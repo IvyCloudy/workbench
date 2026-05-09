@@ -1,0 +1,54 @@
+{
+  "name": "testcase-viewer",
+  "displayName": "TestCase Viewer",
+  "version": "0.0.1",
+  "description": "查看线上测试案例",
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "testcaseViewer.viewOnline",
+        "title": "查看测试案例",
+        "icon": "$(checklist)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "testcaseViewer.viewOnline",
+          "when": "testcaseViewer:showIcon",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "TestCase Viewer",
+      "properties": {
+        "testcaseViewer.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:8081",
+          "description": "查询线上案例的API接口地址"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.84.0",
+    "typescript": "^5.3.0"
+  }
+}

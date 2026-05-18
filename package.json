@@ -68,7 +68,10 @@
     "watch": "tsc -watch -p ./"
   },
   "dependencies": {
-    "sm-crypto": "^0.3.7"
+    "iconv-lite": "^0.7.2",
+    "sm-crypto": "^0.3.7",
+    "udsv": "^0.7.3",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -1,4 +1,5 @@
 (function () {
+    console.log('[CsvBrowser] main.js 开始加载');
     var vscode = acquireVsCodeApi();
 
     // ============ 全局变量 ============
@@ -17,22 +18,29 @@
         }, 3000);
     }
 
+    // ============ 简化的 escapeHtml ============
     function escapeHtml(str) {
         if (!str) return '';
-        return str.replace(/&/g, '&amp;')
-                  .replace(/</g, '&lt;')
-                  .replace(/>/g, '&gt;')
-                  .replace(/"/g, '&quot;')
-                  .replace(/'/g, '&#039;');
+        // 使用 HTML 实体转义
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
     }
 
     // ============ 文件树渲染 ============
     function renderFileTree(files) {
+        console.log('[CsvBrowser] renderFileTree 收到数据, length:', files ? files.length : 'null');
         var container = document.getElementById('fileTreeBody');
-        if (!container) return;
+        if (!container) {
+            console.error('[CsvBrowser] fileTreeBody not found');
+            return;
+        }
 
         if (!files || files.length === 0) {
-            container.innerHTML = '<div class="file-tree-empty">未找到"测试任务"目录或目录下没有CSV文件<br><br>提示：请在工作区根目录下创建"测试任务"目录，并在其中放置CSV文件</div>';
+            container.innerHTML = '<div class="file-tree-empty">未找到"测试任务"目录</div>';
             return;
         }
 
@@ -63,6 +71,7 @@
         });
 
         container.innerHTML = html;
+        console.log('[CsvBrowser] 文件树已渲染, html长度:', html.length);
 
         // 绑定点击事件
         container.querySelectorAll('.file-tree-node.file').forEach(function (node) {
@@ -79,6 +88,7 @@
 
     // ============ 加载CSV文件 ============
     function loadCsvFile(filePath) {
+        console.log('[CsvBrowser] loadCsvFile:', filePath);
         currentFilePath = filePath;
         selectedRows.clear();
         updateSelectedCount();
@@ -102,11 +112,15 @@
 
     // ============ 渲染CSV表格 ============
     function renderCsvTable(data) {
+        console.log('[CsvBrowser] renderCsvTable 收到数据:', data ? 'headers:' + data.headers.length + ' rows:' + data.rows.length : 'null');
         var csvBody = document.getElementById('csvBody');
         var csvFileName = document.getElementById('csvFileName');
         var csvActions = document.getElementById('csvActions');
 
-        if (!csvBody) return;
+        if (!csvBody) {
+            console.error('[CsvBrowser] csvBody not found');
+            return;
+        }
 
         currentCsvData = data;
         selectedRows.clear();
@@ -145,6 +159,7 @@
 
         html += '</tbody></table>';
         csvBody.innerHTML = html;
+        console.log('[CsvBrowser] CSV表格已渲染');
 
         // 绑定事件
         var selectAll = document.getElementById('selectAll');
@@ -233,6 +248,7 @@
 
     // ============ 初始化 ============
     document.addEventListener('DOMContentLoaded', function () {
+        console.log('[CsvBrowser] DOMContentLoaded');
         // 请求工作区文件
         vscode.postMessage({ command: 'fetchWorkspaceFiles' });
 
@@ -277,12 +293,14 @@
     // ============ 消息处理 ============
     window.addEventListener('message', function (event) {
         var msg = event.data;
+        console.log('[CsvBrowser] 收到消息:', msg.command);
         switch (msg.command) {
             case 'workspaceFiles':
                 renderFileTree(msg.data);
                 break;
             case 'csvData':
                 if (msg.error) {
+                    console.error('[CsvBrowser] csvData 错误:', msg.error);
                     showToast(msg.error, 'error');
                     var csvBody = document.getElementById('csvBody');
                     if (csvBody) csvBody.innerHTML = '<div class="csv-empty"><div class="icon">&#128196;</div><div>' + escapeHtml(msg.error) + '</div></div>';
@@ -299,4 +317,6 @@
                 break;
         }
     });
+
+    console.log('[CsvBrowser] main.js 初始化完成');
 })();

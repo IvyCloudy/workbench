@@ -205,6 +205,7 @@ export class CsvBrowserProvider {
                     fileName: path.basename(filePath)
                 }
             });
+            console.log('[CsvBrowser] CSV数据已发送，rows:', data.rows.length, 'headers:', data.headers.length);
         } catch (e: any) {
             this.panel?.webview.postMessage({ command: 'csvData', data: null, error: e.message || '读取文件失败' });
         }
@@ -276,12 +277,32 @@ export class CsvBrowserProvider {
         try {
             const nonce = getNonce();
             let html = fs.readFileSync(htmlPath.fsPath, 'utf-8');
+            
+            // 记录 HTML 长度
+            console.log('[CsvBrowserProvider] 原始 HTML 长度:', html.length);
+            
+            // 检查是否有未替换的占位符
+            if (html.includes('${nonce}')) {
+                console.log('[CsvBrowserProvider] 警告: ${nonce} 占位符未被替换');
+            }
+            if (html.includes('${scriptUri}')) {
+                console.log('[CsvBrowserProvider] 警告: ${scriptUri} 占位符未被替换');
+            }
+            
             html = html.replace(/\$\{nonce\}/g, nonce);
-            html = html.replace(/\$\{scriptUri\}/g, this.panel!.webview.asWebviewUri(
+            const scriptUri = this.panel!.webview.asWebviewUri(
                 vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'csvbrowser', 'main.js')
-            ).toString());
+            ).toString();
+            console.log('[CsvBrowserProvider] scriptUri:', scriptUri);
+            html = html.replace(/\$\{scriptUri\}/g, scriptUri);
+            
+            // 检查替换后的 HTML
+            console.log('[CsvBrowserProvider] 替换后 HTML 长度:', html.length);
+            console.log('[CsvBrowserProvider] nonce 长度:', nonce.length);
+            
             return html;
-        } catch {
+        } catch (e) {
+            console.error('[CsvBrowserProvider] getHtmlContent 错误:', e);
             return this.getFallbackHtml();
         }
     }

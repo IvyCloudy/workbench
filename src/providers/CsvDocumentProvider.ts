@@ -179,7 +179,9 @@ export class CsvDocumentContentProvider implements vscode.TextDocumentContentPro
         });
 
         html += '</tbody></table>';
-        html += '<script nonce="' + nonce + '">window.csvData=' + JSON.stringify({ headers, rows }) + ';Object.assign(csvData,window.csvData);</script>';
+        // 转义 </script> 防止破坏 HTML 解析
+        const jsonData = JSON.stringify({ headers, rows }).replace(/<\/script>/gi, '<\\/script>');
+        html += '<script nonce="' + nonce + '">window.csvData=' + jsonData + ';Object.assign(csvData,window.csvData);</script>';
         return html;
     }
 }

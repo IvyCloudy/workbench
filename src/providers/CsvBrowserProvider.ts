@@ -1,0 +1,302 @@
+import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+
+function getNonce(): string {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < 64; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+}
+
+interface FileNode {
+    name: string;
+    path: string;
+    isDirectory: boolean;
+    children?: FileNode[];
+}
+
+export class CsvBrowserProvider {
+    private panel: vscode.WebviewPanel | undefined;
+    private disposables: vscode.Disposable[] = [];
+
+    constructor(
+        private extensionUri: vscode.Uri,
+        private context: vscode.ExtensionContext
+    ) {}
+
+    show() {
+        if (this.panel) {
+            this.panel.reveal(vscode.ViewColumn.Two);
+            return;
+        }
+
+        this.panel = vscode.window.createWebviewPanel(
+            'csvBrowser',
+            'CSV文件浏览',
+            vscode.ViewColumn.Two,
+            {
+                enableScripts: true,
+                retainContextWhenHidden: true,
+                localResourceRoots: [
+                    vscode.Uri.joinPath(this.extensionUri, 'media')
+                ]
+            }
+        );
+
+        this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+        this.panel.webview.onDidReceiveMessage(
+            msg => this.handleMessage(msg),
+            null,
+            this.disposables
+        );
+
+        this.panel.webview.html = this.getHtmlContent();
+    }
+
+    private async handleMessage(msg: any): Promise<void> {
+        switch (msg.command) {
+            case 'fetchWorkspaceFiles':
+                await this.handleFetchWorkspaceFiles();
+                break;
+            case 'readCsvFile':
+                await this.handleReadCsvFile(msg);
+                break;
+            case 'sendSelectedData':
+                await this.handleSendSelectedData(msg);
+                break;
+        }
+    }
+
+    private async handleFetchWorkspaceFiles(): Promise<void> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+            this.panel?.webview.postMessage({ command: 'workspaceFiles', data: [], error: '请先打开一个工作区文件夹' });
+            return;
+        }
+
+        const rootPath = workspaceFolders[0].uri.fsPath;
+        const fileTree = this.buildFileTree(rootPath);
+        this.panel?.webview.postMessage({ command: 'workspaceFiles', data: fileTree });
+    }
+
+    private buildFileTree(rootPath: string): FileNode[] {
+        const result: FileNode[] = [];
+
+        try {
+            const firstLevelEntries = fs.readdirSync(rootPath, { withFileTypes: true });
+
+            for (const firstEntry of firstLevelEntries) {
+                // 第1层：只处理名为"测试任务"的目录
+                if (!firstEntry.isDirectory() || (firstEntry.name !== '测试任务' && firstEntry.name !== 'testtask')) {
+                    continue;
+                }
+
+                const testTaskPath = path.join(rootPath, firstEntry.name);
+                const taskChildren: FileNode[] = [];
+
+                try {
+                    const secondLevelEntries = fs.readdirSync(testTaskPath, { withFileTypes: true });
+
+                    for (const secondEntry of secondLevelEntries) {
+                        if (!secondEntry.isDirectory()) continue;
+
+                        const subTaskPath = path.join(testTaskPath, secondEntry.name);
+                        const caseChildren: FileNode[] = [];
+
+                        try {
+                            const thirdLevelEntries = fs.readdirSync(subTaskPath, { withFileTypes: true });
+
+                            for (const thirdEntry of thirdLevelEntries) {
+                                // 第3层：只处理名为"测试案例"的目录
+                                if (!thirdEntry.isDirectory() || (thirdEntry.name !== '测试案例' && thirdEntry.name !== 'testcase')) {
+                                    continue;
+                                }
+
+                                const casePath = path.join(subTaskPath, thirdEntry.name);
+                                const csvFiles = this.getCsvFilesInDir(casePath);
+
+                                if (csvFiles.length > 0) {
+                                    caseChildren.push({
+                                        name: thirdEntry.name,
+                                        path: casePath,
+                                        isDirectory: true,
+                                        children: csvFiles
+                                    });
+                                }
+                            }
+                        } catch (e) {
+                            console.error(`Error reading directory ${subTaskPath}:`, e);
+                        }
+
+                        // 如果有测试案例目录
+                        if (caseChildren.length > 0) {
+                            taskChildren.push({
+                                name: secondEntry.name,
+                                path: subTaskPath,
+                                isDirectory: true,
+                                children: caseChildren
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.error(`Error reading directory ${testTaskPath}:`, e);
+                }
+
+                // 如果有子任务目录
+                if (taskChildren.length > 0) {
+                    result.push({
+                        name: firstEntry.name,
+                        path: testTaskPath,
+                        isDirectory: true,
+                        children: taskChildren
+                    });
+                }
+            }
+        } catch (e) {
+            console.error('Error building file tree:', e);
+        }
+
+        return result;
+    }
+
+    private getCsvFilesInDir(dirPath: string): FileNode[] {
+        const csvFiles: FileNode[] = [];
+        try {
+            const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+            for (const entry of entries) {
+                if (!entry.isDirectory() && /\.csv$/i.test(entry.name)) {
+                    csvFiles.push({
+                        name: entry.name,
+                        path: path.join(dirPath, entry.name),
+                        isDirectory: false
+                    });
+                }
+            }
+        } catch (e) {
+            console.error(`Error reading directory ${dirPath}:`, e);
+        }
+        return csvFiles;
+    }
+
+    private async handleReadCsvFile(msg: any): Promise<void> {
+        const filePath = msg.filePath;
+        if (!filePath) {
+            this.panel?.webview.postMessage({ command: 'csvData', data: null, error: '文件路径无效' });
+            return;
+        }
+
+        try {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const data = this.parseCsvContent(content);
+
+            if (!data) {
+                this.panel?.webview.postMessage({ command: 'csvData', data: null, error: 'CSV文件为空' });
+                return;
+            }
+
+            this.panel?.webview.postMessage({
+                command: 'csvData',
+                data: {
+                    headers: data.headers,
+                    rows: data.rows,
+                    fileName: path.basename(filePath)
+                }
+            });
+        } catch (e: any) {
+            this.panel?.webview.postMessage({ command: 'csvData', data: null, error: e.message || '读取文件失败' });
+        }
+    }
+
+    private detectDelimiter(line: string): string {
+        const delimiters = [',', ';', '\t', '|'];
+        const counts = delimiters.map(d => ({ delim: d, count: (line.match(new RegExp(d === '|' ? '\\|' : d, 'g')) || []).length }));
+        const best = counts.filter(c => c.count >= 2).sort((a, b) => b.count - a.count)[0];
+        return best ? best.delim : ',';
+    }
+
+    private parseCsvLine(line: string, delimiter: string = ','): string[] {
+        const result: string[] = [];
+        let current = '';
+        let inQuotes = false;
+
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (ch === '"') {
+                inQuotes = !inQuotes;
+            } else if (ch === delimiter && !inQuotes) {
+                result.push(current.trim());
+                current = '';
+            } else {
+                current += ch;
+            }
+        }
+        result.push(current.trim());
+        return result;
+    }
+
+    private parseCsvContent(content: string): { headers: string[], rows: string[][] } | null {
+        const lines = content.split('\n').filter(line => line.trim());
+        if (lines.length === 0) return null;
+        const delimiter = this.detectDelimiter(lines[0]);
+        const headers = this.parseCsvLine(lines[0], delimiter);
+        const rows = lines.slice(1).map(line => this.parseCsvLine(line, delimiter));
+        return { headers, rows };
+    }
+
+    private async handleSendSelectedData(msg: any): Promise<void> {
+        const { selectedRows, headers } = msg;
+
+        if (!selectedRows || selectedRows.length === 0) {
+            vscode.window.showWarningMessage('请先勾选要发送的数据');
+            return;
+        }
+
+        try {
+            const { sendSelectedData } = require('../services/http-client');
+            const result = await sendSelectedData({ selectedRows, headers }, this.context);
+
+            if (result.returnCode === 'SUC0000') {
+                this.panel?.webview.postMessage({ command: 'sendResult', success: true, message: '数据发送成功' });
+                vscode.window.showInformationMessage('数据发送成功');
+            } else {
+                this.panel?.webview.postMessage({ command: 'sendResult', success: false, message: result.errorMsg || '发送失败' });
+                vscode.window.showErrorMessage(result.errorMsg || '发送失败');
+            }
+        } catch (e: any) {
+            this.panel?.webview.postMessage({ command: 'sendResult', success: false, message: e.message || '发送失败' });
+            vscode.window.showErrorMessage(e.message || '发送失败');
+        }
+    }
+
+    private getHtmlContent(): string {
+        const htmlPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'csvbrowser', 'index.html');
+        try {
+            const nonce = getNonce();
+            let html = fs.readFileSync(htmlPath.fsPath, 'utf-8');
+            html = html.replace(/\$\{nonce\}/g, nonce);
+            html = html.replace(/\$\{scriptUri\}/g, this.panel!.webview.asWebviewUri(
+                vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'csvbrowser', 'main.js')
+            ).toString());
+            return html;
+        } catch {
+            return this.getFallbackHtml();
+        }
+    }
+
+    private getFallbackHtml(): string {
+        return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>CSV文件浏览</title></head>
+<body style="padding:20px;font-family:sans-serif;color:#333;">
+<h2>CSV文件浏览</h2>
+<p style="color:#999;">页面加载中...</p>
+</body></html>`;
+    }
+
+    private dispose(): void {
+        this.panel = undefined;
+        this.disposables.forEach(d => d.dispose());
+        this.disposables = [];
+    }
+}

@@ -14,11 +14,27 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "customEditors": [
+      {
+        "viewType": "csvEditor.testCase",
+        "displayName": "测试案例编辑器",
+        "selector": [
+          {
+            "filenamePattern": "*.csv"
+          }
+        ],
+        "priority": "exclusive"
+      }
+    ],
     "commands": [
       {
         "command": "testcaseViewer.viewOnline",
         "title": "查看测试案例",
         "icon": "$(checklist)"
+      },
+      {
+        "command": "csvEditor.open",
+        "title": "用测试案例编辑器打开"
       }
     ],
     "menus": {
@@ -26,6 +42,11 @@
         {
           "command": "testcaseViewer.viewOnline",
           "when": "testcaseViewer:showIcon",
+          "group": "navigation"
+        },
+        {
+          "command": "csvEditor.open",
+          "when": "editorLangId == csv",
           "group": "navigation"
         }
       ]

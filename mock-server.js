@@ -180,6 +180,25 @@ var server = http.createServer(function (req, res) {
                 }));
             }
         });
+    } else if (req.method === 'POST' && req.url === '/test-task/push-testcase') {
+        var body = '';
+        req.on('data', function (chunk) { body += chunk; });
+        req.on('end', function () {
+            var data = JSON.parse(body);
+            console.log('收到推送测试案例请求，共', Array.isArray(data) ? data.length : 0, '条');
+            console.log('数据示例:', JSON.stringify(data[0], null, 2));
+            res.writeHead(200, {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type'
+            });
+            res.end(JSON.stringify({
+                returnCode: 'SUC0000',
+                errorMsg: '',
+                body: { imported: Array.isArray(data) ? data.length : 0 }
+            }));
+        });
     } else if (req.method === 'OPTIONS') {
         res.writeHead(204, {
             'Access-Control-Allow-Origin': '*',
@@ -196,7 +215,8 @@ var server = http.createServer(function (req, res) {
 server.listen(8081, function () {
     console.log('Mock server running at http://localhost:8081');
     console.log('Endpoints:');
-    console.log('  POST /test-task/task-tree  - 任务树');
-    console.log('  POST /test-task/test-case    - 测试案例');
+    console.log('  POST /test-task/task-tree       - 任务树');
+    console.log('  POST /test-task/test-case       - 测试案例');
+    console.log('  POST /test-task/push-testcase   - 推送测试案例');
     console.log('Total records: ' + TOTAL + ', default pageSize: 200');
 });

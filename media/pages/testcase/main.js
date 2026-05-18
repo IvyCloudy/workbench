@@ -1,38 +1,51 @@
 (function () {
+    var vscode = acquireVsCodeApi();
+
+    window.HttpClient = {
+        postMessage: function (msg) {
+            vscode.postMessage(msg);
+        },
+        query: function (params) {
+            vscode.postMessage({
+                command: 'query',
+                currentPage: params.currentPage,
+                pageSize: params.pageSize,
+                testCaseNo: params.testCaseNo,
+                testCaseName: params.testCaseName,
+                testCasePath: params.testCasePath,
+                testCasePriority: params.testCasePriority,
+                testType: params.testType,
+                type: params.type,
+                testTaskNo: params.testTaskNo,
+                subTestTaskName: params.subTestTaskName,
+                testPhaseName: params.testPhaseName
+            });
+        }
+    };
+
+    var allData = [];
+    var loadingPage = 0;
+    var pageSize = 15;
+    var hasMore = true;
+    var isLoading = false;
+
     var COLUMNS_ORDER = [
-        'testCaseNo',
-        'testCaseName',
-        'testCasePath',
-        'description',
-        'preCondition',
-        'testCasePriority',
-        'testCaseDes',
-        'expected',
-        'testType',
-        'type',
-        'designer'
+        'testCaseNo', 'testCaseName', 'testCasePath', 'testCaseDes',
+        'preCondition', 'testCasePriority', 'description', 'expected',
+        'testType', 'type', 'designer'
     ];
 
     var COLUMN_NAMES = {
-        testCaseNo: '编号',
-        testCaseName: '名称',
-        testCasePath: '路径',
-        description: '描述',
-        preCondition: '前置条件',
-        testCasePriority: '优先级',
-        testCaseDes: '案例描述',
-        expected: '预期结果',
-        testType: '执行方式',
-        type: '案例类型',
-        designer: '设计人'
+        testCaseNo: '编号', testCaseName: '名称', testCasePath: '路径',
+        description: '案例描述', preCondition: '前置条件', testCasePriority: '优先级',
+        testCaseDes: '描述', expected: '预期结果', testType: '执行方式',
+        type: '案例类型', designer: '设计人'
     };
 
     var COLUMN_RENDER = {
         testCaseNo: function (v) { return '<span class="case-code">' + escapeHtml(v) + '</span>'; },
-        testCaseName: function (v, row) {
-            var path = row.testCasePath || '';
-            return '<div class="case-name-cell"><div class="name" title="' + escapeAttr(v) + '">' + escapeHtml(v) + '</div>' +
-                (path ? '<div class="path" title="' + escapeAttr(path) + '">' + escapeHtml(path) + '</div>' : '') + '</div>';
+        testCaseName: function (v) {
+            return '<span title="' + escapeAttr(v) + '">' + escapeHtml(v) + '</span>';
         },
         testCasePath: function (v) { return ellipsisCell(v, 20); },
         testCasePriority: function (v) {
@@ -54,13 +67,12 @@
             var color = colors[initial.charCodeAt(0) % colors.length];
             return '<span class="owner-cell">' +
                 '<span class="avatar-mini" style="background:' + color + '">' + escapeHtml(initial) + '</span>' +
-                escapeHtml(name) +
-                '</span>';
+                '<span class="cell-trunc-name">' + escapeHtml(name) + '</span></span>';
         },
         description: function (v) { return ellipsisCell(v, 20); },
         preCondition: function (v) { return ellipsisCell(v, 20); },
-        expected: function (v) { return ellipsisCell(v, 20); },
-        testCaseDes: function (v) { return ellipsisCell(v, 20); }
+        expected: function (v) { return htmlCell(v, 20); },
+        testCaseDes: function (v) { return htmlCell(v, 20); }
     };
 
     var infoTaskName = document.getElementById('infoTaskName');
@@ -69,7 +81,9 @@
     var loadingEl = document.getElementById('loading');
     var errorEl = document.getElementById('error');
     var tableWrap = document.getElementById('tableWrap');
-    var paginationEl = document.getElementById('pagination');
+    var loadMoreEl = document.getElementById('loadMore');
+    var loadMoreBtn = document.getElementById('loadMoreBtn');
+
     var filterTestCaseNo = document.getElementById('filterTestCaseNo');
     var filterTestCaseName = document.getElementById('filterTestCaseName');
     var filterTestCasePath = document.getElementById('filterTestCasePath');
@@ -77,21 +91,23 @@
     var filterTestType = document.getElementById('filterTestType');
     var filterType = document.getElementById('filterType');
     var resetBtn = document.getElementById('resetBtn');
+    var resultCount = document.getElementById('resultCount');
 
     var testTaskNo = '';
     var subTestTaskName = '';
     var testPhaseName = '';
-    var currentPage = 1;
-    var currentPageSize = 20;
-    var totalRecords = 0;
-    var totalPagesCount = 0;
-    var infoBarSet = false;
 
     function ellipsisCell(v, maxLen) {
         var s = v || '';
-        var display = s.length > maxLen ? s.slice(0, maxLen) + '...' : s;
-        display = escapeHtml(display).replace(/\n/g, '<br>');
-        return '<span class="case-desc" title="' + escapeAttr(s) + '">' + display + '</span>';
+        var display = escapeHtml(s).replace(/\n/g, '<br>');
+        return '<span class="case-desc">' + display + '</span>';
+    }
+
+    function htmlCell(v) {
+        var s = v || '';
+        var display = s.replace(/<\/?(?:table|thead|tbody|tfoot|tr|th|td|caption|colgroup|col)[^>]*>/gi, '');
+        display = display.replace(/\n/g, '<br>');
+        return '<span class="case-desc">' + display + '</span>';
     }
 
     function getFilters() {
@@ -105,42 +121,58 @@
         };
     }
 
-    function search(pageNum) {
-        doQuery(testTaskNo, subTestTaskName, testPhaseName, currentPageSize, pageNum, getFilters());
+    function matchFilter(row, filters) {
+        if (filters.testCaseNo && (row.testCaseNo || '').indexOf(filters.testCaseNo) < 0) return false;
+        if (filters.testCaseName && (row.testCaseName || '').indexOf(filters.testCaseName) < 0) return false;
+        if (filters.testCasePath && (row.testCasePath || '').indexOf(filters.testCasePath) < 0) return false;
+        if (filters.testCasePriority && (row.testCasePriority || '') !== filters.testCasePriority) return false;
+        if (filters.testType && (row.testType || '') !== filters.testType) return false;
+        if (filters.type && (row.type || '') !== filters.type) return false;
+        return true;
     }
 
-    function doQuery(testTaskNo, subTestTaskName, testPhaseName, pageSize, pageNum, filters) {
-        if (!testTaskNo || !subTestTaskName) {
-            showError('未获取到测试任务信息');
-            return;
-        }
-        currentPage = pageNum || 1;
-        currentPageSize = pageSize;
+    function applyFilters() {
+        var filters = getFilters();
+        var filtered = allData.filter(function (row) { return matchFilter(row, filters); });
+        renderTable(filtered);
+    }
+
+    function startFreshLoad() {
+        allData = [];
+        loadingPage = 0;
+        hasMore = true;
+        isLoading = false;
+        loadMore();
+    }
+
+    function loadMore() {
+        if (isLoading || !hasMore) return;
+        isLoading = true;
+        loadingPage++;
         showLoading();
+        loadMoreBtn.disabled = true;
+        loadMoreBtn.querySelector('.txt').textContent = '加载中...';
         HttpClient.query({
-            currentPage: currentPage,
+            currentPage: loadingPage,
             pageSize: pageSize,
-            testCaseNo: filters.testCaseNo,
-            testCaseName: filters.testCaseName,
-            testCasePath: filters.testCasePath,
-            testCasePriority: filters.testCasePriority,
-            testType: filters.testType,
-            type: filters.type
+            testTaskNo: testTaskNo,
+            subTestTaskName: subTestTaskName,
+            testPhaseName: testPhaseName
         });
     }
 
     filterTestCaseNo.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') search(1);
+        if (e.key === 'Enter') applyFilters();
     });
     filterTestCaseName.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') search(1);
+        if (e.key === 'Enter') applyFilters();
     });
     filterTestCasePath.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') search(1);
+        if (e.key === 'Enter') applyFilters();
     });
-    filterPriority.addEventListener('change', function () { search(1); });
-    filterTestType.addEventListener('change', function () { search(1); });
-    filterType.addEventListener('change', function () { search(1); });
+    filterPriority.addEventListener('change', applyFilters);
+    filterTestType.addEventListener('change', applyFilters);
+    filterType.addEventListener('change', applyFilters);
     resetBtn.addEventListener('click', function () {
         filterTestCaseNo.value = '';
         filterTestCaseName.value = '';
@@ -148,8 +180,29 @@
         filterPriority.value = '';
         filterTestType.value = '';
         filterType.value = '';
-        search(1);
+        applyFilters();
     });
+    document.getElementById('refreshBtn').addEventListener('click', function () {
+        filterTestCaseNo.value = '';
+        filterTestCaseName.value = '';
+        filterTestCasePath.value = '';
+        filterPriority.value = '';
+        filterTestType.value = '';
+        filterType.value = '';
+        resultCount.textContent = '';
+        startFreshLoad();
+    });
+
+    loadMoreBtn.addEventListener('click', loadMore);
+
+    function resetTableHeight() {
+        var sc = document.getElementById('tableWrap');
+        var stickyH = document.querySelector('.sticky-header');
+        if (!sc || !stickyH) return;
+        var h = stickyH.offsetHeight;
+        sc.style.maxHeight = 'calc(100vh - ' + h + 'px)';
+    }
+    window.addEventListener('resize', resetTableHeight);
 
     window.addEventListener('message', function (event) {
         var msg = event.data;
@@ -157,7 +210,7 @@
             case 'init':
                 if (msg.testTaskNo) {
                     testTaskNo = msg.testTaskNo;
-                    infoTaskName.innerHTML = '<strong>' + escapeHtml(msg.testTaskNo) + '</strong>';
+                    infoTaskName.textContent = msg.testTaskNo;
                 }
                 if (msg.subTestTaskName) {
                     subTestTaskName = msg.subTestTaskName;
@@ -167,38 +220,55 @@
                     testPhaseName = msg.testPhaseName;
                     infoPhaseName.textContent = msg.testPhaseName;
                 }
-                if (msg.pageSize) {
-                    currentPageSize = parseInt(msg.pageSize, 10) || 20;
-                }
-                if (testTaskNo && subTestTaskName) {
-                    search(1);
-                }
-                break;
-            case 'loading':
-                showLoading();
+                if (testTaskNo && subTestTaskName && testPhaseName) startFreshLoad();
                 break;
             case 'showData':
-                if (!infoBarSet && msg.data && msg.data.length > 0) {
-                    var first = msg.data[0];
-                    if (first.testTaskName) infoTaskName.innerHTML = '<strong>' + escapeHtml(first.testTaskName) + '</strong>';
-                    if (first.testPhaseName) infoPhaseName.textContent = first.testPhaseName;
-                    infoBarSet = true;
+                isLoading = false;
+                for (var i = 0; i < msg.data.length; i++) allData.push(msg.data[i]);
+                loadMoreBtn.disabled = false;
+                loadMoreBtn.querySelector('.txt').textContent = '更多' + pageSize + '个';
+                loadMoreBtn.classList.remove('expanded');
+                hasMore = true;
+                applyFilters();
+                renderLoadMore();
+                break;
+            case 'endOfData':
+                isLoading = false;
+                hasMore = false;
+                loadMoreBtn.disabled = false;
+                loadMoreBtn.querySelector('.txt').textContent = '收起';
+                loadMoreBtn.classList.add('expanded');
+                if (allData.length === 0) {
+                    errorEl.classList.add('hidden');
+                    loadingEl.classList.add('hidden');
+                    tableWrap.innerHTML = '<div class="empty">暂无数据</div>';
+                    tableWrap.classList.remove('hidden');
+                    loadMoreEl.classList.add('hidden');
+                } else {
+                    applyFilters();
+                    renderLoadMore();
                 }
-                renderTable(msg.data, msg.total, msg.currentPage, msg.pageSize);
                 break;
             case 'showError':
+                isLoading = false;
+                loadMoreBtn.disabled = false;
+                loadMoreBtn.querySelector('.txt').textContent = '更多' + pageSize + '个';
+                loadMoreBtn.classList.remove('expanded');
                 showError(msg.message);
                 break;
         }
     });
 
     HttpClient.postMessage({ command: 'ready' });
+    setTimeout(resetTableHeight, 0);
 
     function showLoading() {
-        loadingEl.classList.remove('hidden');
         errorEl.classList.add('hidden');
-        tableWrap.classList.add('hidden');
-        paginationEl.classList.add('hidden');
+        if (allData.length === 0) {
+            loadingEl.classList.remove('hidden');
+            tableWrap.classList.add('hidden');
+            loadMoreEl.classList.add('hidden');
+        }
     }
 
     function showError(msg) {
@@ -206,29 +276,30 @@
         errorEl.classList.remove('hidden');
         loadingEl.classList.add('hidden');
         tableWrap.classList.add('hidden');
-        paginationEl.classList.add('hidden');
+        loadMoreEl.classList.add('hidden');
     }
 
-    function renderTable(data, total, pageNum, pageSize) {
+    function renderTable(data) {
         loadingEl.classList.add('hidden');
         errorEl.classList.add('hidden');
 
-        currentPage = pageNum || 1;
-        currentPageSize = parseInt(pageSize, 10) || 20;
-        totalRecords = total || (data ? data.length : 0);
-        totalPagesCount = Math.ceil(totalRecords / currentPageSize) || 1;
+        var filterActive = filterTestCaseNo.value.trim() || filterTestCaseName.value.trim() || filterTestCasePath.value.trim() || filterPriority.value || filterTestType.value || filterType.value;
+        if (data.length > 0) {
+            resultCount.textContent = filterActive ? data.length + ' / ' + allData.length + ' 条' : '共 ' + allData.length + ' 条';
+        } else {
+            resultCount.textContent = allData.length > 0 ? '0 / ' + allData.length + ' 条' : '';
+        }
 
         if (!data || data.length === 0) {
             tableWrap.innerHTML = '<div class="empty">暂无数据</div>';
             tableWrap.classList.remove('hidden');
-            paginationEl.classList.add('hidden');
             return;
         }
 
         var columns = COLUMNS_ORDER.filter(function (col) { return data[0][col] !== undefined; });
         var html = '<table><thead><tr>';
         for (var i = 0; i < columns.length; i++) {
-            html += '<th>' + escapeHtml(COLUMN_NAMES[columns[i]] || columns[i]) + '</th>';
+            html += '<th><span>' + escapeHtml(COLUMN_NAMES[columns[i]] || columns[i]) + '</span><div class="resize-handle"></div></th>';
         }
         html += '</tr></thead><tbody>';
         for (var r = 0; r < data.length; r++) {
@@ -237,85 +308,96 @@
                 var col = columns[c];
                 var val = data[r][col] !== null && data[r][col] !== undefined ? String(data[r][col]) : '';
                 var render = COLUMN_RENDER[col];
-                html += '<td>' + (render ? render(val, data[r]) : escapeHtml(val)) + '</td>';
+                var cellContent = render ? render(val, data[r]) : escapeHtml(val);
+                var tooltipContent = (col === 'expected' || col === 'testCaseDes') ? val.replace(/\n/g, '<br>') : escapeHtml(val).replace(/\n/g, '<br>');
+                html += '<td><div class="cell-trunc" data-tooltip="' + escapeAttr(tooltipContent) + '">' + cellContent + '</div></td>';
             }
             html += '</tr>';
         }
         html += '</tbody></table>';
         tableWrap.innerHTML = html;
         tableWrap.classList.remove('hidden');
-
-        renderPagination();
+        resetTableHeight();
+        enableColumnResize();
     }
 
-    function renderPagination() {
-        var p = currentPage;
-        var tp = totalPagesCount;
-        var html = '<span class="pg-total">共 ' + totalRecords + ' 条</span>';
-
-        html += '<button class="page-btn" ' + (p <= 1 ? 'disabled' : '') + ' data-go="1">&#171;</button>';
-        html += '<button class="page-btn" ' + (p <= 1 ? 'disabled' : '') + ' data-go="prev">&#8249;</button>';
-
-        var pages = [];
-        for (var i = 1; i <= tp; i++) {
-            if (i === 1 || i === tp || (i >= p - 2 && i <= p + 2)) pages.push(i);
-            else if (pages[pages.length - 1] !== '...') pages.push('...');
+    function renderLoadMore() {
+        loadMoreEl.classList.remove('hidden');
+        if (hasMore) {
+            loadMoreBtn.classList.remove('hidden');
+            loadMoreBtn.querySelector('.txt').textContent = '更多' + pageSize + '个';
+            loadMoreBtn.classList.remove('expanded');
+            loadMoreBtn.disabled = false;
+        } else {
+            loadMoreBtn.classList.add('hidden');
         }
-        for (var j = 0; j < pages.length; j++) {
-            var pg = pages[j];
-            if (pg === '...') {
-                html += '<span style="padding:0 4px;color:#999">···</span>';
-            } else {
-                html += '<button class="page-btn ' + (pg === p ? 'active' : '') + '" data-go="' + pg + '">' + pg + '</button>';
-            }
-        }
-
-        html += '<button class="page-btn" ' + (p >= tp ? 'disabled' : '') + ' data-go="next">&#8250;</button>';
-        html += '<button class="page-btn" ' + (p >= tp ? 'disabled' : '') + ' data-go="' + tp + '">&#187;</button>';
-
-        html += '<span class="pg-jump">第 <input id="gotoPage" type="number" min="1" value="' + p + '" /> / ' + tp + ' 页</span>';
-
-        html += '<select class="page-size" id="pageSizeSelect">' +
-            [10, 20, 50, 100, 200].map(function (n) {
-                return '<option value="' + n + '" ' + (n === currentPageSize ? 'selected' : '') + '>' + n + ' 条/页</option>';
-            }).join('') + '</select>';
-
-        paginationEl.innerHTML = html;
-        paginationEl.classList.remove('hidden');
     }
 
-    function navigatePage(page) {
-        if (page < 1 || page > totalPagesCount || page === currentPage) return;
-        currentPage = page;
-        search(page);
+    var tooltipEl = document.getElementById('tooltip');
+    var tooltipTimer = null;
+
+    tableWrap.addEventListener('mouseover', function (e) {
+        var cell = e.target.closest('.cell-trunc');
+        clearTimeout(tooltipTimer);
+        if (!cell) { tooltipEl.style.display = 'none'; return; }
+        var html = cell.getAttribute('data-tooltip');
+        if (!html) { tooltipEl.style.display = 'none'; return; }
+        tooltipTimer = setTimeout(function () {
+            tooltipEl.innerHTML = html;
+            tooltipEl.style.display = 'block';
+        }, 300);
+    });
+
+    tableWrap.addEventListener('mousemove', function (e) {
+        if (tooltipEl.style.display === 'none') return;
+        var gap = 16;
+        var x = e.clientX + gap;
+        var y = e.clientY + gap;
+        var tw = tooltipEl.offsetWidth;
+        var th = tooltipEl.offsetHeight;
+        if (x + tw > window.innerWidth - 8) x = e.clientX - tw - gap;
+        if (y + th > window.innerHeight - 8) y = e.clientY - th - gap;
+        tooltipEl.style.left = Math.max(4, x) + 'px';
+        tooltipEl.style.top = Math.max(4, y) + 'px';
+    });
+
+    tableWrap.addEventListener('mouseleave', function () {
+        clearTimeout(tooltipTimer);
+        tooltipEl.style.display = 'none';
+    });
+
+    function enableColumnResize() {
+        var ths = document.querySelectorAll('#tableWrap th');
+        ths.forEach(function (th, idx) {
+            var handle = th.querySelector('.resize-handle');
+            if (!handle) return;
+            handle.addEventListener('mousedown', function (e) {
+                e.preventDefault();
+                var startX = e.clientX;
+                var startWidth = th.offsetWidth;
+                function onMouseMove(e) {
+                    var diff = e.clientX - startX;
+                    var newWidth = Math.max(30, startWidth + diff);
+                    var cells = document.querySelectorAll('#tableWrap table tr > *:nth-child(' + (idx + 1) + ')');
+                    cells.forEach(function (cell) {
+                        cell.style.width = newWidth + 'px';
+                        cell.style.minWidth = newWidth + 'px';
+                        cell.style.maxWidth = newWidth + 'px';
+                    });
+                }
+                function onMouseUp() {
+                    document.removeEventListener('mousemove', onMouseMove);
+                    document.removeEventListener('mouseup', onMouseUp);
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                }
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+            });
+        });
     }
-
-    paginationEl.addEventListener('click', function (e) {
-        var btn = e.target.closest('.page-btn');
-        if (btn && !btn.disabled) {
-            var go = btn.getAttribute('data-go');
-            if (go === 'prev') navigatePage(currentPage - 1);
-            else if (go === 'next') navigatePage(currentPage + 1);
-            else navigatePage(parseInt(go, 10));
-        }
-    });
-
-    paginationEl.addEventListener('keydown', function (e) {
-        if (e.target.id === 'gotoPage' && e.key === 'Enter') {
-            var page = parseInt(e.target.value, 10);
-            if (isNaN(page) || page < 1) page = 1;
-            if (page > totalPagesCount) page = totalPagesCount;
-            navigatePage(page);
-        }
-    });
-
-    paginationEl.addEventListener('change', function (e) {
-        if (e.target.id === 'pageSizeSelect') {
-            currentPageSize = parseInt(e.target.value, 10);
-            currentPage = 1;
-            search(1);
-        }
-    });
 
     function escapeHtml(str) {
         return String(str == null ? '' : str).replace(/[&<>"']/g, function (c) {

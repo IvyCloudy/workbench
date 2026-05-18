@@ -41,8 +41,65 @@ function generateRecord(i, testTaskNo, subTestTaskName) {
     };
 }
 
+var TASK_TREE = [
+    {
+        testTaskId: 1, testTaskNo: 'TT2025123500', testTaskName: '2026数据测试', aplusFlag: '否',
+        subTestTaskList: [
+            { subTestTaskId: 110, subTestTaskName: '测试子任务1', gchFlag: '否', gchClassify: '', accTestFlag: '是', aiFlag: '否', miniFlag: '否', urgentFlag: '否', testPhaseList: [
+                { testPhaseName: '合并测试阶段', leader: '张三/IT00001', status: '未启动', testPhaseId: 213, accTestFlag: '否' },
+                { testPhaseName: 'ST阶段', leader: '李四/IT00007', status: '实施中', testPhaseId: 214, accTestFlag: '否' }
+            ]},
+            { subTestTaskId: 111, subTestTaskName: '测试子任务2', gchFlag: '否', gchClassify: '', accTestFlag: '否', aiFlag: '是', miniFlag: '否', urgentFlag: '否', testPhaseList: [
+                { testPhaseName: 'UAT阶段', leader: '王五/IT00012', status: '已完成', testPhaseId: 215, accTestFlag: '是' },
+                { testPhaseName: '合并测试阶段', leader: '赵六/IT00018', status: '未启动', testPhaseId: 216, accTestFlag: '否' }
+            ]}
+        ]
+    },
+    {
+        testTaskId: 2, testTaskNo: 'TT2025123701', testTaskName: '2026测试平台', aplusFlag: '否',
+        subTestTaskList: [
+            { subTestTaskId: 220, subTestTaskName: '测试子任务3', gchFlag: '否', gchClassify: '', accTestFlag: '否', aiFlag: '否', miniFlag: '否', urgentFlag: '否', testPhaseList: [
+                { testPhaseName: '合并测试阶段', leader: '李四/IT00007', status: '实施中', testPhaseId: 45456, accTestFlag: '否' },
+                { testPhaseName: 'ST阶段', leader: '张三/IT00001', status: '未启动', testPhaseId: 45457, accTestFlag: '否' }
+            ]},
+            { subTestTaskId: 221, subTestTaskName: '测试子任务4', gchFlag: '否', gchClassify: '', accTestFlag: '是', aiFlag: '否', miniFlag: '是', urgentFlag: '否', testPhaseList: [
+                { testPhaseName: 'UAT阶段', leader: '王五/IT00012', status: '已完成', testPhaseId: 45458, accTestFlag: '是' }
+            ]}
+        ]
+    },
+    {
+        testTaskId: 3, testTaskNo: 'TT2026123401', testTaskName: '核心交易系统回归', aplusFlag: '否',
+        subTestTaskList: [
+            { subTestTaskId: 330, subTestTaskName: '测试子任务5', gchFlag: '是', gchClassify: '回归', accTestFlag: '否', aiFlag: '否', miniFlag: '否', urgentFlag: '是', testPhaseList: [
+                { testPhaseName: '合并测试阶段', leader: '赵六/IT00018', status: '未启动', testPhaseId: 33001, accTestFlag: '否' },
+                { testPhaseName: 'ST阶段', leader: '李四/IT00007', status: '实施中', testPhaseId: 33002, accTestFlag: '否' },
+                { testPhaseName: 'UAT阶段', leader: '张三/IT00001', status: '未启动', testPhaseId: 33003, accTestFlag: '是' }
+            ]},
+            { subTestTaskId: 331, subTestTaskName: '测试子任务6', gchFlag: '否', gchClassify: '', accTestFlag: '否', aiFlag: '否', miniFlag: '否', urgentFlag: '否', testPhaseList: [
+                { testPhaseName: 'UAT阶段', leader: '王五/IT00012', status: '已完成', testPhaseId: 33101, accTestFlag: '是' }
+            ]}
+        ]
+    },
+    {
+        testTaskId: 4, testTaskNo: 'TT2026010101', testTaskName: '风控模型升级', aplusFlag: '是',
+        subTestTaskList: [
+            { subTestTaskId: 440, subTestTaskName: '测试子任务7', gchFlag: '否', gchClassify: '', accTestFlag: '否', aiFlag: '是', miniFlag: '否', urgentFlag: '否', testPhaseList: [
+                { testPhaseName: '合并测试阶段', leader: '张三/IT00001', status: '实施中', testPhaseId: 44001, accTestFlag: '否' }
+            ]}
+        ]
+    }
+];
+
 var server = http.createServer(function (req, res) {
-    if (req.method === 'POST' && req.url === '/test-task/test-case') {
+    if (req.method === 'POST' && req.url === '/test-task/task-tree') {
+        res.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type'
+        });
+        res.end(JSON.stringify({ errorMsg: '', body: TASK_TREE, returnCode: 'SUC0000' }));
+    } else if (req.method === 'POST' && req.url === '/test-task/test-case') {
         var body = '';
         req.on('data', function (chunk) { body += chunk; });
         req.on('end', function () {
@@ -84,20 +141,44 @@ var server = http.createServer(function (req, res) {
             var end = Math.min(start + pageSize, totalFiltered);
             var pageData = allData.slice(start, end);
 
+            var isEnd = pageData.length === 0 && totalFiltered > 0;
+            var isEmpty = pageData.length === 0 && totalFiltered === 0;
+
             res.writeHead(200, {
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Methods': 'POST, OPTIONS',
             'Access-Control-Allow-Headers': 'Content-Type'
         });
-            res.end(JSON.stringify({
-                errorMsg: '',
-                body: pageData,
-                returnCode: 'SUC0000',
-                total: totalFiltered,
-                currentPage: currentPage,
-                pageSize: String(pageSize)
-            }));
+
+            if (isEmpty) {
+                res.end(JSON.stringify({
+                    errorMsg: '任务测试案例信息不存在',
+                    body: [],
+                    returnCode: '2005',
+                    total: 0,
+                    currentPage: currentPage,
+                    pageSize: String(pageSize)
+                }));
+            } else if (isEnd) {
+                res.end(JSON.stringify({
+                    errorMsg: '任务测试案例信息不存在',
+                    body: [],
+                    returnCode: '2005',
+                    total: totalFiltered,
+                    currentPage: currentPage,
+                    pageSize: String(pageSize)
+                }));
+            } else {
+                res.end(JSON.stringify({
+                    errorMsg: '',
+                    body: pageData,
+                    returnCode: 'SUC0000',
+                    total: totalFiltered,
+                    currentPage: currentPage,
+                    pageSize: String(pageSize)
+                }));
+            }
         });
     } else if (req.method === 'OPTIONS') {
         res.writeHead(204, {
@@ -114,6 +195,8 @@ var server = http.createServer(function (req, res) {
 
 server.listen(8081, function () {
     console.log('Mock server running at http://localhost:8081');
-    console.log('Endpoint: POST /test-task/test-case');
+    console.log('Endpoints:');
+    console.log('  POST /test-task/task-tree  - 任务树');
+    console.log('  POST /test-task/test-case    - 测试案例');
     console.log('Total records: ' + TOTAL + ', default pageSize: 200');
 });

@@ -1,28 +1,22 @@
-import * as vscode from 'vscode';
-import * as path from 'path';
-import * as fs from 'fs';
+const vscode = require('vscode');
+const path = require('path');
+const fs = require('fs');
 
 const CONFIG_FILE = 'app-config.json';
 
-export interface AppConfig {
-    apiUrl: string;
-    authToken: string;
-    userId: string;
-    userName: string;
-}
-
-const defaultConfig: AppConfig = {
+const defaultConfig = {
     apiUrl: 'http://localhost:8081',
     authToken: '',
     userId: '',
-    userName: ''
+    userName: '',
+    sm2PublicKey: ''
 };
 
-export function getConfigPath(context: vscode.ExtensionContext): string {
+function getConfigPath(context) {
     return path.join(context.globalStoragePath, CONFIG_FILE);
 }
 
-export function readConfig(context: vscode.ExtensionContext): AppConfig {
+function readConfig(context) {
     const filePath = getConfigPath(context);
     try {
         return { ...defaultConfig, ...JSON.parse(fs.readFileSync(filePath, 'utf-8')) };
@@ -31,7 +25,7 @@ export function readConfig(context: vscode.ExtensionContext): AppConfig {
     }
 }
 
-export function writeConfig(context: vscode.ExtensionContext, partial: Partial<AppConfig>): AppConfig {
+function writeConfig(context, partial) {
     const dir = context.globalStoragePath;
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -41,3 +35,5 @@ export function writeConfig(context: vscode.ExtensionContext, partial: Partial<A
     fs.writeFileSync(getConfigPath(context), JSON.stringify(updated, null, 2), 'utf-8');
     return updated;
 }
+
+module.exports = { getConfigPath, readConfig, writeConfig };

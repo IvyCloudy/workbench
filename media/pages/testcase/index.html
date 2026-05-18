@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src ${cspConnectSrc};">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
     <title>测试案例</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -13,6 +13,14 @@
             color: var(--vscode-editor-foreground, #1a1a1a);
             background: var(--vscode-editor-background, #f5f6f8);
             font-size: 13px;
+        }
+        .sticky-header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: var(--vscode-editor-background, #f5f6f8);
+            margin: -16px -16px 0;
+            padding: 16px 16px 0;
         }
         .header { margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; }
         .header h2 { font-size: 16px; font-weight: 600; color: #1a1a1a; }
@@ -29,8 +37,10 @@
         }
         .scope-meta .sm-item { display: flex; align-items: center; gap: 6px; }
         .scope-meta .sm-label { color: #888; font-size: 12px; }
-        .scope-meta .sm-value { color: #1a1a1a; font-weight: 600; font-size: 13px; }
-        .scope-meta .sm-value strong { color: #0052d9; }
+        .scope-meta .sm-value { font-weight: 600; font-size: 13px; }
+        .sm-value-task { color: #0052d9; }
+        .sm-value-subtask { color: #2ba471; }
+        .sm-value-phase { color: #e37318; }
 
         .case-toolbar {
             display: flex;
@@ -86,15 +96,22 @@
             white-space: nowrap;
         }
         .btn-sm:hover { border-color: #0052d9; color: #0052d9; }
+        #refreshBtn { font-size: 16px; padding: 0 10px; line-height: 28px; }
         .btn-primary {
             background: #0052d9;
             color: #fff;
             border-color: #0052d9;
         }
         .btn-primary:hover { background: #003cab; color: #fff; }
+        .result-count {
+            margin-left: auto;
+            font-size: 12px;
+            color: #888;
+            white-space: nowrap;
+        }
 
         .table-scroll {
-            overflow-x: auto;
+            overflow: auto;
             border: 1px solid #e5e9ef;
             border-radius: 0 0 6px 6px;
         }
@@ -107,10 +124,10 @@
         th, td {
             padding: 7px 12px;
             text-align: left;
-            white-space: nowrap;
             border-bottom: 1px solid #f0f2f5;
         }
         th {
+            white-space: nowrap;
             background: #f7f8fa;
             font-weight: 600;
             color: #333;
@@ -119,6 +136,16 @@
             z-index: 1;
             font-size: 12px;
         }
+        .resize-handle {
+            position: absolute;
+            right: 0; top: 0; bottom: 0;
+            width: 5px;
+            cursor: col-resize;
+            z-index: 2;
+            background: transparent;
+        }
+        .resize-handle:hover { background: rgba(0, 82, 217, 0.25); }
+        .resize-handle:active { background: #0052d9; }
         tr:hover td { background: #f0f6ff; }
         .case-code {
             color: #0052d9;
@@ -130,7 +157,7 @@
         .case-code:hover { text-decoration: underline; }
         .case-name-cell .name { font-weight: 500; color: #1a1a1a; }
         .case-name-cell .path { font-size: 10.5px; color: #999; margin-top: 2px; }
-        .case-desc { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: pre-wrap; color: #666; }
+        .case-desc { color: #666; }
 
         .priority {
             display: inline-block;
@@ -157,7 +184,16 @@
         .tag-red { background: #fde2e3; color: #e34d59; }
         .tag-cyan { background: #e8fafe; color: #0099cc; }
 
-        .owner-cell { display: flex; align-items: center; gap: 6px; }
+        .cell-trunc {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            word-break: break-all;
+            line-height: 1.4;
+        }
+        .owner-cell { display: flex; align-items: center; gap: 6px; overflow: hidden; min-width: 0; }
+        .cell-trunc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .avatar-mini {
             display: inline-flex;
             align-items: center;
@@ -192,84 +228,66 @@
         }
         .hidden { display: none; }
 
-        .pagination {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            margin-top: 14px;
-            flex-wrap: wrap;
-            font-size: 13px;
-            justify-content: flex-end;
+        .load-more {
+            text-align: center;
+            padding: 12px 0;
+            border: 1px solid #e5e9ef;
+            border-top: none;
+            border-radius: 0 0 6px 6px;
         }
-        .pagination .pg-total {
-            color: #999;
-            margin-right: 12px;
+        .load-more-btn {
+            padding: 6px 18px;
             font-size: 12.5px;
-        }
-        .page-btn {
-            min-width: 28px;
-            height: 28px;
-            padding: 0 6px;
-            border: 1px solid #dde3ea;
-            border-radius: 4px;
-            background: #fff;
-            color: #333;
+            color: #0052d9;
+            background: #f0f6ff;
+            border: 1px solid #d6e4ff;
+            border-radius: 16px;
             cursor: pointer;
-            font-size: 12px;
-            text-align: center;
-        }
-        .page-btn:hover { border-color: #0052d9; color: #0052d9; }
-        .page-btn.active { background: #0052d9; color: #fff; border-color: #0052d9; }
-        .page-btn:disabled { opacity: 0.35; cursor: default; }
-        .page-btn:disabled:hover { border-color: #dde3ea; color: #333; }
-
-        .page-size {
-            margin-left: 8px;
-            height: 28px;
-            padding: 0 8px;
-            border: 1px solid #dde3ea;
-            border-radius: 4px;
-            background: #fff;
-            color: #333;
-            font-size: 12px;
-            outline: none;
-        }
-        .page-size:focus { border-color: #0052d9; }
-        .pg-jump {
-            display: flex;
+            transition: all .15s;
+            display: inline-flex;
             align-items: center;
             gap: 4px;
-            color: #666;
-            font-size: 12.5px;
-            margin-left: 8px;
         }
-        .pg-jump input {
-            width: 40px;
-            height: 28px;
-            padding: 0 4px;
-            border: 1px solid #dde3ea;
-            border-radius: 4px;
-            background: #fff;
-            color: #333;
+        .load-more-btn:hover { background: #e0ecff; border-color: #0052d9; }
+        .load-more-btn:disabled { opacity: 0.4; cursor: not-allowed; border-color: #dde3ea; color: #999; background: #f5f5f5; }
+        .load-more-btn .arr { font-size: 10px; transition: transform .2s; }
+        .load-more-btn.expanded .arr { transform: rotate(180deg); }
+        .load-more .loading-dot { color: #999; font-size: 13px; }
+        #tooltip {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            max-width: 500px;
+            max-height: 360px;
+            overflow: auto;
+            padding: 10px 14px;
+            background: #333;
+            color: #fff;
             font-size: 12px;
-            text-align: center;
-            outline: none;
+            line-height: 1.5;
+            border-radius: 6px;
+            word-break: break-all;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            pointer-events: auto;
         }
-        .pg-jump input:focus { border-color: #0052d9; }
+        #tooltip table { color: #fff; font-size: 12px; border-collapse: collapse; }
+        #tooltip table td,
+        #tooltip table th { border: 1px solid #666; padding: 4px 8px; white-space: nowrap; color: #fff; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h2>基本信息</h2>
-    </div>
+    <div class="sticky-header">
+        <div class="header">
+            <h2>基本信息</h2>
+        </div>
 
-    <div class="scope-meta" id="scopeMeta">
-        <div class="sm-item"><span class="sm-label">测试任务</span><span class="sm-value" id="infoTaskName">-</span></div>
-        <div class="sm-item"><span class="sm-label">子测试任务</span><span class="sm-value" id="infoSubTaskName">-</span></div>
-        <div class="sm-item"><span class="sm-label">测试阶段</span><span class="sm-value" id="infoPhaseName">-</span></div>
-    </div>
+        <div class="scope-meta" id="scopeMeta">
+            <div class="sm-item"><span class="sm-label">测试任务</span><span class="sm-value sm-value-task" id="infoTaskName">-</span></div>
+            <div class="sm-item"><span class="sm-label">子测试任务</span><span class="sm-value sm-value-subtask" id="infoSubTaskName">-</span></div>
+            <div class="sm-item"><span class="sm-label">测试阶段</span><span class="sm-value sm-value-phase" id="infoPhaseName">-</span></div>
+        </div>
 
-    <div class="case-toolbar">
+        <div class="case-toolbar">
         <div class="case-search" style="min-width:150px">
             <span class="ic">&#128269;</span>
             <input id="filterTestCaseNo" placeholder="编号" />
@@ -308,7 +326,10 @@
             <option value="其他">其他</option>
             <option value="报表统计类">报表统计类</option>
         </select>
+        <button class="btn-sm" id="refreshBtn" title="刷新">↻</button>
         <button class="btn-sm" id="resetBtn">重置</button>
+        <span class="result-count" id="resultCount"></span>
+    </div>
     </div>
 
     <div id="loading" class="loading hidden">查询中...</div>
@@ -316,9 +337,15 @@
 
     <div id="tableWrap" class="table-scroll hidden"></div>
 
-    <div id="pagination" class="pagination hidden"></div>
+    <div id="loadMore" class="load-more hidden">
+        <button type="button" id="loadMoreBtn" class="load-more-btn">
+            <span class="txt">更多20个</span>
+            <span class="arr">▾</span>
+        </button>
+    </div>
 
-    <script nonce="${nonce}" src="${httpClientUri}"></script>
+    <div id="tooltip"></div>
+
     <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>

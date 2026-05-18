@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { writeParams } from '../services/store';
-import { queryApi, QueryOpts } from '../services/http-client';
+const { queryApi, fetchTaskTree } = require('../services/http-client');
 
 function getNonce(): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -61,16 +61,26 @@ export class TestCaseWebviewProvider {
             this.panel?.webview.postMessage({
                 command: 'init',
                 ...this.readyParams,
-                pageSize: '20',
+                pageSize: '15',
                 currentPage: 1
             });
+        } else if (msg.command === 'fetchTaskTree') {
+            try {
+                const treeData = await fetchTaskTree(this.context);
+                this.panel?.webview.postMessage({ command: 'taskTreeData', data: treeData });
+            } catch {
+                this.panel?.webview.postMessage({ command: 'taskTreeData', data: [] });
+            }
         } else if (msg.command === 'query') {
             this.panel?.webview.postMessage({ command: 'loading' });
             try {
-                const opts: QueryOpts = {
+                const opts = {
                     currentPage: msg.currentPage || 1,
                     pageSize: String(msg.pageSize || '20'),
-                };
+                    testTaskNo: msg.testTaskNo || '',
+                    subTestTaskName: msg.subTestTaskName || '',
+                    testPhaseName: msg.testPhaseName || '',
+                } as any;
                 if (msg.testCaseNo) opts.testCaseNo = msg.testCaseNo;
                 if (msg.testCaseName) opts.testCaseName = msg.testCaseName;
                 if (msg.testCasePath) opts.testCasePath = msg.testCasePath;
@@ -83,10 +93,9 @@ export class TestCaseWebviewProvider {
                     this.panel?.webview.postMessage({
                         command: 'showData',
                         data: result.body,
-                        total: result.total ?? result.body.length,
-                        currentPage: result.currentPage ?? msg.currentPage,
-                        pageSize: result.pageSize ?? msg.pageSize
                     });
+                } else if (result.returnCode === '2005' && result.errorMsg === '任务测试案例信息不存在') {
+                    this.panel?.webview.postMessage({ command: 'endOfData' });
                 } else {
                     this.panel?.webview.postMessage({ command: 'showError', message: result.errorMsg || '查询失败' });
                 }
@@ -143,13 +152,9 @@ export class TestCaseWebviewProvider {
         const scriptUri = this.panel!.webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'main.js')
         );
-        const httpClientUri = this.panel!.webview.asWebviewUri(
-            vscode.Uri.joinPath(this.extensionUri, 'media', 'common', 'http-client.js')
-        );
         const nonce = getNonce();
         let html = fs.readFileSync(htmlPath.fsPath, 'utf-8');
         html = html.replace(/\$\{scriptUri\}/g, scriptUri.toString());
-        html = html.replace(/\$\{httpClientUri\}/g, httpClientUri.toString());
         html = html.replace(/\$\{nonce\}/g, nonce);
         return html;
     }

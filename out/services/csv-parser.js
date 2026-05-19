@@ -77,7 +77,11 @@ function loadCsvFromFile(filePath) {
     try {
         // 读取文件内容（UTF-8 编码）
         const buffer = fs.readFileSync(filePath);
-        const content = buffer.toString('utf-8');
+        let content = buffer.toString('utf-8');
+        // 移除 BOM 字符
+        if (content.charCodeAt(0) === 0xFEFF) {
+            content = content.slice(1);
+        }
         // 使用 xlsx 库解析 CSV 字符串
         const workbook = XLSX.read(content, { type: 'string' });
         const firstSheet = workbook.SheetNames[0];
@@ -126,6 +130,10 @@ function loadCsvFromFile(filePath) {
  */
 function loadCsvFromContent(content) {
     try {
+        // 移除 BOM 字符
+        if (content.charCodeAt(0) === 0xFEFF) {
+            content = content.slice(1);
+        }
         const workbook = XLSX.read(content, { type: 'string', raw: true });
         const firstSheet = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheet];

@@ -21,11 +21,6 @@
 /* ==================== 基础样式 ==================== */
 body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:var(--bg);color:#333;overflow:hidden}
 
-/* ==================== 左上角表格图标 ==================== */
-.xs-tbl-icon{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:4px;cursor:pointer;flex-shrink:0;transition:background .15s}
-.xs-tbl-icon:hover{background:#e8e8e8}
-.xs-tbl-icon:hover svg{stroke:var(--p)}
-
 /* ==================== 布局容器 ==================== */
 .xs-app{height:100vh;display:flex;flex-direction:column}
 
@@ -35,6 +30,10 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 .xs-sp{flex:1}
 .xs-mod{display:none;font-size:12px;color:var(--tl)}
 .xs-mod strong{color:var(--d)}
+.xs-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:4px;cursor:pointer;background:#f5f5f5;border:1px solid var(--bd);transition:all .15s;flex-shrink:0}
+.xs-icon-btn:hover{background:#e8e8e8;border-color:var(--p)}
+.xs-icon-btn svg{width:14px;height:14px;fill:var(--tl)}
+.xs-icon-btn:hover svg{fill:var(--p)}
 
 /* ==================== 按钮样式 ==================== */
 .xs-btn{background:#f5f5f5;border:1px solid var(--bd);border-radius:3px;padding:4px 12px;cursor:pointer;font-size:12px;transition:all .15s}
@@ -49,38 +48,46 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 
 /* ==================== 表格容器 ==================== */
 .xs-container{flex:1;overflow:auto;padding:0}
-.xs-container table{width:auto;min-width:100%}
+.xs-container table{width:100%;table-layout:fixed}
 
 /* ==================== 表格样式 ==================== */
-.xs-table{border-collapse:collapse}
-.xs-th{background:#f5f5f5;border:1px solid var(--bd);padding:8px 28px 8px 8px;position:relative;user-select:none;font-weight:500;text-align:left}
+.xs-table{border-collapse:collapse;table-layout:fixed;width:100%}
+.xs-th{background:#f5f5f5;border:1px solid var(--bd);padding:8px 24px 8px 8px;position:relative;user-select:none;font-weight:500;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
 .xs-th[data-sort]{background:#e3f2fd}
 .xs-th[data-sort]::after{content:'\25b2';margin-left:4px;font-size:10px;opacity:.5}
 .xs-th[data-sort="desc"]::after{content:'\25bc'}
-.xs-th-cb{width:50px;text-align:center;padding:8px}
-.xs-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:4px;cursor:pointer;background:#f5f5f5;border:1px solid var(--bd);transition:all .15s}
-.xs-icon-btn:hover{background:#e8e8e8;border-color:var(--p)}
-.xs-icon-btn svg{width:14px;height:14px;fill:var(--tl)}
-.xs-icon-btn:hover svg{fill:var(--p)}
-.xs-th-text{display:inline-block;vertical-align:middle}
-.xs-th-filter{position:absolute;right:6px;top:50%;transform:translateY(-50%);cursor:pointer;opacity:.5;font-size:10px}
+.xs-th-cb{width:50px;text-align:center;padding:8px;box-sizing:border-box;position:sticky;left:0;top:0;z-index:5;background:#f5f5f5}
+.xs-th:not(.xs-th-cb){position:sticky;top:0;z-index:2;background:#f5f5f5}
+.xs-th-text{display:inline;vertical-align:middle}
+.xs-th-filter{position:absolute;right:18px;top:50%;transform:translateY(-50%);cursor:pointer;opacity:.5;font-size:10px}
 .xs-th:hover .xs-th-filter{opacity:1}
-.xs-resizer{position:absolute;right:0;top:0;bottom:0;width:4px;cursor:col-resize;background:transparent}
-.xs-resizer:hover{background:var(--p)}
-
-.xs-td{border:1px solid var(--bd);padding:6px 8px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.xs-td-cb{width:40px;text-align:center}
+.xs-resizer{position:absolute;right:0;top:0;bottom:0;width:16px;cursor:col-resize;background:transparent;z-index:1}
+.xs-th:hover .xs-resizer{background:rgba(0,120,212,.1)}
+.xs-resizer:hover{background:var(--p)!important}
+.xs-td{border:1px solid var(--bd);padding:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box}
+.xs-td-cb{width:50px;text-align:center;cursor:row-resize;position:sticky;left:0;z-index:3;background:#fff;overflow:visible}
+.xs-cell-wrap{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;word-break:break-word}
+.xs-td-cb:hover{background:rgba(0,120,212,.1)}
+.xs-td-cb::after{content:'';position:absolute;left:2px;right:2px;bottom:2px;height:3px;background:transparent;border-radius:1px}
+tbody tr:hover .xs-td-cb::after{background:rgba(0,120,212,.3)}
+.xs-td-cb:active::after{background:var(--p)}
 .xs-editable{cursor:cell}
 .xs-editable.active{outline:2px solid var(--p);outline-offset:-2px}
 .xs-editable.modified{background:#fffbe6}
 .xs-editable.highlight{background:#fff59d}
 .xs-td input{width:100%;border:none;outline:none;padding:0;margin:0;font:inherit;background:transparent}
 
+/* 冻结行样式 */
+tbody tr{position:relative}
 tbody tr:hover{background:#f8f8f8}
 tbody tr.selected{background:#e3f2fd}
 tbody tr.hidden{display:none}
-tbody tr td:first-child{text-align:center}
+tbody tr td:first-child{text-align:center;background:inherit}
 tbody tr td:first-child input{width:16px;height:16px;cursor:pointer}
+/* 选中的行第一列也高亮 */
+tbody tr.selected td.xs-td-cb{background:#e3f2fd}
+/* hover 的行第一列也高亮 */
+tbody tr:hover td.xs-td-cb{background:#f8f8f8}
 
 /* ==================== 右键菜单 ==================== */
 .xs-cm{display:none;position:fixed;background:#fff;border:1px solid var(--bd);border-radius:4px;box-shadow:var(--sh);z-index:1000;min-width:160px;padding:4px 0}
@@ -127,14 +134,8 @@ tbody tr td:first-child input{width:16px;height:16px;cursor:pointer}
 <body>
 <div class="xs-app">
     <div class="xs-toolbar">
-        <div class="xs-tbl-icon" id="tableIcon" title="用 Text Editor 打开">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2"/>
-                <line x1="3" y1="10" x2="21" y2="10"/>
-                <line x1="3" y1="17" x2="21" y2="17"/>
-                <line x1="10" y1="3" x2="10" y2="21"/>
-                <line x1="17" y1="3" x2="17" y2="21"/>
-            </svg>
+        <div class="xs-icon-btn" data-action="openTextEditor" title="用 Text Editor 打开">
+            <svg viewBox="0 0 16 16"><path d="M4 1h5.5L13 4.5v9a.5.5 0 01-.5.5h-8a.5.5 0 01-.5-.5V1.5A.5.5 0 014 1zm5 .5V4h2.5L9 1.5zM5 7h5v1H5V7zm0 2h5v1H5V9zm0 2h3v1H5v-1z"/></svg>
         </div>
         <span class="xs-title">测试案例</span>
         <div class="xs-search">
@@ -198,6 +199,13 @@ function init() {
     S.vscode.postMessage({ type: 'init' });
 }
 
+// WebView 获得焦点时强制刷新数据（确保文件变更后能获取最新内容）
+window.addEventListener('focus', function() {
+    if (S.vscode) {
+        S.vscode.postMessage({ type: 'init' });
+    }
+});
+
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
 } else {
@@ -224,7 +232,7 @@ window.addEventListener('message', function(e) {
     if (msg.type === 'saved') {
         S.mods.clear();
         document.querySelectorAll('.xs-editable.modified').forEach(function(td){td.classList.remove('modified');});
-        updUI();toast('保存成功','success');
+        updUI();
     }
     if (msg.type === 'saveError') {
         toast('保存失败: '+msg.message,'error');
@@ -263,23 +271,6 @@ function bindEv(){
     var hcb=document.getElementById('headerCheckbox');
     if(hcb)hcb.addEventListener('change',function(){this.checked?selAll():deselAll();});
 
-    document.querySelectorAll('.row-cb').forEach(function(cb){
-        cb.addEventListener('click',function(e){
-            var tr=this.closest('tr');
-            var idx=parseInt(tr.dataset.row);
-            if(this.checked)S.sel.add(idx);else S.sel.delete(idx);
-            updSel();e.stopPropagation();
-        });
-    });
-
-    document.querySelectorAll('.xs-editable').forEach(function(td){
-        td.addEventListener('click',function(e){
-            if(e.target.tagName==='INPUT')return;
-            setCell(this);
-        });
-        td.addEventListener('dblclick',function(){startEdit(this);});
-    });
-
     var tbl=document.querySelector('.xs-table');
     if(tbl)tbl.addEventListener('contextmenu',function(e){
         e.preventDefault();
@@ -288,10 +279,8 @@ function bindEv(){
         showCtx(e.clientX,e.clientY);
     });
 
+    // 使用事件委托处理表格行事件（解决 reRender 后事件失效问题）
     document.addEventListener('click',function(e){
-        // 处理左上角表格图标点击
-        var tblIcon=e.target.closest('.xs-tbl-icon');
-        if(tblIcon){openTextEditor();return;}
         // 处理图标按钮点击
         var iconBtn=e.target.closest('.xs-icon-btn');
         if(iconBtn){
@@ -299,25 +288,54 @@ function bindEv(){
             if(action==='openTextEditor')openTextEditor();
             return;
         }
+        // 处理 checkbox 点击
+        var cb=e.target.closest('.row-cb');
+        if(cb){
+            var tr=cb.closest('tr');
+            var idx=parseInt(tr.dataset.row);
+            if(cb.checked)S.sel.add(idx);else S.sel.delete(idx);
+            updSel();
+            e.stopPropagation();
+            return;
+        }
+        // 处理行点击（选中该行）
+        var td=e.target.closest('.xs-editable');
+        if(td){
+            setCell(td);
+            return;
+        }
+        // 关闭菜单
         if(!e.target.closest('.xs-cm')&&!e.target.closest('.xs-sf')){
             document.getElementById('ctxMenu').style.display='none';
             document.getElementById('sortFilter').style.display='none';
         }
     });
 
-    document.querySelectorAll('.xs-th-filter').forEach(function(btn){
-        btn.addEventListener('click',function(e){
-            e.stopPropagation();
-            var th=this.closest('th');
-            var col=parseInt(th.dataset.col);
-            showSortF(col,th);
-        });
+    // 双击单元格开始编辑
+    document.addEventListener('dblclick',function(e){
+        var td=e.target.closest('.xs-editable');
+        if(td){
+            startEdit(td);
+        }
     });
 
-    document.querySelectorAll('.xs-resizer').forEach(function(res){
-        res.addEventListener('mousedown',function(e){
+    // 表头排序按钮和列宽拖动使用事件委托
+    document.addEventListener('click',function(e){
+        var btn=e.target.closest('.xs-th-filter');
+        if(btn){
+            e.stopPropagation();
+            var th=btn.closest('th');
+            var col=parseInt(th.dataset.col);
+            showSortF(col,th);
+            return;
+        }
+    });
+
+    document.addEventListener('mousedown',function(e){
+        var res=e.target.closest('.xs-resizer');
+        if(res){
             e.preventDefault();e.stopPropagation();
-            var th=this.parentElement;
+            var th=res.parentElement;
             var startX=e.clientX;
             var startW=th.offsetWidth;
             document.body.style.cursor='col-resize';
@@ -325,7 +343,49 @@ function bindEv(){
             function onUp(){document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',onUp);document.body.style.cursor='';}
             document.addEventListener('mousemove',onMove);
             document.addEventListener('mouseup',onUp);
-        });
+            return;
+        }
+        // 行高拖动（复选框列）
+        var tdCb=e.target.closest('.xs-td-cb');
+        if(tdCb && !e.target.closest('input')){
+            e.preventDefault();e.stopPropagation();
+            var tr=tdCb.closest('tr');
+            var startY=e.clientY;
+            var startH=tr.getBoundingClientRect().height;
+            var rowIdx=parseInt(tr.dataset.row);
+            // 获取单行高度
+            var tdSample=tr.querySelector('.xs-td:not(.xs-td-cb)');
+            var lineH=tdSample?tdSample.offsetHeight:28;
+            document.body.style.cursor='row-resize';
+            function updateWrap(h){
+                var lines=Math.max(1,Math.round(h/lineH));
+                var wraps=tr.querySelectorAll('.xs-cell-wrap');
+                wraps.forEach(function(w){
+                    w.style.whiteSpace=lines>1?'normal':'nowrap';
+                    w.style.overflow='hidden';
+                    w.style.textOverflow='ellipsis';
+                    w.style.wordBreak='break-word';
+                    w.style.display=lines>1?'-webkit-box':'';
+                    w.style.webkitBoxOrient='vertical';
+                    w.style.webkitLineClamp=lines>1?lines:'';
+                });
+            }
+            function onMove(ev){
+                var h=Math.max(lineH,startH+(ev.clientY-startY));
+                tr.style.height=h+'px';
+                S.rowHeights=S.rowHeights||{};
+                S.rowHeights[rowIdx]=h;
+                updateWrap(h);
+            }
+            function onUp(){
+                document.removeEventListener('mousemove',onMove);
+                document.removeEventListener('mouseup',onUp);
+                document.body.style.cursor='';
+            }
+            document.addEventListener('mousemove',onMove);
+            document.addEventListener('mouseup',onUp);
+            return;
+        }
     });
 
     document.getElementById('pushBtn').addEventListener('click',pushTC);
@@ -351,7 +411,6 @@ document.addEventListener('keydown',function(e){
     if(c&&e.key==='y'){e.preventDefault();redo();}
     if(c&&e.key==='f'){e.preventDefault();toggleFind();}
     if((e.key==='Delete'||e.key==='Backspace')&&S.cell){e.preventDefault();clearCell();}
-    if(c&&e.key==='s'){e.preventDefault();saveFile();}
     if(e.key==='Enter'&&S.cell){e.preventDefault();startEdit(S.cell);}
     if(e.key==='Escape'){cancelEdit();}
 });
@@ -441,7 +500,7 @@ function startEdit(td){
             var nt=document.querySelector('.xs-editable[data-row="'+(ri+1)+'"][data-col="'+ci+'"]');
             if(nt){setCell(nt);startEdit(nt);}
         }
-        if(ev.key==='Escape'){td.innerHTML='<span class="xs-cell-text">'+escHtml(orig)+'</span>';S.editing=false;setCell(td);}
+        if(ev.key==='Escape'){td.innerHTML='<div class="xs-cell-wrap"><span class="xs-cell-text">'+escHtml(orig)+'</span></div>';S.editing=false;setCell(td);}
     });
 }
 
@@ -452,7 +511,7 @@ function finEdit(td,ri,ci,orig){
         var val=inp.value;
         var parent=td.parentNode;
         if(!parent)return;
-        td.innerHTML='<span class="xs-cell-text">'+escHtml(val)+'</span>';
+        td.innerHTML='<div class="xs-cell-wrap"><span class="xs-cell-text">'+escHtml(val)+'</span></div>';
         if(val!==orig){
             if(!S.data.rows[ri])S.data.rows[ri]=[];
             S.data.rows[ri][ci]=val;
@@ -460,6 +519,7 @@ function finEdit(td,ri,ci,orig){
             if(!S.mods.has(k)){S.mods.add(k);}
             td.classList.add('modified');
             saveHist();updUI();
+            autoSave();
         }
         var newTd=document.querySelector('.xs-editable[data-row="'+ri+'"][data-col="'+ci+'"]');
         if(newTd)setCell(newTd);
@@ -473,9 +533,9 @@ function clearCell(){
     var ri=parseInt(S.cell.dataset.row);
     var ci=parseInt(S.cell.dataset.col);
     S.data.rows[ri][ci]='';
-    S.cell.innerHTML='<span class="xs-cell-text"></span>';
+    S.cell.innerHTML='<div class="xs-cell-wrap"><span class="xs-cell-text"></span></div>';
     var k=ri+'-'+ci;S.mods.add(k);S.cell.classList.add('modified');
-    saveHist();updUI();
+    saveHist();updUI();autoSave();
 }
 
 // ==================== 复制/粘贴/剪切 ====================
@@ -501,8 +561,8 @@ function cutSel(){
         var ri=parseInt(S.cell.dataset.row);
         var ci=parseInt(S.cell.dataset.col);
         S.data.rows[ri][ci]='';
-        S.cell.innerHTML='<span class="xs-cell-text"></span>';
-        saveHist();updUI();
+        S.cell.innerHTML='<div class="xs-cell-wrap"><span class="xs-cell-text"></span></div>';
+        saveHist();updUI();autoSave();
     }
     toast('已剪切','success');
 }
@@ -514,14 +574,14 @@ function pasteClip(){
         var ci=parseInt(S.cell.dataset.col);
         if(!S.data.rows[ri])S.data.rows[ri]=[];
         S.data.rows[ri][ci]=S.clip.data;
-        S.cell.innerHTML='<span class="xs-cell-text">'+escHtml(S.clip.data)+'</span>';
-        saveHist();updUI();toast('已粘贴','success');
+        S.cell.innerHTML='<div class="xs-cell-wrap"><span class="xs-cell-text">'+escHtml(S.clip.data)+'</span></div>';
+        saveHist();updUI();autoSave();toast('已粘贴','success');
     }else if(S.clip.type==='rows'){
         var sr=S.sel.size>0?Math.min(...S.sel):0;
         S.clip.data.forEach(function(row,i){
             if(S.data.rows[sr+i]){row.forEach(function(val,j){S.data.rows[sr+i][j]=val;});}
         });
-        reRender();saveHist();updUI();toast('已粘贴 '+S.clip.data.length+' 行','success');
+        reRender();saveHist();updUI();autoSave();toast('已粘贴 '+S.clip.data.length+' 行','success');
     }
 }
 
@@ -530,7 +590,7 @@ function insertRow(){
     var idx=S.cell?parseInt(S.cell.dataset.row)+1:S.data.rows.length;
     var nr=new Array(S.data.headers.length).fill('');
     S.data.rows.splice(idx,0,nr);
-    saveHist();reRender();updUI();toast('已插入行','success');
+    saveHist();reRender();updUI();autoSave();toast('已插入行','success');
 }
 
 function duplicateRow(){
@@ -541,23 +601,33 @@ function duplicateRow(){
     var copy=[...src];
     S.data.rows.splice(idx+1,0,copy);
     S.sel.clear();S.sel.add(idx+1);
-    saveHist();reRender();updUI();toast('已复制行','success');
+    saveHist();reRender();updUI();autoSave();toast('已复制行','success');
 }
 
-function saveFile(){S.vscode.postMessage({type:'save',data:{headers:S.data.headers,rows:S.data.rows}});toast('保存中...','');}
+function autoSave(){S.vscode.postMessage({type:'save',data:{headers:S.data.headers,rows:S.data.rows}});}
 
 function insertCol(){
     var idx=S.cell?parseInt(S.cell.dataset.col)+1:S.data.headers.length;
     S.data.headers.splice(idx,0,'新列');
     S.data.rows.forEach(function(r){r.splice(idx,0,'');});
-    saveHist();reRender();updUI();toast('已插入列','success');
+    saveHist();reRender();updUI();autoSave();toast('已插入列','success');
 }
 
 function deleteRows(){
     if(S.sel.size===0)return;
     var rows=Array.from(S.sel).sort(function(a,b){return b-a;});
     rows.forEach(function(i){S.data.rows.splice(i,1);});
-    S.sel.clear();saveHist();reRender();updUI();toast('已删除 '+rows.length+' 行','success');
+    S.sel.clear();saveHist();reRender();updUI();autoSave();toast('已删除 '+rows.length+' 行','success');
+}
+
+function deleteCol(){
+    if(!S.cell)return;
+    var colIdx=parseInt(S.cell.dataset.col);
+    if(S.data.headers.length<=1){toast('至少保留一列','error');return;}
+    S.data.headers.splice(colIdx,1);
+    S.data.rows.forEach(function(r){r.splice(colIdx,1);});
+    S.sel.clear();S.cell=null;
+    saveHist();reRender();updUI();autoSave();toast('已删除列','success');
 }
 
 // ==================== 右键菜单 ====================
@@ -573,6 +643,7 @@ function showCtx(x,y){
         '<div class="xs-mi" id="ctxInsertCol">插入列</div>'+
         '<div class="xs-div"></div>'+
         '<div class="xs-mi'+(S.sel.size>0?'':' disabled')+'" id="ctxDeleteRows">删除行</div>'+
+        '<div class="xs-mi'+(S.cell?'':' disabled')+'" id="ctxDeleteCol">删除列</div>'+
         '<div class="xs-mi'+(S.cell?'':' disabled')+'" id="ctxClearCell">清除内容</div>'+
         '<div class="xs-div"></div>'+
         '<div class="xs-mi" id="ctxSelAll">全选 <span class="lb">Ctrl+A</span></div>';
@@ -583,6 +654,7 @@ function showCtx(x,y){
     document.getElementById('ctxDuplicateRow').addEventListener('click',duplicateRow);
     document.getElementById('ctxInsertCol').addEventListener('click',insertCol);
     document.getElementById('ctxDeleteRows').addEventListener('click',deleteRows);
+    document.getElementById('ctxDeleteCol').addEventListener('click',deleteCol);
     document.getElementById('ctxClearCell').addEventListener('click',clearCell);
     document.getElementById('ctxSelAll').addEventListener('click',selAll);
     menu.style.display='block';
@@ -710,7 +782,7 @@ function doReplace(){
         S.data.rows[ri][ci]=cell.replace(regex,newVal);
         S.cell.querySelector('.xs-cell-text').textContent=S.data.rows[ri][ci];
         var k=ri+'-'+ci;S.mods.add(k);S.cell.classList.add('modified');
-        saveHist();updUI();doFind();toast('已替换','success');
+        saveHist();updUI();doFind();autoSave();toast('已替换','success');
     }
 }
 
@@ -729,19 +801,24 @@ function doReplaceAll(){
             }
         });
     });
-    if(count>0){saveHist();reRender();updUI();doFind();toast('已替换 '+count+' 处','success');}
+    if(count>0){saveHist();reRender();updUI();doFind();autoSave();toast('已替换 '+count+' 处','success');}
 }
 
 // ==================== 打开 TextEditor ====================
+function csvValue(v){
+    v=String(v||'');
+    if(v.includes(',')||v.includes('"')||v.includes('\n')||v.includes('\r')){
+        return'"'+v.replace(/"/g,'""')+'"';
+    }
+    return v;
+}
 function openTextEditor(){
-    // 将 CSV 数据转换为文本格式
     var lines=[];
-    if(S.data.headers)lines.push(S.data.headers.map(function(h){return'"'+h.replace(/"/g,'""')+'"';}).join(','));
+    if(S.data.headers)lines.push(S.data.headers.map(csvValue).join(','));
     S.data.rows.forEach(function(row){
-        lines.push(row.map(function(c){return'"'+String(c).replace(/"/g,'""')+'"';}).join(','));
+        lines.push(row.map(csvValue).join(','));
     });
     var csvText=lines.join('\n');
-    // 发送消息给后端打开 TextEditor
     S.vscode.postMessage({type:'openTextEditor',data:csvText});
 }
 
@@ -765,21 +842,40 @@ function reRender(){
     if(S.editing)return;
     var h=S.data.headers||[];
     var r=S.data.rows||[];
-    var html='<table class="xs-table"><thead><tr><th class="xs-th xs-th-cb"><input type="checkbox" id="headerCheckbox"><div class="xs-icon-btn" data-action="openTextEditor" title="在新窗口打开"><svg viewBox="0 0 16 16"><path d="M3 1v14h10V5.5L9.5 2H3zm9 3.5V4H8.5L6 6.5V12H4V2.5A1.5 1.5 0 0 1 5.5 1h5.5a1.5 1.5 0 0 1 1.5 1.5V6H10V4.5h2zM5 3h6v1H5V3zm0 2h6v1H5V5z"/></svg></div></th>';
+    var html='<table class="xs-table"><thead><tr><th class="xs-th xs-th-cb"><input type="checkbox" id="headerCheckbox"></th>';
     h.forEach(function(ht,i){
         var sa=S.sCol===i?'data-sort="'+S.sOrder+'"':'';
-        var sw=S.colWidths&&S.colWidths[i]?' style="width:'+S.colWidths[i]+'px"':'';
+        var sw=S.colWidths&&S.colWidths[i]?S.colWidths[i]:(ht.length*9+30); // 表头宽度：字符数*9 + 图标和间距空间
+        var wStyle=' style="width:'+sw+'px"';
         var htEsc=escHtml(ht);
-        html=html+'<th class="xs-th" data-col="'+i+'" '+sa+sw+'><span class="xs-th-text" title="'+htEsc+'">'+htEsc+'</span><span class="xs-th-filter">▼</span><div class="xs-resizer" data-col="'+i+'"></div></th>';
+        html=html+'<th class="xs-th" data-col="'+i+'" '+sa+wStyle+'><span class="xs-th-text" title="'+htEsc+'">'+htEsc+'</span><span class="xs-th-filter">▼</span><div class="xs-resizer" data-col="'+i+'"></div></th>';
     });
     html=html+'</tr></thead><tbody>';
     r.forEach(function(row,ri){
-        html=html+'<tr data-row="'+ri+'"><td class="xs-td xs-td-cb"><input type="checkbox" class="row-cb"></td>';
+        var savedH=S.rowHeights&&S.rowHeights[ri];
+        var rowStyle=savedH?' style="height:'+savedH+'px"':'';
+        var lines=1;
+        var wrapStyle='';
+        if(savedH){
+            // 测量单行高度
+            var tmpDiv=document.createElement('div');
+            tmpDiv.className='xs-td';
+            tmpDiv.style.visibility='hidden';
+            tmpDiv.style.position='absolute';
+            tmpDiv.style.width='100px';
+            tmpDiv.textContent='test';
+            document.body.appendChild(tmpDiv);
+            var lineH=tmpDiv.offsetHeight;
+            document.body.removeChild(tmpDiv);
+            lines=Math.max(1,Math.round(savedH/lineH));
+            wrapStyle=' style="white-space:normal;overflow:hidden;text-overflow:ellipsis;word-break:break-word;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:'+lines+'"';
+        }
+        html=html+'<tr data-row="'+ri+'"'+rowStyle+'><td class="xs-td xs-td-cb"><input type="checkbox" class="row-cb"></td>';
         row.forEach(function(cell,ci){
             var k=ri+'-'+ci;
             var mod=S.mods.has(k)?' modified':'';
             var cellEsc=escHtml(cell);
-            html=html+'<td class="xs-td xs-editable'+mod+'" data-row="'+ri+'" data-col="'+ci+'" title="'+cellEsc+'"><span class="xs-cell-text">'+cellEsc+'</span></td>';
+            html=html+'<td class="xs-td xs-editable'+mod+'" data-row="'+ri+'" data-col="'+ci+'" title="'+cellEsc+'"><div class="xs-cell-wrap"'+wrapStyle+'><span class="xs-cell-text">'+cellEsc+'</span></div></td>';
         });
         html=html+'</tr>';
     });

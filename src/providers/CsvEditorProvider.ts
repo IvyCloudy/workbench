@@ -141,9 +141,10 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider {
 
         // 监听 WebView 消息
         webviewPanel.webview.onDidReceiveMessage(async (msg: any) => {
-            // WebView 初始化完成后发送数据
+            // WebView 初始化完成后发送数据（每次都重新读取文件确保最新）
             if (msg?.type === 'init') {
-                const dataStr = JSON.stringify(csvData);
+                const freshData = parseCsvData(filePath);
+                const dataStr = JSON.stringify(freshData);
                 const encoder = new TextEncoder();
                 const uint8Array = encoder.encode(dataStr);
                 // 使用 Uint8Array 传输以正确处理 UTF-8 中文
@@ -200,10 +201,19 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider {
         const rows = csvData.rows || [];
         const lines: string[] = [];
 
-        // 生成 CSV 行，处理引号转义
-        lines.push(headers.map(h => '"' + (h || '').replace(/"/g, '""') + '"').join(','));
+        // 辅助函数：只有包含逗号、引号或换行时才加引号
+        const formatCell = (v: string): string => {
+            const s = v || '';
+            if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+                return '"' + s.replace(/"/g, '""') + '"';
+            }
+            return s;
+        };
+
+        // 生成 CSV 行
+        lines.push(headers.map(formatCell).join(','));
         rows.forEach(row => {
-            lines.push((row || []).map(cell => '"' + ((cell || '').toString()).replace(/"/g, '""') + '"').join(','));
+            lines.push((row || []).map(cell => formatCell((cell || '').toString())).join(','));
         });
 
         // UTF-8 BOM + CRLF 换行

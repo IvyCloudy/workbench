@@ -113,13 +113,26 @@ tbody tr td:first-child input{width:16px;height:16px;cursor:pointer}
         var msg=e.data;
         if(msg.type==='csvData'){
             try{
-                S.data=JSON.parse(atob(msg.data));
+                console.log('[CsvEditor] 原始数据长度:', msg.data.length);
+                // 使用 TextDecoder 替代 atob，避免编码问题
+                var decoder = new TextDecoder('utf-8');
+                var uint8Array = new Uint8Array(msg.data);
+                var decoded = decoder.decode(uint8Array);
+                console.log('[CsvEditor] 解码后样例:', decoded.substring(0, 200));
+                S.data=JSON.parse(decoded);
+                console.log('[CsvEditor] JSON解析成功');
+                console.log('[CsvEditor] 第一行数据:', JSON.stringify(S.data.rows[0]));
+                console.log('[CsvEditor] testTaskName (index 2):', S.data.rows[0][2]);
+                console.log('[CsvEditor] testCaseName (index 6):', S.data.rows[0][6]);
+                console.log('[CsvEditor] testPhaseName (index 4):', S.data.rows[0][4]);
             }catch(ex){
+                console.error('[CsvEditor] 数据解析错误:', ex);
                 S.data={headers:[],rows:[]};
             }
             S.sel.clear();S.cell=null;S.clip=null;S.mods.clear();S.hist=[];S.hIdx=-1;
             saveHist();bindEv();updUI();reRender();
-            document.getElementById('loading').style.display='none';
+            var loading=document.getElementById('loading');
+            if(loading)loading.style.display='none';
         }
         if(msg.type==='saved'){
             S.mods.clear();

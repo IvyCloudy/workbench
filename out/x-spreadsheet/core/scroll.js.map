@@ -1,0 +1,1 @@
+{"version":3,"file":"scroll.js","sourceRoot":"","sources":["../../../src/x-spreadsheet/core/scroll.js"],"names":[],"mappings":";;AAAA,MAAqB,MAAM;IACzB;QACE,IAAI,CAAC,CAAC,GAAG,CAAC,CAAC,CAAC,OAAO;QACnB,IAAI,CAAC,CAAC,GAAG,CAAC,CAAC,CAAC,MAAM;QAClB,IAAI,CAAC,EAAE,GAAG,CAAC,CAAC,CAAC,iBAAiB;QAC9B,IAAI,CAAC,EAAE,GAAG,CAAC,CAAC,CAAC,iBAAiB;IAChC,CAAC;CACF;AAPD,yBAOC"}

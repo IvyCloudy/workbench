@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { loadCsvFromFile } from '../services/csv-parser';
+import { queryApi } from '../services/http-client';
+
 
 /**
  * 生成随机字符串作为 CSP nonce
@@ -94,8 +96,11 @@ function parseCsvData(filePath: string): { headers: string[], rows: string[][], 
  */
 export class CsvEditorProvider implements vscode.CustomEditorProvider {
     private onDidChangeCustomDocumentEmitter = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<vscode.CustomDocument>>();
+    private context: vscode.ExtensionContext | undefined;
 
-    constructor(private extensionUri: vscode.Uri) {}
+    constructor(private extensionUri: vscode.Uri, context?: vscode.ExtensionContext) {
+        this.context = context;
+    }
 
     get onDidChangeCustomDocument(): vscode.Event<vscode.CustomDocumentEditEvent<vscode.CustomDocument>> {
         return this.onDidChangeCustomDocumentEmitter.event;
@@ -115,6 +120,10 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider {
         const filePath = document.uri.fsPath;
         const nonce = getNonce();
 
+        // 设置标题区分插件编辑器与 TextEditor
+        const fileName = filePath.split(path.sep).pop() || 'CSV';
+        webviewPanel.title = fileName + ' - 测试案例编辑器';
+
         // 配置 WebView 允许执行脚本
         webviewPanel.webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
 
@@ -131,7 +140,7 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider {
         webviewPanel.webview.html = this.getHtmlContent(webviewPanel.webview, nonce);
 
         // 监听 WebView 消息
-        webviewPanel.webview.onDidReceiveMessage((msg: any) => {
+        webviewPanel.webview.onDidReceiveMessage(async (msg: any) => {
             // WebView 初始化完成后发送数据
             if (msg?.type === 'init') {
                 const dataStr = JSON.stringify(csvData);
@@ -148,6 +157,34 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider {
                     const errMsg = err?.message || String(err) || '保存失败';
                     webviewPanel.webview.postMessage({ type: 'saveError', message: errMsg });
                 });
+            }
+            // 推送测试案例
+            if (msg?.type === 'pushTestCase' && msg?.data) {
+                console.log('推送数据:', JSON.stringify(msg.data, null, 2));
+                try {
+                    const ctx = this.context;
+                    if (!ctx) {
+                        webviewPanel.webview.postMessage({ type: 'pushError', message: '扩展上下文未初始化' });
+                        return;
+                    }
+                    // 解析文件路径获取任务信息
+                    const parts = filePath.split(path.sep);
+                    const testTaskNo = parts.find((p, i) => 
+                        p.startsWith('TT') || /^\d+$/.test(p.slice(0, 2))
+                    ) || '';
+                    const result = await queryApi({
+                        testTaskNo: testTaskNo,
+                        currentPage: 1,
+                        pageSize: 10
+                    }, ctx);
+                    webviewPanel.webview.postMessage({ type: 'pushSuccess', result });
+                } catch (err: any) {
+                    webviewPanel.webview.postMessage({ type: 'pushError', message: err?.message || '推送失败' });
+                }
+            }
+            // 打开 TextEditor（不关闭插件面板，TextEditor 在当前列叠在插件上方）
+            if (msg?.type === 'openTextEditor') {
+                await vscode.commands.executeCommand('csvEditor.openWithFile', filePath);
             }
         });
     }
@@ -199,7 +236,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-
         const extensionUri = this.extensionUri;
 
         // 读取 HTML 模板
-        const htmlPath = path.join(extensionUri.fsPath, 'media', 'pages', 'csveditor', 'csv-editor.html');
+        const htmlPath = path.join(extensionUri.fsPath, 'media', 'pages', 'csveditor', 'index.html');
         let html = fs.readFileSync(htmlPath, 'utf-8');
 
         // 替换 nonce 占位符

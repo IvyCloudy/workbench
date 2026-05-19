@@ -33,6 +33,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.markUserOpenedAsText = markUserOpenedAsText;
+exports.isUserOpenedAsText = isUserOpenedAsText;
 exports.activate = activate;
 const vscode = __importStar(require("vscode"));
 const WorkbenchProvider_1 = require("./providers/WorkbenchProvider");
@@ -58,6 +60,15 @@ function updateShowIcon() {
     vscode.commands.executeCommand('setContext', 'testcaseViewer:showIcon', !!uri && isTestCaseFile(uri));
 }
 const processingFiles = new Set();
+// 记录用户主动用 TextEditor 打开的文件路径
+// 一旦用户主动用 TextEditor 打开，当前会话中不再自动切换回插件
+const userOpenedAsTextFiles = new Set();
+function markUserOpenedAsText(fsPath) {
+    userOpenedAsTextFiles.add(fsPath);
+}
+function isUserOpenedAsText(uri) {
+    return userOpenedAsTextFiles.has(uri.fsPath);
+}
 async function openWithCsvEditor(uri) {
     const fsPath = uri.fsPath;
     if (processingFiles.has(fsPath))
@@ -80,11 +91,23 @@ async function openWithCsvEditor(uri) {
 function activate(context) {
     const workbenchProvider = new WorkbenchProvider_1.WorkbenchProvider(context.extensionUri, context);
     const csvBrowserProvider = new CsvBrowserProvider_1.CsvBrowserProvider(context.extensionUri, context);
-    const csvEditorProvider = new CsvEditorProvider_1.CsvEditorProvider(context.extensionUri);
+    const csvEditorProvider = new CsvEditorProvider_1.CsvEditorProvider(context.extensionUri, context);
     // 注册自定义CSV编辑器
     context.subscriptions.push(vscode.window.registerCustomEditorProvider('csvEditor.testCase', csvEditorProvider));
-    // 监听标签页打开
+    // 监听标签页变化
     context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(async (e) => {
+        // 标签关闭时清除标记，再次打开时恢复自动切换
+        for (const tab of e.closed) {
+            const input = tab.input;
+            let uri;
+            if (input instanceof vscode.TabInputText)
+                uri = input.uri;
+            else if (input instanceof vscode.TabInputCustom)
+                uri = input.uri;
+            if (uri && /\.csv$/i.test(uri.fsPath)) {
+                userOpenedAsTextFiles.delete(uri.fsPath);
+            }
+        }
         for (const tab of e.opened) {
             const input = tab.input;
             let uri;
@@ -95,6 +118,11 @@ function activate(context) {
                 uri = input.uri;
             }
             if (uri && (0, CsvDocumentProvider_1.isQualifiedCsvFile)(uri)) {
+                // 如果用户主动用 TextEditor 打开，不切换
+                if (isUserOpenedAsText(uri)) {
+                    console.log('[CSV拦截] 用户主动用TextEditor打开，跳过:', uri.fsPath);
+                    continue;
+                }
                 console.log('[CSV拦截] 标签页打开CSV:', uri.fsPath);
                 await openWithCsvEditor(uri);
             }
@@ -105,6 +133,12 @@ function activate(context) {
         if (editor) {
             const uri = editor.document.uri;
             console.log('[CSV拦截] 活动编辑器变化:', uri.fsPath);
+            // 如果用户主动用 TextEditor 打开，不切换
+            if (isUserOpenedAsText(uri)) {
+                console.log('[CSV拦截] 用户主动用TextEditor打开，跳过:', uri.fsPath);
+                updateShowIcon();
+                return;
+            }
             if ((0, CsvDocumentProvider_1.isQualifiedCsvFile)(uri)) {
                 await openWithCsvEditor(uri);
             }
@@ -122,6 +156,20 @@ function activate(context) {
         const uri = getActiveFileUri();
         if (uri && /\.csv$/i.test(uri.fsPath)) {
             await openWithCsvEditor(uri);
+        }
+    }), vscode.commands.registerCommand('csvEditor.openWith', async () => {
+        const uri = getActiveFileUri();
+        if (uri && /\.csv$/i.test(uri.fsPath)) {
+            // 标记为用户主动用 TextEditor 打开
+            markUserOpenedAsText(uri.fsPath);
+            await vscode.commands.executeCommand('vscode.openWith', uri, 'default');
+        }
+    }), vscode.commands.registerCommand('csvEditor.openWithFile', async (filePath) => {
+        if (filePath) {
+            // 标记为用户主动用 TextEditor 打开
+            markUserOpenedAsText(filePath);
+            const uri = vscode.Uri.file(filePath);
+            await vscode.commands.executeCommand('vscode.openWith', uri, 'default');
         }
     }));
     updateShowIcon();

@@ -23,6 +23,17 @@ function updateShowIcon(): void {
 }
 
 const processingFiles = new Set<string>();
+// 记录用户主动用 TextEditor 打开的文件路径
+// 一旦用户主动用 TextEditor 打开，当前会话中不再自动切换回插件
+const userOpenedAsTextFiles = new Set<string>();
+
+export function markUserOpenedAsText(fsPath: string): void {
+    userOpenedAsTextFiles.add(fsPath);
+}
+
+export function isUserOpenedAsText(uri: vscode.Uri): boolean {
+    return userOpenedAsTextFiles.has(uri.fsPath);
+}
 
 async function openWithCsvEditor(uri: vscode.Uri): Promise<void> {
     const fsPath = uri.fsPath;
@@ -46,16 +57,26 @@ async function openWithCsvEditor(uri: vscode.Uri): Promise<void> {
 export function activate(context: vscode.ExtensionContext) {
     const workbenchProvider = new WorkbenchProvider(context.extensionUri, context);
     const csvBrowserProvider = new CsvBrowserProvider(context.extensionUri, context);
-    const csvEditorProvider = new CsvEditorProvider(context.extensionUri);
+    const csvEditorProvider = new CsvEditorProvider(context.extensionUri, context);
 
     // 注册自定义CSV编辑器
     context.subscriptions.push(
         vscode.window.registerCustomEditorProvider('csvEditor.testCase', csvEditorProvider)
     );
 
-    // 监听标签页打开
+    // 监听标签页变化
     context.subscriptions.push(
         vscode.window.tabGroups.onDidChangeTabs(async (e) => {
+            // 标签关闭时清除标记，再次打开时恢复自动切换
+            for (const tab of e.closed) {
+                const input = tab.input;
+                let uri: vscode.Uri | undefined;
+                if (input instanceof vscode.TabInputText) uri = input.uri;
+                else if (input instanceof vscode.TabInputCustom) uri = input.uri;
+                if (uri && /\.csv$/i.test(uri.fsPath)) {
+                    userOpenedAsTextFiles.delete(uri.fsPath);
+                }
+            }
             for (const tab of e.opened) {
                 const input = tab.input;
                 let uri: vscode.Uri | undefined;
@@ -65,6 +86,11 @@ export function activate(context: vscode.ExtensionContext) {
                     uri = input.uri;
                 }
                 if (uri && isQualifiedCsvFile(uri)) {
+                    // 如果用户主动用 TextEditor 打开，不切换
+                    if (isUserOpenedAsText(uri)) {
+                        console.log('[CSV拦截] 用户主动用TextEditor打开，跳过:', uri.fsPath);
+                        continue;
+                    }
                     console.log('[CSV拦截] 标签页打开CSV:', uri.fsPath);
                     await openWithCsvEditor(uri);
                 }
@@ -78,6 +104,12 @@ export function activate(context: vscode.ExtensionContext) {
             if (editor) {
                 const uri = editor.document.uri;
                 console.log('[CSV拦截] 活动编辑器变化:', uri.fsPath);
+                // 如果用户主动用 TextEditor 打开，不切换
+                if (isUserOpenedAsText(uri)) {
+                    console.log('[CSV拦截] 用户主动用TextEditor打开，跳过:', uri.fsPath);
+                    updateShowIcon();
+                    return;
+                }
                 if (isQualifiedCsvFile(uri)) {
                     await openWithCsvEditor(uri);
                 }
@@ -102,6 +134,22 @@ export function activate(context: vscode.ExtensionContext) {
             const uri = getActiveFileUri();
             if (uri && /\.csv$/i.test(uri.fsPath)) {
                 await openWithCsvEditor(uri);
+            }
+        }),
+        vscode.commands.registerCommand('csvEditor.openWith', async () => {
+            const uri = getActiveFileUri();
+            if (uri && /\.csv$/i.test(uri.fsPath)) {
+                // 标记为用户主动用 TextEditor 打开
+                markUserOpenedAsText(uri.fsPath);
+                await vscode.commands.executeCommand('vscode.openWith', uri, 'default');
+            }
+        }),
+        vscode.commands.registerCommand('csvEditor.openWithFile', async (filePath: string) => {
+            if (filePath) {
+                // 标记为用户主动用 TextEditor 打开
+                markUserOpenedAsText(filePath);
+                const uri = vscode.Uri.file(filePath);
+                await vscode.commands.executeCommand('vscode.openWith', uri, 'default');
             }
         })
     );

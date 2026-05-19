@@ -23,7 +23,7 @@
             "filenamePattern": "*.csv"
           }
         ],
-        "priority": "exclusive"
+        "priority": "option"
       }
     ],
     "commands": [
@@ -35,6 +35,10 @@
       {
         "command": "csvEditor.open",
         "title": "用测试案例编辑器打开"
+      },
+      {
+        "command": "csvEditor.openWith",
+        "title": "用 Text Editor 打开"
       }
     ],
     "menus": {
@@ -42,11 +46,6 @@
         {
           "command": "testcaseViewer.viewOnline",
           "when": "testcaseViewer:showIcon",
-          "group": "navigation"
-        },
-        {
-          "command": "csvEditor.open",
-          "when": "editorLangId == csv",
           "group": "navigation"
         }
       ]

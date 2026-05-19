@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!--
+    内容安全策略 (CSP)
+    - default-src 'self': 只允许同源资源
+    - script-src 'nonce-${nonce}': 只允许带有正确 nonce 的脚本（防 XSS）
+    - style-src 'self' 'unsafe-inline': 允许内联样式
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'nonce-${nonce}'; style-src 'self' 'unsafe-inline';">
+<style>
+/* ==================== 基础重置 ==================== */
+*{box-sizing:border-box;margin:0;padding:0}
+
+/* ==================== CSS 变量 ==================== */
+:root{
+    --bg:#fff;      /* 背景色 */
+    --tl:#666;      /* 次要文字颜色 */
+    --bd:#ddd;      /* 边框颜色 */
+    --p:#0078d4;    /* 主色调（蓝色） */
+    --s:#107c10;    /* 成功色（绿色） */
+    --d:#e34d59;    /* 危险色（红色） */
+    --sh:0 2px 8px rgba(0,0,0,.1)  /* 阴影 */
+}
+
+/* ==================== 基础样式 ==================== */
+body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:var(--bg);color:#333;overflow:hidden}
+
+/* ==================== 布局容器 ==================== */
+.xs-app{height:100vh;display:flex;flex-direction:column}
+
+/* ==================== 工具栏 ==================== */
+.xs-toolbar{display:flex;align-items:center;padding:8px 12px;background:var(--bg);border-bottom:1px solid var(--bd);gap:8px;flex-shrink:0}
+.xs-title{font-weight:600;color:#333}
+.xs-sp{flex:1}  /* 弹性间隔 */
+.xs-mod{display:none;font-size:12px;color:var(--tl)}  /* 修改提示 */
+.xs-mod strong{color:var(--d)}
+
+/* ==================== 按钮样式 ==================== */
+.xs-btn{background:#f5f5f5;border:1px solid var(--bd);border-radius:3px;padding:4px 12px;cursor:pointer;font-size:12px;transition:all .15s}
+.xs-btn:hover{background:#e8e8e8}
+.xs-btn:disabled{opacity:.5;cursor:not-allowed}
+.xs-btn-p{background:var(--p);color:#fff;border-color:var(--p)}  /* 主按钮 */
+.xs-btn-p:hover{background:#006cbd}
+
+/* ==================== 搜索框 ==================== */
+.xs-search{display:flex;align-items:center;background:#f5f5f5;border-radius:4px;padding:4px 8px;gap:4px}
+.xs-search input{background:transparent;border:none;outline:none;font-size:12px;width:140px}
+
+/* ==================== 表格容器 ==================== */
+.xs-container{flex:1;overflow:auto;padding:0}
+
+/* ==================== 表格样式 ==================== */
+.xs-table{width:100%;border-collapse:collapse;table-layout:fixed}
+
+/* 表头单元格 */
+.xs-th{background:#f5f5f5;border:1px solid var(--bd);padding:8px;position:relative;user-select:none;font-weight:500;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 排序状态样式 */
+.xs-th[data-sort]{background:#e3f2fd}
+.xs-th[data-sort]::after{content:'\25b2';margin-left:4px;font-size:10px;opacity:.5}  /* 升序箭头 */
+.xs-th[data-sort="desc"]::after{content:'\25bc'}  /* 降序箭头 */
+.xs-th-cb{width:40px;text-align:center}  /* 复选框列 */
+.xs-th-text{display:inline-block;max-width:calc(100% - 24px);overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.xs-th-filter{position:absolute;right:4px;top:50%;transform:translateY(-50%);cursor:pointer;opacity:.5;font-size:10px}  /* 排序/筛选按钮 */
+.xs-th:hover .xs-th-filter{opacity:1}
+.xs-resizer{position:absolute;right:0;top:0;bottom:0;width:4px;cursor:col-resize;background:transparent}  /* 列宽调整器 */
+.xs-resizer:hover{background:var(--p)}
+
+/* 数据单元格 */
+.xs-td{border:1px solid var(--bd);padding:6px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.xs-td-cb{width:40px;text-align:center}
+.xs-editable{cursor:cell}  /* 可编辑单元格 */
+.xs-editable.active{outline:2px solid var(--p);outline-offset:-2px}  /* 选中状态 */
+.xs-editable.modified{background:#fffbe6}  /* 已修改状态 */
+.xs-editable.highlight{background:#fff59d}  /* 高亮状态 */
+.xs-td input{width:100%;border:none;outline:none;padding:0;margin:0;font:inherit;background:transparent}
+
+/* 表格行状态 */
+tbody tr:hover{background:#f8f8f8}
+tbody tr.selected{background:#e3f2fd}  /* 选中行 */
+tbody tr.hidden{display:none}  /* 隐藏行 */
+tbody tr td:first-child{text-align:center}
+tbody tr td:first-child input{width:16px;height:16px;cursor:pointer}
+
+/* ==================== 右键菜单 ==================== */
+.xs-cm{position:fixed;background:#fff;border:1px solid var(--bd);border-radius:4px;box-shadow:var(--sh);z-index:1000;min-width:160px;padding:4px 0}
+.xs-mi{padding:6px 12px;cursor:pointer;font-size:12px}
+.xs-mi:hover{background:#f5f5f5}
+.xs-mi.disabled{opacity:.4;cursor:not-allowed}
+.xs-mi.disabled:hover{background:transparent}
+.xs-div{height:1px;background:var(--bd);margin:4px 0}
+.lb{float:right;color:var(--tl);font-size:11px}  /* 快捷键提示 */
+
+/* ==================== 排序/筛选菜单 ==================== */
+.xs-sf{position:fixed;background:#fff;border:1px solid var(--bd);border-radius:4px;box-shadow:var(--sh);z-index:1000;min-width:120px;padding:4px 0}
+.xs-sfi{padding:6px 12px;cursor:pointer;font-size:12px}
+.xs-sfi:hover{background:#f5f5f5}
+.xs-sfi.active{color:var(--p);font-weight:600}
+
+/* ==================== 查找/替换面板 ==================== */
+.xs-find{position:fixed;top:44px;right:10px;z-index:999;background:#fff;border-radius:4px;box-shadow:var(--sh);padding:8px;display:none;min-width:280px}
+.xs-find.show{display:block}
+.xs-find-row{display:flex;gap:6px;margin-bottom:6px}
+.xs-find input{flex:1;padding:4px 8px;border:1px solid var(--bd);border-radius:3px;outline:none;font-size:12px}
+.xs-find input:focus{border-color:var(--p)}
+.xs-find input[type="checkbox"]{width:auto}
+.xs-find-btns{display:flex;gap:4px;flex-wrap:wrap}
+.xs-find-info{font-size:11px;color:var(--tl);padding:4px 0}
+
+/* ==================== 提示框 ==================== */
+.xs-toast{position:fixed;z-index:2000;background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:4px;padding:12px 16px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.15);display:none;left:50%;top:50%;transform:translate(-50%,-50%)}
+.xs-toast.success{border-color:var(--s);color:var(--s)}  /* 成功提示 */
+.xs-toast.error{border-color:var(--d);color:var(--d)}  /* 错误提示 */
+
+/* ==================== 加载动画 ==================== */
+.xs-load{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,.9);display:flex;align-items:center;justify-content:center;z-index:3000}
+.xs-spin{width:40px;height:40px;border:3px solid var(--bd);border-top-color:var(--p);border-radius:50%;animation:xs-spin .8s linear infinite}
+@keyframes xs-spin{to{transform:rotate(360deg)}}
+
+/* ==================== 滚动条 ==================== */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:#ccc;border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:#aaa}
+</style>
+</head>
+<body>
+<div class="xs-app">
+    <!-- 工具栏 -->
+    <div class="xs-toolbar">
+        <span class="xs-title">测试案例</span>
+        <div class="xs-search">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="searchInput" placeholder="搜索...">
+        </div>
+        <span class="xs-sp"></span>
+        <span class="xs-mod" id="modInfo">已修改 <strong id="modCount">0</strong></span>
+        <span id="selCount" style="font-size:12px;color:#666">已选 0</span>
+        <span id="totalCount" style="font-size:12px;color:#666">共 0</span>
+        <button class="xs-btn" id="undoBtn" disabled>撤销</button>
+        <button class="xs-btn" id="redoBtn" disabled>重做</button>
+        <button class="xs-btn" id="findBtn">查找</button>
+        <button class="xs-btn xs-btn-p" id="pushBtn" disabled>推送</button>
+    </div>
+
+    <!-- 表格容器 -->
+    <div class="xs-container" id="tableContainer"></div>
+
+    <!-- 加载动画 -->
+    <div class="xs-load" id="loading" style="display:none"><div class="xs-spin"></div></div>
+
+    <!-- 右键菜单 -->
+    <div class="xs-cm" id="ctxMenu"></div>
+
+    <!-- 排序/筛选菜单 -->
+    <div class="xs-sf" id="sortFilter"></div>
+
+    <!-- 查找/替换面板 -->
+    <div class="xs-find" id="findPanel">
+        <div class="xs-find-row">
+            <input type="text" id="findInput" placeholder="查找...">
+            <button class="xs-btn" id="prevBtn">上一个</button>
+            <button class="xs-btn" id="nextBtn">下一个</button>
+        </div>
+        <div class="xs-find-row">
+            <input type="text" id="replaceInput" placeholder="替换为...">
+            <button class="xs-btn" id="replaceBtn">替换</button>
+            <button class="xs-btn" id="replaceAllBtn">全部</button>
+        </div>
+        <div class="xs-find-info" id="findInfo"></div>
+    </div>
+
+    <!-- 提示框 -->
+    <div class="xs-toast" id="toast"></div>
+</div>
+
+<script nonce="${nonce}">
+(function() {
+    // ==================== 全局状态 ====================
+    var S={
+        data:{},          // CSV 数据 {headers: [], rows: [[]]}
+        sel:new Set(),     // 选中行索引集合
+        cell:null,         // 当前单元格 DOM 元素
+        clip:null,         // 剪贴板数据 {type: 'cell'|'rows', data: ...}
+        mods:new Set(),    // 已修改单元格键集合 "row-col"
+        hist:[],           // 历史记录快照数组
+        hIdx:-1,           // 当前历史索引
+        sCol:null,         // 当前排序列索引
+        sOrder:'asc',      // 排序方向 'asc'|'desc'
+        colWidths:{},      // 列宽缓存
+        vscode:null,       // VS Code API 实例
+        editing:false      // 是否正在编辑
+    };
+
+    // ==================== 初始化 ====================
+    function init(){
+        S.vscode=acquireVsCodeApi();
+        S.vscode.postMessage({type:'init'});
+    }
+
+    // ==================== 消息处理 ====================
+    window.addEventListener('message',function(e){
+        var msg=e.data;
+        // 接收 CSV 数据
+        if(msg.type==='csvData'){
+            try{
+                // 使用 TextDecoder 正确解码 UTF-8 数据（支持中文）
+                var decoder = new TextDecoder('utf-8');
+                var uint8Array = new Uint8Array(msg.data);
+                var decoded = decoder.decode(uint8Array);
+                S.data=JSON.parse(decoded);
+            }catch(ex){
+                S.data={headers:[],rows:[]};
+            }
+            // 重置状态
+            S.sel.clear();S.cell=null;S.clip=null;S.mods.clear();S.hist=[];S.hIdx=-1;
+            saveHist();bindEv();updUI();reRender();
+            // 隐藏加载动画
+            var loading=document.getElementById('loading');
+            if(loading)loading.style.display='none';
+        }
+        // 保存成功
+        if(msg.type==='saved'){
+            S.mods.clear();
+            document.querySelectorAll('.xs-editable.modified').forEach(function(td){td.classList.remove('modified');});
+            updUI();toast('保存成功','success');
+        }
+        // 保存失败
+        if(msg.type==='saveError'){
+            toast('保存失败: '+msg.message,'error');
+        }
+    });
+
+    // 页面加载完成后初始化
+    if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}
+
+    // ==================== 历史记录（撤销/重做） ====================
+    /**
+     * 保存当前状态快照到历史记录
+     */
+    function saveHist(){
+        var snap=JSON.stringify(S.data);
+        // 丢弃当前位置之后的历史
+        if(S.hIdx<S.hist.length-1)S.hist=S.hist.slice(0,S.hIdx+1);
+        S.hist.push(snap);
+        S.hIdx=S.hist.length-1;
+        // 限制历史记录数量
+        if(S.hist.length>50){S.hist.shift();S.hIdx--;}
+    }
+
+    /**
+     * 撤销：恢复到上一个状态
+     */
+    function undo(){
+        if(S.hIdx>0){
+            S.hIdx--;
+            S.data=JSON.parse(S.hist[S.hIdx]);
+            reRender();updUI();toast('撤销成功','success');
+        }else{
+            toast('无法撤销','error');
+        }
+    }
+
+    /**
+     * 重做：恢复到下一个状态
+     */
+    function redo(){
+        if(S.hIdx<S.hist.length-1){
+            S.hIdx++;
+            S.data=JSON.parse(S.hist[S.hIdx]);
+            reRender();updUI();toast('重做成功','success');
+        }else{
+            toast('无法重做','error');
+        }
+    }
+
+    // ==================== 事件绑定 ====================
+    function bindEv(){
+        // 表头复选框 - 全选/取消全选
+        var hcb=document.getElementById('headerCheckbox');
+        if(hcb)hcb.addEventListener('change',function(){this.checked?selAll():deselAll();});
+
+        // 行复选框
+        document.querySelectorAll('.row-cb').forEach(function(cb){
+            cb.addEventListener('click',function(e){
+                var tr=this.closest('tr');
+                var idx=parseInt(tr.dataset.row);
+                if(this.checked)S.sel.add(idx);else S.sel.delete(idx);
+                updSel();e.stopPropagation();
+            });
+        });
+
+        // 单元格点击 - 选中单元格
+        document.querySelectorAll('.xs-editable').forEach(function(td){
+            td.addEventListener('click',function(e){
+                if(e.target.tagName==='INPUT')return;
+                setCell(this);
+            });
+            // 双击 - 开始编辑
+            td.addEventListener('dblclick',function(){
+                startEdit(this);
+            });
+        });
+
+        // 右键菜单
+        var tbl=document.querySelector('.xs-table');
+        if(tbl)tbl.addEventListener('contextmenu',function(e){
+            e.preventDefault();
+            var td=e.target.closest('td');
+            if(td&&td.classList.contains('xs-editable')){
+                S.cell=td;
+                updCellSel();
+            }
+            showCtx(e.clientX,e.clientY);
+        });
+
+        // 点击其他区域关闭菜单
+        document.addEventListener('click',function(e){
+            if(!e.target.closest('.xs-cm')&&!e.target.closest('.xs-sf')){
+                document.getElementById('ctxMenu').style.display='none';
+                document.getElementById('sortFilter').style.display='none';
+            }
+        });
+
+        // 列排序/筛选按钮
+        document.querySelectorAll('.xs-th-filter').forEach(function(btn){
+            btn.addEventListener('click',function(e){
+                e.stopPropagation();
+                var th=this.closest('th');
+                var col=parseInt(th.dataset.col);
+                showSortF(col,th);
+            });
+        });
+
+        // 列宽调整
+        document.querySelectorAll('.xs-resizer').forEach(function(res){
+            res.addEventListener('mousedown',function(e){
+                e.preventDefault();e.stopPropagation();
+                var th=this.parentElement;
+                var startX=e.clientX;
+                var startW=th.offsetWidth;
+                document.body.style.cursor='col-resize';
+                function onMove(ev){
+                    var w=Math.max(40,startW+(ev.clientX-startX));
+                    th.style.width=w+'px';
+                    S.colWidths[parseInt(th.dataset.col)]=w;
+                }
+                function onUp(){
+                    document.removeEventListener('mousemove',onMove);
+                    document.removeEventListener('mouseup',onUp);
+                    document.body.style.cursor='';
+                }
+                document.addEventListener('mousemove',onMove);
+                document.addEventListener('mouseup',onUp);
+            });
+        });
+
+        // 工具栏按钮
+        document.getElementById('pushBtn').addEventListener('click',pushTC);
+        document.getElementById('undoBtn').addEventListener('click',undo);
+        document.getElementById('redoBtn').addEventListener('click',redo);
+        document.getElementById('findBtn').addEventListener('click',toggleFind);
+        document.getElementById('searchInput').addEventListener('input',function(){doSearch(this.value);});
+        document.getElementById('prevBtn').addEventListener('click',doPrev);
+        document.getElementById('nextBtn').addEventListener('click',doNext);
+        document.getElementById('replaceBtn').addEventListener('click',doReplace);
+        document.getElementById('replaceAllBtn').addEventListener('click',doReplaceAll);
+    }
+
+    // ==================== 键盘快捷键 ====================
+    document.addEventListener('keydown',function(e){
+        if(document.activeElement.tagName==='INPUT')return;  // 输入框中不响应
+        var c=e.ctrlKey||e.metaKey;
+        if(c&&e.key==='c'){e.preventDefault();copySel();}           // Ctrl+C 复制
+        if(c&&e.key==='x'){e.preventDefault();cutSel();}             // Ctrl+X 剪切
+        if(c&&e.key==='v'){e.preventDefault();pasteClip();}         // Ctrl+V 粘贴
+        if(c&&e.key==='a'){e.preventDefault();selAll();}             // Ctrl+A 全选
+        if(c&&e.key==='z'){e.preventDefault();undo();}               // Ctrl+Z 撤销
+        if(c&&e.key==='y'){e.preventDefault();redo();}              // Ctrl+Y 重做
+        if(c&&e.key==='f'){e.preventDefault();toggleFind();}        // Ctrl+F 查找
+        if((e.key==='Delete'||e.key==='Backspace')&&S.cell){e.preventDefault();clearCell();}  // Delete 清空
+        if(c&&e.key==='s'){e.preventDefault();saveFile();}          // Ctrl+S 保存
+        if(e.key==='Enter'&&S.cell){e.preventDefault();startEdit(S.cell);}  // Enter 编辑
+        if(e.key==='Escape'){cancelEdit();}                         // Escape 取消编辑
+    });
+
+    // ==================== UI 更新 ====================
+    /**
+     * 更新状态栏（总数、选中数、按钮状态）
+     */
+    function updUI(){
+        var tc=document.getElementById('totalCount');
+        var sc=document.getElementById('selCount');
+        var ub=document.getElementById('undoBtn');
+        var rb=document.getElementById('redoBtn');
+        if(tc)tc.textContent=S.data.rows.length;
+        if(sc)sc.textContent='已选 '+S.sel.size;
+        if(ub)ub.disabled=S.hIdx<=0;
+        if(rb)rb.disabled=S.hIdx>=S.hist.length-1;
+        var mi=document.getElementById('modInfo');
+        var mc=document.getElementById('modCount');
+        if(mi)mi.style.display=S.mods.size>0?'inline':'none';
+        if(mc)mc.textContent=S.mods.size;
+        updSel();updSearch();
+    }
+
+    /**
+     * 更新选中状态（复选框和行高亮）
+     */
+    function updSel(){
+        document.querySelectorAll('tbody tr').forEach(function(tr){
+            var idx=parseInt(tr.dataset.row);
+            var cb=tr.querySelector('.row-cb');
+            if(cb)cb.checked=S.sel.has(idx);
+            tr.classList.toggle('selected',S.sel.has(idx));
+        });
+        // 更新表头复选框状态
+        var hcb=document.getElementById('headerCheckbox');
+        if(hcb){
+            var vr=document.querySelectorAll('tbody tr:not(.hidden)');
+            var vi=Array.from(vr).map(function(r){return parseInt(r.dataset.row);});
+            var sv=vi.filter(function(i){return S.sel.has(i);}).length;
+            hcb.checked=sv>0&&sv===vi.length;
+            hcb.indeterminate=sv>0&&sv<vi.length;
+        }
+        // 更新推送按钮状态
+        var pb=document.getElementById('pushBtn');
+        if(pb)pb.disabled=S.sel.size===0;
+    }
+
+    /**
+     * 更新单元格选中状态
+     */
+    function updCellSel(){
+        document.querySelectorAll('.xs-editable').forEach(function(td){td.classList.remove('active');});
+        if(S.cell)S.cell.classList.add('active');
+    }
+
+    /**
+     * 更新搜索结果（显示/隐藏行）
+     */
+    function updSearch(){
+        var kw=(document.getElementById('searchInput').value||'').toLowerCase();
+        document.querySelectorAll('tbody tr').forEach(function(tr){
+            if(!kw){tr.classList.remove('hidden');}
+            else{
+                var t=tr.textContent||'';
+                tr.classList.toggle('hidden',!t.toLowerCase().includes(kw));
+            }
+        });
+        updSel();
+    }
+
+    // ==================== 选择操作 ====================
+    function selAll(){
+        document.querySelectorAll('tbody tr:not(.hidden)').forEach(function(tr){
+            S.sel.add(parseInt(tr.dataset.row));
+        });
+        updSel();
+    }
+    function deselAll(){S.sel.clear();updSel();}
+
+    /**
+     * 设置当前单元格
+     */
+    function setCell(td){
+        document.querySelectorAll('.xs-editable').forEach(function(t){t.classList.remove('active');});
+        S.cell=td;
+        if(td){
+            td.classList.add('active');
+            var idx=parseInt(td.dataset.row);
+            if(!S.sel.has(idx)){
+                S.sel.clear();
+                S.sel.add(idx);
+            }
+            updSel();
+        }
+    }
+
+    // ==================== 单元格编辑 ====================
+    /**
+     * 开始编辑单元格
+     */
+    function startEdit(td){
+        if(td.querySelector('input'))return;  // 已在编辑状态
+        setCell(td);
+        S.editing=true;
+        var ri=parseInt(td.dataset.row);
+        var ci=parseInt(td.dataset.col);
+        var orig=S.data.rows[ri]&&S.data.rows[ri][ci]||'';
+        td.innerHTML='<input type="text" value="'+escHtml(orig)+'">';
+        var inp=td.querySelector('input');
+        inp.focus();inp.select();
+        // 失焦时完成编辑
+        inp.addEventListener('blur',function(){S.editing=false;finEdit(td,ri,ci,orig);});
+        // 键盘事件
+        inp.addEventListener('keydown',function(ev){
+            if(ev.key==='Enter'){ev.preventDefault();S.editing=false;finEdit(td,ri,ci,orig);
+                // 移动到下一行同一列
+                var nt=document.querySelector('.xs-editable[data-row="'+(ri+1)+'"][data-col="'+ci+'"]');
+                if(nt){setCell(nt);startEdit(nt);}
+            }
+            if(ev.key==='Escape'){td.innerHTML='<span class="xs-cell-text">'+escHtml(orig)+'</span>';S.editing=false;setCell(td);}
+        });
+    }
+
+    /**
+     * 完成单元格编辑
+     */
+    function finEdit(td,ri,ci,orig){
+        try{
+            var inp=td&&td.querySelector&&td.querySelector('input');
+            if(!inp)return;
+            var val=inp.value;
+            var parent=td.parentNode;
+            if(!parent)return;
+            td.innerHTML='<span class="xs-cell-text">'+escHtml(val)+'</span>';
+            // 检查值是否变化
+            if(val!==orig){
+                if(!S.data.rows[ri])S.data.rows[ri]=[];
+                S.data.rows[ri][ci]=val;
+                var k=ri+'-'+ci;
+                if(!S.mods.has(k)){S.mods.add(k);}
+                td.classList.add('modified');
+                saveHist();updUI();
+            }
+            var newTd=document.querySelector('.xs-editable[data-row="'+ri+'"][data-col="'+ci+'"]');
+            if(newTd)setCell(newTd);
+        }catch(e){}
+    }
+
+    /**
+     * 取消编辑（失焦所有输入框）
+     */
+    function cancelEdit(){document.querySelectorAll('.xs-editable input').forEach(function(inp){inp.blur();});}
+
+    /**
+     * 清空单元格内容
+     */
+    function clearCell(){
+        if(!S.cell)return;
+        var ri=parseInt(S.cell.dataset.row);
+        var ci=parseInt(S.cell.dataset.col);
+        S.data.rows[ri][ci]='';
+        S.cell.innerHTML='<span class="xs-cell-text"></span>';
+        var k=ri+'-'+ci;
+        S.mods.add(k);
+        S.cell.classList.add('modified');
+        saveHist();updUI();
+    }
+
+    // ==================== 复制/粘贴/剪切 ====================
+    /**
+     * 复制选中内容
+     */
+    function copySel(){
+        if(S.cell){
+            // 复制单个单元格
+            var ri=parseInt(S.cell.dataset.row);
+            var ci=parseInt(S.cell.dataset.col);
+            S.clip={type:'cell',data:S.data.rows[ri]&&S.data.rows[ri][ci]||''};
+            navigator.clipboard.writeText(S.clip.data);
+            toast('已复制单元格','success');
+        }else if(S.sel.size>0){
+            // 复制多行
+            var rows=Array.from(S.sel).sort(function(a,b){return a-b;});
+            var text=rows.map(function(i){return(S.data.rows[i]||[]).join('\t');}).join('\n');
+            S.clip={type:'rows',data:rows.map(function(i){return[...(S.data.rows[i]||[])];})};
+            navigator.clipboard.writeText(text);
+            toast('已复制 '+rows.length+' 行','success');
+        }
+    }
+
+    /**
+     * 剪切选中内容
+     */
+    function cutSel(){
+        copySel();
+        if(S.cell){
+            var ri=parseInt(S.cell.dataset.row);
+            var ci=parseInt(S.cell.dataset.col);
+            S.data.rows[ri][ci]='';
+            S.cell.innerHTML='<span class="xs-cell-text"></span>';
+            saveHist();updUI();
+        }
+        toast('已剪切','success');
+    }
+
+    /**
+     * 粘贴剪贴板内容
+     */
+    function pasteClip(){
+        if(!S.clip)return;
+        if(S.clip.type==='cell'&&S.cell){
+            // 粘贴到单个单元格
+            var ri=parseInt(S.cell.dataset.row);
+            var ci=parseInt(S.cell.dataset.col);
+            if(!S.data.rows[ri])S.data.rows[ri]=[];
+            S.data.rows[ri][ci]=S.clip.data;
+            S.cell.innerHTML='<span class="xs-cell-text">'+escHtml(S.clip.data)+'</span>';
+            saveHist();updUI();toast('已粘贴','success');
+        }else if(S.clip.type==='rows'){
+            // 粘贴多行
+            var sr=S.sel.size>0?Math.min(...S.sel):0;
+            S.clip.data.forEach(function(row,i){
+                if(S.data.rows[sr+i]){
+                    row.forEach(function(val,j){S.data.rows[sr+i][j]=val;});
+                }
+            });
+            reRender();saveHist();updUI();toast('已粘贴 '+S.clip.data.length+' 行','success');
+        }
+    }
+
+    // ==================== 行/列操作 ====================
+    /**
+     * 插入新行
+     */
+    function insertRow(){
+        var idx=S.cell?parseInt(S.cell.dataset.row)+1:S.data.rows.length;
+        var nr=new Array(S.data.headers.length).fill('');
+        S.data.rows.splice(idx,0,nr);
+        saveHist();reRender();updUI();toast('已插入行','success');
+    }
+
+    /**
+     * 复制行
+     */
+    function duplicateRow(){
+        var idx=S.cell?parseInt(S.cell.dataset.row):(S.sel.size>0?Math.min(...S.sel):S.data.rows.length-1);
+        if(S.data.rows.length===0){toast('无数据可复制','error');return;}
+        var src=S.data.rows[idx];
+        if(!src){toast('源行不存在','error');return;}
+        var copy=[...src];
+        S.data.rows.splice(idx+1,0,copy);
+        S.sel.clear();S.sel.add(idx+1);
+        saveHist();reRender();updUI();toast('已复制行','success');
+    }
+
+    /**
+     * 保存文件
+     */
+    function saveFile(){S.vscode.postMessage({type:'save',data:{headers:S.data.headers,rows:S.data.rows}});toast('保存中...','');}
+
+    /**
+     * 插入新列
+     */
+    function insertCol(){
+        var idx=S.cell?parseInt(S.cell.dataset.col)+1:S.data.headers.length;
+        S.data.headers.splice(idx,0,'新列');
+        S.data.rows.forEach(function(r){r.splice(idx,0,'');});
+        saveHist();reRender();updUI();toast('已插入列','success');
+    }
+
+    /**
+     * 删除选中行
+     */
+    function deleteRows(){
+        if(S.sel.size===0)return;
+        var rows=Array.from(S.sel).sort(function(a,b){return b-a;});
+        rows.forEach(function(i){S.data.rows.splice(i,1);});
+        S.sel.clear();saveHist();reRender();updUI();toast('已删除 '+rows.length+' 行','success');
+    }
+
+    // ==================== 右键菜单 ====================
+    /**
+     * 显示右键菜单
+     */
+    function showCtx(x,y){
+        var menu=document.getElementById('ctxMenu');
+        menu.innerHTML='<div class="xs-mi" id="ctxCopy">复制 <span class="lb">Ctrl+C</span></div>'+
+            '<div class="xs-mi" id="ctxCut">剪切 <span class="lb">Ctrl+X</span></div>'+
+            '<div class="xs-mi'+(S.clip?'':' disabled')+'" id="ctxPaste">粘贴 <span class="lb">Ctrl+V</span></div>'+
+            '<div class="xs-div"></div>'+
+            '<div class="xs-mi" id="ctxInsertRow">插入行</div>'+
+            '<div class="xs-mi" id="ctxDuplicateRow">复制行</div>'+
+            '<div class="xs-mi" id="ctxInsertCol">插入列</div>'+
+            '<div class="xs-div"></div>'+
+            '<div class="xs-mi'+(S.sel.size>0?'':' disabled')+'" id="ctxDeleteRows">删除行</div>'+
+            '<div class="xs-mi'+(S.cell?'':' disabled')+'" id="ctxClearCell">清除内容</div>'+
+            '<div class="xs-div"></div>'+
+            '<div class="xs-mi" id="ctxSelAll">全选 <span class="lb">Ctrl+A</span></div>';
+        // 绑定点击事件
+        document.getElementById('ctxCopy').addEventListener('click',copySel);
+        document.getElementById('ctxCut').addEventListener('click',cutSel);
+        document.getElementById('ctxPaste').addEventListener('click',pasteClip);
+        document.getElementById('ctxInsertRow').addEventListener('click',insertRow);
+        document.getElementById('ctxDuplicateRow').addEventListener('click',duplicateRow);
+        document.getElementById('ctxInsertCol').addEventListener('click',insertCol);
+        document.getElementById('ctxDeleteRows').addEventListener('click',deleteRows);
+        document.getElementById('ctxClearCell').addEventListener('click',clearCell);
+        document.getElementById('ctxSelAll').addEventListener('click',selAll);
+        // 显示菜单位置
+        menu.style.display='block';
+        menu.style.left=Math.min(x,window.innerWidth-menu.offsetWidth-10)+'px';
+        menu.style.top=Math.min(y,window.innerHeight-menu.offsetHeight-10)+'px';
+    }
+
+    // ==================== 排序功能 ====================
+    /**
+     * 显示排序/筛选菜单
+     */
+    function showSortF(col,th){
+        var rect=th.getBoundingClientRect();
+        var sf=document.getElementById('sortFilter');
+        var aA=(S.sCol===col&&S.sOrder==='asc')?' active':'';
+        var dA=(S.sCol===col&&S.sOrder==='desc')?' active':'';
+        sf.innerHTML='<div class="xs-sfi'+aA+'" data-col="'+col+'" data-dir="asc">升序</div>'+
+            '<div class="xs-sfi'+dA+'" data-col="'+col+'" data-dir="desc">降序</div>'+
+            '<div class="xs-div"></div>'+
+            '<div class="xs-sfi" id="clearSortBtn">清除排序</div>';
+        sf.querySelectorAll('.xs-sfi[data-col]').forEach(function(el){
+            el.addEventListener('click',function(){
+                var c=parseInt(el.dataset.col);
+                var d=el.dataset.dir;
+                sortBy(c,d);
+            });
+        });
+        document.getElementById('clearSortBtn').addEventListener('click',clearSort);
+        sf.style.display='block';
+        sf.style.left=rect.left+'px';
+        sf.style.top=rect.bottom+'px';
+    }
+
+    /**
+     * 按指定列排序
+     */
+    function sortBy(col,order){
+        S.sCol=col;S.sOrder=order;
+        S.data.rows.sort(function(a,b){
+            var va=(a[col]||'').toString().toLowerCase();
+            var vb=(b[col]||'').toString().toLowerCase();
+            // 尝试数字排序
+            var na=parseFloat(va);
+            var nb=parseFloat(vb);
+            if(!isNaN(na)&&!isNaN(nb)){return order==='asc'?na-nb:nb-na;}
+            // 字符串排序
+            return order==='asc'?va.localeCompare(vb):vb.localeCompare(va);
+        });
+        saveHist();reRender();updUI();
+        document.getElementById('sortFilter').style.display='none';
+        document.querySelectorAll('.xs-th').forEach(function(th){th.removeAttribute('data-sort');});
+        var thEl=document.querySelector('.xs-th[data-col="'+col+'"]');
+        if(thEl)thEl.setAttribute('data-sort',order);
+    }
+
+    /**
+     * 清除排序
+     */
+    function clearSort(){
+        S.sCol=null;S.sOrder='asc';
+        document.querySelectorAll('.xs-th').forEach(function(th){th.removeAttribute('data-sort');});
+        document.getElementById('sortFilter').style.display='none';
+    }
+
+    // ==================== 搜索功能 ====================
+    function doSearch(kw){updSearch();}
+    var findMatches=[],findIdx=0;
+
+    /**
+     * 切换查找面板显示
+     */
+    function toggleFind(){
+        var p=document.getElementById('findPanel');
+        p.classList.toggle('show');
+        if(p.classList.contains('show')){document.getElementById('findInput').focus();doFind();}
+        else{clearHighlights();}
+    }
+
+    /**
+     * 清除所有高亮
+     */
+    function clearHighlights(){
+        document.querySelectorAll('.xs-editable.highlight').forEach(function(td){td.classList.remove('highlight');});
+        findMatches=[];findIdx=0;
+    }
+
+    /**
+     * 执行查找并高亮匹配项
+     */
+    function doFind(){
+        clearHighlights();
+        var kw=(document.getElementById('findInput').value||'').toLowerCase();
+        if(!kw)return;
+        var info=document.getElementById('findInfo');
+        S.data.rows.forEach(function(row,ri){
+            row.forEach(function(cell,ci){
+                if((cell||'').toString().toLowerCase().includes(kw)){
+                    var td=document.querySelector('.xs-editable[data-row="'+ri+'"][data-col="'+ci+'"]');
+                    if(td){td.classList.add('highlight');findMatches.push(td);}
+                }
+            });
+        });
+        info.textContent=findMatches.length>0?findMatches.length+' 个匹配':'';
+        if(findMatches.length>0){findIdx=0;scrollToMatch(findMatches[0]);}
+    }
+
+    /**
+     * 移动到下一个匹配项
+     */
+    function doNext(){
+        if(findMatches.length===0)return;
+        findIdx=(findIdx+1)%findMatches.length;
+        scrollToMatch(findMatches[findIdx]);
+    }
+
+    /**
+     * 移动到上一个匹配项
+     */
+    function doPrev(){
+        if(findMatches.length===0)return;
+        findIdx=(findIdx-1+findMatches.length)%findMatches.length;
+        scrollToMatch(findMatches[findIdx]);
+    }
+
+    /**
+     * 滚动到并选中匹配项
+     */
+    function scrollToMatch(td){
+        td.scrollIntoView({behavior:'smooth',block:'center'});
+        document.querySelectorAll('.xs-editable').forEach(function(t){t.classList.remove('active');});
+        td.classList.add('active');S.cell=td;
+    }
+
+    // ==================== 替换功能 ====================
+    /**
+     * HTML 特殊字符转义（防 XSS）
+     */
+    function escHtml(s){if(!s)return'';return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+    /**
+     * 将字符串转义为正则表达式（转义特殊字符）
+     */
+    function esc(s){
+        var r='';var sp='.*+?^$()|[]\\';
+        for(var i=0;i<s.length;i++){var c=s[i];if(sp.indexOf(c)>=0){r=r+'\\'+c;}else{r=r+c;}}
+        return r;
+    }
+
+    /**
+     * 替换当前单元格内容
+     */
+    function doReplace(){
+        var oldVal=(document.getElementById('findInput').value||'');
+        var newVal=(document.getElementById('replaceInput').value||'');
+        if(!oldVal||!S.cell)return;
+        var ri=parseInt(S.cell.dataset.row);
+        var ci=parseInt(S.cell.dataset.col);
+        var cell=S.data.rows[ri]&&S.data.rows[ri][ci]||'';
+        var regex=new RegExp(esc(oldVal),'gi');
+        if(regex.test(cell)){
+            regex.lastIndex=0;
+            S.data.rows[ri][ci]=cell.replace(regex,newVal);
+            S.cell.querySelector('.xs-cell-text').textContent=S.data.rows[ri][ci];
+            var k=ri+'-'+ci;S.mods.add(k);S.cell.classList.add('modified');
+            saveHist();updUI();doFind();toast('已替换','success');
+        }
+    }
+
+    /**
+     * 替换所有匹配项
+     */
+    function doReplaceAll(){
+        var oldVal=(document.getElementById('findInput').value||'');
+        var newVal=(document.getElementById('replaceInput').value||'');
+        if(!oldVal)return;
+        var regex=new RegExp(esc(oldVal),'gi');
+        var count=0;
+        S.data.rows.forEach(function(row,ri){
+            row.forEach(function(cell,ci){
+                if(cell&&regex.test(cell)){
+                    regex.lastIndex=0;
+                    S.data.rows[ri][ci]=cell.replace(regex,newVal);
+                    var k=ri+'-'+ci;S.mods.add(k);count++;
+                }
+            });
+        });
+        if(count>0){saveHist();reRender();updUI();doFind();toast('已替换 '+count+' 处','success');}
+    }
+
+    // ==================== 推送功能 ====================
+    /**
+     * 推送选中的测试案例到服务器
+     */
+    async function pushTC(){
+        if(S.sel.size===0){toast('请先选择测试案例','error');return;}
+        // 将选中行转换为对象数组
+        var data=Array.from(S.sel).map(function(i){
+            var obj={};
+            S.data.headers.forEach(function(h,j){obj[h]=S.data.rows[i]&&S.data.rows[i][j]||'';});
+            return obj;
+        });
+        try{
+            var res=await fetch('http://localhost:8081/test-task/push-testcase',{
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify(data)
+            });
+            var result=await res.json();
+            if(result.returnCode==='SUC0000'){toast('推送成功','success');}
+            else{toast(result.errorMsg||'推送失败','error');}
+        }catch(e){toast('推送失败: '+e.message,'error');}
+    }
+
+    // ==================== 渲染功能 ====================
+    /**
+     * 重新渲染表格
+     */
+    function reRender(){
+        var container=document.getElementById('tableContainer');
+        if(!container)return;
+        if(S.editing)return;  // 编辑中不重新渲染
+        var h=S.data.headers||[];
+        var r=S.data.rows||[];
+        var html='<table class="xs-table"><thead><tr><th class="xs-th xs-th-cb"><input type="checkbox" id="headerCheckbox"></th>';
+        // 表头行
+        h.forEach(function(ht,i){
+            var sa=S.sCol===i?'data-sort="'+S.sOrder+'"':'';
+            var sw=S.colWidths&&S.colWidths[i]?' style="width:'+S.colWidths[i]+'px"':'';
+            html=html+'<th class="xs-th" data-col="'+i+'" '+sa+sw+'><span class="xs-th-text">'+escHtml(ht)+'</span><span class="xs-th-filter">▼</span><div class="xs-resizer" data-col="'+i+'"></div></th>';
+        });
+        html=html+'</tr></thead><tbody>';
+        // 数据行
+        r.forEach(function(row,ri){
+            html=html+'<tr data-row="'+ri+'"><td class="xs-td xs-td-cb"><input type="checkbox" class="row-cb"></td>';
+            row.forEach(function(cell,ci){
+                var k=ri+'-'+ci;
+                var mod=S.mods.has(k)?' modified':'';
+                html=html+'<td class="xs-td xs-editable'+mod+'" data-row="'+ri+'" data-col="'+ci+'"><span class="xs-cell-text">'+escHtml(cell)+'</span></td>';
+            });
+            html=html+'</tr>';
+        });
+        html=html+'</tbody></table>';
+        container.innerHTML=html;
+        bindEv();  // 重新绑定事件
+    }
+
+    // ==================== 提示框 ====================
+    /**
+     * 显示提示信息
+     * @param msg 提示文本
+     * @param type 类型：'success', 'error' 或空
+     */
+    function toast(msg,type){
+        var t=document.getElementById('toast');
+        t.textContent=msg;t.className='xs-toast '+(type||'');
+        t.style.display='block';
+        setTimeout(function(){t.style.display='none';},2000);
+    }
+})();
+</script>
+</body>
+</html>

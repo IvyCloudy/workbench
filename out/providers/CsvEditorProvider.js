@@ -38,6 +38,10 @@ const vscode = __importStar(require("vscode"));
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
 const csv_parser_1 = require("../services/csv-parser");
+/**
+ * 生成随机字符串作为 CSP nonce
+ * 用于内容安全策略，防止 XSS 攻击
+ */
 function getNonce() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     let result = '';
@@ -46,12 +50,21 @@ function getNonce() {
     }
     return result;
 }
+/**
+ * HTML 特殊字符转义
+ * 防止 XSS 和 HTML 解析错误
+ */
 function escapeHtml(str) {
     if (!str)
         return '';
-    // 只转义必要的 HTML 字符
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+/**
+ * 检查 CSV 文件是否符合安全目录要求
+ * 只允许在特定目录下打开 CSV 文件，防止任意文件访问
+ * @param uri 文件 URI
+ * @returns 是否符合要求
+ */
 function isQualifiedCsvFile(uri) {
     if (uri.scheme !== 'file' || !/\.csv$/i.test(uri.fsPath))
         return false;
@@ -67,14 +80,18 @@ function isQualifiedCsvFile(uri) {
         (caseDir === '测试案例' || caseDir === 'testcase') &&
         /\.csv$/i.test(csvFileName);
 }
+/**
+ * 解析 CSV 文件数据为可渲染的格式
+ * @param filePath CSV 文件路径
+ * @returns 包含表头、行数据和列宽信息的对象
+ */
 function parseCsvData(filePath) {
     try {
-        console.log('[CsvEditorProvider] 开始解析 CSV:', filePath);
         const data = (0, csv_parser_1.loadCsvFromFile)(filePath);
-        console.log('[CsvEditorProvider] loadCsvFromFile 返回, rows:', data.sheets[0]?.rows ? Object.keys(data.sheets[0].rows).length : 0);
         const sheet = data.sheets[0];
         if (!sheet)
             return { headers: [], rows: [], cols: {} };
+        // 提取表头
         const headers = [];
         const rows = [];
         const cols = sheet.cols || {};
@@ -83,16 +100,18 @@ function parseCsvData(filePath) {
             const cellKeys = Object.keys(row0.cells).map(k => parseInt(k)).sort((a, b) => a - b);
             cellKeys.forEach(ci => headers.push(row0.cells[ci]?.text || ''));
         }
+        // 提取数据行（跳过表头行）
         const rowKeys = Object.keys(sheet.rows).map(k => parseInt(k)).sort((a, b) => a - b);
         rowKeys.forEach(ri => {
             if (ri === 0 && headers.length > 0)
-                return;
+                return; // 跳过表头
             const row = sheet.rows[ri];
             if (!row)
                 return;
             const rowData = [];
             const cellKeys = Object.keys(row.cells).map(k => parseInt(k)).sort((a, b) => a - b);
             cellKeys.forEach(ci => rowData[ci] = row.cells[ci]?.text || '');
+            // 补齐空单元格
             while (rowData.length < headers.length)
                 rowData.push('');
             rows.push(rowData);
@@ -104,6 +123,10 @@ function parseCsvData(filePath) {
         return { headers: [], rows: [], cols: {} };
     }
 }
+/**
+ * CSV 自定义编辑器 Provider
+ * 负责在 VS Code 中打开和渲染 CSV 文件
+ */
 class CsvEditorProvider {
     constructor(extensionUri) {
         this.extensionUri = extensionUri;
@@ -112,33 +135,40 @@ class CsvEditorProvider {
     get onDidChangeCustomDocument() {
         return this.onDidChangeCustomDocumentEmitter.event;
     }
+    /**
+     * 打开新的自定义文档
+     */
     async openCustomDocument(uri, _openContext, _token) {
         return { uri: uri, dispose: () => { } };
     }
+    /**
+     * 解析并渲染 CSV 文件到 WebView
+     */
     async resolveCustomEditor(document, webviewPanel, _token) {
         const filePath = document.uri.fsPath;
         const nonce = getNonce();
+        // 配置 WebView 允许执行脚本
         webviewPanel.webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
+        // 安全检查：只允许特定目录下的 CSV 文件
         if (!isQualifiedCsvFile(document.uri)) {
             webviewPanel.webview.html = this.getErrorHtml('该文件不在允许的目录下，仅支持：<br>测试任务/xxx/输入文档/测试案例/*.csv');
             return;
         }
-        // Load CSV data
+        // 加载 CSV 数据
         const csvData = parseCsvData(filePath);
-        console.log('[CsvEditorProvider] parseCsvData 返回, headers:', JSON.stringify(csvData.headers).substring(0, 100));
-        console.log('[CsvEditorProvider] 第一行数据:', JSON.stringify(csvData.rows[0]).substring(0, 200));
-        // Set HTML first without data
+        // 先设置 HTML 内容
         webviewPanel.webview.html = this.getHtmlContent(webviewPanel.webview, nonce);
-        // Send data via message after HTML is loaded
+        // 监听 WebView 消息
         webviewPanel.webview.onDidReceiveMessage((msg) => {
+            // WebView 初始化完成后发送数据
             if (msg?.type === 'init') {
-                // Send CSV data to webview - 使用 Uint8Array 避免编码问题
                 const dataStr = JSON.stringify(csvData);
-                console.log('[CsvEditorProvider] JSON.stringify 长度:', dataStr.length);
                 const encoder = new TextEncoder();
                 const uint8Array = encoder.encode(dataStr);
+                // 使用 Uint8Array 传输以正确处理 UTF-8 中文
                 webviewPanel.webview.postMessage({ type: 'csvData', data: Array.from(uint8Array) });
             }
+            // 保存文件
             if (msg?.type === 'save' && msg?.data) {
                 this.saveFile(filePath, msg.data).then(() => {
                     webviewPanel.webview.postMessage({ type: 'saved' });
@@ -149,18 +179,28 @@ class CsvEditorProvider {
             }
         });
     }
+    /**
+     * 保存 CSV 数据到文件
+     * @param filePath 文件路径
+     * @param csvData CSV 数据（表头和行）
+     */
     async saveFile(filePath, csvData) {
         if (!csvData)
             throw new Error('没有数据可保存');
         const headers = csvData.headers || [];
         const rows = csvData.rows || [];
         const lines = [];
+        // 生成 CSV 行，处理引号转义
         lines.push(headers.map(h => '"' + (h || '').replace(/"/g, '""') + '"').join(','));
         rows.forEach(row => {
             lines.push((row || []).map(cell => '"' + ((cell || '').toString()).replace(/"/g, '""') + '"').join(','));
         });
+        // UTF-8 BOM + CRLF 换行
         await fs.promises.writeFile(filePath, '\uFEFF' + lines.join('\r\n'), 'utf-8');
     }
+    /**
+     * 生成错误提示 HTML
+     */
     getErrorHtml(message) {
         return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f5f6f8}
@@ -168,20 +208,23 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-
 .msg h3{color:#e34d59;margin:0 0 12px}.msg p{color:#666;font-size:14px;margin:0}
 </style></head><body><div class="msg"><h3>不支持的文件位置</h3><p>${message}</p></div></body></html>`;
     }
+    // 以下为 CustomEditorProvider 接口要求的空实现
     saveCustomDocument(_document, _cancellation) { return Promise.resolve(); }
     saveCustomDocumentAs(_document, destination, _cancellation) { return Promise.resolve(); }
     revertCustomDocument(_document, _cancellation) { return Promise.resolve(); }
     backupCustomDocument(_document, context, _cancellation) {
         return Promise.resolve({ id: context.destination.toString(), delete: () => { } });
     }
+    /**
+     * 加载 HTML 模板并替换 nonce
+     */
     getHtmlContent(webview, nonce) {
         const extensionUri = this.extensionUri;
-        // Load HTML template
-        const htmlPath = path.join(extensionUri.fsPath, 'src', 'services', 'csv-editor.html');
+        // 读取 HTML 模板
+        const htmlPath = path.join(extensionUri.fsPath, 'media', 'pages', 'csveditor', 'csv-editor.html');
         let html = fs.readFileSync(htmlPath, 'utf-8');
-        // Replace nonce placeholder
+        // 替换 nonce 占位符
         html = html.replace(/\$\{nonce\}/g, nonce);
-        console.log('[CsvEditorProvider] HTML 模板已加载，长度:', html.length, 'nonce:', nonce.substring(0, 10) + '...');
         return html;
     }
 }

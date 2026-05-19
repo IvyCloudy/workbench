@@ -37,7 +37,7 @@ exports.TestCaseWebviewProvider = void 0;
 const vscode = __importStar(require("vscode"));
 const fs = __importStar(require("fs"));
 const store_1 = require("../services/store");
-const http_client_1 = require("../services/http-client");
+const { queryApi, fetchTaskTree } = require('../services/http-client');
 function getNonce() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     let result = '';
@@ -80,9 +80,18 @@ class TestCaseWebviewProvider {
             this.panel?.webview.postMessage({
                 command: 'init',
                 ...this.readyParams,
-                pageSize: '20',
+                pageSize: '15',
                 currentPage: 1
             });
+        }
+        else if (msg.command === 'fetchTaskTree') {
+            try {
+                const treeData = await fetchTaskTree(this.context);
+                this.panel?.webview.postMessage({ command: 'taskTreeData', data: treeData });
+            }
+            catch {
+                this.panel?.webview.postMessage({ command: 'taskTreeData', data: [] });
+            }
         }
         else if (msg.command === 'query') {
             this.panel?.webview.postMessage({ command: 'loading' });
@@ -90,6 +99,9 @@ class TestCaseWebviewProvider {
                 const opts = {
                     currentPage: msg.currentPage || 1,
                     pageSize: String(msg.pageSize || '20'),
+                    testTaskNo: msg.testTaskNo || '',
+                    subTestTaskName: msg.subTestTaskName || '',
+                    testPhaseName: msg.testPhaseName || '',
                 };
                 if (msg.testCaseNo)
                     opts.testCaseNo = msg.testCaseNo;
@@ -103,15 +115,15 @@ class TestCaseWebviewProvider {
                     opts.testType = msg.testType;
                 if (msg.type)
                     opts.type = msg.type;
-                const result = await (0, http_client_1.queryApi)(opts, this.context);
+                const result = await queryApi(opts, this.context);
                 if (result.returnCode === 'SUC0000') {
                     this.panel?.webview.postMessage({
                         command: 'showData',
                         data: result.body,
-                        total: result.total ?? result.body.length,
-                        currentPage: result.currentPage ?? msg.currentPage,
-                        pageSize: result.pageSize ?? msg.pageSize
                     });
+                }
+                else if (result.returnCode === '2005' && result.errorMsg === '任务测试案例信息不存在') {
+                    this.panel?.webview.postMessage({ command: 'endOfData' });
                 }
                 else {
                     this.panel?.webview.postMessage({ command: 'showError', message: result.errorMsg || '查询失败' });
@@ -166,11 +178,9 @@ class TestCaseWebviewProvider {
     getHtmlContent() {
         const htmlPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'index.html');
         const scriptUri = this.panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'main.js'));
-        const httpClientUri = this.panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'common', 'http-client.js'));
         const nonce = getNonce();
         let html = fs.readFileSync(htmlPath.fsPath, 'utf-8');
         html = html.replace(/\$\{scriptUri\}/g, scriptUri.toString());
-        html = html.replace(/\$\{httpClientUri\}/g, httpClientUri.toString());
         html = html.replace(/\$\{nonce\}/g, nonce);
         return html;
     }

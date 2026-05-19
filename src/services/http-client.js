@@ -1,6 +1,5 @@
 const http = require('http');
 const https = require('https');
-const vscode = require('vscode');
 const { readConfig } = require('./config');
 
 function addSm2Signature(headers, context) {
@@ -19,26 +18,23 @@ function addSm2Signature(headers, context) {
     }
 }
 
-async function fetchTaskTree(context) {
-    const appConfig = readConfig(context);
-    const baseUrl = appConfig.apiUrl || 'http://localhost:8081';
-    const apiUrl = baseUrl.replace(/\/+$/, '') + '/test-task/task-tree';
-    const url = new URL(apiUrl);
-
-    const headers = { 'Content-Type': 'application/json' };
-    if (appConfig.authToken) headers['Authorization'] = 'Bearer ' + appConfig.authToken;
-    if (appConfig.userId) headers['X-User-Id'] = appConfig.userId;
-    if (appConfig.userName) headers['X-User-Name'] = encodeURIComponent(appConfig.userName);
-    addSm2Signature(headers, context);
-
+function makeRequest(apiUrl, method, headers, body) {
     return new Promise((resolve, reject) => {
+        // 强制使用 127.0.0.1 替代 localhost
+        const urlStr = apiUrl.replace('localhost', '127.0.0.1');
+        const url = new URL(urlStr);
+        
         const options = {
-            hostname: url.hostname,
+            hostname: '127.0.0.1',  // 强制使用 IP
             port: url.port || (url.protocol === 'https:' ? 443 : 80),
             path: url.pathname + url.search,
-            method: 'POST',
-            headers,
+            method: method,
+            headers: headers,
+            // 禁用代理
+            agent: new (http.Agent)({ keepAlive: false, proxy: false }),
         };
+
+        console.log('[HTTP] 请求:', options.hostname + ':' + options.port + options.path);
 
         const client = url.protocol === 'https:' ? https : http;
         const req = client.request(options, res => {
@@ -46,29 +42,63 @@ async function fetchTaskTree(context) {
             let data = '';
             res.on('data', chunk => { data += chunk; });
             res.on('end', () => {
+                console.log('[HTTP] 响应状态:', res.statusCode);
                 try {
-                    const result = JSON.parse(data);
-                    if (result.returnCode === 'SUC0000') {
-                        resolve(result.body || []);
-                    } else {
-                        reject(new Error(result.errorMsg || '获取任务树失败'));
-                    }
+                    resolve(JSON.parse(data));
                 } catch {
-                    reject(new Error('响应数据解析失败'));
+                    resolve({ raw: data });
                 }
             });
         });
-        req.on('error', reject);
-        req.write('{}');
+        
+        req.on('error', (e) => {
+            console.error('[HTTP] 请求错误:', e.code, e.message);
+            reject(e);
+        });
+        
+        req.on('timeout', () => {
+            console.error('[HTTP] 请求超时');
+            req.destroy();
+            reject(new Error('请求超时'));
+        });
+        
+        req.setTimeout(10000);
+        
+        if (body) {
+            req.write(body);
+        }
         req.end();
     });
 }
 
+async function fetchTaskTree(context) {
+    const appConfig = readConfig(context);
+    const baseUrl = appConfig.apiUrl || 'http://127.0.0.1:8081';
+    const apiUrl = baseUrl.replace(/\/+$/, '') + '/test-task/task-tree';
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (appConfig.authToken) headers['Authorization'] = 'Bearer ' + appConfig.authToken;
+    if (appConfig.userId) headers['X-User-Id'] = appConfig.userId;
+    if (appConfig.userName) headers['X-User-Name'] = encodeURIComponent(appConfig.userName);
+    addSm2Signature(headers, context);
+
+    try {
+        const result = await makeRequest(apiUrl, 'POST', headers, '{}');
+        if (result.returnCode === 'SUC0000') {
+            return result.body || [];
+        } else {
+            throw new Error(result.errorMsg || '获取任务树失败');
+        }
+    } catch (e) {
+        console.error('[testcase-viewer] fetchTaskTree error:', e);
+        throw e;
+    }
+}
+
 async function queryApi(opts, context) {
     const appConfig = readConfig(context);
-    const baseUrl = appConfig.apiUrl || 'http://localhost:8081';
+    const baseUrl = appConfig.apiUrl || 'http://127.0.0.1:8081';
     const apiUrl = baseUrl.replace(/\/+$/, '') + '/test-task/test-case';
-    const url = new URL(apiUrl);
 
     const body = {
         testTaskNo: opts.testTaskNo,
@@ -84,94 +114,47 @@ async function queryApi(opts, context) {
     if (opts.testType) body.testType = opts.testType;
     if (opts.type) body.type = opts.type;
 
-    const postData = JSON.stringify(body);
-
     const headers = {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData).toString(),
     };
     if (appConfig.authToken) headers['Authorization'] = 'Bearer ' + appConfig.authToken;
     if (appConfig.userId) headers['X-User-Id'] = appConfig.userId;
     if (appConfig.userName) headers['X-User-Name'] = encodeURIComponent(appConfig.userName);
     addSm2Signature(headers, context);
 
-    return new Promise((resolve, reject) => {
-        const options = {
-            hostname: url.hostname,
-            port: url.port || (url.protocol === 'https:' ? 443 : 80),
-            path: url.pathname + url.search,
-            method: 'POST',
-            headers,
-        };
-
-        const client = url.protocol === 'https:' ? https : http;
-        const req = client.request(options, res => {
-            res.setEncoding('utf8');
-            let data = '';
-            res.on('data', chunk => { data += chunk; });
-            res.on('end', () => {
-                try {
-                    resolve(JSON.parse(data));
-                } catch {
-                    reject(new Error('响应数据解析失败'));
-                }
-            });
-        });
-        req.on('error', reject);
-        req.write(postData);
-        req.end();
-    });
+    try {
+        return await makeRequest(apiUrl, 'POST', headers, JSON.stringify(body));
+    } catch (e) {
+        console.error('[testcase-viewer] queryApi error:', e);
+        throw e;
+    }
 }
 
 async function sendSelectedData(opts, context) {
     const { selectedRows, headers } = opts;
     const appConfig = readConfig(context);
-    const baseUrl = appConfig.apiUrl || 'http://localhost:8081';
+    const baseUrl = appConfig.apiUrl || 'http://127.0.0.1:8081';
     const apiUrl = baseUrl.replace(/\/+$/, '') + '/test-task/batch-import';
-    const url = new URL(apiUrl);
 
     const body = {
         headers: headers,
         rows: selectedRows
     };
 
-    const postData = JSON.stringify(body);
-
     const requestHeaders = {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData).toString(),
     };
     if (appConfig.authToken) requestHeaders['Authorization'] = 'Bearer ' + appConfig.authToken;
     if (appConfig.userId) requestHeaders['X-User-Id'] = appConfig.userId;
     if (appConfig.userName) requestHeaders['X-User-Name'] = encodeURIComponent(appConfig.userName);
     addSm2Signature(requestHeaders, context);
 
-    return new Promise((resolve, reject) => {
-        const options = {
-            hostname: url.hostname,
-            port: url.port || (url.protocol === 'https:' ? 443 : 80),
-            path: url.pathname + url.search,
-            method: 'POST',
-            headers: requestHeaders,
-        };
-
-        const client = url.protocol === 'https:' ? https : http;
-        const req = client.request(options, res => {
-            res.setEncoding('utf8');
-            let data = '';
-            res.on('data', chunk => { data += chunk; });
-            res.on('end', () => {
-                try {
-                    resolve(JSON.parse(data));
-                } catch {
-                    reject(new Error('响应数据解析失败'));
-                }
-            });
-        });
-        req.on('error', reject);
-        req.write(postData);
-        req.end();
-    });
+    try {
+        return await makeRequest(apiUrl, 'POST', requestHeaders, JSON.stringify(body));
+    } catch (e) {
+        console.error('[testcase-viewer] sendSelectedData error:', e);
+        throw e;
+    }
 }
 
 module.exports = { addSm2Signature, fetchTaskTree, queryApi, sendSelectedData };

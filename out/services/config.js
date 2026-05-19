@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const CONFIG_FILE = 'app-config.json';
 const defaultConfig = {
-    apiUrl: 'http://localhost:8081',
+    apiUrl: 'http://127.0.0.1:8081',
     authToken: '',
     userId: '',
     userName: '',

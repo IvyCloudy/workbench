@@ -24,6 +24,29 @@
           }
         ],
         "priority": "option"
+      },
+      {
+        "viewType": "yamlEditor.testCase",
+        "displayName": "YAML测试案例编辑器",
+        "selector": [
+          {
+            "filenamePattern": "*.yaml"
+          },
+          {
+            "filenamePattern": "*.yml"
+          }
+        ],
+        "priority": "option"
+      },
+      {
+        "viewType": "jsonEditor.testCase",
+        "displayName": "JSON测试案例编辑器",
+        "selector": [
+          {
+            "filenamePattern": "*.json"
+          }
+        ],
+        "priority": "option"
       }
     ],
     "commands": [
@@ -38,6 +61,22 @@
       },
       {
         "command": "csvEditor.openWith",
+        "title": "用 Text Editor 打开"
+      },
+      {
+        "command": "yamlEditor.open",
+        "title": "用YAML编辑器打开"
+      },
+      {
+        "command": "yamlEditor.openWith",
+        "title": "用 Text Editor 打开"
+      },
+      {
+        "command": "jsonEditor.open",
+        "title": "用JSON编辑器打开"
+      },
+      {
+        "command": "jsonEditor.openWith",
         "title": "用 Text Editor 打开"
       }
     ],
@@ -70,7 +109,8 @@
     "iconv-lite": "^0.7.2",
     "sm-crypto": "^0.3.7",
     "udsv": "^0.7.3",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

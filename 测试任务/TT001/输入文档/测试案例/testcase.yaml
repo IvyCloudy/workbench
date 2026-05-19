@@ -1,0 +1,172 @@
+# 复杂的YAML测试文件 - 覆盖多种场景
+# 包含：嵌套对象、数组、多行字符串、特殊字符、空值等
+
+- testCaseId: 1
+  testTaskNo: TASK001
+  testTaskName: 复杂嵌套测试
+  subTestTaskName: 测试1
+  testPhaseName: ST阶段
+  testCaseNo: TC001
+  testCaseName: 验证嵌套配置
+  
+  # 嵌套对象
+  config:
+    enabled: true
+    timeout: 3000
+    retries: 3
+    endpoints:
+      - url: https://api.example.com/v1
+        method: POST
+      - url: https://api.example.com/v2
+        method: GET
+    headers:
+      Content-Type: application/json
+      Authorization: Bearer token123
+    options:
+      debug: false
+      logLevel: info
+  
+  # 多行字符串
+  preCondition: |
+    1. 确保服务器已启动
+    2. 准备测试数据
+    3. 清理缓存
+    4. 配置网络代理
+  
+  # 复杂描述
+  description: |
+    测试用例用于验证复杂嵌套结构的解析能力。
+    包含以下场景：
+    - 多层嵌套对象
+    - 数组嵌套
+    - 特殊字符测试 "双引号" 和 '单引号'
+    - 多行文本
+  
+  expected: |
+    期望结果：
+    1. 解析成功返回正确数据
+    2. 嵌套对象正确展开
+    3. 数组正确转换为表格单元格
+  
+  testCaseCheckPoint: "33"
+  
+  # 数组中包含对象
+  source:
+    - name: 数据源A
+      type: database
+      connection:
+        host: localhost
+        port: 3306
+        database: testdb
+    - name: 数据源B
+      type: api
+      connection:
+        url: https://api.example.com
+  
+  testType: 0.0
+  type: TMS
+  testCaseDes: 手工
+  cmbtId: 流程类
+  designer: 张三/123454
+
+- testCaseId: 2
+  testTaskNo: TASK001
+  testTaskName: 复杂嵌套测试
+  subTestTaskName: 测试1
+  testPhaseName: UAT阶段
+  testCaseNo: TC002
+  testCaseName: 验证数组和特殊值
+  
+  # 空值和null
+  config:
+    enabled: false
+    timeout: null
+    retries: 0
+    endpoints: []
+    headers: {}
+    options: null
+  
+  # 空字符串和空格
+  preCondition: ""
+  
+  description: ""
+  
+  expected: ""
+  
+  testCaseCheckPoint: ""
+  
+  # 空数组
+  source: []
+  
+  testType: 1.5
+  type: A
+  testCaseDes: 自动化
+  cmbtId: 接口类
+  designer: 李四/123457
+
+- testCaseId: 3
+  testTaskNo: TASK002
+  testTaskName: 边界值测试
+  subTestTaskName: 测试2
+  testPhaseName: SIT阶段
+  testCaseNo: TC003
+  testCaseName: 长文本和特殊字符
+  
+  # 包含特殊字符
+  config:
+    allowedChars: "!@#$%^&*()_+-=[]{}|;':\",./<>?"
+    unicode: "中文测试русский日本語한국어"
+    emoji: "🎉🚀💻"
+    newline: "line1\nline2\nline3"
+    tab: "col1\tcol2\tcol3"
+  
+  preCondition: "前置条件：需要管理员权限"
+  
+  description: |
+    包含各种边界值：
+    1. 超长文本
+    2. 特殊符号
+    3. 多语言
+    4. Emoji表情
+  
+  expected: |
+    期望结果：
+    1. 所有特殊字符正确保存
+    2. 换行符正确处理
+    3. 编码正确显示
+  
+  testCaseCheckPoint: "100"
+  
+  # 混合数组
+  source:
+    - 简单字符串
+    - 12345
+    - true
+    - { key: value, nested: { deep: true } }
+    - [1, 2, 3]
+  
+  testType: 2.0
+  type: B
+  testCaseDes: 性能
+  cmbtId: 场景类
+  designer: 王五/999888
+
+# 对象格式（非数组）
+metadata:
+  version: "1.0.0"
+  created: 2024-01-15
+  updated: 2024-01-20
+  author: 测试团队
+  tags:
+    - 功能测试
+    - 冒烟测试
+    - 回归测试
+
+# 纯键值对格式
+simpleConfig:
+  appName: TestCaseViewer
+  appVersion: 1.0.0
+  environment: production
+  debugMode: false
+  maxRetries: 5
+  cacheEnabled: true

@@ -185,24 +185,31 @@ class CsvEditorProvider {
             }
             // 推送测试案例
             if (msg?.type === 'pushTestCase' && msg?.data) {
-                console.log('推送数据:', JSON.stringify(msg.data, null, 2));
+                console.log('[CSV推送] 收到推送请求');
+                console.log('[CSV推送] 文件路径:', filePath);
+                console.log('[CSV推送] 数据:', JSON.stringify(msg.data, null, 2));
                 try {
                     const ctx = this.context;
+                    console.log('[CSV推送] context:', ctx ? '已初始化' : '未初始化');
                     if (!ctx) {
                         webviewPanel.webview.postMessage({ type: 'pushError', message: '扩展上下文未初始化' });
                         return;
                     }
                     // 解析文件路径获取任务信息
                     const parts = filePath.split(path.sep);
+                    console.log('[CSV推送] 路径部分:', parts);
                     const testTaskNo = parts.find((p, i) => p.startsWith('TT') || /^\d+$/.test(p.slice(0, 2))) || '';
+                    console.log('[CSV推送] testTaskNo:', testTaskNo);
                     const result = await (0, http_client_1.queryApi)({
                         testTaskNo: testTaskNo,
                         currentPage: 1,
                         pageSize: 10
                     }, ctx);
+                    console.log('[CSV推送] API 返回:', result);
                     webviewPanel.webview.postMessage({ type: 'pushSuccess', result });
                 }
                 catch (err) {
+                    console.error('[CSV推送] 异常:', err);
                     webviewPanel.webview.postMessage({ type: 'pushError', message: err?.message || '推送失败' });
                 }
             }

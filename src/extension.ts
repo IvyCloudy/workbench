@@ -3,6 +3,8 @@ import { WorkbenchProvider } from './providers/WorkbenchProvider';
 import { CsvBrowserProvider } from './providers/CsvBrowserProvider';
 import { CsvEditorProvider } from './providers/CsvEditorProvider';
 import { isQualifiedCsvFile } from './providers/CsvDocumentProvider';
+import { YamlEditorProvider, isQualifiedYamlFile } from './providers/YamlDocumentProvider';
+import { JsonEditorProvider, isQualifiedJsonFile } from './providers/JsonDocumentProvider';
 
 function getActiveFileUri(): vscode.Uri | undefined {
     const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
@@ -54,14 +56,56 @@ async function openWithCsvEditor(uri: vscode.Uri): Promise<void> {
     }
 }
 
+async function openWithYamlEditor(uri: vscode.Uri): Promise<void> {
+    const fsPath = uri.fsPath;
+    if (processingFiles.has(fsPath)) return;
+    processingFiles.add(fsPath);
+
+    try {
+        // 关闭当前编辑器
+        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // 用自定义编辑器打开
+        await vscode.commands.executeCommand('vscode.openWith', uri, 'yamlEditor.testCase');
+    } catch (e) {
+        console.error('[YAML拦截] 切换编辑器失败:', e);
+    } finally {
+        processingFiles.delete(fsPath);
+    }
+}
+
+async function openWithJsonEditor(uri: vscode.Uri): Promise<void> {
+    const fsPath = uri.fsPath;
+    if (processingFiles.has(fsPath)) return;
+    processingFiles.add(fsPath);
+
+    try {
+        // 关闭当前编辑器
+        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // 用自定义编辑器打开
+        await vscode.commands.executeCommand('vscode.openWith', uri, 'jsonEditor.testCase');
+    } catch (e) {
+        console.error('[JSON拦截] 切换编辑器失败:', e);
+    } finally {
+        processingFiles.delete(fsPath);
+    }
+}
+
 export function activate(context: vscode.ExtensionContext) {
     const workbenchProvider = new WorkbenchProvider(context.extensionUri, context);
     const csvBrowserProvider = new CsvBrowserProvider(context.extensionUri, context);
     const csvEditorProvider = new CsvEditorProvider(context.extensionUri, context);
+    const yamlEditorProvider = new YamlEditorProvider(context.extensionUri, context);
+    const jsonEditorProvider = new JsonEditorProvider(context.extensionUri, context);
 
-    // 注册自定义CSV编辑器
+    // 注册自定义编辑器
     context.subscriptions.push(
-        vscode.window.registerCustomEditorProvider('csvEditor.testCase', csvEditorProvider)
+        vscode.window.registerCustomEditorProvider('csvEditor.testCase', csvEditorProvider),
+        vscode.window.registerCustomEditorProvider('yamlEditor.testCase', yamlEditorProvider),
+        vscode.window.registerCustomEditorProvider('jsonEditor.testCase', jsonEditorProvider)
     );
 
     // 监听标签页变化
@@ -73,8 +117,16 @@ export function activate(context: vscode.ExtensionContext) {
                 let uri: vscode.Uri | undefined;
                 if (input instanceof vscode.TabInputText) uri = input.uri;
                 else if (input instanceof vscode.TabInputCustom) uri = input.uri;
-                if (uri && /\.csv$/i.test(uri.fsPath)) {
-                    userOpenedAsTextFiles.delete(uri.fsPath);
+                if (uri) {
+                    if (/\.csv$/i.test(uri.fsPath)) {
+                        userOpenedAsTextFiles.delete(uri.fsPath);
+                    }
+                    if (/\.ya?ml$/i.test(uri.fsPath)) {
+                        userOpenedAsTextFiles.delete(uri.fsPath);
+                    }
+                    if (/\.json$/i.test(uri.fsPath)) {
+                        userOpenedAsTextFiles.delete(uri.fsPath);
+                    }
                 }
             }
             for (const tab of e.opened) {
@@ -85,14 +137,30 @@ export function activate(context: vscode.ExtensionContext) {
                 } else if (input instanceof vscode.TabInputCustom) {
                     uri = input.uri;
                 }
-                if (uri && isQualifiedCsvFile(uri)) {
-                    // 如果用户主动用 TextEditor 打开，不切换
-                    if (isUserOpenedAsText(uri)) {
-                        console.log('[CSV拦截] 用户主动用TextEditor打开，跳过:', uri.fsPath);
-                        continue;
+                if (uri) {
+                    if (isQualifiedCsvFile(uri)) {
+                        // 如果用户主动用 TextEditor 打开，不切换
+                        if (isUserOpenedAsText(uri)) {
+                            console.log('[CSV拦截] 用户主动用TextEditor打开，跳过:', uri.fsPath);
+                            continue;
+                        }
+                        console.log('[CSV拦截] 标签页打开CSV:', uri.fsPath);
+                        await openWithCsvEditor(uri);
+                    } else if (isQualifiedYamlFile(uri)) {
+                        if (isUserOpenedAsText(uri)) {
+                            console.log('[YAML拦截] 用户主动用TextEditor打开，跳过:', uri.fsPath);
+                            continue;
+                        }
+                        console.log('[YAML拦截] 标签页打开YAML:', uri.fsPath);
+                        await openWithYamlEditor(uri);
+                    } else if (isQualifiedJsonFile(uri)) {
+                        if (isUserOpenedAsText(uri)) {
+                            console.log('[JSON拦截] 用户主动用TextEditor打开，跳过:', uri.fsPath);
+                            continue;
+                        }
+                        console.log('[JSON拦截] 标签页打开JSON:', uri.fsPath);
+                        await openWithJsonEditor(uri);
                     }
-                    console.log('[CSV拦截] 标签页打开CSV:', uri.fsPath);
-                    await openWithCsvEditor(uri);
                 }
             }
         })
@@ -103,15 +171,19 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.onDidChangeActiveTextEditor(async (editor) => {
             if (editor) {
                 const uri = editor.document.uri;
-                console.log('[CSV拦截] 活动编辑器变化:', uri.fsPath);
+                console.log('[编辑器拦截] 活动编辑器变化:', uri.fsPath);
                 // 如果用户主动用 TextEditor 打开，不切换
                 if (isUserOpenedAsText(uri)) {
-                    console.log('[CSV拦截] 用户主动用TextEditor打开，跳过:', uri.fsPath);
+                    console.log('[编辑器拦截] 用户主动用TextEditor打开，跳过:', uri.fsPath);
                     updateShowIcon();
                     return;
                 }
                 if (isQualifiedCsvFile(uri)) {
                     await openWithCsvEditor(uri);
+                } else if (isQualifiedYamlFile(uri)) {
+                    await openWithYamlEditor(uri);
+                } else if (isQualifiedJsonFile(uri)) {
+                    await openWithJsonEditor(uri);
                 }
             }
             updateShowIcon();
@@ -145,6 +217,50 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }),
         vscode.commands.registerCommand('csvEditor.openWithFile', async (filePath: string) => {
+            if (filePath) {
+                // 标记为用户主动用 TextEditor 打开
+                markUserOpenedAsText(filePath);
+                const uri = vscode.Uri.file(filePath);
+                await vscode.commands.executeCommand('vscode.openWith', uri, 'default');
+            }
+        }),
+        vscode.commands.registerCommand('yamlEditor.open', async () => {
+            const uri = getActiveFileUri();
+            if (uri && /\.ya?ml$/i.test(uri.fsPath)) {
+                await openWithYamlEditor(uri);
+            }
+        }),
+        vscode.commands.registerCommand('yamlEditor.openWith', async () => {
+            const uri = getActiveFileUri();
+            if (uri && /\.ya?ml$/i.test(uri.fsPath)) {
+                // 标记为用户主动用 TextEditor 打开
+                markUserOpenedAsText(uri.fsPath);
+                await vscode.commands.executeCommand('vscode.openWith', uri, 'default');
+            }
+        }),
+        vscode.commands.registerCommand('yamlEditor.openWithFile', async (filePath: string) => {
+            if (filePath) {
+                // 标记为用户主动用 TextEditor 打开
+                markUserOpenedAsText(filePath);
+                const uri = vscode.Uri.file(filePath);
+                await vscode.commands.executeCommand('vscode.openWith', uri, 'default');
+            }
+        }),
+        vscode.commands.registerCommand('jsonEditor.open', async () => {
+            const uri = getActiveFileUri();
+            if (uri && /\.json$/i.test(uri.fsPath)) {
+                await openWithJsonEditor(uri);
+            }
+        }),
+        vscode.commands.registerCommand('jsonEditor.openWith', async () => {
+            const uri = getActiveFileUri();
+            if (uri && /\.json$/i.test(uri.fsPath)) {
+                // 标记为用户主动用 TextEditor 打开
+                markUserOpenedAsText(uri.fsPath);
+                await vscode.commands.executeCommand('vscode.openWith', uri, 'default');
+            }
+        }),
+        vscode.commands.registerCommand('jsonEditor.openWithFile', async (filePath: string) => {
             if (filePath) {
                 // 标记为用户主动用 TextEditor 打开
                 markUserOpenedAsText(filePath);

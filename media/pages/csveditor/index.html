@@ -142,14 +142,13 @@ tbody tr:hover td.xs-td-cb{background:#f8f8f8}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input type="text" id="searchInput" placeholder="搜索...">
         </div>
+        <button class="xs-btn xs-btn-p" id="pushBtn" disabled>推送</button>
         <span class="xs-sp"></span>
         <span class="xs-mod" id="modInfo">已修改 <strong id="modCount">0</strong></span>
-        <span id="selCount" style="font-size:12px;color:#666">已选 0</span>
-        <span id="totalCount" style="font-size:12px;color:#666">共 0</span>
-        <button class="xs-btn" id="undoBtn" disabled>撤销</button>
-        <button class="xs-btn" id="redoBtn" disabled>重做</button>
-        <button class="xs-btn" id="findBtn">查找</button>
-        <button class="xs-btn xs-btn-p" id="pushBtn" disabled>推送</button>
+        <div class="xs-icon-btn" id="findBtn" title="查找">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </div>
+        <span id="selInfo" style="font-size:12px;color:#666">已选 0 行，共 0 行</span>
     </div>
     <div class="xs-container" id="tableContainer"></div>
     <div class="xs-load" id="loading" style="display:none"><div class="xs-spin"></div></div>
@@ -274,9 +273,22 @@ function bindEv(){
     var tbl=document.querySelector('.xs-table');
     if(tbl)tbl.addEventListener('contextmenu',function(e){
         e.preventDefault();
+        // 关闭已打开的菜单
+        document.getElementById('ctxMenu').style.display='none';
+        document.getElementById('sortFilter').style.display='none';
         var td=e.target.closest('td');
         if(td&&td.classList.contains('xs-editable')){S.cell=td;updCellSel();}
         showCtx(e.clientX,e.clientY);
+    });
+
+    // 点击/拖动等操作时关闭右键菜单和排序菜单
+    document.addEventListener('mousedown',function(e){
+        var isMenuClick=e.target.closest('.xs-cm')||e.target.closest('.xs-sf')||e.target.closest('.xs-find');
+        if(!isMenuClick){
+            document.getElementById('ctxMenu').style.display='none';
+            document.getElementById('sortFilter').style.display='none';
+            document.getElementById('findPanel').classList.remove('show');
+        }
     });
 
     // 使用事件委托处理表格行事件（解决 reRender 后事件失效问题）
@@ -305,9 +317,10 @@ function bindEv(){
             return;
         }
         // 关闭菜单
-        if(!e.target.closest('.xs-cm')&&!e.target.closest('.xs-sf')){
+        if(!e.target.closest('.xs-cm')&&!e.target.closest('.xs-sf')&&!e.target.closest('.xs-find')){
             document.getElementById('ctxMenu').style.display='none';
             document.getElementById('sortFilter').style.display='none';
+            document.getElementById('findPanel').classList.remove('show');
         }
     });
 
@@ -389,10 +402,9 @@ function bindEv(){
     });
 
     document.getElementById('pushBtn').addEventListener('click',pushTC);
-    document.getElementById('undoBtn').addEventListener('click',undo);
-    document.getElementById('redoBtn').addEventListener('click',redo);
     document.getElementById('findBtn').addEventListener('click',toggleFind);
     document.getElementById('searchInput').addEventListener('input',function(){doSearch(this.value);});
+    document.getElementById('findInput').addEventListener('input',function(){doFind();});
     document.getElementById('prevBtn').addEventListener('click',doPrev);
     document.getElementById('nextBtn').addEventListener('click',doNext);
     document.getElementById('replaceBtn').addEventListener('click',doReplace);
@@ -417,14 +429,8 @@ document.addEventListener('keydown',function(e){
 
 // ==================== UI 更新 ====================
 function updUI(){
-    var tc=document.getElementById('totalCount');
-    var sc=document.getElementById('selCount');
-    var ub=document.getElementById('undoBtn');
-    var rb=document.getElementById('redoBtn');
-    if(tc)tc.textContent=S.data.rows.length;
-    if(sc)sc.textContent='已选 '+S.sel.size;
-    if(ub)ub.disabled=S.hIdx<=0;
-    if(rb)rb.disabled=S.hIdx>=S.hist.length-1;
+    var si=document.getElementById('selInfo');
+    if(si)si.textContent='已选 '+S.sel.size+' 行，共 '+S.data.rows.length+' 行';
     var mi=document.getElementById('modInfo');
     var mc=document.getElementById('modCount');
     if(mi)mi.style.display=S.mods.size>0?'inline':'none';
@@ -439,6 +445,8 @@ function updSel(){
         if(cb)cb.checked=S.sel.has(idx);
         tr.classList.toggle('selected',S.sel.has(idx));
     });
+    var si=document.getElementById('selInfo');
+    if(si)si.textContent='已选 '+S.sel.size+' 行，共 '+S.data.rows.length+' 行';
     var hcb=document.getElementById('headerCheckbox');
     if(hcb){
         var vr=document.querySelectorAll('tbody tr:not(.hidden)');
@@ -459,8 +467,8 @@ function updCellSel(){
 function updSearch(){
     var kw=(document.getElementById('searchInput').value||'').toLowerCase();
     document.querySelectorAll('tbody tr').forEach(function(tr){
-        if(!kw){tr.classList.remove('hidden');}
-        else{var t=tr.textContent||'';tr.classList.toggle('hidden',!t.toLowerCase().includes(kw));}
+        var matchKw=!kw||(tr.textContent||'').toLowerCase().includes(kw);
+        tr.classList.toggle('hidden',!matchKw);
     });
     updSel();
 }
@@ -634,6 +642,8 @@ function deleteCol(){
 function showCtx(x,y){
     var menu=document.getElementById('ctxMenu');
     menu.innerHTML=
+        '<div class="xs-mi'+(S.sel.size>0?'':' disabled')+'" id="ctxPush">推送测试案例</div>'+
+        '<div class="xs-div"></div>'+
         '<div class="xs-mi" id="ctxCopy">复制 <span class="lb">Ctrl+C</span></div>'+
         '<div class="xs-mi" id="ctxCut">剪切 <span class="lb">Ctrl+X</span></div>'+
         '<div class="xs-mi'+(S.clip?'':' disabled')+'" id="ctxPaste">粘贴 <span class="lb">Ctrl+V</span></div>'+
@@ -657,6 +667,11 @@ function showCtx(x,y){
     document.getElementById('ctxDeleteCol').addEventListener('click',deleteCol);
     document.getElementById('ctxClearCell').addEventListener('click',clearCell);
     document.getElementById('ctxSelAll').addEventListener('click',selAll);
+    document.getElementById('ctxPush').addEventListener('click',pushTC);
+    // 点击菜单项后关闭菜单
+    menu.querySelectorAll('.xs-mi:not(.disabled)').forEach(function(mi){
+        mi.addEventListener('click',function(){menu.style.display='none';});
+    });
     menu.style.display='block';
     menu.style.left=Math.min(x,window.innerWidth-menu.offsetWidth-10)+'px';
     menu.style.top=Math.min(y,window.innerHeight-menu.offsetHeight-10)+'px';
@@ -710,7 +725,21 @@ function clearSort(){
 }
 
 // ==================== 搜索功能 ====================
-function doSearch(kw){updSearch();}
+function doSearch(kw){
+    updSearch();
+    // 搜索时也高亮匹配单元格
+    clearHighlights();
+    if(!kw)return;
+    var kwLower=kw.toLowerCase();
+    S.data.rows.forEach(function(row,ri){
+        row.forEach(function(cell,ci){
+            if((cell||'').toString().toLowerCase().includes(kwLower)){
+                var td=document.querySelector('.xs-editable[data-row="'+ri+'"][data-col="'+ci+'"]');
+                if(td)td.classList.add('highlight');
+            }
+        });
+    });
+}
 var findMatches=[],findIdx=0;
 
 function toggleFind(){
@@ -783,6 +812,7 @@ function doReplace(){
         S.cell.querySelector('.xs-cell-text').textContent=S.data.rows[ri][ci];
         var k=ri+'-'+ci;S.mods.add(k);S.cell.classList.add('modified');
         saveHist();updUI();doFind();autoSave();toast('已替换','success');
+        clearHighlights();document.getElementById('findPanel').classList.remove('show');
     }
 }
 
@@ -801,7 +831,8 @@ function doReplaceAll(){
             }
         });
     });
-    if(count>0){saveHist();reRender();updUI();doFind();autoSave();toast('已替换 '+count+' 处','success');}
+    if(count>0){saveHist();reRender();updUI();autoSave();toast('已替换 '+count+' 处','success');}
+    clearHighlights();document.getElementById('findPanel').classList.remove('show');
 }
 
 // ==================== 打开 TextEditor ====================

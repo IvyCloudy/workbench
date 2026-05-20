@@ -1,9 +1,49 @@
 "use strict";
-const http = require('http');
-const https = require('https');
-const { readConfig } = require('./config');
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.fetchTaskTree = fetchTaskTree;
+exports.queryApi = queryApi;
+exports.sendSelectedData = sendSelectedData;
+const http = __importStar(require("http"));
+const https = __importStar(require("https"));
+const storage_1 = require("./storage");
+// ============================================
+// SM2 签名
+// ============================================
 function addSm2Signature(headers, context) {
-    const appConfig = readConfig(context);
+    const appConfig = (0, storage_1.readConfig)(context);
     const publicKey = appConfig.sm2PublicKey;
     if (!publicKey)
         return;
@@ -15,31 +55,33 @@ function addSm2Signature(headers, context) {
         headers['X-Signature'] = encrypted;
     }
     catch (e) {
-        console.error('[testcase-viewer] SM2 encryption failed:', e);
+        console.error('[http-client] SM2 encryption failed:', e);
     }
 }
+// ============================================
+// HTTP 请求
+// ============================================
 function makeRequest(apiUrl, method, headers, body) {
     return new Promise((resolve, reject) => {
         // 强制使用 127.0.0.1 替代 localhost
         const urlStr = apiUrl.replace('localhost', '127.0.0.1');
         const url = new URL(urlStr);
         const options = {
-            hostname: '127.0.0.1', // 强制使用 IP
+            hostname: '127.0.0.1',
             port: url.port || (url.protocol === 'https:' ? 443 : 80),
             path: url.pathname + url.search,
             method: method,
             headers: headers,
-            // 禁用代理
-            agent: new (http.Agent)({ keepAlive: false, proxy: false }),
+            agent: new (http.Agent)({ keepAlive: false }),
         };
-        console.log('[HTTP] 请求:', options.hostname + ':' + options.port + options.path);
+        console.log('[http-client] Request:', options.hostname + ':' + options.port + options.path);
         const client = url.protocol === 'https:' ? https : http;
         const req = client.request(options, res => {
             res.setEncoding('utf8');
             let data = '';
             res.on('data', chunk => { data += chunk; });
             res.on('end', () => {
-                console.log('[HTTP] 响应状态:', res.statusCode);
+                console.log('[http-client] Response status:', res.statusCode);
                 try {
                     resolve(JSON.parse(data));
                 }
@@ -49,11 +91,11 @@ function makeRequest(apiUrl, method, headers, body) {
             });
         });
         req.on('error', (e) => {
-            console.error('[HTTP] 请求错误:', e.code, e.message);
+            console.error('[http-client] Request error:', e.code, e.message);
             reject(e);
         });
         req.on('timeout', () => {
-            console.error('[HTTP] 请求超时');
+            console.error('[http-client] Request timeout');
             req.destroy();
             reject(new Error('请求超时'));
         });
@@ -64,8 +106,11 @@ function makeRequest(apiUrl, method, headers, body) {
         req.end();
     });
 }
+// ============================================
+// API 方法
+// ============================================
 async function fetchTaskTree(context) {
-    const appConfig = readConfig(context);
+    const appConfig = (0, storage_1.readConfig)(context);
     const baseUrl = appConfig.apiUrl || 'http://127.0.0.1:8081';
     const apiUrl = baseUrl.replace(/\/+$/, '') + '/test-task/task-tree';
     const headers = { 'Content-Type': 'application/json' };
@@ -86,12 +131,12 @@ async function fetchTaskTree(context) {
         }
     }
     catch (e) {
-        console.error('[testcase-viewer] fetchTaskTree error:', e);
+        console.error('[http-client] fetchTaskTree error:', e);
         throw e;
     }
 }
 async function queryApi(opts, context) {
-    const appConfig = readConfig(context);
+    const appConfig = (0, storage_1.readConfig)(context);
     const baseUrl = appConfig.apiUrl || 'http://127.0.0.1:8081';
     const apiUrl = baseUrl.replace(/\/+$/, '') + '/test-task/test-case';
     const body = {
@@ -101,6 +146,7 @@ async function queryApi(opts, context) {
         currentPage: opts.currentPage,
         pageSize: opts.pageSize
     };
+    // 可选参数
     if (opts.testCaseNo)
         body.testCaseNo = opts.testCaseNo;
     if (opts.testCaseName)
@@ -113,9 +159,7 @@ async function queryApi(opts, context) {
         body.testType = opts.testType;
     if (opts.type)
         body.type = opts.type;
-    const headers = {
-        'Content-Type': 'application/json',
-    };
+    const headers = { 'Content-Type': 'application/json' };
     if (appConfig.authToken)
         headers['Authorization'] = 'Bearer ' + appConfig.authToken;
     if (appConfig.userId)
@@ -127,22 +171,19 @@ async function queryApi(opts, context) {
         return await makeRequest(apiUrl, 'POST', headers, JSON.stringify(body));
     }
     catch (e) {
-        console.error('[testcase-viewer] queryApi error:', e);
+        console.error('[http-client] queryApi error:', e);
         throw e;
     }
 }
 async function sendSelectedData(opts, context) {
-    const { selectedRows, headers } = opts;
-    const appConfig = readConfig(context);
+    const appConfig = (0, storage_1.readConfig)(context);
     const baseUrl = appConfig.apiUrl || 'http://127.0.0.1:8081';
     const apiUrl = baseUrl.replace(/\/+$/, '') + '/test-task/batch-import';
     const body = {
-        headers: headers,
-        rows: selectedRows
+        headers: opts.headers,
+        rows: opts.selectedRows
     };
-    const requestHeaders = {
-        'Content-Type': 'application/json',
-    };
+    const requestHeaders = { 'Content-Type': 'application/json' };
     if (appConfig.authToken)
         requestHeaders['Authorization'] = 'Bearer ' + appConfig.authToken;
     if (appConfig.userId)
@@ -154,9 +195,8 @@ async function sendSelectedData(opts, context) {
         return await makeRequest(apiUrl, 'POST', requestHeaders, JSON.stringify(body));
     }
     catch (e) {
-        console.error('[testcase-viewer] sendSelectedData error:', e);
+        console.error('[http-client] sendSelectedData error:', e);
         throw e;
     }
 }
-module.exports = { addSm2Signature, fetchTaskTree, queryApi, sendSelectedData };
 //# sourceMappingURL=http-client.js.map

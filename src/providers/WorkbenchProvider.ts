@@ -1,54 +1,23 @@
 import * as vscode from 'vscode';
-import * as fs from 'fs';
+import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider';
+import type { WebviewMessage } from '../types';
 
-function getNonce(): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    for (let i = 0; i < 64; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
+// ============================================
+// 工作台 Provider
+// ============================================
+
+export class WorkbenchProvider extends BaseWebviewProvider {
+    protected getPanelId(): string { return 'workbench'; }
+    protected getPanelTitle(): string { return '工作台'; }
+    protected getViewColumn(): vscode.ViewColumn { return vscode.ViewColumn.One; }
+    protected getHtmlPath(): vscode.Uri {
+        return vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'workbench', 'index.html');
     }
-    return result;
-}
-
-export class WorkbenchProvider {
-    private panel: vscode.WebviewPanel | undefined;
-    private disposables: vscode.Disposable[] = [];
-
-    constructor(
-        private extensionUri: vscode.Uri,
-        private context: vscode.ExtensionContext
-    ) {}
-
-    show() {
-        if (this.panel) {
-            this.panel.reveal(vscode.ViewColumn.One);
-            return;
-        }
-
-        this.panel = vscode.window.createWebviewPanel(
-            'workbench',
-            '工作台',
-            vscode.ViewColumn.One,
-            {
-                enableScripts: true,
-                retainContextWhenHidden: true,
-                localResourceRoots: [
-                    vscode.Uri.joinPath(this.extensionUri, 'media')
-                ]
-            }
-        );
-
-        this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
-        this.panel.webview.onDidReceiveMessage(
-            msg => this.handleMessage(msg),
-            null,
-            this.disposables
-        );
-
-        this.panel.webview.html = this.getHtmlContent();
+    protected getScriptPath(): vscode.Uri {
+        return vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'workbench', 'main.js');
     }
 
-    private handleMessage(msg: any): void {
+    protected handleMessage: MessageHandler = (msg: WebviewMessage) => {
         switch (msg.command) {
             case 'openTestTask':
                 vscode.window.showInformationMessage(`打开测试任务: ${msg.taskName || msg.taskId}`);
@@ -75,34 +44,5 @@ export class WorkbenchProvider {
                 vscode.commands.executeCommand(msg.commandId || '').then(() => {}, () => {});
                 break;
         }
-    }
-
-    private getHtmlContent(): string {
-        const htmlPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'workbench', 'index.html');
-        try {
-            const nonce = getNonce();
-            let html = fs.readFileSync(htmlPath.fsPath, 'utf-8');
-            html = html.replace(/\$\{nonce\}/g, nonce);
-            html = html.replace(/\$\{scriptUri\}/g, this.panel!.webview.asWebviewUri(
-                vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'workbench', 'main.js')
-            ).toString());
-            return html;
-        } catch {
-            return this.getFallbackHtml();
-        }
-    }
-
-    private getFallbackHtml(): string {
-        return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>工作台</title></head>
-<body style="padding:20px;font-family:sans-serif;color:#333;">
-<h2>工作台</h2>
-<p style="color:#999;">工作台页面正在开发中...</p>
-</body></html>`;
-    }
-
-    private dispose(): void {
-        this.panel = undefined;
-        this.disposables.forEach(d => d.dispose());
-        this.disposables = [];
-    }
+    };
 }

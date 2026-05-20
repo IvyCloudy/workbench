@@ -38,8 +38,7 @@ exports.isUserOpenedAsText = isUserOpenedAsText;
 exports.activate = activate;
 const vscode = __importStar(require("vscode"));
 const WorkbenchProvider_1 = require("./providers/WorkbenchProvider");
-const CsvBrowserProvider_1 = require("./providers/CsvBrowserProvider");
-const CsvEditorProvider_1 = require("./providers/CsvEditorProvider");
+const TableBrowserProvider_1 = require("./providers/TableBrowserProvider");
 const CsvDocumentProvider_1 = require("./providers/CsvDocumentProvider");
 const YamlDocumentProvider_1 = require("./providers/YamlDocumentProvider");
 const JsonDocumentProvider_1 = require("./providers/JsonDocumentProvider");
@@ -130,8 +129,8 @@ async function openWithJsonEditor(uri) {
 }
 function activate(context) {
     const workbenchProvider = new WorkbenchProvider_1.WorkbenchProvider(context.extensionUri, context);
-    const csvBrowserProvider = new CsvBrowserProvider_1.CsvBrowserProvider(context.extensionUri, context);
-    const csvEditorProvider = new CsvEditorProvider_1.CsvEditorProvider(context.extensionUri, context);
+    const tableBrowserProvider = new TableBrowserProvider_1.TableBrowserProvider(context.extensionUri, context);
+    const csvEditorProvider = new CsvDocumentProvider_1.CsvEditorProvider(context.extensionUri, context);
     const yamlEditorProvider = new YamlDocumentProvider_1.YamlEditorProvider(context.extensionUri, context);
     const jsonEditorProvider = new JsonDocumentProvider_1.JsonEditorProvider(context.extensionUri, context);
     // 注册自定义编辑器
@@ -226,7 +225,7 @@ function activate(context) {
             const testcaseProvider = new TestCaseWebviewProvider(context.extensionUri, context);
             await testcaseProvider.showWebview(uri);
         }
-    }), vscode.commands.registerCommand('workbench.open', () => workbenchProvider.show()), vscode.commands.registerCommand('csvBrowser.open', () => csvBrowserProvider.show()), vscode.commands.registerCommand('csvEditor.open', async () => {
+    }), vscode.commands.registerCommand('workbench.open', () => workbenchProvider.show()), vscode.commands.registerCommand('tableBrowser.open', () => tableBrowserProvider.show()), vscode.commands.registerCommand('csvEditor.open', async () => {
         const uri = getActiveFileUri();
         if (uri && /\.csv$/i.test(uri.fsPath)) {
             await openWithCsvEditor(uri);

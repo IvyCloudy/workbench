@@ -36,103 +36,86 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.TestCaseWebviewProvider = void 0;
 const vscode = __importStar(require("vscode"));
 const fs = __importStar(require("fs"));
-const store_1 = require("../services/store");
-const { queryApi, fetchTaskTree } = require('../services/http-client');
-function getNonce() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    for (let i = 0; i < 64; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
-}
-class TestCaseWebviewProvider {
-    constructor(extensionUri, context) {
-        this.extensionUri = extensionUri;
-        this.context = context;
-        this.disposables = [];
+const BaseWebviewProvider_1 = require("./BaseWebviewProvider");
+const storage_1 = require("../services/storage");
+const http_client_1 = require("../services/http-client");
+class TestCaseWebviewProvider extends BaseWebviewProvider_1.BaseWebviewProvider {
+    constructor() {
+        super(...arguments);
         this.readyParams = null;
+        this.handleMessage = async (msg) => {
+            if (msg.command === 'ready' && this.readyParams) {
+                this.postMessage({
+                    command: 'init',
+                    ...this.readyParams,
+                    pageSize: '15',
+                    currentPage: 1
+                });
+            }
+            else if (msg.command === 'fetchTaskTree') {
+                try {
+                    const treeData = await (0, http_client_1.fetchTaskTree)(this.context);
+                    this.postMessage({ command: 'taskTreeData', data: treeData });
+                }
+                catch {
+                    this.postMessage({ command: 'taskTreeData', data: [] });
+                }
+            }
+            else if (msg.command === 'query') {
+                this.postMessage({ command: 'loading' });
+                try {
+                    const opts = {
+                        currentPage: msg.currentPage || 1,
+                        pageSize: String(msg.pageSize || '20'),
+                        testTaskNo: msg.testTaskNo || '',
+                        subTestTaskName: msg.subTestTaskName || '',
+                        testPhaseName: msg.testPhaseName || '',
+                    };
+                    if (msg.testCaseNo)
+                        opts.testCaseNo = msg.testCaseNo;
+                    if (msg.testCaseName)
+                        opts.testCaseName = msg.testCaseName;
+                    if (msg.testCasePath)
+                        opts.testCasePath = msg.testCasePath;
+                    if (msg.testCasePriority)
+                        opts.testCasePriority = msg.testCasePriority;
+                    if (msg.testType)
+                        opts.testType = msg.testType;
+                    if (msg.type)
+                        opts.type = msg.type;
+                    const result = await (0, http_client_1.queryApi)(opts, this.context);
+                    if (result.returnCode === 'SUC0000') {
+                        this.postMessage({ command: 'showData', data: result.body });
+                    }
+                    else if (result.returnCode === '2005' && result.errorMsg === '任务测试案例信息不存在') {
+                        this.postMessage({ command: 'endOfData' });
+                    }
+                    else {
+                        this.postMessage({ command: 'showError', message: result.errorMsg || '查询失败' });
+                    }
+                }
+                catch (err) {
+                    this.postMessage({ command: 'showError', message: err.message || '网络请求失败' });
+                }
+            }
+        };
+    }
+    getPanelId() { return 'testcaseViewer'; }
+    getPanelTitle() { return '测试案例'; }
+    getViewColumn() { return vscode.ViewColumn.Beside; }
+    getHtmlPath() {
+        return vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'index.html');
+    }
+    getScriptPath() {
+        return vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'main.js');
     }
     async showWebview(fileUri) {
-        if (this.panel) {
-            this.panel.reveal(vscode.ViewColumn.Beside);
-        }
-        else {
-            this.panel = vscode.window.createWebviewPanel('testcaseViewer', '测试案例', vscode.ViewColumn.Beside, {
-                enableScripts: true,
-                retainContextWhenHidden: true,
-                localResourceRoots: [
-                    vscode.Uri.joinPath(this.extensionUri, 'media')
-                ]
-            });
-            this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
-            this.panel.webview.onDidReceiveMessage(msg => this.handleMessage(msg), null, this.disposables);
-        }
+        this.show();
         const params = await this.extractParamsFromFile(fileUri);
         const config = vscode.workspace.getConfiguration('testcaseViewer');
         const apiUrl = config.get('apiUrl') || 'http://localhost:8081';
-        (0, store_1.writeParams)(this.context, params);
+        (0, storage_1.writeParams)(this.context, params);
         this.readyParams = { ...params, apiUrl };
-        this.panel.webview.html = this.getHtmlContent();
-    }
-    async handleMessage(msg) {
-        if (msg.command === 'ready' && this.readyParams) {
-            this.panel?.webview.postMessage({
-                command: 'init',
-                ...this.readyParams,
-                pageSize: '15',
-                currentPage: 1
-            });
-        }
-        else if (msg.command === 'fetchTaskTree') {
-            try {
-                const treeData = await fetchTaskTree(this.context);
-                this.panel?.webview.postMessage({ command: 'taskTreeData', data: treeData });
-            }
-            catch {
-                this.panel?.webview.postMessage({ command: 'taskTreeData', data: [] });
-            }
-        }
-        else if (msg.command === 'query') {
-            this.panel?.webview.postMessage({ command: 'loading' });
-            try {
-                const opts = {
-                    currentPage: msg.currentPage || 1,
-                    pageSize: String(msg.pageSize || '20'),
-                    testTaskNo: msg.testTaskNo || '',
-                    subTestTaskName: msg.subTestTaskName || '',
-                    testPhaseName: msg.testPhaseName || '',
-                };
-                if (msg.testCaseNo)
-                    opts.testCaseNo = msg.testCaseNo;
-                if (msg.testCaseName)
-                    opts.testCaseName = msg.testCaseName;
-                if (msg.testCasePath)
-                    opts.testCasePath = msg.testCasePath;
-                if (msg.testCasePriority)
-                    opts.testCasePriority = msg.testCasePriority;
-                if (msg.testType)
-                    opts.testType = msg.testType;
-                if (msg.type)
-                    opts.type = msg.type;
-                const result = await queryApi(opts, this.context);
-                if (result.returnCode === 'SUC0000') {
-                    this.panel?.webview.postMessage({
-                        command: 'showData',
-                        data: result.body,
-                    });
-                }
-                else if (result.returnCode === '2005' && result.errorMsg === '任务测试案例信息不存在') {
-                    this.panel?.webview.postMessage({ command: 'endOfData' });
-                }
-                else {
-                    this.panel?.webview.postMessage({ command: 'showError', message: result.errorMsg || '查询失败' });
-                }
-            }
-            catch (err) {
-                this.panel?.webview.postMessage({ command: 'showError', message: err.message || '网络请求失败' });
-            }
-        }
     }
     async extractParamsFromFile(fileUri) {
         try {
@@ -174,20 +157,6 @@ class TestCaseWebviewProvider {
         }
         result.push(current);
         return result;
-    }
-    getHtmlContent() {
-        const htmlPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'index.html');
-        const scriptUri = this.panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'main.js'));
-        const nonce = getNonce();
-        let html = fs.readFileSync(htmlPath.fsPath, 'utf-8');
-        html = html.replace(/\$\{scriptUri\}/g, scriptUri.toString());
-        html = html.replace(/\$\{nonce\}/g, nonce);
-        return html;
-    }
-    dispose() {
-        this.panel = undefined;
-        this.disposables.forEach(d => d.dispose());
-        this.disposables = [];
     }
 }
 exports.TestCaseWebviewProvider = TestCaseWebviewProvider;

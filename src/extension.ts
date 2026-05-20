@@ -1,8 +1,7 @@
 import * as vscode from 'vscode';
 import { WorkbenchProvider } from './providers/WorkbenchProvider';
-import { CsvBrowserProvider } from './providers/CsvBrowserProvider';
-import { CsvEditorProvider } from './providers/CsvEditorProvider';
-import { isQualifiedCsvFile } from './providers/CsvDocumentProvider';
+import { TableBrowserProvider } from './providers/TableBrowserProvider';
+import { CsvEditorProvider, isQualifiedCsvFile } from './providers/CsvDocumentProvider';
 import { YamlEditorProvider, isQualifiedYamlFile } from './providers/YamlDocumentProvider';
 import { JsonEditorProvider, isQualifiedJsonFile } from './providers/JsonDocumentProvider';
 
@@ -96,7 +95,7 @@ async function openWithJsonEditor(uri: vscode.Uri): Promise<void> {
 
 export function activate(context: vscode.ExtensionContext) {
     const workbenchProvider = new WorkbenchProvider(context.extensionUri, context);
-    const csvBrowserProvider = new CsvBrowserProvider(context.extensionUri, context);
+    const tableBrowserProvider = new TableBrowserProvider(context.extensionUri, context);
     const csvEditorProvider = new CsvEditorProvider(context.extensionUri, context);
     const yamlEditorProvider = new YamlEditorProvider(context.extensionUri, context);
     const jsonEditorProvider = new JsonEditorProvider(context.extensionUri, context);
@@ -201,7 +200,7 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }),
         vscode.commands.registerCommand('workbench.open', () => workbenchProvider.show()),
-        vscode.commands.registerCommand('csvBrowser.open', () => csvBrowserProvider.show()),
+        vscode.commands.registerCommand('tableBrowser.open', () => tableBrowserProvider.show()),
         vscode.commands.registerCommand('csvEditor.open', async () => {
             const uri = getActiveFileUri();
             if (uri && /\.csv$/i.test(uri.fsPath)) {

@@ -1,51 +1,36 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import { writeParams } from '../services/store';
-const { queryApi, fetchTaskTree } = require('../services/http-client');
+import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider';
+import { writeParams } from '../services/storage';
+import { queryApi, fetchTaskTree } from '../services/http-client';
+import type { WebviewMessage } from '../types';
 
-function getNonce(): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    for (let i = 0; i < 64; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
+// ============================================
+// 测试案例查看器 Provider
+// ============================================
+
+interface ReadyParams {
+    testTaskNo: string;
+    subTestTaskName: string;
+    testPhaseName: string;
+    apiUrl: string;
 }
 
-export class TestCaseWebviewProvider {
-    private panel: vscode.WebviewPanel | undefined;
-    private disposables: vscode.Disposable[] = [];
-    private readyParams: { testTaskNo: string; subTestTaskName: string; testPhaseName: string; apiUrl: string } | null = null;
+export class TestCaseWebviewProvider extends BaseWebviewProvider {
+    private readyParams: ReadyParams | null = null;
 
-    constructor(
-        private extensionUri: vscode.Uri,
-        private context: vscode.ExtensionContext
-    ) { }
+    protected getPanelId(): string { return 'testcaseViewer'; }
+    protected getPanelTitle(): string { return '测试案例'; }
+    protected getViewColumn(): vscode.ViewColumn { return vscode.ViewColumn.Beside; }
+    protected getHtmlPath(): vscode.Uri {
+        return vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'index.html');
+    }
+    protected getScriptPath(): vscode.Uri {
+        return vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'main.js');
+    }
 
     async showWebview(fileUri: vscode.Uri): Promise<void> {
-        if (this.panel) {
-            this.panel.reveal(vscode.ViewColumn.Beside);
-        } else {
-            this.panel = vscode.window.createWebviewPanel(
-                'testcaseViewer',
-                '测试案例',
-                vscode.ViewColumn.Beside,
-                {
-                    enableScripts: true,
-                    retainContextWhenHidden: true,
-                    localResourceRoots: [
-                        vscode.Uri.joinPath(this.extensionUri, 'media')
-                    ]
-                }
-            );
-
-            this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
-            this.panel.webview.onDidReceiveMessage(
-                msg => this.handleMessage(msg),
-                null,
-                this.disposables
-            );
-        }
+        this.show();
 
         const params = await this.extractParamsFromFile(fileUri);
         const config = vscode.workspace.getConfiguration('testcaseViewer');
@@ -53,12 +38,11 @@ export class TestCaseWebviewProvider {
 
         writeParams(this.context, params);
         this.readyParams = { ...params, apiUrl };
-        this.panel.webview.html = this.getHtmlContent();
     }
 
-    private async handleMessage(msg: any): Promise<void> {
+    protected handleMessage: MessageHandler = async (msg: WebviewMessage) => {
         if (msg.command === 'ready' && this.readyParams) {
-            this.panel?.webview.postMessage({
+            this.postMessage({
                 command: 'init',
                 ...this.readyParams,
                 pageSize: '15',
@@ -67,20 +51,20 @@ export class TestCaseWebviewProvider {
         } else if (msg.command === 'fetchTaskTree') {
             try {
                 const treeData = await fetchTaskTree(this.context);
-                this.panel?.webview.postMessage({ command: 'taskTreeData', data: treeData });
+                this.postMessage({ command: 'taskTreeData', data: treeData });
             } catch {
-                this.panel?.webview.postMessage({ command: 'taskTreeData', data: [] });
+                this.postMessage({ command: 'taskTreeData', data: [] });
             }
         } else if (msg.command === 'query') {
-            this.panel?.webview.postMessage({ command: 'loading' });
+            this.postMessage({ command: 'loading' });
             try {
-                const opts = {
+                const opts: any = {
                     currentPage: msg.currentPage || 1,
                     pageSize: String(msg.pageSize || '20'),
                     testTaskNo: msg.testTaskNo || '',
                     subTestTaskName: msg.subTestTaskName || '',
                     testPhaseName: msg.testPhaseName || '',
-                } as any;
+                };
                 if (msg.testCaseNo) opts.testCaseNo = msg.testCaseNo;
                 if (msg.testCaseName) opts.testCaseName = msg.testCaseName;
                 if (msg.testCasePath) opts.testCasePath = msg.testCasePath;
@@ -90,20 +74,17 @@ export class TestCaseWebviewProvider {
 
                 const result = await queryApi(opts, this.context);
                 if (result.returnCode === 'SUC0000') {
-                    this.panel?.webview.postMessage({
-                        command: 'showData',
-                        data: result.body,
-                    });
+                    this.postMessage({ command: 'showData', data: result.body });
                 } else if (result.returnCode === '2005' && result.errorMsg === '任务测试案例信息不存在') {
-                    this.panel?.webview.postMessage({ command: 'endOfData' });
+                    this.postMessage({ command: 'endOfData' });
                 } else {
-                    this.panel?.webview.postMessage({ command: 'showError', message: result.errorMsg || '查询失败' });
+                    this.postMessage({ command: 'showError', message: result.errorMsg || '查询失败' });
                 }
             } catch (err: any) {
-                this.panel?.webview.postMessage({ command: 'showError', message: err.message || '网络请求失败' });
+                this.postMessage({ command: 'showError', message: err.message || '网络请求失败' });
             }
         }
-    }
+    };
 
     private async extractParamsFromFile(fileUri: vscode.Uri): Promise<{ testTaskNo: string; subTestTaskName: string; testPhaseName: string }> {
         try {
@@ -145,23 +126,5 @@ export class TestCaseWebviewProvider {
         }
         result.push(current);
         return result;
-    }
-
-    private getHtmlContent(): string {
-        const htmlPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'index.html');
-        const scriptUri = this.panel!.webview.asWebviewUri(
-            vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'main.js')
-        );
-        const nonce = getNonce();
-        let html = fs.readFileSync(htmlPath.fsPath, 'utf-8');
-        html = html.replace(/\$\{scriptUri\}/g, scriptUri.toString());
-        html = html.replace(/\$\{nonce\}/g, nonce);
-        return html;
-    }
-
-    private dispose(): void {
-        this.panel = undefined;
-        this.disposables.forEach(d => d.dispose());
-        this.disposables = [];
     }
 }

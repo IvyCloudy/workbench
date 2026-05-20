@@ -1,14 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import * as fs from 'fs';
 import * as path from 'path';
 import type { AppConfig, QueryParams } from '../types';
 
-// Mock fs module
+const mockExistsSync = vi.fn();
+const mockReadFile = vi.fn();
+const mockWriteFile = vi.fn();
+const mockMkdir = vi.fn();
+
 vi.mock('fs', () => ({
-  existsSync: vi.fn(),
-  readFileSync: vi.fn(),
-  writeFileSync: vi.fn(),
-  mkdirSync: vi.fn(),
+  existsSync: mockExistsSync,
+  promises: {
+    readFile: mockReadFile,
+    writeFile: mockWriteFile,
+    mkdir: mockMkdir,
+  },
 }));
 
 describe('storage.ts', () => {
@@ -17,9 +22,8 @@ describe('storage.ts', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    // 动态导入以使用 mock
     storage = await import('./storage');
-    
+
     mockContext = {
       globalStoragePath: '/mock/storage/path'
     };
@@ -40,10 +44,10 @@ describe('storage.ts', () => {
   });
 
   describe('readConfig', () => {
-    it('应该返回默认配置当文件不存在', () => {
-      (fs.existsSync as any).mockReturnValue(false);
+    it('应该返回默认配置当文件不存在', async () => {
+      mockExistsSync.mockReturnValue(false);
 
-      const config = storage.readConfig(mockContext);
+      const config = await storage.readConfig(mockContext);
 
       expect(config.apiUrl).toBe('http://127.0.0.1:8081');
       expect(config.authToken).toBe('');
@@ -52,60 +56,58 @@ describe('storage.ts', () => {
       expect(config.sm2PublicKey).toBe('');
     });
 
-    it('应该合并默认配置和已有配置', () => {
-      (fs.existsSync as any).mockReturnValue(true);
-      (fs.readFileSync as any).mockReturnValue(JSON.stringify({
+    it('应该合并默认配置和已有配置', async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockResolvedValue(JSON.stringify({
         apiUrl: 'http://custom.url',
         userId: 'user123'
       }));
 
-      const config = storage.readConfig(mockContext);
+      const config = await storage.readConfig(mockContext);
 
       expect(config.apiUrl).toBe('http://custom.url');
       expect(config.userId).toBe('user123');
-      expect(config.authToken).toBe(''); // 默认值
+      expect(config.authToken).toBe('');
     });
 
-    it('应该在读取失败时返回默认配置', () => {
-      (fs.existsSync as any).mockReturnValue(true);
-      (fs.readFileSync as any).mockImplementation(() => {
-        throw new Error('Read error');
-      });
+    it('应该在读取失败时返回默认配置', async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockRejectedValue(new Error('Read error'));
 
-      const config = storage.readConfig(mockContext);
+      const config = await storage.readConfig(mockContext);
 
       expect(config.apiUrl).toBe('http://127.0.0.1:8081');
     });
   });
 
   describe('writeConfig', () => {
-    it('应该创建目录如果不存在', () => {
-      (fs.existsSync as any).mockReturnValue(false);
-      (fs.readFileSync as any).mockReturnValue('{}');
+    it('应该创建目录如果不存在', async () => {
+      mockExistsSync.mockReturnValue(false);
+      mockReadFile.mockResolvedValue('{}');
 
-      storage.writeConfig(mockContext, { apiUrl: 'http://test.com' });
+      await storage.writeConfig(mockContext, { apiUrl: 'http://test.com' });
 
-      expect(fs.mkdirSync).toHaveBeenCalledWith(mockContext.globalStoragePath, { recursive: true });
+      expect(mockMkdir).toHaveBeenCalledWith(mockContext.globalStoragePath, { recursive: true });
     });
 
-    it('应该写入更新后的配置', () => {
-      (fs.existsSync as any).mockReturnValue(true);
-      (fs.readFileSync as any).mockReturnValue(JSON.stringify({
+    it('应该写入更新后的配置', async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockResolvedValue(JSON.stringify({
         apiUrl: 'http://old.url',
         userId: 'user1'
       }));
 
-      const result = storage.writeConfig(mockContext, { apiUrl: 'http://new.url' });
+      const result = await storage.writeConfig(mockContext, { apiUrl: 'http://new.url' });
 
       expect(result.apiUrl).toBe('http://new.url');
       expect(result.userId).toBe('user1');
-      expect(fs.writeFileSync).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalled();
     });
 
-    it('应该返回合并后的配置', () => {
-      (fs.existsSync as any).mockReturnValue(false);
+    it('应该返回合并后的配置', async () => {
+      mockExistsSync.mockReturnValue(false);
 
-      const result = storage.writeConfig(mockContext, { userName: 'TestUser' });
+      const result = await storage.writeConfig(mockContext, { userName: 'TestUser' });
 
       expect(result.userName).toBe('TestUser');
       expect(result.apiUrl).toBe('http://127.0.0.1:8081');
@@ -113,25 +115,25 @@ describe('storage.ts', () => {
   });
 
   describe('readParams', () => {
-    it('应该返回默认参数当文件不存在', () => {
-      (fs.existsSync as any).mockReturnValue(false);
+    it('应该返回默认参数当文件不存在', async () => {
+      mockExistsSync.mockReturnValue(false);
 
-      const params = storage.readParams(mockContext);
+      const params = await storage.readParams(mockContext);
 
       expect(params.testTaskNo).toBe('');
       expect(params.subTestTaskName).toBe('');
       expect(params.testPhaseName).toBe('');
     });
 
-    it('应该读取已有的查询参数', () => {
-      (fs.existsSync as any).mockReturnValue(true);
-      (fs.readFileSync as any).mockReturnValue(JSON.stringify({
+    it('应该读取已有的查询参数', async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockResolvedValue(JSON.stringify({
         testTaskNo: 'TASK001',
         subTestTaskName: 'SubTask1',
         testPhaseName: 'Phase1'
       }));
 
-      const params = storage.readParams(mockContext);
+      const params = await storage.readParams(mockContext);
 
       expect(params.testTaskNo).toBe('TASK001');
       expect(params.subTestTaskName).toBe('SubTask1');
@@ -140,49 +142,49 @@ describe('storage.ts', () => {
   });
 
   describe('writeParams', () => {
-    it('应该创建目录如果不存在', () => {
-      (fs.existsSync as any).mockReturnValue(false);
+    it('应该创建目录如果不存在', async () => {
+      mockExistsSync.mockReturnValue(false);
 
-      storage.writeParams(mockContext, {
+      await storage.writeParams(mockContext, {
         testTaskNo: 'TASK001',
         subTestTaskName: 'SubTask1',
         testPhaseName: 'Phase1'
       });
 
-      expect(fs.mkdirSync).toHaveBeenCalledWith(mockContext.globalStoragePath, { recursive: true });
+      expect(mockMkdir).toHaveBeenCalledWith(mockContext.globalStoragePath, { recursive: true });
     });
 
-    it('应该写入查询参数', () => {
-      (fs.existsSync as any).mockReturnValue(true);
+    it('应该写入查询参数', async () => {
+      mockExistsSync.mockReturnValue(true);
 
-      storage.writeParams(mockContext, {
+      await storage.writeParams(mockContext, {
         testTaskNo: 'TASK001',
         subTestTaskName: 'SubTask1',
         testPhaseName: 'Phase1'
       });
 
-      expect(fs.writeFileSync).toHaveBeenCalled();
-      const writtenContent = (fs.writeFileSync as any).mock.calls[0][1];
+      expect(mockWriteFile).toHaveBeenCalled();
+      const writtenContent = mockWriteFile.mock.calls[0][1];
       const writtenParams = JSON.parse(writtenContent);
       expect(writtenParams.testTaskNo).toBe('TASK001');
     });
   });
 
   describe('ensureDir', () => {
-    it('应该创建目录如果不存在', () => {
-      (fs.existsSync as any).mockReturnValue(false);
+    it('应该创建目录如果不存在', async () => {
+      mockExistsSync.mockReturnValue(false);
 
-      storage.ensureDir(mockContext);
+      await storage.ensureDir(mockContext);
 
-      expect(fs.mkdirSync).toHaveBeenCalledWith(mockContext.globalStoragePath, { recursive: true });
+      expect(mockMkdir).toHaveBeenCalledWith(mockContext.globalStoragePath, { recursive: true });
     });
 
-    it('如果目录已存在则不创建', () => {
-      (fs.existsSync as any).mockReturnValue(true);
+    it('如果目录已存在则不创建', async () => {
+      mockExistsSync.mockReturnValue(true);
 
-      storage.ensureDir(mockContext);
+      await storage.ensureDir(mockContext);
 
-      expect(fs.mkdirSync).not.toHaveBeenCalled();
+      expect(mockMkdir).not.toHaveBeenCalled();
     });
   });
 });

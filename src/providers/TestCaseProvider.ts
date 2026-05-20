@@ -30,13 +30,13 @@ export class TestCaseWebviewProvider extends BaseWebviewProvider {
     }
 
     async showWebview(fileUri: vscode.Uri): Promise<void> {
-        this.show();
+        await this.show();
 
         const params = await this.extractParamsFromFile(fileUri);
         const config = vscode.workspace.getConfiguration('testcaseViewer');
         const apiUrl = config.get<string>('apiUrl') || 'http://localhost:8081';
 
-        writeParams(this.context, params);
+        await writeParams(this.context, params);
         this.readyParams = { ...params, apiUrl };
     }
 
@@ -88,7 +88,7 @@ export class TestCaseWebviewProvider extends BaseWebviewProvider {
 
     private async extractParamsFromFile(fileUri: vscode.Uri): Promise<{ testTaskNo: string; subTestTaskName: string; testPhaseName: string }> {
         try {
-            const content = fs.readFileSync(fileUri.fsPath, 'utf-8');
+            const content = await fs.promises.readFile(fileUri.fsPath, 'utf-8');
             const lines = content.split('\n').filter(l => l.trim());
             if (lines.length < 2) return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
 

@@ -1,1 +1,0 @@
-{"version":3,"file":"format.js","sourceRoot":"","sources":["../../../../src/x-spreadsheet/component/toolbar/format.js"],"names":[],"mappings":";;;;;AAAA,oEAA2C;AAC3C,yEAAgD;AAEhD,MAAqB,MAAO,SAAQ,uBAAY;IAC9C;QACE,KAAK,CAAC,QAAQ,CAAC,CAAC;IAClB,CAAC;IAED,QAAQ,CAAC,EAAE;QACT,OAAO,EAAE,CAAC,GAAG,CAAC;IAChB,CAAC;IAED,QAAQ;QACN,OAAO,IAAI,yBAAc,EAAE,CAAC;IAC9B,CAAC;CACF;AAZD,yBAYC"}

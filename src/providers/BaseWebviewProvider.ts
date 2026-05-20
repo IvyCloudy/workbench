@@ -55,7 +55,7 @@ export abstract class BaseWebviewProvider {
     /**
      * 显示面板
      */
-    show(): void {
+    async show(): Promise<void> {
         if (this.panel) {
             this.panel.reveal(this.getViewColumn());
             return;
@@ -79,17 +79,17 @@ export abstract class BaseWebviewProvider {
             this.disposables
         );
 
-        this.panel.webview.html = this.getHtmlContent();
+        this.panel.webview.html = await this.getHtmlContent();
     }
 
     /**
      * 获取 HTML 内容
      */
-    protected getHtmlContent(): string {
+    protected async getHtmlContent(): Promise<string> {
         try {
             const nonce = getNonce();
             const scriptUri = this.panel!.webview.asWebviewUri(this.getScriptPath()).toString();
-            let html = fs.readFileSync(this.getHtmlPath().fsPath, 'utf-8');
+            let html = await fs.promises.readFile(this.getHtmlPath().fsPath, 'utf-8');
 
             html = html.replace(/\$\{nonce\}/g, nonce);
             html = html.replace(/\$\{scriptUri\}/g, scriptUri);

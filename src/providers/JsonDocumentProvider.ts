@@ -1,23 +1,23 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import { BaseEditorProvider, TableData, HttpFetchPushStrategy, isInQualifiedDir } from './BaseEditorProvider';
+import { BaseEditorProvider, PushViaHttpClient, isInQualifiedDir } from './BaseEditorProvider';
+import type { TableData } from '../types';
 
 // 检查JSON文件是否满足目录要求
 export function isQualifiedJsonFile(uri: vscode.Uri): boolean {
     return isInQualifiedDir(uri, /\.json$/i);
 }
 
-// 解析JSON文件数据（支持复杂嵌套结构）
-function parseJsonData(filePath: string): TableData {
+// 异步解析JSON文件数据
+async function parseJsonData(filePath: string): Promise<TableData> {
     try {
-        const content = fs.readFileSync(filePath, 'utf-8');
+        const content = await fs.promises.readFile(filePath, 'utf-8');
         const data = JSON.parse(content);
 
         if (!Array.isArray(data) || data.length === 0) {
             return { headers: [], rows: [] };
         }
 
-        // 收集所有可能的路径（支持嵌套结构）
         const allPaths = new Set<string>();
 
         function collectPaths(obj: any, prefix: string = '') {
@@ -73,13 +73,13 @@ function parseJsonData(filePath: string): TableData {
         });
 
         return { headers, rows };
-    } catch (e) {
-        console.error('JSON parse error:', e);
-        return { headers: [], rows: [] };
+    } catch (e: any) {
+        const msg = `JSON 解析失败: ${e.message}`;
+        console.error(msg, e);
+        throw new Error(msg);
     }
 }
 
-// 将扁平数据转换回嵌套结构
 function unflattenRow(headers: string[], row: string[]): any {
     const result: any = {};
 
@@ -120,7 +120,7 @@ function unflattenRow(headers: string[], row: string[]): any {
 
 // JSON 自定义编辑器 Provider
 export class JsonEditorProvider extends BaseEditorProvider {
-    protected pushStrategy = new HttpFetchPushStrategy();
+    protected pushStrategy = new PushViaHttpClient();
 
     protected getTypeName(): string { return 'JSON'; }
     protected getDataType(): 'yaml' | 'json' | 'csv' { return 'json'; }
@@ -133,8 +133,8 @@ export class JsonEditorProvider extends BaseEditorProvider {
         return isQualifiedJsonFile(uri);
     }
 
-    protected parseData(filePath: string): TableData {
-        return parseJsonData(filePath);
+    protected async parseData(filePath: string): Promise<TableData> {
+        return await parseJsonData(filePath);
     }
 
     protected async saveFile(filePath: string, data: TableData): Promise<void> {

@@ -8,14 +8,27 @@ import type { QueryOptions, ApiResponse } from '../types';
 // SM2 签名
 // ============================================
 
-function addSm2Signature(headers: Record<string, string>, context: vscode.ExtensionContext): void {
-    const appConfig = readConfig(context);
+let sm2Module: any = null;
+function getSm2(): any {
+    if (!sm2Module) {
+        try {
+            sm2Module = require('sm-crypto').sm2;
+        } catch (e) {
+            console.error('[http-client] sm-crypto 加载失败:', e);
+        }
+    }
+    return sm2Module;
+}
+
+async function addSm2Signature(headers: Record<string, string>, context: vscode.ExtensionContext): Promise<void> {
+    const appConfig = await readConfig(context);
     const publicKey = appConfig.sm2PublicKey;
     if (!publicKey) return;
+    const sm2 = getSm2();
+    if (!sm2) return;
 
     const timestamp = Date.now();
     try {
-        const sm2 = require('sm-crypto').sm2;
         const encrypted = sm2.doEncrypt(String(timestamp), publicKey);
         headers['X-Timestamp'] = String(timestamp);
         headers['X-Signature'] = encrypted;
@@ -24,18 +37,29 @@ function addSm2Signature(headers: Record<string, string>, context: vscode.Extens
     }
 }
 
+async function buildHeaders(context: vscode.ExtensionContext): Promise<Record<string, string>> {
+    const appConfig = await readConfig(context);
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (appConfig.authToken) headers['Authorization'] = 'Bearer ' + appConfig.authToken;
+    if (appConfig.userId) headers['X-User-Id'] = appConfig.userId;
+    if (appConfig.userName) headers['X-User-Name'] = encodeURIComponent(appConfig.userName);
+    await addSm2Signature(headers, context);
+    return headers;
+}
+
 // ============================================
 // HTTP 请求
 // ============================================
 
 function makeRequest<T = any>(apiUrl: string, method: string, headers: Record<string, string>, body?: string): Promise<T> {
     return new Promise((resolve, reject) => {
-        // 强制使用 127.0.0.1 替代 localhost
-        const urlStr = apiUrl.replace('localhost', '127.0.0.1');
-        const url = new URL(urlStr);
+        const url = new URL(apiUrl);
+        if (url.hostname === 'localhost') {
+            url.hostname = '127.0.0.1';
+        }
 
         const options: http.RequestOptions = {
-            hostname: '127.0.0.1',
+            hostname: url.hostname,
             port: url.port || (url.protocol === 'https:' ? 443 : 80),
             path: url.pathname + url.search,
             method: method,
@@ -85,31 +109,20 @@ function makeRequest<T = any>(apiUrl: string, method: string, headers: Record<st
 // ============================================
 
 export async function fetchTaskTree(context: vscode.ExtensionContext): Promise<any[]> {
-    const appConfig = readConfig(context);
+    const appConfig = await readConfig(context);
     const baseUrl = appConfig.apiUrl || 'http://127.0.0.1:8081';
     const apiUrl = baseUrl.replace(/\/+$/, '') + '/test-task/task-tree';
+    const headers = await buildHeaders(context);
 
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (appConfig.authToken) headers['Authorization'] = 'Bearer ' + appConfig.authToken;
-    if (appConfig.userId) headers['X-User-Id'] = appConfig.userId;
-    if (appConfig.userName) headers['X-User-Name'] = encodeURIComponent(appConfig.userName);
-    addSm2Signature(headers, context);
-
-    try {
-        const result = await makeRequest<ApiResponse<any[]>>(apiUrl, 'POST', headers, '{}');
-        if (result.returnCode === 'SUC0000') {
-            return result.body || [];
-        } else {
-            throw new Error(result.errorMsg || '获取任务树失败');
-        }
-    } catch (e) {
-        console.error('[http-client] fetchTaskTree error:', e);
-        throw e;
+    const result = await makeRequest<ApiResponse<any[]>>(apiUrl, 'POST', headers, '{}');
+    if (result.returnCode === 'SUC0000') {
+        return result.body || [];
     }
+    throw new Error(result.errorMsg || '获取任务树失败');
 }
 
 export async function queryApi(opts: QueryOptions, context: vscode.ExtensionContext): Promise<ApiResponse> {
-    const appConfig = readConfig(context);
+    const appConfig = await readConfig(context);
     const baseUrl = appConfig.apiUrl || 'http://127.0.0.1:8081';
     const apiUrl = baseUrl.replace(/\/+$/, '') + '/test-task/test-case';
 
@@ -121,7 +134,6 @@ export async function queryApi(opts: QueryOptions, context: vscode.ExtensionCont
         pageSize: opts.pageSize
     };
 
-    // 可选参数
     if (opts.testCaseNo) body.testCaseNo = opts.testCaseNo;
     if (opts.testCaseName) body.testCaseName = opts.testCaseName;
     if (opts.testCasePath) body.testCasePath = opts.testCasePath;
@@ -129,40 +141,29 @@ export async function queryApi(opts: QueryOptions, context: vscode.ExtensionCont
     if (opts.testType) body.testType = opts.testType;
     if (opts.type) body.type = opts.type;
 
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (appConfig.authToken) headers['Authorization'] = 'Bearer ' + appConfig.authToken;
-    if (appConfig.userId) headers['X-User-Id'] = appConfig.userId;
-    if (appConfig.userName) headers['X-User-Name'] = encodeURIComponent(appConfig.userName);
-    addSm2Signature(headers, context);
-
-    try {
-        return await makeRequest<ApiResponse>(apiUrl, 'POST', headers, JSON.stringify(body));
-    } catch (e) {
-        console.error('[http-client] queryApi error:', e);
-        throw e;
-    }
+    const headers = await buildHeaders(context);
+    return await makeRequest<ApiResponse>(apiUrl, 'POST', headers, JSON.stringify(body));
 }
 
 export async function sendSelectedData(opts: { selectedRows: any[]; headers: string[] }, context: vscode.ExtensionContext): Promise<ApiResponse> {
-    const appConfig = readConfig(context);
+    const appConfig = await readConfig(context);
     const baseUrl = appConfig.apiUrl || 'http://127.0.0.1:8081';
     const apiUrl = baseUrl.replace(/\/+$/, '') + '/test-task/batch-import';
 
-    const body = {
-        headers: opts.headers,
-        rows: opts.selectedRows
-    };
+    const body = { headers: opts.headers, rows: opts.selectedRows };
+    const headers = await buildHeaders(context);
 
-    const requestHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (appConfig.authToken) requestHeaders['Authorization'] = 'Bearer ' + appConfig.authToken;
-    if (appConfig.userId) requestHeaders['X-User-Id'] = appConfig.userId;
-    if (appConfig.userName) requestHeaders['X-User-Name'] = encodeURIComponent(appConfig.userName);
-    addSm2Signature(requestHeaders, context);
+    return await makeRequest<ApiResponse>(apiUrl, 'POST', headers, JSON.stringify(body));
+}
 
-    try {
-        return await makeRequest<ApiResponse>(apiUrl, 'POST', requestHeaders, JSON.stringify(body));
-    } catch (e) {
-        console.error('[http-client] sendSelectedData error:', e);
-        throw e;
-    }
+/**
+ * 推送测试案例数据（统一接口，各文件类型共用）
+ */
+export async function pushTestCase(data: any[], context: vscode.ExtensionContext): Promise<ApiResponse> {
+    const appConfig = await readConfig(context);
+    const baseUrl = appConfig.apiUrl || 'http://127.0.0.1:8081';
+    const apiUrl = baseUrl.replace(/\/+$/, '') + '/test-task/push-testcase';
+
+    const headers = await buildHeaders(context);
+    return await makeRequest<ApiResponse>(apiUrl, 'POST', headers, JSON.stringify(data));
 }

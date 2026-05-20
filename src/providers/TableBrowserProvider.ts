@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider';
 import { loadCsvFromFile } from '../services/csv-parser';
 import { sendSelectedData } from '../services/http-client';
@@ -34,21 +35,8 @@ export class TableBrowserProvider extends BaseWebviewProvider {
         }
     };
 
-    private async handleFetchWorkspaceFiles(): Promise<void> {
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders || workspaceFolders.length === 0) {
-            this.postMessage({ command: 'workspaceFiles', data: [], error: '请先打开一个工作区文件夹' });
-            return;
-        }
-
-        const rootPath = workspaceFolders[0].uri.fsPath;
-        const fileTree = this.buildFileTree(rootPath);
-        this.postMessage({ command: 'workspaceFiles', data: fileTree });
-    }
-
     private buildFileTree(rootPath: string): FileNode[] {
         const result: FileNode[] = [];
-        const fs = require('fs');
 
         try {
             const firstLevelEntries = fs.readdirSync(rootPath, { withFileTypes: true });
@@ -124,7 +112,6 @@ export class TableBrowserProvider extends BaseWebviewProvider {
     }
 
     private getCsvFilesInDir(dirPath: string): FileNode[] {
-        const fs = require('fs');
         const csvFiles: FileNode[] = [];
         try {
             const entries = fs.readdirSync(dirPath, { withFileTypes: true });
@@ -143,6 +130,18 @@ export class TableBrowserProvider extends BaseWebviewProvider {
         return csvFiles;
     }
 
+    private async handleFetchWorkspaceFiles(): Promise<void> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+            this.postMessage({ command: 'workspaceFiles', data: [], error: '请先打开一个工作区文件夹' });
+            return;
+        }
+
+        const rootPath = workspaceFolders[0].uri.fsPath;
+        const fileTree = this.buildFileTree(rootPath);
+        this.postMessage({ command: 'workspaceFiles', data: fileTree });
+    }
+
     private async handleReadCsvFile(msg: WebviewMessage): Promise<void> {
         const filePath = msg.filePath as string;
         if (!filePath) {
@@ -151,7 +150,7 @@ export class TableBrowserProvider extends BaseWebviewProvider {
         }
 
         try {
-            const data = loadCsvFromFile(filePath);
+            const data = await loadCsvFromFile(filePath);
             const result = this.convertToTableData(data);
 
             if (!result) {

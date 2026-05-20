@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import { BaseEditorProvider, TableData, HttpFetchPushStrategy, isInQualifiedDir, PREVIEW_STYLES, PREVIEW_SCRIPTS, BaseDocumentContentProvider } from './BaseEditorProvider';
+import { BaseEditorProvider, PushViaHttpClient, isInQualifiedDir } from './BaseEditorProvider';
+import type { TableData } from '../types';
 
 // ============================================
-// CSV 解析工具
+// CSV 解析工具（纯函数，无副作用）
 // ============================================
 
 function detectDelimiter(line: string): string {
@@ -17,7 +18,6 @@ function parseCsvLine(line: string, delimiter: string = ','): string[] {
     const result: string[] = [];
     let current = '';
     let inQuotes = false;
-
     for (let i = 0; i < line.length; i++) {
         const ch = line[i];
         if (ch === '"') {
@@ -36,11 +36,9 @@ function parseCsvLine(line: string, delimiter: string = ','): string[] {
 function parseCsvContent(content: string): { headers: string[], rows: string[][] } | null {
     const lines = content.split('\n').filter(line => line.trim());
     if (lines.length === 0) return null;
-
     const delimiter = detectDelimiter(lines[0]);
     const headers = parseCsvLine(lines[0], delimiter);
     const rows = lines.slice(1).map(line => parseCsvLine(line, delimiter));
-
     return { headers, rows };
 }
 
@@ -57,8 +55,21 @@ export function isQualifiedCsvFile(uri: vscode.Uri): boolean {
     return isInQualifiedDir(uri, /\.csv$/i);
 }
 
-// 解析CSV文件
-function parseCsvData(filePath: string): TableData {
+// 异步读取并解析CSV文件
+async function parseCsvData(filePath: string): Promise<TableData> {
+    try {
+        const content = await fs.promises.readFile(filePath, 'utf-8');
+        const result = parseCsvContent(content);
+        return result || { headers: [], rows: [] };
+    } catch (e: any) {
+        const msg = `CSV 解析失败: ${e.message}`;
+        console.error(msg, e);
+        throw new Error(msg);
+    }
+}
+
+// 同步读取并解析CSV文件（用于旧版预览模式）
+function parseCsvDataSync(filePath: string): TableData {
     try {
         const content = fs.readFileSync(filePath, 'utf-8');
         const result = parseCsvContent(content);
@@ -70,11 +81,11 @@ function parseCsvData(filePath: string): TableData {
 }
 
 // ============================================
-// CSV 自定义编辑器 Provider（编辑模式）
+// CSV 自定义编辑器 Provider
 // ============================================
 
 export class CsvEditorProvider extends BaseEditorProvider {
-    protected pushStrategy = new HttpFetchPushStrategy();
+    protected pushStrategy = new PushViaHttpClient();
 
     protected getTypeName(): string { return 'CSV'; }
     protected getDataType(): 'yaml' | 'json' | 'csv' { return 'csv'; }
@@ -87,8 +98,8 @@ export class CsvEditorProvider extends BaseEditorProvider {
         return isQualifiedCsvFile(uri);
     }
 
-    protected parseData(filePath: string): TableData {
-        return parseCsvData(filePath);
+    protected async parseData(filePath: string): Promise<TableData> {
+        return await parseCsvData(filePath);
     }
 
     protected async saveFile(filePath: string, data: TableData): Promise<void> {
@@ -102,23 +113,5 @@ export class CsvEditorProvider extends BaseEditorProvider {
         });
 
         await fs.promises.writeFile(filePath, lines.join('\n'), 'utf-8');
-    }
-}
-
-// ============================================
-// CSV 预览模式 Provider（继承基类）
-// ============================================
-
-export class CsvDocumentContentProvider extends BaseDocumentContentProvider {
-    protected getFilePath(uri: vscode.Uri): string {
-        return uri.fsPath.replace(/^csv-preview:/, '');
-    }
-
-    protected getPreviewScheme(): string {
-        return 'csv-preview';
-    }
-
-    protected parseData(filePath: string): TableData {
-        return parseCsvData(filePath);
     }
 }

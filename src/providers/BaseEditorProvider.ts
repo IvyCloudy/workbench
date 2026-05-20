@@ -15,6 +15,7 @@ export type { TableData, PushStrategy };
 export class PushViaHttpClient implements PushStrategy {
     async push(data: any, _filePath: string, webviewPanel: vscode.WebviewPanel, context?: vscode.ExtensionContext): Promise<void> {
         if (!context) throw new Error('ExtensionContext 不可用，无法推送');
+        console.log(`[推送] 推送数据 (${data.length} 行):`, JSON.stringify(data, null, 2));
         const result = await pushTestCase(data, context);
         if (result.returnCode === 'SUC0000') {
             webviewPanel.webview.postMessage({ type: 'pushSuccess' });

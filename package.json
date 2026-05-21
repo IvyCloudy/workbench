@@ -78,6 +78,10 @@
       {
         "command": "jsonEditor.openWith",
         "title": "用 Text Editor 打开"
+      },
+      {
+        "command": "testcaseViewer.pushTestCaseFromExplorer",
+        "title": "推送测试案例"
       }
     ],
     "menus": {
@@ -86,6 +90,13 @@
           "command": "testcaseViewer.viewOnline",
           "when": "testcaseViewer:showIcon",
           "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "testcaseViewer.pushTestCaseFromExplorer",
+          "when": "resourcePath =~ /(测试任务|testtask)\\/[^\\/]+\\/(测试案例|testcase)\\/[^\\/]+\\.(csv|yaml|yml|json)$/i",
+          "group": "2_workspace"
         }
       ]
     },

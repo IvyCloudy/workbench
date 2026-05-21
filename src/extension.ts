@@ -1,9 +1,13 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { WorkbenchProvider } from './providers/WorkbenchProvider';
 import { TableBrowserProvider } from './providers/TableBrowserProvider';
 import { CsvEditorProvider, isQualifiedCsvFile } from './providers/CsvDocumentProvider';
 import { YamlEditorProvider, isQualifiedYamlFile } from './providers/YamlDocumentProvider';
 import { JsonEditorProvider, isQualifiedJsonFile } from './providers/JsonDocumentProvider';
+import { isInQualifiedDir, FILE_PATTERNS } from './services/utils';
+import { pushTestCase } from './services/http-client';
 
 function getTabUri(input: any): vscode.Uri | undefined {
     if (input instanceof vscode.TabInputText) return input.uri;
@@ -19,7 +23,7 @@ function getActiveFileUri(): vscode.Uri | undefined {
 }
 
 function isTestCaseFile(uri: vscode.Uri): boolean {
-    return uri.scheme === 'file' && /testcases?\.csv$/i.test(uri.fsPath);
+    return isQualifiedCsvFile(uri) || isQualifiedYamlFile(uri) || isQualifiedJsonFile(uri);
 }
 
 function updateShowIcon(): void {
@@ -69,6 +73,76 @@ async function openWithEditor(uri: vscode.Uri, viewType: string): Promise<void> 
     } finally {
         processingFiles.delete(fsPath);
     }
+}
+
+function parseCsvLine(line: string, delimiter: string): string[] {
+    const result: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+            inQuotes = !inQuotes;
+        } else if (ch === delimiter && !inQuotes) {
+            result.push(current.trim());
+            current = '';
+        } else {
+            current += ch;
+        }
+    }
+    result.push(current.trim());
+    return result;
+}
+
+function detectDelimiter(line: string): string {
+    const delimiters = [',', ';', '\t', '|'];
+    const counts = delimiters.map(d => ({ delim: d, count: (line.match(new RegExp(d === '|' ? '\\|' : d, 'g')) || []).length }));
+    const best = counts.filter(c => c.count >= 2).sort((a, b) => b.count - a.count)[0];
+    return best ? best.delim : ',';
+}
+
+async function parseFileToPushData(filePath: string, ext: string): Promise<Record<string, string>[]> {
+    const content = await fs.promises.readFile(filePath, 'utf-8');
+
+    if (ext === '.csv') {
+        const lines = content.split('\n').filter((l: string) => l.trim());
+        if (lines.length < 2) return [];
+        const delimiter = detectDelimiter(lines[0]);
+        const headers = parseCsvLine(lines[0], delimiter);
+        return lines.slice(1).map(line => {
+            const values = parseCsvLine(line, delimiter);
+            const obj: Record<string, string> = {};
+            headers.forEach((h, i) => { obj[h] = values[i] || ''; });
+            return obj;
+        });
+    }
+
+    if (ext === '.yaml' || ext === '.yml') {
+        const YAML = require('yaml');
+        const parsed = YAML.parse(content);
+        const arr = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
+        return arr.map((item: any) => {
+            const obj: Record<string, string> = {};
+            for (const key of Object.keys(item || {})) {
+                obj[key] = String(item[key] ?? '');
+            }
+            return obj;
+        });
+    }
+
+    if (ext === '.json') {
+        const parsed = JSON.parse(content);
+        const arr = Array.isArray(parsed) ? parsed : [parsed];
+        return arr.map((item: any) => {
+            const obj: Record<string, string> = {};
+            for (const key of Object.keys(item || {})) {
+                obj[key] = String(item[key] ?? '');
+            }
+            return obj;
+        });
+    }
+
+    return [];
 }
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -240,6 +314,40 @@ export async function activate(context: vscode.ExtensionContext) {
                 markUserOpenedAsText(filePath);
                 const uri = vscode.Uri.file(filePath);
                 await vscode.commands.executeCommand('vscode.openWith', uri, 'default');
+            }
+        }),
+        vscode.commands.registerCommand('testcaseViewer.pushTestCaseFromExplorer', async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
+            try {
+                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+                for (const target of targets) {
+                    const filePath = target.fsPath;
+                    const ext = path.extname(filePath).toLowerCase();
+
+                    let isQualified = false;
+                    if (ext === '.csv') isQualified = isInQualifiedDir(target, FILE_PATTERNS.CSV);
+                    else if (ext === '.yaml' || ext === '.yml') isQualified = isInQualifiedDir(target, FILE_PATTERNS.YAML);
+                    else if (ext === '.json') isQualified = isInQualifiedDir(target, FILE_PATTERNS.JSON);
+                    if (!isQualified) {
+                        vscode.window.showWarningMessage(`文件不在允许的目录下: ${path.basename(filePath)}`);
+                        continue;
+                    }
+
+                    const rows = await parseFileToPushData(filePath, ext);
+                    if (!rows || rows.length === 0) {
+                        vscode.window.showWarningMessage(`文件无数据: ${path.basename(filePath)}`);
+                        continue;
+                    }
+
+                    console.log(`[推送] 文件: ${filePath}, ${rows.length} 行:\n`, JSON.stringify(rows, null, 2));
+                    const result = await pushTestCase(rows, context);
+                    if (result.returnCode === 'SUC0000') {
+                        vscode.window.showInformationMessage(`推送成功: ${path.basename(filePath)} (${rows.length} 行)`);
+                    } else {
+                        vscode.window.showErrorMessage(`推送失败: ${result.errorMsg || '未知错误'}`);
+                    }
+                }
+            } catch (err: any) {
+                vscode.window.showErrorMessage(`推送失败: ${err.message || err}`);
             }
         })
     );

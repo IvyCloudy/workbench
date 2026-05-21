@@ -1,13 +1,10 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as path from 'path';
 import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider';
 import { writeParams } from '../services/storage';
 import { queryApi, fetchTaskTree } from '../services/http-client';
 import type { WebviewMessage } from '../types';
-
-// ============================================
-// 测试案例查看器 Provider
-// ============================================
 
 interface ReadyParams {
     testTaskNo: string;
@@ -30,14 +27,14 @@ export class TestCaseWebviewProvider extends BaseWebviewProvider {
     }
 
     async showWebview(fileUri: vscode.Uri): Promise<void> {
-        await this.show();
-
         const params = await this.extractParamsFromFile(fileUri);
         const config = vscode.workspace.getConfiguration('testcaseViewer');
         const apiUrl = config.get<string>('apiUrl') || 'http://localhost:8081';
+        this.readyParams = { ...params, apiUrl };
+
+        await this.show();
 
         await writeParams(this.context, params);
-        this.readyParams = { ...params, apiUrl };
     }
 
     protected handleMessage: MessageHandler = async (msg: WebviewMessage) => {
@@ -89,24 +86,84 @@ export class TestCaseWebviewProvider extends BaseWebviewProvider {
     private async extractParamsFromFile(fileUri: vscode.Uri): Promise<{ testTaskNo: string; subTestTaskName: string; testPhaseName: string }> {
         try {
             const content = await fs.promises.readFile(fileUri.fsPath, 'utf-8');
-            const lines = content.split('\n').filter(l => l.trim());
-            if (lines.length < 2) return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
+            const ext = path.extname(fileUri.fsPath).toLowerCase();
 
-            const headers = this.parseCsvLine(lines[0]);
-            const data = this.parseCsvLine(lines[1]);
+            if (ext === '.csv') {
+                return this.extractParamsFromCsv(content);
+            }
+            if (ext === '.yaml' || ext === '.yml') {
+                return this.extractParamsFromYaml(content);
+            }
+            if (ext === '.json') {
+                return this.extractParamsFromJson(content);
+            }
+        } catch {
+            // fall through
+        }
+        return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
+    }
 
-            const testTaskNoIdx = headers.findIndex(h => h.trim().toLowerCase() === 'testtaskno');
-            const subTestTaskNameIdx = headers.findIndex(h => h.trim().toLowerCase() === 'subtesttaskname');
-            const testPhaseNameIdx = headers.findIndex(h => h.trim().toLowerCase() === 'testphasename');
+    private extractParamsFromCsv(content: string): { testTaskNo: string; subTestTaskName: string; testPhaseName: string } {
+        const lines = content.split('\n').filter(l => l.trim());
+        if (lines.length < 2) return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
 
-            return {
-                testTaskNo: testTaskNoIdx >= 0 ? (data[testTaskNoIdx] || '').trim() : '',
-                subTestTaskName: subTestTaskNameIdx >= 0 ? (data[subTestTaskNameIdx] || '').trim() : '',
-                testPhaseName: testPhaseNameIdx >= 0 ? (data[testPhaseNameIdx] || '').trim() : '',
-            };
+        const headers = this.parseCsvLine(lines[0]);
+        const data = this.parseCsvLine(lines[1]);
+
+        const testTaskNoIdx = headers.findIndex(h => h.trim().toLowerCase() === 'testtaskno');
+        const subTestTaskNameIdx = headers.findIndex(h => h.trim().toLowerCase() === 'subtesttaskname');
+        const testPhaseNameIdx = headers.findIndex(h => h.trim().toLowerCase() === 'testphasename');
+
+        return {
+            testTaskNo: testTaskNoIdx >= 0 ? (data[testTaskNoIdx] || '').trim() : '',
+            subTestTaskName: subTestTaskNameIdx >= 0 ? (data[subTestTaskNameIdx] || '').trim() : '',
+            testPhaseName: testPhaseNameIdx >= 0 ? (data[testPhaseNameIdx] || '').trim() : '',
+        };
+    }
+
+    private extractParamsFromYaml(content: string): { testTaskNo: string; subTestTaskName: string; testPhaseName: string } {
+        try {
+            const YAML = require('yaml');
+            const parsed = YAML.parse(content);
+            const records = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
+            if (records.length === 0) return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
+            return this.extractParamsFromRecord(records[0]);
         } catch {
             return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
         }
+    }
+
+    private extractParamsFromJson(content: string): { testTaskNo: string; subTestTaskName: string; testPhaseName: string } {
+        try {
+            const parsed = JSON.parse(content);
+            const records = Array.isArray(parsed) ? parsed : [parsed];
+            if (records.length === 0) return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
+            return this.extractParamsFromRecord(records[0]);
+        } catch {
+            return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
+        }
+    }
+
+    private extractParamsFromRecord(record: any): { testTaskNo: string; subTestTaskName: string; testPhaseName: string } {
+        const searchKey = (obj: any, targetKey: string): string => {
+            if (!obj || typeof obj !== 'object') return '';
+            const lowerKey = targetKey.toLowerCase();
+            for (const k of Object.keys(obj)) {
+                if (k.toLowerCase() === lowerKey) {
+                    return String(obj[k] ?? '').trim();
+                }
+                if (typeof obj[k] === 'object' && !Array.isArray(obj[k])) {
+                    const val = searchKey(obj[k], targetKey);
+                    if (val) return val;
+                }
+            }
+            return '';
+        };
+        return {
+            testTaskNo: searchKey(record, 'testTaskNo'),
+            subTestTaskName: searchKey(record, 'subTestTaskName'),
+            testPhaseName: searchKey(record, 'testPhaseName'),
+        };
     }
 
     private parseCsvLine(line: string): string[] {

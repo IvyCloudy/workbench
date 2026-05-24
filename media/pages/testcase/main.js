@@ -1,5 +1,5 @@
 // ============ 测试案例页面 ============
-import { Table, Loading, Tooltip, debounce } from '../common/index.js';
+import { Table, Loading, Tooltip, debounce } from '../../common/index.js';
 
 const vscode = acquireVsCodeApi();
 

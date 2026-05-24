@@ -1,9 +1,10 @@
-- testCaseId: "1"
+- tsId: 62e845e4-8ac4-4360-b59a-91cd46fa4853
+  testCaseId: "1"
   testTaskNo: TASK001
   testTaskName: 复杂嵌套测试
   subTestTaskName: 测试1
   testPhaseName: ST阶段
-  testCaseNo: TC001
+  testCaseNo: TT17796309042871000
   testCaseName: 验证嵌套配置
   config:
     enabled: true
@@ -69,7 +70,8 @@
   testCaseDes: 手工
   cmbtId: 流程类
   designer: 张三/123454
-- testCaseId: "2"
+- tsId: 7ee3a893-4775-4ecf-9a9b-2cd016031b0f
+  testCaseId: "2"
   testTaskNo: TASK001
   testTaskName: 复杂嵌套测试
   subTestTaskName: 测试1
@@ -99,12 +101,13 @@
   testCaseDes: 自动化
   cmbtId: 接口类
   designer: 李四/123457
-- testCaseId: "3"
+- tsId: 2848e539-b91d-42d7-92ad-41ea305c524a
+  testCaseId: "3"
   testTaskNo: TASK002
   testTaskName: 边界值测试
   subTestTaskName: 测试2
   testPhaseName: SIT阶段
-  testCaseNo: TC003
+  testCaseNo: TT17796309042871002
   testCaseName: 长文本和特殊字符
   config:
     allowedChars: "!@#$%^&*()_+-=[]{}|;':\",./<>?"

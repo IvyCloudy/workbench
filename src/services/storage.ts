@@ -1,3 +1,17 @@
+/**
+ * ============================================================================
+ *  services/storage.ts
+ *  扩展全局存储读写
+ * ----------------------------------------------------------------------------
+ *  职责：
+ *    - 在 context.globalStoragePath 下管理两份 JSON：
+ *        app-config.json    : apiUrl / token / SM2 公钥等运行时配置
+ *        query-params.json  : 上次查询所用的 testTaskNo / subTestTaskName / testPhaseName
+ *  设计要点：
+ *    - 读取时使用 spread 合并 DEFAULTS，新增字段时无需迁移
+ *    - 写入失败不抛出，仅 console.error；不阻塞业务
+ * ============================================================================
+ */
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -25,14 +39,14 @@ const DEFAULT_QUERY_PARAMS: QueryParams = {
 };
 
 // ============================================
-// 路径
+// 路径（内部）
 // ============================================
 
-export function getConfigPath(context: vscode.ExtensionContext): string {
+function getConfigPath(context: vscode.ExtensionContext): string {
     return path.join(context.globalStoragePath, CONFIG_FILE);
 }
 
-export function getQueryParamsPath(context: vscode.ExtensionContext): string {
+function getQueryParamsPath(context: vscode.ExtensionContext): string {
     return path.join(context.globalStoragePath, QUERY_PARAMS_FILE);
 }
 
@@ -65,40 +79,10 @@ async function writeJsonFile<T>(filePath: string, data: T): Promise<void> {
 // ============================================
 
 /**
- * 确保存储目录存在
- */
-export async function ensureDir(context: vscode.ExtensionContext): Promise<void> {
-    const dir = context.globalStoragePath;
-    if (!fs.existsSync(dir)) {
-        await fs.promises.mkdir(dir, { recursive: true });
-    }
-}
-
-/**
  * 读取应用配置
  */
 export async function readConfig(context: vscode.ExtensionContext): Promise<AppConfig> {
     return await readJsonFile(getConfigPath(context), DEFAULT_CONFIG);
-}
-
-/**
- * 写入应用配置（合并）
- */
-export async function writeConfig(
-    context: vscode.ExtensionContext,
-    partial: Partial<AppConfig>
-): Promise<AppConfig> {
-    const current = await readConfig(context);
-    const updated = { ...current, ...partial };
-    await writeJsonFile(getConfigPath(context), updated);
-    return updated;
-}
-
-/**
- * 读取查询参数
- */
-export async function readParams(context: vscode.ExtensionContext): Promise<QueryParams> {
-    return await readJsonFile(getQueryParamsPath(context), DEFAULT_QUERY_PARAMS);
 }
 
 /**

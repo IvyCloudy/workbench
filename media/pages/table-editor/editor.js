@@ -144,12 +144,15 @@ window.addEventListener('message', function (e) {
         renderTable();
     } else if (m.type === 'saveError') {
         showToast('保存失败: ' + (m.message || ''), 'error');
-    } else if (m.type === 'pushSuccess') {
-        showToast('推送成功', 'success');
+    } else if (m.type === 'pushDone') {
+        // 扩展端已通过独立 webview 弹窗展示推送结果（含成功/失败明细）；
+        // 前端无需再做 toast / 弹窗，仅作为推送流程结束的钩子点。
     } else if (m.type === 'pushError') {
         showToast('推送失败: ' + (m.message || ''), 'error');
     }
 });
+
+// 推送结果统一由扩展端通过独立 webview 弹窗展示，前端不再处理 pushSuccess。
 
 function decodePayload(payload) {
     if (!payload) return {};
@@ -551,8 +554,12 @@ function hideContextMenu() {
 
 // ==================== 行/列 操作 ====================
 function insertRow(at) {
-    var width = (S.data.headers || []).length;
+    var headers = S.data.headers || [];
+    var width = headers.length;
     var newRow = new Array(width).fill('');
+    // 新行自动生成 tsId；testCaseNo 保留为空（由推送响应回写）
+    var tsCol = headers.indexOf('tsId');
+    if (tsCol >= 0) newRow[tsCol] = genUuidV4();
     if (at < 0) at = 0;
     if (at > S.data.rows.length) at = S.data.rows.length;
     pushHistory();
@@ -671,6 +678,12 @@ function copyRowInline() {
     var src = S.data.rows[S._ctxRow] || [];
     var at = S._ctxRow + 1;
     var newRow = src.slice();
+    // 复制行需要重新生成 tsId（避免两行同 id），并清空已回写的 testCaseNo
+    var headers0 = S.data.headers || [];
+    var tsCol0 = headers0.indexOf('tsId');
+    var tcCol0 = headers0.indexOf('testCaseNo');
+    if (tsCol0 >= 0) newRow[tsCol0] = genUuidV4();
+    if (tcCol0 >= 0) newRow[tcCol0] = '';
     S.data.rows.splice(at, 0, newRow);
     // 同步复制所有明细表的行
     var dts = getDetailTables();
@@ -1037,6 +1050,14 @@ function escapeHtml(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 function formatCellValue(v) { return v === null || v === undefined ? '' : String(v); }
+// 生成 RFC4122 v4 UUID（与扩展端 utils.genUuid 实现一致）
+function genUuidV4() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        var r = (Math.random() * 16) | 0;
+        var v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
+}
 function showToast(msg, type) {
     var t = document.getElementById('toast');
     if (!t) return;

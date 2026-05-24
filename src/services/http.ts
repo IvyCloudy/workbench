@@ -1,3 +1,19 @@
+/**
+ * ============================================================================
+ *  services/http.ts
+ *  与后端 API 交互的 HTTP 客户端
+ * ----------------------------------------------------------------------------
+ *  职责：
+ *    1. 从 storage 读取 apiUrl / token 等配置，组装请求头
+ *    2. 自动注入 SM2 时间戳签名（X-Timestamp / X-Signature）
+ *    3. 封装 4 个业务接口：fetchTaskTree / queryTestCases / batchImportData / pushTestCase
+ *    4. 统一翻译网络错误码（ECONNREFUSED 等）为可读中文提示
+ *  设计要点：
+ *    - 推送链路为关键链路：pushTestCase 会打印完整请求/响应日志（敏感头脱敏）
+ *    - 所有 POST 请求超时统一为 DEFAULT_TIMEOUT(10s)
+ *    - localhost 一律改写为 127.0.0.1，规避部分系统 IPv6 解析问题
+ * ============================================================================
+ */
 import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
@@ -194,12 +210,50 @@ export async function batchImportData(
 
 /**
  * 推送测试案例数据
+ *
+ * @param taskInfo 必填，从文件路径解析得到的任务信息
+ *                 目录格式：测试任务/<testTaskNo>_<subTestTaskName>/测试案例/<file>
  */
 export async function pushTestCase(
     context: vscode.ExtensionContext,
-    data: any[]
+    data: any[],
+    taskInfo: { testTaskNo: string; subTestTaskName: string }
 ): Promise<ApiResponse> {
     const url = `${await getApiBaseUrl(context)}/test-task/push-testcase`;
-    const response = await post<ApiResponse>(context, url, data);
+    const body = {
+        testTaskNo: taskInfo.testTaskNo,
+        subTestTaskName: taskInfo.subTestTaskName,
+        data
+    };
+
+    // 打印完整请求（headers 中的敏感字段做脱敏）
+    const headers = await buildHeaders(context);
+    const safeHeaders = maskSensitiveHeaders(headers);
+    const bodyStr = JSON.stringify(body);
+    console.log('[推送][请求] ───────────────────────────────');
+    console.log('[推送][请求] POST', url);
+    console.log('[推送][请求] headers:', JSON.stringify(safeHeaders, null, 2));
+    console.log('[推送][请求] body  :', JSON.stringify(body, null, 2));
+    console.log(`[推送][请求] 数据行数=${data.length}, body 字节=${Buffer.byteLength(bodyStr, 'utf8')}`);
+
+    const response = await makeRequest<ApiResponse>('POST', url, headers, bodyStr);
+    console.log('[推送][响应] status=', response.status,
+        'returnCode=', (response.data as any)?.returnCode,
+        'errorMsg=', (response.data as any)?.errorMsg || '');
+    console.log('[推送][响应] body  :', JSON.stringify(response.data, null, 2));
     return response.data;
+}
+
+/** 对日志输出的请求头做脱敏，避免泄漏 token / 签名 */
+function maskSensitiveHeaders(headers: Record<string, string>): Record<string, string> {
+    const SENSITIVE = ['Authorization', 'X-Signature'];
+    const masked: Record<string, string> = {};
+    for (const [k, v] of Object.entries(headers)) {
+        if (SENSITIVE.some(s => s.toLowerCase() === k.toLowerCase())) {
+            masked[k] = v ? `${v.slice(0, 6)}***(len=${v.length})` : '';
+        } else {
+            masked[k] = v;
+        }
+    }
+    return masked;
 }

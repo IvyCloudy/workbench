@@ -1,3 +1,14 @@
+/**
+ * ============================================================================
+ *  providers/common/FileTreeService.ts
+ *  合规目录结构识别服务
+ * ----------------------------------------------------------------------------
+ *  职责：从工作区根目录出发，返回符合业务约定的 CSV 文件树：
+ *    .../{测试任务|testtask}/<task>/{测试案例|testcase}/*.csv
+ *  主调用方：TableBrowserProvider 进行「表格浏览」渲染。
+ *  说明：仅负责文件结构产出，不解析文件内容。
+ * ============================================================================
+ */
 import * as fs from 'fs';
 import * as path from 'path';
 import type { FileNode } from '../../types';
@@ -106,27 +117,5 @@ export class FileTreeService {
             console.error(`[FileTreeService] Error reading directory ${dirPath}:`, e);
         }
         return csvFiles;
-    }
-
-    /**
-     * 检查路径是否存在
-     */
-    pathExists(filePath: string): boolean {
-        try {
-            return fs.existsSync(filePath);
-        } catch {
-            return false;
-        }
-    }
-
-    /**
-     * 获取文件统计信息
-     */
-    getFileStats(filePath: string): fs.Stats | null {
-        try {
-            return fs.statSync(filePath);
-        } catch {
-            return null;
-        }
     }
 }

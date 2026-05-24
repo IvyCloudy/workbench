@@ -1,6 +1,6 @@
 /* 表格编辑器样式 */
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#fff;--tl:#666;--bd:#ddd;--p:#0078d4;--s:#107c10;--d:#e34d59;--sh:0 2px 8px rgba(0,0,0,.1)}
+:root{--bg:#fff;--tl:#666;--bd:#ddd;--p:#0078d4;--s:#107c10;--d:#e34d59;--w:#f29d39;--sh:0 2px 8px rgba(0,0,0,.1)}
 body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:var(--bg);color:#333;overflow:hidden}
 
 /* 应用布局 */
@@ -106,6 +106,7 @@ tbody tr:hover td.xs-td-cb{background:#f8f8f8}
 /* Toast提示 */
 .xs-toast{position:fixed;z-index:2000;background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:4px;padding:12px 16px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.15);display:none;left:50%;top:50%;transform:translate(-50%,-50%)}
 .xs-toast.success{border-color:var(--s);color:var(--s)}
+.xs-toast.warning{border-color:var(--w);color:var(--w)}
 .xs-toast.error{border-color:var(--d);color:var(--d)}
 
 /* 加载动画 */

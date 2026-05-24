@@ -12,4 +12,4 @@ export { Loading } from './components/Loading.js';
 export { Tooltip } from './components/Tooltip.js';
 
 // 工具函数
-export { escapeHtml, escapeAttr, debounce, throttle } from './utils/helpers.js';
+export { escapeHtml, escapeAttr, debounce } from './utils/helpers.js';

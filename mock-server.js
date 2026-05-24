@@ -184,9 +184,48 @@ var server = http.createServer(function (req, res) {
         var body = '';
         req.on('data', function (chunk) { body += chunk; });
         req.on('end', function () {
-            var data = JSON.parse(body);
-            console.log('收到推送测试案例请求，共', Array.isArray(data) ? data.length : 0, '条');
-            console.log('数据示例:', JSON.stringify(data[0], null, 2));
+            var payload = {};
+            try { payload = JSON.parse(body); } catch (e) { payload = {}; }
+
+            // 兼容两种格式：
+            //   1) { testTaskNo, subTestTaskName, data: [...] }  ← 新格式
+            //   2) [...]                                         ← 旧格式（向后兼容）
+            var testTaskNo = '';
+            var subTestTaskName = '';
+            var data = [];
+            if (Array.isArray(payload)) {
+                data = payload;
+            } else if (payload && typeof payload === 'object') {
+                testTaskNo = payload.testTaskNo || '';
+                subTestTaskName = payload.subTestTaskName || '';
+                data = Array.isArray(payload.data) ? payload.data : [];
+            }
+
+            console.log('收到推送测试案例请求 testTaskNo=%s subTestTaskName=%s 共 %d 条',
+                testTaskNo || '(未提供)', subTestTaskName || '(未提供)', data.length);
+            if (data.length > 0) {
+                console.log('数据示例:', JSON.stringify(data[0], null, 2));
+            }
+
+            // 按 tsId 逐条返回处理结果。
+            // 调试约定：第偶数条（索引为偶数：第 1、3、5... 条用户看到的行）模拟成功，
+            // 其余模拟失败，用于联调"成功回写 + 失败弹窗"全链路。
+            var resultBody = data.map(function (rec, i) {
+                var tsId = rec && rec.tsId ? String(rec.tsId) : '';
+                if (i % 2 === 0) {
+                    return {
+                        data: 'TT' + Date.now() + (1000 + i),
+                        sourceId: tsId,
+                        type: '1'
+                    };
+                }
+                return {
+                    data: '无效的案例类型',
+                    sourceId: tsId,
+                    type: '2'
+                };
+            });
+
             res.writeHead(200, {
                 'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*',
@@ -196,7 +235,7 @@ var server = http.createServer(function (req, res) {
             res.end(JSON.stringify({
                 returnCode: 'SUC0000',
                 errorMsg: '',
-                body: { imported: Array.isArray(data) ? data.length : 0 }
+                body: resultBody
             }));
         });
     } else if (req.method === 'OPTIONS') {

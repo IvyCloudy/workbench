@@ -35,16 +35,3 @@ export function debounce(func, wait) {
         timer = setTimeout(() => func.apply(this, args), wait);
     };
 }
-
-/**
- * 节流
- */
-export function throttle(func, limit) {
-    let inThrottle = false;
-    return function (...args) {
-        if (inThrottle) return;
-        func.apply(this, args);
-        inThrottle = true;
-        setTimeout(() => (inThrottle = false), limit);
-    };
-}

@@ -1,4 +1,19 @@
-import * as vscode from 'vscode';
+/**
+ * ============================================================================
+ *  types/index.ts
+ *  全项目共享类型定义
+ * ----------------------------------------------------------------------------
+ *  包含：
+ *    - TableData / DetailTableData       表格与明细表结构
+ *    - SheetData / SheetRow / SheetCell  YAML 中间转换用的「伪表格」结构
+ *    - QueryParams / QueryOptions        查询测试案例请求参数
+ *    - AppConfig                         本地持久化配置
+ *    - WebviewMessage                    前后端消息包通用结构
+ *    - FileNode                          资源树节点
+ *    - ApiResponse                       后端返回包
+ *  原则：本文件仅定义类型，不包含运行时代码。
+ * ============================================================================
+ */
 
 // ============================================
 // 表格数据类型
@@ -37,10 +52,6 @@ export interface DetailTableData {
     rawRowTypes?: ('array' | 'object' | 'none')[];
 }
 
-export interface ColWidthInfo {
-    width: number;
-}
-
 // ============================================
 // CSV 数据类型
 // ============================================
@@ -57,21 +68,6 @@ export interface SheetRow {
 export interface SheetData {
     name: string;
     rows: { [key: number]: SheetRow };
-    cols?: { [key: string]: ColWidthInfo };
-}
-
-export interface ExcelData {
-    sheets: SheetData[];
-    maxCols: number;
-    maxLength: number;
-}
-
-// ============================================
-// 推送策略接口
-// ============================================
-
-export interface PushStrategy {
-    push(data: any, filePath: string, webviewPanel: vscode.WebviewPanel, context?: vscode.ExtensionContext): Promise<void>;
 }
 
 // ============================================

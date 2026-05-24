@@ -1,3 +1,12 @@
+/**
+ * ============================================================================
+ *  providers/WorkbenchProvider.ts
+ *  「工作台」Webview（插件首页）
+ * ----------------------------------------------------------------------------
+ *  职责：提供一个总入口页面，列出各业务模块入口（测试任务/案例/执行/缺陷/评审/报告）。
+ *  当前状态：各子功能还是占位 Toast，待后续补齐具体跳转逻辑。
+ * ============================================================================
+ */
 import * as vscode from 'vscode';
 import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider';
 import type { WebviewMessage } from '../types';
@@ -36,12 +45,6 @@ export class WorkbenchProvider extends BaseWebviewProvider {
                 break;
             case 'openReport':
                 vscode.window.showInformationMessage('打开测试报告');
-                break;
-            case 'openTaskList':
-                vscode.window.showInformationMessage('打开测试任务列表');
-                break;
-            case 'navigate':
-                vscode.commands.executeCommand(msg.commandId || '').then(() => {}, () => {});
                 break;
         }
     };

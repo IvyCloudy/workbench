@@ -1,5 +1,5 @@
 // ============ 表格浏览器页面 ============
-import { Table, FileTree, Loading } from '../common/index.js';
+import { Table, FileTree, Loading } from '../../common/index.js';
 
 const vscode = acquireVsCodeApi();
 

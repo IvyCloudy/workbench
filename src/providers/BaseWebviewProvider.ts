@@ -1,3 +1,18 @@
+/**
+ * ============================================================================
+ *  providers/BaseWebviewProvider.ts
+ *  独立 Webview Panel 的抽象基类
+ * ----------------------------------------------------------------------------
+ *  适用对象：WorkbenchProvider / TableBrowserProvider / TestCaseProvider
+ *  职责：
+ *    1. 统一管理 panel 创建 / 重用 / 销毁 / disposables。
+ *    2. 从结论同体模板加载 HTML，替换 nonce / scriptUri / mediaBase / cspSource。
+ *    3. 定义统一消息入口（handleMessage）供子类实现。
+ *  与 BaseEditorProvider 的区别：
+ *    - 本类适用于「面板式」Webview（独立 Tab，文件无关）。
+ *    - BaseEditorProvider 适用于绑定到某个文件的「定制编辑器」。
+ * ============================================================================
+ */
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { getNonce, buildErrorHtml } from '../services/utils';

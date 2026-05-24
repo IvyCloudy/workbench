@@ -1,3 +1,14 @@
+/**
+ * ============================================================================
+ *  parsers/json-parser.ts
+ *  JSON 解析器实现
+ * ----------------------------------------------------------------------------
+ *  职责：
+ *    - 以「顶层数组」为默认集合语义，展平为表格主表 + N 个明细表。
+ *    - 存在明细字段时，主表只展开顶层标量列，避免与明细列冲突。
+ *  说明：复用 yaml-parser 的 getDetailFieldDisplay，以统一明细表标题呈现风格。
+ * ============================================================================
+ */
 import * as fs from 'fs';
 import type { TableData, DetailTableData } from '../types';
 import type { FileParser, FileParseResult } from './file-parser';

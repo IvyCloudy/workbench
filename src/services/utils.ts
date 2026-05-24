@@ -1,3 +1,20 @@
+/**
+ * ============================================================================
+ *  services/utils.ts
+ *  扩展端通用工具集
+ * ----------------------------------------------------------------------------
+ *  内容分组：
+ *    1. FILE_PATTERNS：CSV/YAML/JSON 后缀正则
+ *    2. CSP nonce / HTML escape / 错误页 HTML 模板（buildErrorHtml）
+ *    3. 路径合规校验（isInQualifiedDir）
+ *    4. ⭐ 任务信息解析（parseTaskInfoFromPath / resolveTaskInfo）
+ *       - testTaskNo / subTestTaskName 的唯一来源；后续若调整规则只改这里
+ *    5. 推送追踪相关常量与 UUID 生成
+ *  设计要点：
+ *    - 本文件不依赖 vscode.workspace 等运行时上下文，纯工具函数，便于单测。
+ *    - resolveTaskInfo 始终返回 info（失败时为兜底空值），调用方可安全访问字段。
+ * ============================================================================
+ */
 import * as path from 'path';
 
 // ============================================
@@ -140,36 +157,104 @@ export function isInQualifiedDir(filePath: string, filePattern: RegExp): boolean
 }
 
 // ============================================
-// 通用辅助
+// 任务信息解析
 // ============================================
 
-/**
- * 防抖
- */
-export function debounce<T extends (...args: any[]) => any>(
-    fn: T,
-    wait: number
-): (...args: Parameters<T>) => void {
-    let timeoutId: NodeJS.Timeout | null = null;
-    return function (...args: Parameters<T>) {
-        if (timeoutId) clearTimeout(timeoutId);
-        timeoutId = setTimeout(() => fn.apply(null, args), wait);
-    };
+export interface TaskInfo {
+    /** 测试任务编号，例如 TT001 */
+    testTaskNo: string;
+    /** 测试子任务名称，例如 登录模块 */
+    subTestTaskName: string;
 }
 
 /**
- * 深克隆（支持普通对象、数组、Date）
+ * ⭐ testTaskNo / subTestTaskName 的唯一来源（内部实现）
+ * ----------------------------------------------------------------
+ * 后续如需调整两字段的取值方式（例如改为读 .meta 文件、改分隔符、
+ * 从配置注入等），仅需修改本函数；所有调用方均经由 resolveTaskInfo
+ * 间接使用，不应再单独解析路径。
+ *
+ * 目录约定：
+ *   .../{测试任务|testtask}/<testTaskNo>_<subTestTaskName>/{测试案例|testcase}/<file>
  */
-export function deepClone<T>(obj: T): T {
-    if (obj === null || typeof obj !== 'object') return obj;
-    if (obj instanceof Date) return new Date(obj.getTime()) as unknown as T;
-    if (Array.isArray(obj)) return obj.map(item => deepClone(item)) as unknown as T;
+function parseTaskInfoFromPath(filePath: string): TaskInfo | null {
+    if (!filePath) return null;
+    const parts = filePath.split(path.sep);
+    const len = parts.length;
+    if (len < 4) return null;
 
-    const cloned = {} as T;
-    for (const key in obj) {
-        if (Object.prototype.hasOwnProperty.call(obj, key)) {
-            cloned[key] = deepClone(obj[key]);
-        }
+    const rootDir = parts[len - 4];
+    const taskDir = parts[len - 3];
+    const caseDir = parts[len - 2];
+
+    const rootOk = rootDir === '测试任务' || rootDir === 'testtask';
+    const caseOk = caseDir === '测试案例' || caseDir === 'testcase';
+    if (!rootOk || !caseOk || !taskDir) return null;
+
+    const idx = taskDir.indexOf('_');
+    if (idx <= 0 || idx === taskDir.length - 1) return null;
+
+    return {
+        testTaskNo: taskDir.slice(0, idx),
+        subTestTaskName: taskDir.slice(idx + 1),
+    };
+}
+
+/** 路径不合规时使用的统一提示语（仅本文件内部使用） */
+const TASK_INFO_PARSE_ERROR =
+    '无法解析测试任务信息，目录需形如：测试任务/<编号>_<子任务名>/测试案例/<文件>';
+
+interface ResolveTaskInfoOk {
+    ok: true;
+    info: TaskInfo;
+}
+interface ResolveTaskInfoFail {
+    ok: false;
+    info: TaskInfo;   // 兜底空值，便于调用方安全访问字段
+    error: string;    // 统一的错误描述
+}
+export type ResolveTaskInfoResult = ResolveTaskInfoOk | ResolveTaskInfoFail;
+
+/**
+ * ⭐ testTaskNo / subTestTaskName 的统一业务入口（推荐所有调用方使用）
+ *
+ * 与 parseTaskInfoFromPath 的区别：
+ *   - parseTaskInfoFromPath：纯解析，失败返回 null，仅给底层 utils 用
+ *   - resolveTaskInfo：业务入口，附带统一错误文案与兜底空值，所有调用方都应走这里
+ *
+ * 用法示例：
+ *   const r = resolveTaskInfo(filePath);
+ *   if (!r.ok) { showWarning(r.error); return; }
+ *   const { testTaskNo, subTestTaskName } = r.info;
+ */
+export function resolveTaskInfo(filePath: string): ResolveTaskInfoResult {
+    const info = parseTaskInfoFromPath(filePath);
+    if (info) {
+        return { ok: true, info };
     }
-    return cloned;
+    return {
+        ok: false,
+        info: { testTaskNo: '', subTestTaskName: '' },
+        error: TASK_INFO_PARSE_ERROR,
+    };
+}
+
+// ============================================
+// 推送相关：固定列名 & UUID
+// ============================================
+
+/** 推送追踪列：行的唯一 id，请求时回传给后端，用于响应回写匹配 */
+export const TS_ID_COLUMN = 'tsId';
+/** 推送成功回写列：成功时存放后端返回的 testCaseNo */
+export const TEST_CASE_NO_COLUMN = 'testCaseNo';
+
+/**
+ * 生成 RFC4122 v4 UUID（无外部依赖，浏览器/Node 通用）
+ */
+export function genUuid(): string {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
 }

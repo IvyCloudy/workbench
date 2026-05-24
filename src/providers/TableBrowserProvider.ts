@@ -1,3 +1,16 @@
+/**
+ * ============================================================================
+ *  providers/TableBrowserProvider.ts
+ *  「表格浏览器」Webview
+ * ----------------------------------------------------------------------------
+ *  职责：
+ *    1. 列出工作区下合规目录中的 CSV 文件树（委托 FileTreeService）。
+ *    2. 读取选中文件的 CSV 内容并展示。
+ *    3. 「发送选中行」：调用 batchImportData 将选中行推送到后端。
+ *  与 UnifiedEditorProvider 的区别：
+ *    - 本 Provider 面向「批量浏览/挑选」场景，不提供单文件编辑能力。
+ * ============================================================================
+ */
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider';

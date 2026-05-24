@@ -5,8 +5,6 @@ import {
     escapeHtml,
     buildErrorHtml,
     isInQualifiedDir,
-    debounce,
-    deepClone,
     FILE_PATTERNS
 } from '../services/utils';
 
@@ -102,57 +100,6 @@ describe('services/utils', () => {
         it('识别 JSON 文件', () => {
             const uri = vscode.Uri.file('/workspace/测试任务/t/测试案例/d.json');
             expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.JSON)).toBe(true);
-        });
-    });
-
-    describe('debounce', () => {
-        it('应该延迟函数执行', async () => {
-            let count = 0;
-            const fn = () => { count++; };
-            const debounced = debounce(fn, 100);
-
-            debounced(); debounced(); debounced();
-            expect(count).toBe(0);
-
-            await new Promise(r => setTimeout(r, 150));
-            expect(count).toBe(1);
-        });
-
-        it('应该传递参数到原始函数', async () => {
-            let result = 0;
-            const fn = (a: number, b: number) => { result = a + b; };
-            const debounced = debounce(fn, 50);
-
-            debounced(3, 5);
-            await new Promise(r => setTimeout(r, 100));
-            expect(result).toBe(8);
-        });
-    });
-
-    describe('deepClone', () => {
-        it('深拷贝数组', () => {
-            const original = [1, [2, 3], { a: 4 }];
-            const cloned = deepClone(original);
-
-            expect(cloned).toEqual(original);
-            expect(cloned).not.toBe(original);
-            expect(cloned[1]).not.toBe(original[1]);
-        });
-
-        it('深拷贝对象', () => {
-            const original = { a: 1, b: { c: 2 } };
-            const cloned = deepClone(original);
-
-            expect(cloned).toEqual(original);
-            expect(cloned).not.toBe(original);
-            expect(cloned.b).not.toBe(original.b);
-        });
-
-        it('处理原始类型', () => {
-            expect(deepClone(42)).toBe(42);
-            expect(deepClone('hello')).toBe('hello');
-            expect(deepClone(true)).toBe(true);
-            expect(deepClone(null)).toBe(null);
         });
     });
 

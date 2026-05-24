@@ -1,9 +1,26 @@
+/**
+ * ============================================================================
+ *  providers/TestCaseProvider.ts
+ *  「查看测试案例（线上）」Webview
+ * ----------------------------------------------------------------------------
+ *  职责：
+ *    1. 提供「查询参数」初始化：
+ *       - testTaskNo / subTestTaskName 从路径解析（resolveTaskInfo）
+ *       - testPhaseName 从文件内容提取（ParamExtractor）
+ *    2. 中转前端「查询」/「获取任务树」请求到 services/http。
+ *    3. 将本次使用的查询参数写入本地缓存（storage.writeParams）。
+ *  设计要点：
+ *    - 类内包含三块職责：ParamExtractor / QueryService / Provider，各取所需，便于单测。
+ *    - testTaskNo / subTestTaskName 严格与推送链路保持一致来源，避免两路双存。
+ * ============================================================================
+ */
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider';
 import { writeParams } from '../services/storage';
 import { queryTestCases, fetchTaskTree } from '../services/http';
+import { resolveTaskInfo } from '../services/utils';
 import type { WebviewMessage } from '../types';
 
 // ============================================
@@ -44,11 +61,14 @@ interface QueryResult {
 const EMPTY_PARAMS: TestCaseParams = { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
 
 // ============================================
-// 文件参数提取（CSV / YAML / JSON）
+// 文件参数提取
 // ============================================
+// testTaskNo / subTestTaskName 不再从文件内容提取，而是与推送链路保持一致，
+// 由 parseTaskInfoFromPath 从第三层目录 {testTaskNo}_{subTestTaskName} 解析；
+// 这里仅负责从 CSV / YAML / JSON 文件内容中提取 testPhaseName。
 
 class ParamExtractor {
-    async extract(fileUri: string): Promise<TestCaseParams> {
+    async extractTestPhaseName(fileUri: string): Promise<string> {
         try {
             const content = await fs.promises.readFile(fileUri, 'utf-8');
             const ext = path.extname(fileUri).toLowerCase();
@@ -59,66 +79,52 @@ class ParamExtractor {
         } catch {
             // fall through
         }
-        return EMPTY_PARAMS;
+        return '';
     }
 
-    private fromCsv(content: string): TestCaseParams {
+    private fromCsv(content: string): string {
         const lines = content.split('\n').filter(l => l.trim());
-        if (lines.length < 2) return EMPTY_PARAMS;
+        if (lines.length < 2) return '';
 
         const headers = this.parseCsvLine(lines[0]);
         const data = this.parseCsvLine(lines[1]);
-        const findVal = (key: string): string => {
-            const idx = headers.findIndex(h => h.trim().toLowerCase() === key.toLowerCase());
-            return idx >= 0 ? (data[idx] || '').trim() : '';
-        };
-
-        return {
-            testTaskNo: findVal('testTaskNo'),
-            subTestTaskName: findVal('subTestTaskName'),
-            testPhaseName: findVal('testPhaseName'),
-        };
+        const idx = headers.findIndex(h => h.trim().toLowerCase() === 'testphasename');
+        return idx >= 0 ? (data[idx] || '').trim() : '';
     }
 
-    private fromYaml(content: string): TestCaseParams {
+    private fromYaml(content: string): string {
         try {
             const YAML = require('yaml');
             const parsed = YAML.parse(content);
             const records = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
-            return records.length > 0 ? this.fromRecord(records[0]) : EMPTY_PARAMS;
+            return records.length > 0 ? this.searchKey(records[0], 'testPhaseName') : '';
         } catch {
-            return EMPTY_PARAMS;
+            return '';
         }
     }
 
-    private fromJson(content: string): TestCaseParams {
+    private fromJson(content: string): string {
         try {
             const parsed = JSON.parse(content);
             const records = Array.isArray(parsed) ? parsed : [parsed];
-            return records.length > 0 ? this.fromRecord(records[0]) : EMPTY_PARAMS;
+            return records.length > 0 ? this.searchKey(records[0], 'testPhaseName') : '';
         } catch {
-            return EMPTY_PARAMS;
+            return '';
         }
     }
 
-    private fromRecord(record: any): TestCaseParams {
-        const search = (obj: any, target: string): string => {
-            if (!obj || typeof obj !== 'object') return '';
-            const lowerKey = target.toLowerCase();
-            for (const k of Object.keys(obj)) {
-                if (k.toLowerCase() === lowerKey) return String(obj[k] ?? '').trim();
-                if (typeof obj[k] === 'object' && !Array.isArray(obj[k])) {
-                    const v = search(obj[k], target);
-                    if (v) return v;
-                }
+    /** 在对象中递归查找指定 key（大小写不敏感），返回首个匹配字符串值 */
+    private searchKey(obj: any, target: string): string {
+        if (!obj || typeof obj !== 'object') return '';
+        const lowerKey = target.toLowerCase();
+        for (const k of Object.keys(obj)) {
+            if (k.toLowerCase() === lowerKey) return String(obj[k] ?? '').trim();
+            if (typeof obj[k] === 'object' && !Array.isArray(obj[k])) {
+                const v = this.searchKey(obj[k], target);
+                if (v) return v;
             }
-            return '';
-        };
-        return {
-            testTaskNo: search(record, 'testTaskNo'),
-            subTestTaskName: search(record, 'subTestTaskName'),
-            testPhaseName: search(record, 'testPhaseName'),
-        };
+        }
+        return '';
     }
 
     private parseCsvLine(line: string): string[] {
@@ -213,9 +219,27 @@ export class TestCaseProvider extends BaseWebviewProvider {
 
     /**
      * 显示 Webview 并加载文件参数
+     *
+     * 参数来源（与推送链路保持一致）：
+     *   - testTaskNo / subTestTaskName：从第三层目录 {编号}_{子任务名} 解析
+     *     （路径形如 .../测试任务/<testTaskNo>_<subTestTaskName>/测试案例/<file>）
+     *   - testPhaseName：从文件内容（CSV header / YAML / JSON 字段）提取
      */
     async showWebview(fileUri: vscode.Uri): Promise<void> {
-        const params = await this.paramExtractor.extract(fileUri.fsPath);
+        const filePath = fileUri.fsPath;
+        const r = resolveTaskInfo(filePath);
+        const testPhaseName = await this.paramExtractor.extractTestPhaseName(filePath);
+
+        const params: TestCaseParams = {
+            testTaskNo: r.info.testTaskNo,
+            subTestTaskName: r.info.subTestTaskName,
+            testPhaseName,
+        };
+
+        if (!r.ok) {
+            vscode.window.showWarningMessage(r.error);
+        }
+
         const config = vscode.workspace.getConfiguration('testcaseViewer');
         const apiUrl = config.get<string>('apiUrl') || 'http://localhost:8081';
 

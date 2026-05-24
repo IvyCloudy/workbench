@@ -3,7 +3,7 @@
     "module": "commonjs",
     "target": "ES2020",
     "outDir": "out",
-    "lib": ["ES2020"],
+    "lib": ["ES2020", "DOM"],
     "sourceMap": true,
     "rootDir": "src",
     "strict": true,
@@ -11,8 +11,27 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "allowJs": true,
-    "checkJs": false
+    "checkJs": false,
+    "types": ["node", "vscode"]
   },
   "include": ["src"],
-  "exclude": ["node_modules", "media", "out"]
+  "exclude": [
+    "node_modules",
+    "media",
+    "out",
+    "src/**/*.test.ts",
+    "src/test",
+    "src/core",
+    "src/events",
+    "src/config",
+    "src/services/parsers",
+    "src/services/storage",
+    "src/services/utils",
+    "src/services/http",
+    "src/services/index.ts",
+    "src/services/store.ts",
+    "src/services/http-client.ts",
+    "src/services/yaml-parser.ts",
+    "src/providers/common/FileParserService.ts"
+  ]
 }

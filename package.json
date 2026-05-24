@@ -16,37 +16,19 @@
   "contributes": {
     "customEditors": [
       {
-        "viewType": "csvEditor.testCase",
+        "viewType": "testcaseViewer.unifiedEditor",
         "displayName": "测试案例编辑器",
         "selector": [
-          {
-            "filenamePattern": "*.csv"
-          }
+          { "filenamePattern": "**/测试任务/*/测试案例/*.csv" },
+          { "filenamePattern": "**/测试任务/*/测试案例/*.yaml" },
+          { "filenamePattern": "**/测试任务/*/测试案例/*.yml" },
+          { "filenamePattern": "**/测试任务/*/测试案例/*.json" },
+          { "filenamePattern": "**/testtask/*/testcase/*.csv" },
+          { "filenamePattern": "**/testtask/*/testcase/*.yaml" },
+          { "filenamePattern": "**/testtask/*/testcase/*.yml" },
+          { "filenamePattern": "**/testtask/*/testcase/*.json" }
         ],
-        "priority": "option"
-      },
-      {
-        "viewType": "yamlEditor.testCase",
-        "displayName": "YAML测试案例编辑器",
-        "selector": [
-          {
-            "filenamePattern": "*.yaml"
-          },
-          {
-            "filenamePattern": "*.yml"
-          }
-        ],
-        "priority": "option"
-      },
-      {
-        "viewType": "jsonEditor.testCase",
-        "displayName": "JSON测试案例编辑器",
-        "selector": [
-          {
-            "filenamePattern": "*.json"
-          }
-        ],
-        "priority": "option"
+        "priority": "default"
       }
     ],
     "commands": [
@@ -56,27 +38,11 @@
         "icon": "$(checklist)"
       },
       {
-        "command": "csvEditor.open",
+        "command": "testcaseViewer.openWithEditor",
         "title": "用测试案例编辑器打开"
       },
       {
-        "command": "csvEditor.openWith",
-        "title": "用 Text Editor 打开"
-      },
-      {
-        "command": "yamlEditor.open",
-        "title": "用YAML编辑器打开"
-      },
-      {
-        "command": "yamlEditor.openWith",
-        "title": "用 Text Editor 打开"
-      },
-      {
-        "command": "jsonEditor.open",
-        "title": "用JSON编辑器打开"
-      },
-      {
-        "command": "jsonEditor.openWith",
+        "command": "testcaseViewer.openWithText",
         "title": "用 Text Editor 打开"
       },
       {

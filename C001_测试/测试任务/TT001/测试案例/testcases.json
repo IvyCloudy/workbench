@@ -1,0 +1,69 @@
+[
+  {
+    "caseId": "TC001",
+    "name": "登录功能测试",
+    "priority": "P0",
+    "steps": [
+      {
+        "no": 3,
+        "action": "账户",
+        "expect": "11"
+      },
+      {
+        "no": 1,
+        "action": "输入用户名",
+        "expect": "显示用户名"
+      },
+      {
+        "no": "2",
+        "action": "输入密码",
+        "expect": "密码显示为***"
+      }
+    ],
+    "subTestTaskName": 111,
+    "tags": "登录; 冒烟测试",
+    "testTaskNo": "001",
+    "config": {
+      "retry": 3,
+      "timeout": 30
+    }
+  },
+  {
+    "caseId": "TC002",
+    "name": "注册功能测试",
+    "priority": "P1",
+    "steps": [
+      {
+        "no": 1,
+        "action": "点击注册",
+        "expect": "打开注册页面"
+      }
+    ],
+    "subTestTaskName": 111,
+    "tags": "注册",
+    "testTaskNo": "001",
+    "config": {
+      "retry": 2,
+      "timeout": 60
+    }
+  },
+  {
+    "caseId": "TC003",
+    "name": "注册功能测试",
+    "priority": "P1",
+    "steps": [
+      {
+        "no": "1",
+        "action": "点击注册",
+        "expect": "打开注册页面"
+      }
+    ],
+    "subTestTaskName": 111,
+    "tags": "注册",
+    "testTaskNo": "001",
+    "config": {
+      "retry": 2,
+      "timeout": 60
+    }
+  }
+]

@@ -1,0 +1,404 @@
+/* ============ 基础样式重置 ============ */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px;
+    line-height: 1.4;
+    color: #1a1a1a;
+    background-color: #f5f5f5;
+}
+
+/* ============ 布局容器 ============ */
+.container {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    gap: 12px;
+    padding: 12px;
+}
+
+.panel {
+    background: #fff;
+    border: 1px solid #e5e9ef;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.left-panel {
+    width: 260px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.right-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.panel-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid #e5e9ef;
+    font-size: 13px;
+    font-weight: 600;
+    color: #1a1a1a;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.panel-body {
+    flex: 1;
+    overflow: auto;
+    padding: 12px;
+}
+
+/* ============ 按钮样式 ============ */
+.btn {
+    padding: 6px 14px;
+    font-size: 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid transparent;
+    text-decoration: none;
+    background: none;
+    color: inherit;
+}
+
+.btn-primary {
+    background: #0052d9;
+    color: white;
+    border-color: #0052d9;
+}
+
+.btn-primary:hover {
+    background: #003eb3;
+    border-color: #003eb3;
+}
+
+.btn-secondary {
+    background: #f5f5f5;
+    color: #666;
+    border-color: #ddd;
+}
+
+.btn-secondary:hover {
+    background: #e8e8e8;
+    border-color: #ccc;
+}
+
+.btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-sm {
+    padding: 4px 10px;
+    font-size: 11px;
+}
+
+/* ============ 表格样式 ============ */
+.table-container {
+    overflow: auto;
+    max-height: calc(100vh - 120px);
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.table th,
+.table td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid #e5e9ef;
+    vertical-align: top;
+}
+
+.table th {
+    background: #f8f9fa;
+    font-weight: 600;
+    color: #666;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.table tbody tr:hover {
+    background: #f8f9fa;
+}
+
+.table tbody tr.selected {
+    background: #e6f3ff;
+}
+
+/* ============ 复选框样式 ============ */
+.checkbox {
+    width: 16px;
+    text-align: center;
+}
+
+.checkbox input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+}
+
+/* ============ 文件树样式 ============ */
+.file-tree {
+    padding: 8px 0;
+}
+
+.file-tree-node {
+    padding: 6px 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: #333;
+    transition: background 0.1s;
+}
+
+.file-tree-node:hover {
+    background: #f0f0f0;
+}
+
+.file-tree-node.active {
+    background: #e6f3ff;
+    color: #0052d9;
+}
+
+.file-tree-node .icon {
+    font-size: 14px;
+    width: 16px;
+    text-align: center;
+}
+
+.file-tree-empty {
+    padding: 20px;
+    text-align: center;
+    color: #999;
+    font-style: italic;
+}
+
+/* ============ 加载状态样式 ============ */
+.loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    color: #666;
+}
+
+.loading-spinner {
+    text-align: center;
+}
+
+.spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #0052d9;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 8px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* ============ 空状态样式 ============ */
+.empty {
+    padding: 40px 20px;
+    text-align: center;
+    color: #999;
+}
+
+.empty .icon {
+    font-size: 32px;
+    margin-bottom: 8px;
+    opacity: 0.5;
+}
+
+/* ============ 错误状态样式 ============ */
+.error {
+    padding: 20px;
+    background: #fee;
+    border: 1px solid #fcc;
+    border-radius: 4px;
+    color: #c00;
+    text-align: center;
+}
+
+.error.hidden {
+    display: none;
+}
+
+/* ============ 标签样式 ============ */
+.tag {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.tag-blue { background: #e6f3ff; color: #0052d9; }
+.tag-green { background: #e6f7ed; color: #009944; }
+.tag-red { background: #fee; color: #c00; }
+.tag-orange { background: #fff2e8; color: #d64b00; }
+.tag-purple { background: #f0e6ff; color: #722ed1; }
+.tag-cyan { background: #e6fffb; color: #006d75; }
+
+/* ============ 优先级样式 ============ */
+.priority {
+    font-weight: 500;
+}
+
+.pri-high { color: #c00; }
+.pri-mid { color: #d64b00; }
+.pri-low { color: #009944; }
+
+/* ============ 头像样式 ============ */
+.avatar-mini {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 10px;
+    font-weight: bold;
+    margin-right: 6px;
+}
+
+/* ============ 文本截断样式 ============ */
+.cell-trunc {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+}
+
+.cell-trunc-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+}
+
+/* ============ 工具提示样式 ============ */
+.tooltip {
+    position: fixed;
+    background: rgba(0, 0, 0, 0.9);
+    color: white;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    max-width: 400px;
+    max-height: 300px;
+    overflow: auto;
+    z-index: 10000;
+    display: none;
+    pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* ============ 表单元素样式 ============ */
+.form-group {
+    margin-bottom: 12px;
+}
+
+.form-label {
+    display: block;
+    margin-bottom: 4px;
+    font-weight: 500;
+    color: #333;
+}
+
+.form-control {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 12px;
+    transition: border-color 0.15s;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: #0052d9;
+    box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.1);
+}
+
+.form-select {
+    appearance: none;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23333' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 12px;
+    padding-right: 24px;
+}
+
+/* ============ 响应式设计 ============ */
+@media (max-width: 768px) {
+    .container {
+        flex-direction: column;
+    }
+    
+    .left-panel {
+        width: 100%;
+        margin-bottom: 12px;
+    }
+    
+    .table-container {
+        max-height: 400px;
+    }
+}
+
+/* ============ 辅助类 ============ */
+.hidden { display: none !important; }
+.text-center { text-align: center; }
+.text-left { text-align: left; }
+.text-right { text-align: right; }
+.mt-1 { margin-top: 4px; }
+.mb-1 { margin-bottom: 4px; }
+.ml-1 { margin-left: 4px; }
+.mr-1 { margin-right: 4px; }
+.p-1 { padding: 4px; }
+.p-2 { padding: 8px; }
+.p-3 { padding: 12px; }
+
+/* ============ Toast 提示 ============ */
+.toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    padding: 10px 16px;
+    border-radius: 4px;
+    font-size: 13px;
+    background: rgba(0, 0, 0, 0.85);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    z-index: 9999;
+    display: none;
+    max-width: 400px;
+}
+.toast-success { background: #009944; }
+.toast-error { background: #c00; }
+.toast-info { background: #0052d9; }

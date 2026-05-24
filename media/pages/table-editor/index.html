@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src {{cspSource}} data:; style-src {{cspSource}} 'unsafe-inline'; script-src {{cspSource}} 'nonce-{{nonce}}';">
+<link rel="stylesheet" href="{{stylesUri}}">
+</head>
+<body>
+<div class="xs-app">
+    <div class="xs-toolbar">
+        <div class="xs-icon-btn" data-action="openTextEditor" title="用 Text Editor 打开">
+            <svg viewBox="0 0 16 16"><path d="M4 1h5.5L13 4.5v9a.5.5 0 01-.5.5h-8a.5.5 0 01-.5-.5V1.5A.5.5 0 014 1zm5 .5V4h2.5L9 1.5zM5 7h5v1H5V7zm0 2h5v1H5V9zm0 2h3v1H5v-1z"/></svg>
+        </div>
+        <span class="xs-title">测试案例</span>
+        <div class="xs-search">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="searchInput" placeholder="搜索...">
+        </div>
+        <button class="xs-btn xs-btn-p" id="pushBtn" disabled>推送</button>
+        <span class="xs-sp"></span>
+        <span class="xs-mod" id="modInfo">已修改 <strong id="modCount">0</strong></span>
+        <div class="xs-icon-btn" id="findBtn" title="查找">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </div>
+        <span id="selInfo" style="font-size:12px;color:#666">已选 0 行，共 0 行</span>
+    </div>
+    <div class="xs-container" id="tableContainer"></div>
+    <div class="xs-modal-overlay" id="detailModal">
+        <div class="xs-modal-dialog">
+            <div class="xs-modal-header">
+                <span class="xs-modal-title" id="detailModalTitle">步骤明细</span>
+                <button class="xs-modal-close" id="detailModalClose" title="关闭">✕</button>
+            </div>
+            <div class="xs-modal-body" id="detailModalBody"></div>
+            <div class="xs-modal-footer">
+                <span id="detailModInfo" style="display:none;font-size:11px;color:var(--d);flex:1">明细已修改</span>
+                <button class="xs-btn" id="detailCopyBtn" title="在所选行下方复制一份">复制行</button>
+                <button class="xs-btn" id="detailAddBtn" title="在末尾添加新行">添加行</button>
+                <button class="xs-btn" id="detailCancelBtn">取消</button>
+                <button class="xs-btn xs-btn-p" id="detailSaveBtn">保存</button>
+            </div>
+        </div>
+    </div>
+    <div class="xs-load" id="loading" style="display:none">
+        <div class="xs-spin"></div>
+    </div>
+    <div class="xs-cm" id="ctxMenu"></div>
+    <div class="xs-sf" id="sortFilter"></div>
+    <div class="xs-find" id="findPanel">
+        <div class="xs-find-row">
+            <input type="text" id="findInput" placeholder="查找...">
+            <button class="xs-btn" id="prevBtn">上一个</button>
+            <button class="xs-btn" id="nextBtn">下一个</button>
+        </div>
+        <div class="xs-find-row">
+            <input type="text" id="replaceInput" placeholder="替换为...">
+            <button class="xs-btn" id="replaceBtn">替换</button>
+            <button class="xs-btn" id="replaceAllBtn">全部</button>
+        </div>
+        <div class="xs-find-info" id="findInfo"></div>
+    </div>
+    <div class="xs-toast" id="toast"></div>
+    <!-- 通用 prompt / confirm 模态（替代受 sandbox 限制的 window.prompt / window.confirm） -->
+    <div class="xs-modal-overlay" id="xsPromptModal">
+        <div class="xs-modal-dialog" style="width:380px;max-height:none">
+            <div class="xs-modal-header">
+                <span class="xs-modal-title" id="xsPromptTitle">请输入</span>
+                <button class="xs-modal-close" id="xsPromptClose" title="关闭">✕</button>
+            </div>
+            <div class="xs-modal-body" style="padding:16px;min-height:auto">
+                <input type="text" id="xsPromptInput" style="width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:3px;outline:none;font-size:13px">
+            </div>
+            <div class="xs-modal-footer">
+                <button class="xs-btn" id="xsPromptCancel">取消</button>
+                <button class="xs-btn xs-btn-p" id="xsPromptOk">确定</button>
+            </div>
+        </div>
+    </div>
+</div>
+<script nonce="{{nonce}}">
+window.__EDITOR_CONFIG__ = { dataType: '{{dataType}}', msgType: '{{msgType}}' };
+</script>
+<script nonce="{{nonce}}" src="{{editorUri}}"></script>
+</body>
+</html>

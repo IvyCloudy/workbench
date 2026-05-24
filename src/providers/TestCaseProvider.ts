@@ -3,166 +3,121 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider';
 import { writeParams } from '../services/storage';
-import { queryApi, fetchTaskTree } from '../services/http-client';
+import { queryTestCases, fetchTaskTree } from '../services/http';
 import type { WebviewMessage } from '../types';
 
-interface ReadyParams {
+// ============================================
+// 类型定义
+// ============================================
+
+interface TestCaseParams {
     testTaskNo: string;
     subTestTaskName: string;
     testPhaseName: string;
+}
+
+interface ReadyParams extends TestCaseParams {
     apiUrl: string;
 }
 
-export class TestCaseWebviewProvider extends BaseWebviewProvider {
-    private readyParams: ReadyParams | null = null;
+interface QueryOptions {
+    currentPage?: number;
+    pageSize?: string;
+    testTaskNo?: string;
+    subTestTaskName?: string;
+    testPhaseName?: string;
+    testCaseNo?: string;
+    testCaseName?: string;
+    testCasePath?: string;
+    testCasePriority?: string;
+    testType?: string;
+    type?: string;
+}
 
-    protected getPanelId(): string { return 'testcaseViewer'; }
-    protected getPanelTitle(): string { return '测试案例'; }
-    protected getViewColumn(): vscode.ViewColumn { return vscode.ViewColumn.Beside; }
-    protected getHtmlPath(): vscode.Uri {
-        return vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'index.html');
-    }
-    protected getScriptPath(): vscode.Uri {
-        return vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'main.js');
-    }
+interface QueryResult {
+    success: boolean;
+    data?: any;
+    error?: string;
+    endOfData?: boolean;
+}
 
-    async showWebview(fileUri: vscode.Uri): Promise<void> {
-        const params = await this.extractParamsFromFile(fileUri);
-        const config = vscode.workspace.getConfiguration('testcaseViewer');
-        const apiUrl = config.get<string>('apiUrl') || 'http://localhost:8081';
-        this.readyParams = { ...params, apiUrl };
+const EMPTY_PARAMS: TestCaseParams = { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
 
-        await this.show();
+// ============================================
+// 文件参数提取（CSV / YAML / JSON）
+// ============================================
 
-        await writeParams(this.context, params);
-    }
-
-    protected handleMessage: MessageHandler = async (msg: WebviewMessage) => {
-        if (msg.command === 'ready' && this.readyParams) {
-            this.postMessage({
-                command: 'init',
-                ...this.readyParams,
-                pageSize: '15',
-                currentPage: 1
-            });
-        } else if (msg.command === 'fetchTaskTree') {
-            try {
-                const treeData = await fetchTaskTree(this.context);
-                this.postMessage({ command: 'taskTreeData', data: treeData });
-            } catch {
-                this.postMessage({ command: 'taskTreeData', data: [] });
-            }
-        } else if (msg.command === 'query') {
-            this.postMessage({ command: 'loading' });
-            try {
-                const opts: any = {
-                    currentPage: msg.currentPage || 1,
-                    pageSize: String(msg.pageSize || '20'),
-                    testTaskNo: msg.testTaskNo || '',
-                    subTestTaskName: msg.subTestTaskName || '',
-                    testPhaseName: msg.testPhaseName || '',
-                };
-                if (msg.testCaseNo) opts.testCaseNo = msg.testCaseNo;
-                if (msg.testCaseName) opts.testCaseName = msg.testCaseName;
-                if (msg.testCasePath) opts.testCasePath = msg.testCasePath;
-                if (msg.testCasePriority) opts.testCasePriority = msg.testCasePriority;
-                if (msg.testType) opts.testType = msg.testType;
-                if (msg.type) opts.type = msg.type;
-
-                const result = await queryApi(opts, this.context);
-                if (result.returnCode === 'SUC0000') {
-                    this.postMessage({ command: 'showData', data: result.body });
-                } else if (result.returnCode === '2005' && result.errorMsg === '任务测试案例信息不存在') {
-                    this.postMessage({ command: 'endOfData' });
-                } else {
-                    this.postMessage({ command: 'showError', message: result.errorMsg || '查询失败' });
-                }
-            } catch (err: any) {
-                this.postMessage({ command: 'showError', message: err.message || '网络请求失败' });
-            }
-        }
-    };
-
-    private async extractParamsFromFile(fileUri: vscode.Uri): Promise<{ testTaskNo: string; subTestTaskName: string; testPhaseName: string }> {
+class ParamExtractor {
+    async extract(fileUri: string): Promise<TestCaseParams> {
         try {
-            const content = await fs.promises.readFile(fileUri.fsPath, 'utf-8');
-            const ext = path.extname(fileUri.fsPath).toLowerCase();
+            const content = await fs.promises.readFile(fileUri, 'utf-8');
+            const ext = path.extname(fileUri).toLowerCase();
 
-            if (ext === '.csv') {
-                return this.extractParamsFromCsv(content);
-            }
-            if (ext === '.yaml' || ext === '.yml') {
-                return this.extractParamsFromYaml(content);
-            }
-            if (ext === '.json') {
-                return this.extractParamsFromJson(content);
-            }
+            if (ext === '.csv') return this.fromCsv(content);
+            if (ext === '.yaml' || ext === '.yml') return this.fromYaml(content);
+            if (ext === '.json') return this.fromJson(content);
         } catch {
             // fall through
         }
-        return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
+        return EMPTY_PARAMS;
     }
 
-    private extractParamsFromCsv(content: string): { testTaskNo: string; subTestTaskName: string; testPhaseName: string } {
+    private fromCsv(content: string): TestCaseParams {
         const lines = content.split('\n').filter(l => l.trim());
-        if (lines.length < 2) return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
+        if (lines.length < 2) return EMPTY_PARAMS;
 
         const headers = this.parseCsvLine(lines[0]);
         const data = this.parseCsvLine(lines[1]);
-
-        const testTaskNoIdx = headers.findIndex(h => h.trim().toLowerCase() === 'testtaskno');
-        const subTestTaskNameIdx = headers.findIndex(h => h.trim().toLowerCase() === 'subtesttaskname');
-        const testPhaseNameIdx = headers.findIndex(h => h.trim().toLowerCase() === 'testphasename');
+        const findVal = (key: string): string => {
+            const idx = headers.findIndex(h => h.trim().toLowerCase() === key.toLowerCase());
+            return idx >= 0 ? (data[idx] || '').trim() : '';
+        };
 
         return {
-            testTaskNo: testTaskNoIdx >= 0 ? (data[testTaskNoIdx] || '').trim() : '',
-            subTestTaskName: subTestTaskNameIdx >= 0 ? (data[subTestTaskNameIdx] || '').trim() : '',
-            testPhaseName: testPhaseNameIdx >= 0 ? (data[testPhaseNameIdx] || '').trim() : '',
+            testTaskNo: findVal('testTaskNo'),
+            subTestTaskName: findVal('subTestTaskName'),
+            testPhaseName: findVal('testPhaseName'),
         };
     }
 
-    private extractParamsFromYaml(content: string): { testTaskNo: string; subTestTaskName: string; testPhaseName: string } {
+    private fromYaml(content: string): TestCaseParams {
         try {
             const YAML = require('yaml');
             const parsed = YAML.parse(content);
             const records = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
-            if (records.length === 0) return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
-            return this.extractParamsFromRecord(records[0]);
+            return records.length > 0 ? this.fromRecord(records[0]) : EMPTY_PARAMS;
         } catch {
-            return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
+            return EMPTY_PARAMS;
         }
     }
 
-    private extractParamsFromJson(content: string): { testTaskNo: string; subTestTaskName: string; testPhaseName: string } {
+    private fromJson(content: string): TestCaseParams {
         try {
             const parsed = JSON.parse(content);
             const records = Array.isArray(parsed) ? parsed : [parsed];
-            if (records.length === 0) return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
-            return this.extractParamsFromRecord(records[0]);
+            return records.length > 0 ? this.fromRecord(records[0]) : EMPTY_PARAMS;
         } catch {
-            return { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
+            return EMPTY_PARAMS;
         }
     }
 
-    private extractParamsFromRecord(record: any): { testTaskNo: string; subTestTaskName: string; testPhaseName: string } {
-        const searchKey = (obj: any, targetKey: string): string => {
+    private fromRecord(record: any): TestCaseParams {
+        const search = (obj: any, target: string): string => {
             if (!obj || typeof obj !== 'object') return '';
-            const lowerKey = targetKey.toLowerCase();
+            const lowerKey = target.toLowerCase();
             for (const k of Object.keys(obj)) {
-                if (k.toLowerCase() === lowerKey) {
-                    return String(obj[k] ?? '').trim();
-                }
+                if (k.toLowerCase() === lowerKey) return String(obj[k] ?? '').trim();
                 if (typeof obj[k] === 'object' && !Array.isArray(obj[k])) {
-                    const val = searchKey(obj[k], targetKey);
-                    if (val) return val;
+                    const v = search(obj[k], target);
+                    if (v) return v;
                 }
             }
             return '';
         };
         return {
-            testTaskNo: searchKey(record, 'testTaskNo'),
-            subTestTaskName: searchKey(record, 'subTestTaskName'),
-            testPhaseName: searchKey(record, 'testPhaseName'),
+            testTaskNo: search(record, 'testTaskNo'),
+            subTestTaskName: search(record, 'subTestTaskName'),
+            testPhaseName: search(record, 'testPhaseName'),
         };
     }
 
@@ -184,4 +139,141 @@ export class TestCaseWebviewProvider extends BaseWebviewProvider {
         result.push(current);
         return result;
     }
+}
+
+// ============================================
+// 查询服务（HTTP 调用封装）
+// ============================================
+
+class QueryService {
+    constructor(private context: vscode.ExtensionContext) {}
+
+    async queryTestCases(options: QueryOptions): Promise<QueryResult> {
+        try {
+            const opts: any = {
+                currentPage: options.currentPage || 1,
+                pageSize: String(options.pageSize || '20'),
+                testTaskNo: options.testTaskNo || '',
+                subTestTaskName: options.subTestTaskName || '',
+                testPhaseName: options.testPhaseName || '',
+            };
+            if (options.testCaseNo) opts.testCaseNo = options.testCaseNo;
+            if (options.testCaseName) opts.testCaseName = options.testCaseName;
+            if (options.testCasePath) opts.testCasePath = options.testCasePath;
+            if (options.testCasePriority) opts.testCasePriority = options.testCasePriority;
+            if (options.testType) opts.testType = options.testType;
+            if (options.type) opts.type = options.type;
+
+            const result = await queryTestCases(this.context, opts);
+
+            if (result.returnCode === 'SUC0000') {
+                return { success: true, data: result.body };
+            }
+            if (result.returnCode === '2005' && result.errorMsg === '任务测试案例信息不存在') {
+                return { success: true, endOfData: true };
+            }
+            return { success: false, error: result.errorMsg || '查询失败' };
+        } catch (err: any) {
+            return { success: false, error: err.message || '网络请求失败' };
+        }
+    }
+
+    async getTaskTree(): Promise<any[]> {
+        try {
+            return await fetchTaskTree(this.context);
+        } catch {
+            return [];
+        }
+    }
+}
+
+// ============================================
+// 测试案例 Webview Provider
+// ============================================
+
+export class TestCaseProvider extends BaseWebviewProvider {
+    private paramExtractor = new ParamExtractor();
+    private queryService: QueryService;
+    private readyParams: ReadyParams | null = null;
+
+    constructor(extensionUri: vscode.Uri, context: vscode.ExtensionContext) {
+        super(extensionUri, context);
+        this.queryService = new QueryService(context);
+    }
+
+    protected getPanelId(): string { return 'testcaseViewer'; }
+    protected getPanelTitle(): string { return '测试案例'; }
+    protected getViewColumn(): vscode.ViewColumn { return vscode.ViewColumn.Beside; }
+    protected getHtmlPath(): vscode.Uri {
+        return vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'index.html');
+    }
+    protected getScriptPath(): vscode.Uri {
+        return vscode.Uri.joinPath(this.extensionUri, 'media', 'pages', 'testcase', 'main.js');
+    }
+
+    /**
+     * 显示 Webview 并加载文件参数
+     */
+    async showWebview(fileUri: vscode.Uri): Promise<void> {
+        const params = await this.paramExtractor.extract(fileUri.fsPath);
+        const config = vscode.workspace.getConfiguration('testcaseViewer');
+        const apiUrl = config.get<string>('apiUrl') || 'http://localhost:8081';
+
+        this.readyParams = { ...params, apiUrl };
+
+        await this.show();
+        await writeParams(this.context, params);
+    }
+
+    /**
+     * 处理来自 Webview 的消息
+     */
+    protected handleMessage: MessageHandler = async (msg: WebviewMessage) => {
+        try {
+            if (msg.command === 'ready' && this.readyParams) {
+                this.postMessage({
+                    command: 'init',
+                    ...this.readyParams,
+                    pageSize: '15',
+                    currentPage: 1,
+                });
+                return;
+            }
+
+            if (msg.command === 'fetchTaskTree') {
+                const treeData = await this.queryService.getTaskTree();
+                this.postMessage({ command: 'taskTreeData', data: treeData });
+                return;
+            }
+
+            if (msg.command === 'query') {
+                const result = await this.queryService.queryTestCases({
+                    currentPage: msg.currentPage || 1,
+                    pageSize: msg.pageSize || '20',
+                    testTaskNo: msg.testTaskNo || '',
+                    subTestTaskName: msg.subTestTaskName || '',
+                    testPhaseName: msg.testPhaseName || '',
+                    testCaseNo: msg.testCaseNo,
+                    testCaseName: msg.testCaseName,
+                    testCasePath: msg.testCasePath,
+                    testCasePriority: msg.testCasePriority,
+                    testType: msg.testType,
+                    type: msg.type,
+                });
+
+                if (!result.success) {
+                    this.postMessage({ command: 'showError', message: result.error || '查询失败' });
+                } else if (result.endOfData) {
+                    this.postMessage({ command: 'endOfData' });
+                } else {
+                    this.postMessage({ command: 'showData', data: result.data });
+                }
+            }
+        } catch (err: any) {
+            this.postMessage({
+                command: 'showError',
+                message: `消息处理失败: ${err?.message || err}`,
+            });
+        }
+    };
 }

@@ -7,6 +7,34 @@ import * as vscode from 'vscode';
 export interface TableData {
     headers: string[];
     rows: string[][];
+    detailTable?: DetailTableData;
+    /**
+     * 多明细字段：每一个顶层嵌套对象/对象数组字段对应一项。
+     * 仅支持一层展开：子表单元格内若仍为嵌套结构，会被序列化为 JSON 字符串展示与编辑。
+     * 兼容字段：detailTable 仍保留，等同于 detailTables[0]（若存在）。
+     */
+    detailTables?: DetailTableData[];
+}
+
+export interface DetailTableData {
+    field: string;
+    fieldDisplay: string;
+    headers: string[];
+    /**
+     * 每个主行对应的明细二维数据：
+     * - 对象数组：多子行
+     * - 嵌套对象：一行子表（headers 为 key 的并集，rowGroups[ri] 长度为 1）
+     * - 无明细：空数组
+     */
+    rowGroups: string[][][];
+    rawRowGroups?: any[][][];
+    /**
+     * 每个主行的原始 detail 类型，长度与主行数一致。
+     * - 'array'：原始为对象数组
+     * - 'object'：原始为嵌套对象
+     * - 'none'：无明细
+     */
+    rawRowTypes?: ('array' | 'object' | 'none')[];
 }
 
 export interface ColWidthInfo {

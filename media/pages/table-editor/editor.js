@@ -36,6 +36,8 @@ var S = {
     _matches: [],           // [{r, c}]
     _matchIdx: -1,          // 当前命中的 match 索引
     _findKw: '',            // 当前关键字
+    // 顶部搜索过滤
+    _searchKw: '',          // 搜索关键字
     // 撤销/重做
     _history: [],           // 过去的快照栈
     _future: [],            // 已撤销可重做的栈
@@ -225,6 +227,7 @@ function renderTable() {
     updateSelectionInfo();
     updatePushBtn();
     updateModInfo();
+    updateSearchClear();
     // 重绘后恢复查找高亮
     if (S._findKw) paintFindHighlight();
 }
@@ -240,7 +243,35 @@ function bindToolbar() {
     var findBtn = document.getElementById('findBtn');
     if (findBtn) findBtn.addEventListener('click', toggleFindPanel);
     var search = document.getElementById('searchInput');
-    if (search) search.addEventListener('input', onSearch);
+    if (search) {
+        search.addEventListener('input', onSearch);
+        search.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') {
+                // Enter 立即搜索，取消防抖
+                if (_searchTimer) { clearTimeout(_searchTimer); _searchTimer = null; }
+                S._searchKw = search.value || '';
+                updateSearchClear(S._searchKw);
+                renderTable();
+            } else if (e.key === 'Escape') {
+                if (_searchTimer) { clearTimeout(_searchTimer); _searchTimer = null; }
+                search.value = '';
+                S._searchKw = '';
+                updateSearchClear();
+                renderTable();
+            }
+        });
+    }
+    var searchClear = document.getElementById('searchClear');
+    if (searchClear) {
+        searchClear.addEventListener('click', function () {
+            var inp = document.getElementById('searchInput');
+            if (inp) { inp.value = ''; inp.focus(); }
+            if (_searchTimer) { clearTimeout(_searchTimer); _searchTimer = null; }
+            S._searchKw = '';
+            updateSearchClear();
+            renderTable();
+        });
+    }
 
     var findInput = document.getElementById('findInput');
     if (findInput) findInput.addEventListener('input', function (ev) {
@@ -375,7 +406,31 @@ function toggleRowSelection(e) {
 
 function updateSelectionInfo() {
     var info = document.getElementById('selInfo');
-    if (info) info.textContent = '已选 ' + S.sel.size + ' 行，共 ' + (S.data.rows || []).length + ' 行';
+    if (!info) return;
+    var total = (S.data.rows || []).length;
+    if (S._searchKw) {
+        var matched = countMatchedRows();
+        info.textContent = '已选 ' + S.sel.size + ' 行，筛选 ' + matched + ' / ' + total + ' 行';
+    } else {
+        info.textContent = '已选 ' + S.sel.size + ' 行，共 ' + total + ' 行';
+    }
+}
+
+function countMatchedRows() {
+    var skw = (S._searchKw || '').toLowerCase();
+    if (!skw) return (S.data.rows || []).length;
+    var h = S.data.headers || [];
+    var count = 0;
+    (S.data.rows || []).forEach(function (row) {
+        for (var k = 0; k < h.length; k++) {
+            var cv = row[k];
+            if (cv !== null && cv !== undefined && String(cv).toLowerCase().indexOf(skw) >= 0) {
+                count++;
+                break;
+            }
+        }
+    });
+    return count;
 }
 
 function updatePushBtn() {
@@ -862,10 +917,24 @@ function bindCloseFindOnTableClick() {
     });
 }
 
-// 顶部 searchInput：过滤未命中的行
+// 顶部 searchInput：过滤未命中的行（边输入边过滤，防抖 150ms）
+var _searchTimer = null;
 function onSearch(e) {
-    S._searchKw = (e.target.value || '');
-    renderTable();
+    var val = (e.target.value || '');
+    updateSearchClear(val);
+    if (_searchTimer) clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(function () {
+        S._searchKw = val;
+        dbg('🔍 search kw="' + S._searchKw + '"');
+        renderTable();
+    }, 150);
+}
+
+// 显示/隐藏搜索清除按钮
+function updateSearchClear(val) {
+    var btn = document.getElementById('searchClear');
+    var kw = (val !== undefined) ? val : S._searchKw;
+    if (btn) btn.style.display = (kw || '').length > 0 ? '' : 'none';
 }
 
 // 重新构建命中列表 + 渲染高亮
@@ -1620,4 +1689,4 @@ function updateDetailModInfo() {
 }
 
 // 初始化
-document.addEventListener('DOMContentLoaded', init);
+init();

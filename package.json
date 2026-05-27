@@ -19,14 +19,10 @@
         "viewType": "testcaseViewer.unifiedEditor",
         "displayName": "测试案例编辑器",
         "selector": [
-          { "filenamePattern": "**/测试任务/*/测试案例/*.csv" },
-          { "filenamePattern": "**/测试任务/*/测试案例/*.yaml" },
-          { "filenamePattern": "**/测试任务/*/测试案例/*.yml" },
-          { "filenamePattern": "**/测试任务/*/测试案例/*.json" },
-          { "filenamePattern": "**/testtask/*/testcase/*.csv" },
-          { "filenamePattern": "**/testtask/*/testcase/*.yaml" },
-          { "filenamePattern": "**/testtask/*/testcase/*.yml" },
-          { "filenamePattern": "**/testtask/*/testcase/*.json" }
+          { "filenamePattern": "**/测试任务/*/测试案例/**/*.csv" },
+          { "filenamePattern": "**/测试任务/*/测试案例/**/*.yaml" },
+          { "filenamePattern": "**/测试任务/*/测试案例/**/*.yml" },
+          { "filenamePattern": "**/测试任务/*/测试案例/**/*.json" }
         ],
         "priority": "default"
       }
@@ -61,7 +57,7 @@
       "explorer/context": [
         {
           "command": "testcaseViewer.pushTestCaseFromExplorer",
-          "when": "resourcePath =~ /(测试任务|testtask)\\/[^\\/]+\\/(测试案例|testcase)\\/[^\\/]+\\.(csv|yaml|yml|json)$/i",
+          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i",
           "group": "2_workspace"
         }
       ]

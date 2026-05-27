@@ -16,7 +16,6 @@
  */
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { WorkbenchProvider } from './providers/WorkbenchProvider';
 import { TableBrowserProvider } from './providers/TableBrowserProvider';
 import { TestCaseProvider } from './providers/TestCaseProvider';
 import { UnifiedEditorProvider, FileTypeChecker } from './providers/UnifiedEditorProvider';
@@ -185,7 +184,6 @@ function registerEditorCommands(
 export function activate(context: vscode.ExtensionContext) {
     console.log('[Extension] 插件激活中...');
 
-    const workbenchProvider = new WorkbenchProvider(context.extensionUri, context);
     const tableBrowserProvider = new TableBrowserProvider(context.extensionUri, context);
     const testCaseProvider = new TestCaseProvider(context.extensionUri, context);
     const unifiedEditorProvider = new UnifiedEditorProvider(context.extensionUri, context);
@@ -205,7 +203,6 @@ export function activate(context: vscode.ExtensionContext) {
         ),
 
         // 全局命令
-        vscode.commands.registerCommand('workbench.open', () => workbenchProvider.show()),
         vscode.commands.registerCommand('tableBrowser.open', () => tableBrowserProvider.show()),
         vscode.commands.registerCommand('testcaseViewer.viewOnline', async () => {
             const uri = getActiveFileUri();
@@ -235,13 +232,6 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     updateShowIcon();
-
-    try {
-        workbenchProvider.show();
-    } catch (err) {
-        console.error('WorkbenchProvider.show() failed:', err);
-    }
-
     console.log('[Extension] 插件激活完成');
 }
 

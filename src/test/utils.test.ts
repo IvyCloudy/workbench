@@ -77,14 +77,14 @@ describe('services/utils', () => {
     });
 
     describe('isInQualifiedDir', () => {
-        it('识别合格的 CSV 文件路径（中文）', () => {
-            const uri = vscode.Uri.file('/workspace/测试任务/任务1/测试案例/cases.csv');
+        it('识别合格的 CSV 文件路径', () => {
+            const uri = vscode.Uri.file('/workspace/测试任务/TT001_登录/测试案例/cases.csv');
             expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.CSV)).toBe(true);
         });
 
-        it('识别合格的英文目录', () => {
-            const uri = vscode.Uri.file('/workspace/testtask/task1/testcase/data.csv');
-            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.CSV)).toBe(true);
+        it('拒绝非 测试任务 的英文目录', () => {
+            const uri = vscode.Uri.file('/workspace/testtask/TT_test/测试案例/data.csv');
+            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.CSV)).toBe(false);
         });
 
         it('拒绝不合法路径', () => {
@@ -93,13 +93,38 @@ describe('services/utils', () => {
         });
 
         it('识别 YAML 文件', () => {
-            const uri = vscode.Uri.file('/workspace/测试任务/t/测试案例/c.yaml');
+            const uri = vscode.Uri.file('/workspace/测试任务/TT_cases/测试案例/c.yaml');
             expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.YAML)).toBe(true);
         });
 
         it('识别 JSON 文件', () => {
-            const uri = vscode.Uri.file('/workspace/测试任务/t/测试案例/d.json');
+            const uri = vscode.Uri.file('/workspace/测试任务/TT_data/测试案例/d.json');
             expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.JSON)).toBe(true);
+        });
+
+        it('识别 测试案例/ 子目录下的 CSV 文件', () => {
+            const uri = vscode.Uri.file('/workspace/测试任务/TT001_登录/测试案例/模块A/cases.csv');
+            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.CSV)).toBe(true);
+        });
+
+        it('识别深层子目录下的 YAML 文件', () => {
+            const uri = vscode.Uri.file('/workspace/测试任务/TT_test/测试案例/a/b/c/data.yaml');
+            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.YAML)).toBe(true);
+        });
+
+        it('识别子目录下的 JSON 文件', () => {
+            const uri = vscode.Uri.file('/workspace/测试任务/TT002_异常/测试案例/错误处理/edge.json');
+            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.JSON)).toBe(true);
+        });
+
+        it('拒绝缺少 测试案例 目录的子目录路径', () => {
+            const uri = vscode.Uri.file('/workspace/测试任务/TT002_异常/其他目录/cases.csv');
+            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.CSV)).toBe(false);
+        });
+
+        it('拒绝 测试任务 后缺少测试案例目录的路径', () => {
+            const uri = vscode.Uri.file('/workspace/测试任务/TT_test/cases.csv');
+            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.CSV)).toBe(false);
         });
     });
 

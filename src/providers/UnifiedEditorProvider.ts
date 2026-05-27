@@ -50,7 +50,7 @@ export class FileTypeChecker {
         if (!type) return '该文件不在允许的目录下';
         const typeName = FileTypeChecker.getTypeName(type);
         const ext = type === 'yaml' ? '*.yaml 或 *.yml' : `*.${type.toLowerCase()}`;
-        return `该 ${typeName} 文件不在允许的目录下，仅支持：测试任务/xxx/测试案例/${ext}`;
+        return `该 ${typeName} 文件不在允许的目录下，仅支持：测试任务/<编号>_<子任务名>/测试案例/[...]/${ext}`;
     }
 }
 

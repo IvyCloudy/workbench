@@ -136,7 +136,8 @@ document.querySelectorAll('button[data-act]').forEach(b => {
 
 /**
  * 检查文件是否在合格目录下：
- *   .../{测试任务|testtask}/<task>/{测试案例|testcase}/<file>
+ *   .../测试任务/<testTaskNo>_<name>/测试案例/[...]/<file>
+ * 文件可直接放在 测试案例/ 目录下，也可放在其子目录中。
  */
 export function isInQualifiedDir(filePath: string, filePattern: RegExp): boolean {
     if (!filePath || !filePattern.test(filePath)) {
@@ -147,13 +148,29 @@ export function isInQualifiedDir(filePath: string, filePattern: RegExp): boolean
     const len = parts.length;
     if (len < 4) return false;
 
-    const dirNames = parts.map(p => path.basename(p));
-    const caseDir = dirNames[len - 2];
-    const rootDir = dirNames[len - 4];
+    // 动态查找 "测试任务" 的位置（不在固定倒数层级）
+    let rootIdx = -1;
+    for (let i = 0; i < len - 3; i++) {
+        if (parts[i] === '测试任务') {
+            rootIdx = i;
+            break;
+        }
+    }
+    if (rootIdx === -1) return false;
 
-    return (rootDir === '测试任务' || rootDir === 'testtask') &&
-           (caseDir === '测试案例' || caseDir === 'testcase') &&
-           filePattern.test(dirNames[len - 1]);
+    // rootIdx + 1 必须是任务目录，格式：<testTaskNo>_<subTestTaskName>
+    const taskDir = parts[rootIdx + 1];
+    if (!taskDir) return false;
+    const idx = taskDir.indexOf('_');
+    if (idx <= 0 || idx === taskDir.length - 1) return false;
+
+    // rootIdx + 2 必须是 "测试案例"
+    const caseDir = parts[rootIdx + 2];
+    if (caseDir !== '测试案例') return false;
+
+    // 文件名匹配（文件可在 测试案例/ 目录或其子目录下）
+    const lastPart = parts[len - 1];
+    return filePattern.test(lastPart);
 }
 
 // ============================================
@@ -175,7 +192,7 @@ export interface TaskInfo {
  * 间接使用，不应再单独解析路径。
  *
  * 目录约定：
- *   .../{测试任务|testtask}/<testTaskNo>_<subTestTaskName>/{测试案例|testcase}/<file>
+ *   .../测试任务/<testTaskNo>_<subTestTaskName>/测试案例/[...]/<file>
  */
 function parseTaskInfoFromPath(filePath: string): TaskInfo | null {
     if (!filePath) return null;
@@ -183,12 +200,21 @@ function parseTaskInfoFromPath(filePath: string): TaskInfo | null {
     const len = parts.length;
     if (len < 4) return null;
 
-    const rootDir = parts[len - 4];
-    const taskDir = parts[len - 3];
-    const caseDir = parts[len - 2];
+    // 动态查找 "测试任务" 的位置
+    let rootIdx = -1;
+    for (let i = 0; i < len - 3; i++) {
+        if (parts[i] === '测试任务') {
+            rootIdx = i;
+            break;
+        }
+    }
+    if (rootIdx === -1) return null;
 
-    const rootOk = rootDir === '测试任务' || rootDir === 'testtask';
-    const caseOk = caseDir === '测试案例' || caseDir === 'testcase';
+    const taskDir = parts[rootIdx + 1];
+    const caseDir = parts[rootIdx + 2];
+
+    const rootOk = parts[rootIdx] === '测试任务';
+    const caseOk = caseDir === '测试案例';
     if (!rootOk || !caseOk || !taskDir) return null;
 
     const idx = taskDir.indexOf('_');
@@ -202,7 +228,7 @@ function parseTaskInfoFromPath(filePath: string): TaskInfo | null {
 
 /** 路径不合规时使用的统一提示语（仅本文件内部使用） */
 const TASK_INFO_PARSE_ERROR =
-    '无法解析测试任务信息，目录需形如：测试任务/<编号>_<子任务名>/测试案例/<文件>';
+    '无法从路径解析测试任务信息，请确认目录形如：测试任务/<编号>_<子任务名>/测试案例/<文件>';
 
 interface ResolveTaskInfoOk {
     ok: true;

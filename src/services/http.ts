@@ -211,18 +211,21 @@ export async function batchImportData(
 /**
  * 推送测试案例数据
  *
- * @param taskInfo 必填，从文件路径解析得到的任务信息
- *                 目录格式：测试任务/<testTaskNo>_<subTestTaskName>/测试案例/<file>
+ * @param artifactId   推送的文件名（如 testcases.csv）
+ * @param taskInfo     必填，从文件路径解析得到的任务信息
+ *                     目录格式：测试任务/<testTaskNo>_<subTestTaskName>/测试案例/<file>
  */
 export async function pushTestCase(
     context: vscode.ExtensionContext,
     data: any[],
-    taskInfo: { testTaskNo: string; subTestTaskName: string }
+    taskInfo: { testTaskNo: string; subTestTaskName: string },
+    artifactId: string
 ): Promise<ApiResponse> {
     const url = `${await getApiBaseUrl(context)}/test-task/push-testcase`;
     const body = {
         testTaskNo: taskInfo.testTaskNo,
         subTestTaskName: taskInfo.subTestTaskName,
+        artifactId,
         data
     };
 

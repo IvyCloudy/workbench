@@ -91,7 +91,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
         }
 
         console.log(`[推送] 文件: ${filePath}, ${rows.length} 行`);
-        const pushResult = await pushTestCase(context, rows, taskInfo);
+        const pushResult = await pushTestCase(context, rows, taskInfo, path.basename(filePath));
         if (pushResult.returnCode !== 'SUC0000') {
             vscode.window.showErrorMessage(`推送失败: ${pushResult.errorMsg || '未知错误'}`);
             continue;

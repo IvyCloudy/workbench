@@ -63,7 +63,39 @@ export class PushViaHttpClient implements PushStrategy {
             throw new Error(r.error);
         }
         const taskInfo = r.info;
-        const result = await pushTestCase(extensionContext, data, taskInfo);
+
+        // 重新解析文件获取原始结构化数据。
+        // 前端 table 中嵌套对象/数组字段被渲染为显示文本（如 "[2 项]"），
+        // 但文件落盘时 parser.save 通过 reconstructDetail 保留了正确结构。
+        // 此处重新 parse 并用 tsId 匹配，确保推送的是原始数据而非显示文本。
+        let pushData: any[] = data;
+        try {
+            const parsed = await ctx.session.parser.parse(ctx.filePath);
+            const sourceRecords: any[] = Array.isArray(parsed.sourceData)
+                ? parsed.sourceData
+                : (parsed.sourceData ? [parsed.sourceData] : []);
+
+            const sourceByTsId = new Map<string, any>();
+            sourceRecords.forEach((rec: any) => {
+                const id = rec?.[TS_ID_COLUMN];
+                if (id != null && id !== '') sourceByTsId.set(String(id), rec);
+            });
+
+            if (Array.isArray(data)) {
+                pushData = data.map((rec: any) => {
+                    const tsId = rec?.[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
+                    if (tsId && sourceByTsId.has(tsId)) {
+                        return sourceByTsId.get(tsId);
+                    }
+                    return rec; // 回退：新行可能尚未写入文件
+                });
+                console.log(`[推送] 已用文件源数据替换 ${pushData.filter((_, i) => pushData[i] !== data[i]).length} 行，共 ${pushData.length} 行`);
+            }
+        } catch (parseErr: any) {
+            console.warn('[推送] 重新解析文件失败，使用前端数据兜底:', parseErr?.message || parseErr);
+        }
+
+        const result = await pushTestCase(extensionContext, pushData, taskInfo, path.basename(ctx.filePath));
         if (result.returnCode !== 'SUC0000') {
             webviewPanel.webview.postMessage({ type: 'pushError', message: result.errorMsg || '推送失败' });
             return;
@@ -97,10 +129,8 @@ export class PushViaHttpClient implements PushStrategy {
 
         // 失败项按 tsId 反查行号，统一通过 webview 弹窗展示（与右键文件推送一致）
         const tsIdToRowIndex = new Map<string, number>();
-        // 注意：成功回写后 cachedTableData 已置 null，这里需要重新读取最新表格
-        // 简化处理：基于推送请求的入参 data 构建映射
-        if (Array.isArray(data)) {
-            data.forEach((rec: any, i: number) => {
+        if (Array.isArray(pushData)) {
+            pushData.forEach((rec: any, i: number) => {
                 const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
                 if (id) tsIdToRowIndex.set(id, i);
             });
@@ -111,7 +141,7 @@ export class PushViaHttpClient implements PushStrategy {
             rowIndex: tsIdToRowIndex.has(f.tsId) ? (tsIdToRowIndex.get(f.tsId)! + 1) : undefined,
         }));
 
-        const total = Array.isArray(data) ? data.length : (successMappings.length + failures.length);
+        const total = Array.isArray(pushData) ? pushData.length : (successMappings.length + failures.length);
         showPushResult(extensionContext, {
             fileName: path.basename(ctx.filePath),
             successCount: successMappings.length,

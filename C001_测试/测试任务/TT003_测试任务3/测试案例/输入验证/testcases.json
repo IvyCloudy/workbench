@@ -1,0 +1,29 @@
+[
+  {
+    "caseId": "TC001",
+    "name": "登录功能测试",
+    "priority": "P0",
+    "config": {
+      "timeout": 30,
+      "retry": 3
+    },
+    "tags": ["登录", "冒烟测试"],
+    "steps": [
+      {"no": 1, "action": "输入用户名", "expect": "显示用户名"},
+      {"no": 2, "action": "输入密码", "expect": "密码显示为***"}
+    ]
+  },
+  {
+    "caseId": "TC002",
+    "name": "注册功能测试",
+    "priority": "P1",
+    "config": {
+      "timeout": 60,
+      "retry": 2
+    },
+    "tags": ["注册"],
+    "steps": [
+      {"no": 1, "action": "点击注册", "expect": "打开注册页面"}
+    ]
+  }
+]

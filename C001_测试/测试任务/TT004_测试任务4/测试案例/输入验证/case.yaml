@@ -1,10 +1,11 @@
-- tsId: TC-INPUT-0032
-  testCaseNo: TT17800758397761000
-  path: PC端界面设计/云订单查询/订单详情
-  name: 边界值测试_003
-  type: 异常类
-  preconditions: 测试环境网络通畅; 依赖的下游服务正常运行
-  priority: 低
+- tsId: TC-INPUT-001
+  path: PC端界面设计/云订单查询/未完结订单列表
+  name: 正常流程展示_001
+  type: 功能类
+  preconditions:
+    - 用户已登录系统
+    - 用户拥有相应模块的访问权限
+  priority: 高
   steps:
     - id: step001-1
       operation: 点击查询按钮
@@ -22,6 +23,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -31,18 +33,20 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-001
-  testCaseNo: ""
-  path: PC端界面设计/云订单查询/未完结订单列表
-  name: 正常流程展示_001
-  type: 功能类
-  preconditions: 用户已登录系统; 用户拥有相应模块的访问权限
-  priority: 高
+- tsId: TC-INPUT-002
+  path: PC端界面设计/云订单查询/已完结订单列表
+  name: 异常输入校验_002
+  type: 界面类
+  preconditions:
+    - 数据库已初始化基础数据
+    - 缓存服务可用
+  priority: 中
   steps:
     - id: step002-1
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -75,13 +79,14 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-004
-  testCaseNo: TT17800758397761002
-  path: PC端界面设计/账户管理/用户列表
-  name: 权限不足时拦截_004
-  type: 性能类
-  preconditions: 浏览器版本符合要求; 页面已完整加载
-  priority: 高
+- tsId: TC-INPUT-003
+  path: PC端界面设计/云订单查询/订单详情
+  name: 边界值测试_003
+  type: 异常类
+  preconditions:
+    - 测试环境网络通畅
+    - 依赖的下游服务正常运行
+  priority: 低
   steps:
     - id: step003-1
       operation: 选择列表中的某条记录
@@ -130,13 +135,14 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-005
-  testCaseNo: TT17800745375751000
-  path: PC端界面设计/账户管理/角色管理
-  name: 网络异常时提示_005
-  type: 兼容性
-  preconditions: 管理员已开通该功能开关; 用户已完成实名认证
-  priority: 中
+- tsId: TC-INPUT-004
+  path: PC端界面设计/账户管理/用户列表
+  name: 权限不足时拦截_004
+  type: 性能类
+  preconditions:
+    - 浏览器版本符合要求
+    - 页面已完整加载
+  priority: 高
   steps:
     - id: step004-1
       operation: 点击导出按钮
@@ -161,13 +167,14 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-006
-  testCaseNo: TT17800758397761004
-  path: PC端界面设计/账户管理/权限配置
-  name: 数据为空时占位_006
-  type: 安全类
-  preconditions: 订单服务可用; 支付服务可用; 消息队列正常
-  priority: 低
+- tsId: TC-INPUT-005
+  path: PC端界面设计/账户管理/角色管理
+  name: 网络异常时提示_005
+  type: 兼容性
+  preconditions:
+    - 管理员已开通该功能开关
+    - 用户已完成实名认证
+  priority: 中
   steps:
     - id: step005-1
       operation: 调用对应接口
@@ -197,6 +204,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -206,13 +214,15 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-007
-  testCaseNo: ""
-  path: PC端界面设计/资源管理/主机列表
-  name: 并发提交防重_007
-  type: 功能类
-  preconditions: 用户存在未完结订单数据; 时间范围内有可查记录
-  priority: 高
+- tsId: TC-INPUT-006
+  path: PC端界面设计/账户管理/权限配置
+  name: 数据为空时占位_006
+  type: 安全类
+  preconditions:
+    - 订单服务可用
+    - 支付服务可用
+    - 消息队列正常
+  priority: 低
   steps:
     - id: step006-1
       operation: 切换 Tab 页
@@ -230,6 +240,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -262,18 +273,20 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-009
-  testCaseNo: TT17800758397761006
-  path: PC端界面设计/资源管理/存储管理
-  name: 排序功能正确_009
-  type: 异常类
-  preconditions: 数据库 purchase_order 表存在测试数据; 用户角色为采购人
-  priority: 低
+- tsId: TC-INPUT-007
+  path: PC端界面设计/资源管理/主机列表
+  name: 并发提交防重_007
+  type: 功能类
+  preconditions:
+    - 用户存在未完结订单数据
+    - 时间范围内有可查记录
+  priority: 高
   steps:
     - id: step007-1
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -296,11 +309,12 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-008
-  testCaseNo: ""
   path: PC端界面设计/资源管理/网络配置
   name: 分页查询正确_008
   type: 界面类
-  preconditions: 接口契约与文档一致; Mock 服务已启动
+  preconditions:
+    - 接口契约与文档一致
+    - Mock 服务已启动
   priority: 中
   steps:
     - id: step008-1
@@ -338,13 +352,14 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-011
-  testCaseNo: TT17800758397761008
-  path: 移动端/首页/搜索框
-  name: 搜索关键字高亮_011
-  type: 兼容性
-  preconditions: 用户已登录系统; 用户拥有相应模块的访问权限
-  priority: 中
+- tsId: TC-INPUT-009
+  path: PC端界面设计/资源管理/存储管理
+  name: 排序功能正确_009
+  type: 异常类
+  preconditions:
+    - 数据库 purchase_order 表存在测试数据
+    - 用户角色为采购人
+  priority: 低
   steps:
     - id: step009-1
       operation: 登录系统
@@ -385,6 +400,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -394,13 +410,14 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-012
-  testCaseNo: TT17800750075601000
-  path: 移动端/个人中心/我的订单
-  name: 导出文件成功_012
-  type: 安全类
-  preconditions: 数据库已初始化基础数据; 缓存服务可用
-  priority: 低
+- tsId: TC-INPUT-010
+  path: 移动端/首页/资讯流
+  name: 筛选条件生效_010
+  type: 性能类
+  preconditions:
+    - 前置依赖接口返回成功
+    - Token 未过期
+  priority: 高
   steps:
     - id: step010-1
       operation: 进入目标功能页面
@@ -426,13 +443,14 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-013
-  testCaseNo: TT17800758397761010
-  path: API/订单服务/创建订单
-  name: 导入文件校验_013
-  type: 功能类
-  preconditions: 测试环境网络通畅; 依赖的下游服务正常运行
-  priority: 高
+- tsId: TC-INPUT-011
+  path: 移动端/首页/搜索框
+  name: 搜索关键字高亮_011
+  type: 兼容性
+  preconditions:
+    - 用户已登录系统
+    - 用户拥有相应模块的访问权限
+  priority: 中
   steps:
     - id: step011-1
       operation: 点击查询按钮
@@ -450,6 +468,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -471,18 +490,20 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-002
-  testCaseNo: ""
-  path: PC端界面设计/云订单查询/已完结订单列表
-  name: 异常输入校验_002
-  type: 界面类
-  preconditions: 数据库已初始化基础数据; 缓存服务可用
-  priority: 中
+- tsId: TC-INPUT-012
+  path: 移动端/个人中心/我的订单
+  name: 导出文件成功_012
+  type: 安全类
+  preconditions:
+    - 数据库已初始化基础数据
+    - 缓存服务可用
+  priority: 低
   steps:
     - id: step012-1
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -527,12 +548,13 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-010
-  testCaseNo: TT17800758397761012
-  path: 移动端/首页/资讯流
-  name: 筛选条件生效_010
-  type: 性能类
-  preconditions: 前置依赖接口返回成功; Token 未过期
+- tsId: TC-INPUT-013
+  path: API/订单服务/创建订单
+  name: 导入文件校验_013
+  type: 功能类
+  preconditions:
+    - 测试环境网络通畅
+    - 依赖的下游服务正常运行
   priority: 高
   steps:
     - id: step013-1
@@ -559,11 +581,12 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-014
-  testCaseNo: ""
   path: API/订单服务/取消订单
   name: 字段必填校验_014
   type: 界面类
-  preconditions: 浏览器版本符合要求; 页面已完整加载
+  preconditions:
+    - 浏览器版本符合要求
+    - 页面已完整加载
   priority: 中
   steps:
     - id: step014-1
@@ -602,11 +625,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-015
-  testCaseNo: TT17800758397761014
   path: API/支付服务/支付回调
   name: 字段长度校验_015
   type: 异常类
-  preconditions: 管理员已开通该功能开关; 用户已完成实名认证
+  preconditions:
+    - 管理员已开通该功能开关
+    - 用户已完成实名认证
   priority: 低
   steps:
     - id: step015-1
@@ -637,6 +661,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -659,11 +684,13 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-016
-  testCaseNo: ""
   path: API/用户服务/登录鉴权
   name: 字段格式校验_016
   type: 性能类
-  preconditions: 订单服务可用; 支付服务可用; 消息队列正常
+  preconditions:
+    - 订单服务可用
+    - 支付服务可用
+    - 消息队列正常
   priority: 高
   steps:
     - id: step016-1
@@ -682,6 +709,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -692,17 +720,19 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-017
-  testCaseNo: TT17800758397761016
   path: API/用户服务/注册
   name: 弹窗交互正确_017
   type: 兼容性
-  preconditions: 用户存在未完结订单数据; 时间范围内有可查记录
+  preconditions:
+    - 用户存在未完结订单数据
+    - 时间范围内有可查记录
   priority: 中
   steps:
     - id: step017-1
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -736,11 +766,12 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-018
-  testCaseNo: TT17800758764401000
   path: 管理后台/数据看板/总览
   name: Tab 切换刷新_018
   type: 安全类
-  preconditions: 接口契约与文档一致; Mock 服务已启动
+  preconditions:
+    - 接口契约与文档一致
+    - Mock 服务已启动
   priority: 低
   steps:
     - id: step018-1
@@ -791,11 +822,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-019
-  testCaseNo: TT17800758397761018
   path: 管理后台/数据看板/明细
   name: 下拉选项联动_019
   type: 功能类
-  preconditions: 数据库 purchase_order 表存在测试数据; 用户角色为采购人
+  preconditions:
+    - 数据库 purchase_order 表存在测试数据
+    - 用户角色为采购人
   priority: 高
   steps:
     - id: step019-1
@@ -822,11 +854,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-020
-  testCaseNo: ""
   path: 管理后台/系统设置/参数配置
   name: 默认值填充_020
   type: 界面类
-  preconditions: 前置依赖接口返回成功; Token 未过期
+  preconditions:
+    - 前置依赖接口返回成功
+    - Token 未过期
   priority: 中
   steps:
     - id: step020-1
@@ -857,6 +890,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -867,11 +901,12 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-021
-  testCaseNo: TT17800758397761020
   path: PC端界面设计/云订单查询/未完结订单列表
   name: 正常流程展示_021
   type: 异常类
-  preconditions: 用户已登录系统; 用户拥有相应模块的访问权限
+  preconditions:
+    - 用户已登录系统
+    - 用户拥有相应模块的访问权限
   priority: 低
   steps:
     - id: step021-1
@@ -890,6 +925,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -923,17 +959,19 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-022
-  testCaseNo: ""
   path: PC端界面设计/云订单查询/已完结订单列表
   name: 异常输入校验_022
   type: 性能类
-  preconditions: 数据库已初始化基础数据; 缓存服务可用
+  preconditions:
+    - 数据库已初始化基础数据
+    - 缓存服务可用
   priority: 高
   steps:
     - id: step022-1
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -956,11 +994,12 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-023
-  testCaseNo: TT17800758397761022
   path: PC端界面设计/云订单查询/订单详情
   name: 边界值测试_023
   type: 兼容性
-  preconditions: 测试环境网络通畅; 依赖的下游服务正常运行
+  preconditions:
+    - 测试环境网络通畅
+    - 依赖的下游服务正常运行
   priority: 中
   steps:
     - id: step023-1
@@ -999,11 +1038,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-024
-  testCaseNo: ""
   path: PC端界面设计/账户管理/用户列表
   name: 权限不足时拦截_024
   type: 安全类
-  preconditions: 浏览器版本符合要求; 页面已完整加载
+  preconditions:
+    - 浏览器版本符合要求
+    - 页面已完整加载
   priority: 低
   steps:
     - id: step024-1
@@ -1045,6 +1085,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -1055,11 +1096,12 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-025
-  testCaseNo: TT17800758397761024
   path: PC端界面设计/账户管理/角色管理
   name: 网络异常时提示_025
   type: 功能类
-  preconditions: 管理员已开通该功能开关; 用户已完成实名认证
+  preconditions:
+    - 管理员已开通该功能开关
+    - 用户已完成实名认证
   priority: 高
   steps:
     - id: step025-1
@@ -1087,11 +1129,13 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-026
-  testCaseNo: ""
   path: PC端界面设计/账户管理/权限配置
   name: 数据为空时占位_026
   type: 界面类
-  preconditions: 订单服务可用; 支付服务可用; 消息队列正常
+  preconditions:
+    - 订单服务可用
+    - 支付服务可用
+    - 消息队列正常
   priority: 中
   steps:
     - id: step026-1
@@ -1110,6 +1154,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -1132,17 +1177,19 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-027
-  testCaseNo: TT17800758397761026
   path: PC端界面设计/资源管理/主机列表
   name: 并发提交防重_027
   type: 异常类
-  preconditions: 用户存在未完结订单数据; 时间范围内有可查记录
+  preconditions:
+    - 用户存在未完结订单数据
+    - 时间范围内有可查记录
   priority: 低
   steps:
     - id: step027-1
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -1188,11 +1235,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-028
-  testCaseNo: ""
   path: PC端界面设计/资源管理/网络配置
   name: 分页查询正确_028
   type: 性能类
-  preconditions: 接口契约与文档一致; Mock 服务已启动
+  preconditions:
+    - 接口契约与文档一致
+    - Mock 服务已启动
   priority: 高
   steps:
     - id: step028-1
@@ -1219,11 +1267,12 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-029
-  testCaseNo: TT17800758397761028
   path: PC端界面设计/资源管理/存储管理
   name: 排序功能正确_029
   type: 兼容性
-  preconditions: 数据库 purchase_order 表存在测试数据; 用户角色为采购人
+  preconditions:
+    - 数据库 purchase_order 表存在测试数据
+    - 用户角色为采购人
   priority: 中
   steps:
     - id: step029-1
@@ -1262,11 +1311,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-030
-  testCaseNo: ""
   path: 移动端/首页/资讯流
   name: 筛选条件生效_030
   type: 安全类
-  preconditions: 前置依赖接口返回成功; Token 未过期
+  preconditions:
+    - 前置依赖接口返回成功
+    - Token 未过期
   priority: 低
   steps:
     - id: step030-1
@@ -1297,6 +1347,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -1319,11 +1370,12 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-031
-  testCaseNo: TT17800758397761030
   path: 移动端/首页/搜索框
   name: 搜索关键字高亮_031
   type: 功能类
-  preconditions: 用户已登录系统; 用户拥有相应模块的访问权限
+  preconditions:
+    - 用户已登录系统
+    - 用户拥有相应模块的访问权限
   priority: 高
   steps:
     - id: step031-1
@@ -1342,6 +1394,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -1352,17 +1405,19 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-032
-  testCaseNo: ""
   path: 移动端/个人中心/我的订单
   name: 导出文件成功_032
   type: 界面类
-  preconditions: 数据库已初始化基础数据; 缓存服务可用
+  preconditions:
+    - 数据库已初始化基础数据
+    - 缓存服务可用
   priority: 中
   steps:
     - id: step032-1
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -1396,11 +1451,12 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-033
-  testCaseNo: TT17800758397761032
   path: API/订单服务/创建订单
   name: 导入文件校验_033
   type: 异常类
-  preconditions: 测试环境网络通畅; 依赖的下游服务正常运行
+  preconditions:
+    - 测试环境网络通畅
+    - 依赖的下游服务正常运行
   priority: 低
   steps:
     - id: step033-1
@@ -1451,11 +1507,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-034
-  testCaseNo: ""
   path: API/订单服务/取消订单
   name: 字段必填校验_034
   type: 性能类
-  preconditions: 浏览器版本符合要求; 页面已完整加载
+  preconditions:
+    - 浏览器版本符合要求
+    - 页面已完整加载
   priority: 高
   steps:
     - id: step034-1
@@ -1482,11 +1539,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-035
-  testCaseNo: TT17800758397761034
   path: API/支付服务/支付回调
   name: 字段长度校验_035
   type: 兼容性
-  preconditions: 管理员已开通该功能开关; 用户已完成实名认证
+  preconditions:
+    - 管理员已开通该功能开关
+    - 用户已完成实名认证
   priority: 中
   steps:
     - id: step035-1
@@ -1517,6 +1575,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -1527,11 +1586,13 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-036
-  testCaseNo: ""
   path: API/用户服务/登录鉴权
   name: 字段格式校验_036
   type: 安全类
-  preconditions: 订单服务可用; 支付服务可用; 消息队列正常
+  preconditions:
+    - 订单服务可用
+    - 支付服务可用
+    - 消息队列正常
   priority: 低
   steps:
     - id: step036-1
@@ -1550,6 +1611,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -1583,17 +1645,19 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-037
-  testCaseNo: TT17800758397761036
   path: API/用户服务/注册
   name: 弹窗交互正确_037
   type: 功能类
-  preconditions: 用户存在未完结订单数据; 时间范围内有可查记录
+  preconditions:
+    - 用户存在未完结订单数据
+    - 时间范围内有可查记录
   priority: 高
   steps:
     - id: step037-1
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -1616,11 +1680,12 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-038
-  testCaseNo: ""
   path: 管理后台/数据看板/总览
   name: Tab 切换刷新_038
   type: 界面类
-  preconditions: 接口契约与文档一致; Mock 服务已启动
+  preconditions:
+    - 接口契约与文档一致
+    - Mock 服务已启动
   priority: 中
   steps:
     - id: step038-1
@@ -1659,11 +1724,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-039
-  testCaseNo: TT17800758397761038
   path: 管理后台/数据看板/明细
   name: 下拉选项联动_039
   type: 异常类
-  preconditions: 数据库 purchase_order 表存在测试数据; 用户角色为采购人
+  preconditions:
+    - 数据库 purchase_order 表存在测试数据
+    - 用户角色为采购人
   priority: 低
   steps:
     - id: step039-1
@@ -1705,6 +1771,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -1715,11 +1782,12 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-040
-  testCaseNo: ""
   path: 管理后台/系统设置/参数配置
   name: 默认值填充_040
   type: 性能类
-  preconditions: 前置依赖接口返回成功; Token 未过期
+  preconditions:
+    - 前置依赖接口返回成功
+    - Token 未过期
   priority: 高
   steps:
     - id: step040-1
@@ -1747,11 +1815,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-041
-  testCaseNo: TT17800758397761040
   path: PC端界面设计/云订单查询/未完结订单列表
   name: 正常流程展示_041
   type: 兼容性
-  preconditions: 用户已登录系统; 用户拥有相应模块的访问权限
+  preconditions:
+    - 用户已登录系统
+    - 用户拥有相应模块的访问权限
   priority: 中
   steps:
     - id: step041-1
@@ -1770,6 +1839,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -1792,17 +1862,19 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-042
-  testCaseNo: ""
   path: PC端界面设计/云订单查询/已完结订单列表
   name: 异常输入校验_042
   type: 安全类
-  preconditions: 数据库已初始化基础数据; 缓存服务可用
+  preconditions:
+    - 数据库已初始化基础数据
+    - 缓存服务可用
   priority: 低
   steps:
     - id: step042-1
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -1848,11 +1920,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-043
-  testCaseNo: TT17800758397761042
   path: PC端界面设计/云订单查询/订单详情
   name: 边界值测试_043
   type: 功能类
-  preconditions: 测试环境网络通畅; 依赖的下游服务正常运行
+  preconditions:
+    - 测试环境网络通畅
+    - 依赖的下游服务正常运行
   priority: 高
   steps:
     - id: step043-1
@@ -1879,11 +1952,12 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-044
-  testCaseNo: TT17800758764401002
   path: PC端界面设计/账户管理/用户列表
   name: 权限不足时拦截_044
   type: 界面类
-  preconditions: 浏览器版本符合要求; 页面已完整加载
+  preconditions:
+    - 浏览器版本符合要求
+    - 页面已完整加载
   priority: 中
   steps:
     - id: step044-1
@@ -1922,11 +1996,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-045
-  testCaseNo: TT17800758397761044
   path: PC端界面设计/账户管理/角色管理
   name: 网络异常时提示_045
   type: 异常类
-  preconditions: 管理员已开通该功能开关; 用户已完成实名认证
+  preconditions:
+    - 管理员已开通该功能开关
+    - 用户已完成实名认证
   priority: 低
   steps:
     - id: step045-1
@@ -1957,6 +2032,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -1979,11 +2055,13 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-046
-  testCaseNo: ""
   path: PC端界面设计/账户管理/权限配置
   name: 数据为空时占位_046
   type: 性能类
-  preconditions: 订单服务可用; 支付服务可用; 消息队列正常
+  preconditions:
+    - 订单服务可用
+    - 支付服务可用
+    - 消息队列正常
   priority: 高
   steps:
     - id: step046-1
@@ -2002,6 +2080,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2012,17 +2091,19 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-047
-  testCaseNo: TT17800758764401004
   path: PC端界面设计/资源管理/主机列表
   name: 并发提交防重_047
   type: 兼容性
-  preconditions: 用户存在未完结订单数据; 时间范围内有可查记录
+  preconditions:
+    - 用户存在未完结订单数据
+    - 时间范围内有可查记录
   priority: 中
   steps:
     - id: step047-1
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2056,11 +2137,12 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-048
-  testCaseNo: ""
   path: PC端界面设计/资源管理/网络配置
   name: 分页查询正确_048
   type: 安全类
-  preconditions: 接口契约与文档一致; Mock 服务已启动
+  preconditions:
+    - 接口契约与文档一致
+    - Mock 服务已启动
   priority: 低
   steps:
     - id: step048-1
@@ -2111,11 +2193,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-049
-  testCaseNo: TT17800758397761048
   path: PC端界面设计/资源管理/存储管理
   name: 排序功能正确_049
   type: 功能类
-  preconditions: 数据库 purchase_order 表存在测试数据; 用户角色为采购人
+  preconditions:
+    - 数据库 purchase_order 表存在测试数据
+    - 用户角色为采购人
   priority: 高
   steps:
     - id: step049-1
@@ -2142,11 +2225,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-050
-  testCaseNo: ""
   path: 移动端/首页/资讯流
   name: 筛选条件生效_050
   type: 界面类
-  preconditions: 前置依赖接口返回成功; Token 未过期
+  preconditions:
+    - 前置依赖接口返回成功
+    - Token 未过期
   priority: 中
   steps:
     - id: step050-1
@@ -2177,6 +2261,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2187,11 +2272,12 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-051
-  testCaseNo: TT17800758397761050
   path: 移动端/首页/搜索框
   name: 搜索关键字高亮_051
   type: 异常类
-  preconditions: 用户已登录系统; 用户拥有相应模块的访问权限
+  preconditions:
+    - 用户已登录系统
+    - 用户拥有相应模块的访问权限
   priority: 低
   steps:
     - id: step051-1
@@ -2210,6 +2296,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2243,17 +2330,19 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-052
-  testCaseNo: ""
   path: 移动端/个人中心/我的订单
   name: 导出文件成功_052
   type: 性能类
-  preconditions: 数据库已初始化基础数据; 缓存服务可用
+  preconditions:
+    - 数据库已初始化基础数据
+    - 缓存服务可用
   priority: 高
   steps:
     - id: step052-1
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2276,11 +2365,12 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-053
-  testCaseNo: TT17800758397761052
   path: API/订单服务/创建订单
   name: 导入文件校验_053
   type: 兼容性
-  preconditions: 测试环境网络通畅; 依赖的下游服务正常运行
+  preconditions:
+    - 测试环境网络通畅
+    - 依赖的下游服务正常运行
   priority: 中
   steps:
     - id: step053-1
@@ -2319,11 +2409,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-054
-  testCaseNo: ""
   path: API/订单服务/取消订单
   name: 字段必填校验_054
   type: 安全类
-  preconditions: 浏览器版本符合要求; 页面已完整加载
+  preconditions:
+    - 浏览器版本符合要求
+    - 页面已完整加载
   priority: 低
   steps:
     - id: step054-1
@@ -2365,6 +2456,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2375,11 +2467,12 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-055
-  testCaseNo: TT17800758397761054
   path: API/支付服务/支付回调
   name: 字段长度校验_055
   type: 功能类
-  preconditions: 管理员已开通该功能开关; 用户已完成实名认证
+  preconditions:
+    - 管理员已开通该功能开关
+    - 用户已完成实名认证
   priority: 高
   steps:
     - id: step055-1
@@ -2407,11 +2500,13 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-056
-  testCaseNo: ""
   path: API/用户服务/登录鉴权
   name: 字段格式校验_056
   type: 界面类
-  preconditions: 订单服务可用; 支付服务可用; 消息队列正常
+  preconditions:
+    - 订单服务可用
+    - 支付服务可用
+    - 消息队列正常
   priority: 中
   steps:
     - id: step056-1
@@ -2430,6 +2525,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2452,17 +2548,19 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-057
-  testCaseNo: TT17800758397761056
   path: API/用户服务/注册
   name: 弹窗交互正确_057
   type: 异常类
-  preconditions: 用户存在未完结订单数据; 时间范围内有可查记录
+  preconditions:
+    - 用户存在未完结订单数据
+    - 时间范围内有可查记录
   priority: 低
   steps:
     - id: step057-1
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2508,11 +2606,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-058
-  testCaseNo: ""
   path: 管理后台/数据看板/总览
   name: Tab 切换刷新_058
   type: 性能类
-  preconditions: 接口契约与文档一致; Mock 服务已启动
+  preconditions:
+    - 接口契约与文档一致
+    - Mock 服务已启动
   priority: 高
   steps:
     - id: step058-1
@@ -2539,11 +2638,12 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-059
-  testCaseNo: TT17800758397761058
   path: 管理后台/数据看板/明细
   name: 下拉选项联动_059
   type: 兼容性
-  preconditions: 数据库 purchase_order 表存在测试数据; 用户角色为采购人
+  preconditions:
+    - 数据库 purchase_order 表存在测试数据
+    - 用户角色为采购人
   priority: 中
   steps:
     - id: step059-1
@@ -2582,11 +2682,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-060
-  testCaseNo: ""
   path: 管理后台/系统设置/参数配置
   name: 默认值填充_060
   type: 安全类
-  preconditions: 前置依赖接口返回成功; Token 未过期
+  preconditions:
+    - 前置依赖接口返回成功
+    - Token 未过期
   priority: 低
   steps:
     - id: step060-1
@@ -2617,6 +2718,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2639,11 +2741,12 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-061
-  testCaseNo: TT17800758397761060
   path: PC端界面设计/云订单查询/未完结订单列表
   name: 正常流程展示_061
   type: 功能类
-  preconditions: 用户已登录系统; 用户拥有相应模块的访问权限
+  preconditions:
+    - 用户已登录系统
+    - 用户拥有相应模块的访问权限
   priority: 高
   steps:
     - id: step061-1
@@ -2662,6 +2765,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2672,17 +2776,19 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-062
-  testCaseNo: ""
   path: PC端界面设计/云订单查询/已完结订单列表
   name: 异常输入校验_062
   type: 界面类
-  preconditions: 数据库已初始化基础数据; 缓存服务可用
+  preconditions:
+    - 数据库已初始化基础数据
+    - 缓存服务可用
   priority: 中
   steps:
     - id: step062-1
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2716,11 +2822,12 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-063
-  testCaseNo: TT17800758397761062
   path: PC端界面设计/云订单查询/订单详情
   name: 边界值测试_063
   type: 异常类
-  preconditions: 测试环境网络通畅; 依赖的下游服务正常运行
+  preconditions:
+    - 测试环境网络通畅
+    - 依赖的下游服务正常运行
   priority: 低
   steps:
     - id: step063-1
@@ -2771,11 +2878,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-064
-  testCaseNo: ""
   path: PC端界面设计/账户管理/用户列表
   name: 权限不足时拦截_064
   type: 性能类
-  preconditions: 浏览器版本符合要求; 页面已完整加载
+  preconditions:
+    - 浏览器版本符合要求
+    - 页面已完整加载
   priority: 高
   steps:
     - id: step064-1
@@ -2802,11 +2910,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-065
-  testCaseNo: TT17800758397761064
   path: PC端界面设计/账户管理/角色管理
   name: 网络异常时提示_065
   type: 兼容性
-  preconditions: 管理员已开通该功能开关; 用户已完成实名认证
+  preconditions:
+    - 管理员已开通该功能开关
+    - 用户已完成实名认证
   priority: 中
   steps:
     - id: step065-1
@@ -2837,6 +2946,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2847,11 +2957,13 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-066
-  testCaseNo: ""
   path: PC端界面设计/账户管理/权限配置
   name: 数据为空时占位_066
   type: 安全类
-  preconditions: 订单服务可用; 支付服务可用; 消息队列正常
+  preconditions:
+    - 订单服务可用
+    - 支付服务可用
+    - 消息队列正常
   priority: 低
   steps:
     - id: step066-1
@@ -2870,6 +2982,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2903,17 +3016,19 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-067
-  testCaseNo: TT17800758397761066
   path: PC端界面设计/资源管理/主机列表
   name: 并发提交防重_067
   type: 功能类
-  preconditions: 用户存在未完结订单数据; 时间范围内有可查记录
+  preconditions:
+    - 用户存在未完结订单数据
+    - 时间范围内有可查记录
   priority: 高
   steps:
     - id: step067-1
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -2936,11 +3051,12 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-068
-  testCaseNo: ""
   path: PC端界面设计/资源管理/网络配置
   name: 分页查询正确_068
   type: 界面类
-  preconditions: 接口契约与文档一致; Mock 服务已启动
+  preconditions:
+    - 接口契约与文档一致
+    - Mock 服务已启动
   priority: 中
   steps:
     - id: step068-1
@@ -2979,11 +3095,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-069
-  testCaseNo: TT17800758397761068
   path: PC端界面设计/资源管理/存储管理
   name: 排序功能正确_069
   type: 异常类
-  preconditions: 数据库 purchase_order 表存在测试数据; 用户角色为采购人
+  preconditions:
+    - 数据库 purchase_order 表存在测试数据
+    - 用户角色为采购人
   priority: 低
   steps:
     - id: step069-1
@@ -3025,6 +3142,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3035,11 +3153,12 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-070
-  testCaseNo: ""
   path: 移动端/首页/资讯流
   name: 筛选条件生效_070
   type: 性能类
-  preconditions: 前置依赖接口返回成功; Token 未过期
+  preconditions:
+    - 前置依赖接口返回成功
+    - Token 未过期
   priority: 高
   steps:
     - id: step070-1
@@ -3067,11 +3186,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-071
-  testCaseNo: TT17800758397761070
   path: 移动端/首页/搜索框
   name: 搜索关键字高亮_071
   type: 兼容性
-  preconditions: 用户已登录系统; 用户拥有相应模块的访问权限
+  preconditions:
+    - 用户已登录系统
+    - 用户拥有相应模块的访问权限
   priority: 中
   steps:
     - id: step071-1
@@ -3090,6 +3210,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3112,17 +3233,19 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-072
-  testCaseNo: ""
   path: 移动端/个人中心/我的订单
   name: 导出文件成功_072
   type: 安全类
-  preconditions: 数据库已初始化基础数据; 缓存服务可用
+  preconditions:
+    - 数据库已初始化基础数据
+    - 缓存服务可用
   priority: 低
   steps:
     - id: step072-1
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3168,11 +3291,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-073
-  testCaseNo: TT17800758397761072
   path: API/订单服务/创建订单
   name: 导入文件校验_073
   type: 功能类
-  preconditions: 测试环境网络通畅; 依赖的下游服务正常运行
+  preconditions:
+    - 测试环境网络通畅
+    - 依赖的下游服务正常运行
   priority: 高
   steps:
     - id: step073-1
@@ -3199,11 +3323,12 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-074
-  testCaseNo: ""
   path: API/订单服务/取消订单
   name: 字段必填校验_074
   type: 界面类
-  preconditions: 浏览器版本符合要求; 页面已完整加载
+  preconditions:
+    - 浏览器版本符合要求
+    - 页面已完整加载
   priority: 中
   steps:
     - id: step074-1
@@ -3242,11 +3367,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-075
-  testCaseNo: TT17800758397761074
   path: API/支付服务/支付回调
   name: 字段长度校验_075
   type: 异常类
-  preconditions: 管理员已开通该功能开关; 用户已完成实名认证
+  preconditions:
+    - 管理员已开通该功能开关
+    - 用户已完成实名认证
   priority: 低
   steps:
     - id: step075-1
@@ -3277,6 +3403,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3299,11 +3426,13 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-076
-  testCaseNo: ""
   path: API/用户服务/登录鉴权
   name: 字段格式校验_076
   type: 性能类
-  preconditions: 订单服务可用; 支付服务可用; 消息队列正常
+  preconditions:
+    - 订单服务可用
+    - 支付服务可用
+    - 消息队列正常
   priority: 高
   steps:
     - id: step076-1
@@ -3322,6 +3451,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3332,17 +3462,19 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-077
-  testCaseNo: TT17800758397761076
   path: API/用户服务/注册
   name: 弹窗交互正确_077
   type: 兼容性
-  preconditions: 用户存在未完结订单数据; 时间范围内有可查记录
+  preconditions:
+    - 用户存在未完结订单数据
+    - 时间范围内有可查记录
   priority: 中
   steps:
     - id: step077-1
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3376,11 +3508,12 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-078
-  testCaseNo: ""
   path: 管理后台/数据看板/总览
   name: Tab 切换刷新_078
   type: 安全类
-  preconditions: 接口契约与文档一致; Mock 服务已启动
+  preconditions:
+    - 接口契约与文档一致
+    - Mock 服务已启动
   priority: 低
   steps:
     - id: step078-1
@@ -3431,11 +3564,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-079
-  testCaseNo: TT17800758397761078
   path: 管理后台/数据看板/明细
   name: 下拉选项联动_079
   type: 功能类
-  preconditions: 数据库 purchase_order 表存在测试数据; 用户角色为采购人
+  preconditions:
+    - 数据库 purchase_order 表存在测试数据
+    - 用户角色为采购人
   priority: 高
   steps:
     - id: step079-1
@@ -3462,11 +3596,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-080
-  testCaseNo: ""
   path: 管理后台/系统设置/参数配置
   name: 默认值填充_080
   type: 界面类
-  preconditions: 前置依赖接口返回成功; Token 未过期
+  preconditions:
+    - 前置依赖接口返回成功
+    - Token 未过期
   priority: 中
   steps:
     - id: step080-1
@@ -3497,6 +3632,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3507,11 +3643,12 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-081
-  testCaseNo: TT17800758397761080
   path: PC端界面设计/云订单查询/未完结订单列表
   name: 正常流程展示_081
   type: 异常类
-  preconditions: 用户已登录系统; 用户拥有相应模块的访问权限
+  preconditions:
+    - 用户已登录系统
+    - 用户拥有相应模块的访问权限
   priority: 低
   steps:
     - id: step081-1
@@ -3530,6 +3667,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3563,17 +3701,19 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-082
-  testCaseNo: ""
   path: PC端界面设计/云订单查询/已完结订单列表
   name: 异常输入校验_082
   type: 性能类
-  preconditions: 数据库已初始化基础数据; 缓存服务可用
+  preconditions:
+    - 数据库已初始化基础数据
+    - 缓存服务可用
   priority: 高
   steps:
     - id: step082-1
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3596,11 +3736,12 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-083
-  testCaseNo: TT17800758397761082
   path: PC端界面设计/云订单查询/订单详情
   name: 边界值测试_083
   type: 兼容性
-  preconditions: 测试环境网络通畅; 依赖的下游服务正常运行
+  preconditions:
+    - 测试环境网络通畅
+    - 依赖的下游服务正常运行
   priority: 中
   steps:
     - id: step083-1
@@ -3639,11 +3780,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-084
-  testCaseNo: ""
   path: PC端界面设计/账户管理/用户列表
   name: 权限不足时拦截_084
   type: 安全类
-  preconditions: 浏览器版本符合要求; 页面已完整加载
+  preconditions:
+    - 浏览器版本符合要求
+    - 页面已完整加载
   priority: 低
   steps:
     - id: step084-1
@@ -3685,6 +3827,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3695,11 +3838,12 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-085
-  testCaseNo: TT17800758397761084
   path: PC端界面设计/账户管理/角色管理
   name: 网络异常时提示_085
   type: 功能类
-  preconditions: 管理员已开通该功能开关; 用户已完成实名认证
+  preconditions:
+    - 管理员已开通该功能开关
+    - 用户已完成实名认证
   priority: 高
   steps:
     - id: step085-1
@@ -3727,11 +3871,13 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-086
-  testCaseNo: ""
   path: PC端界面设计/账户管理/权限配置
   name: 数据为空时占位_086
   type: 界面类
-  preconditions: 订单服务可用; 支付服务可用; 消息队列正常
+  preconditions:
+    - 订单服务可用
+    - 支付服务可用
+    - 消息队列正常
   priority: 中
   steps:
     - id: step086-1
@@ -3750,6 +3896,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3772,17 +3919,19 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-087
-  testCaseNo: TT17800758397761086
   path: PC端界面设计/资源管理/主机列表
   name: 并发提交防重_087
   type: 异常类
-  preconditions: 用户存在未完结订单数据; 时间范围内有可查记录
+  preconditions:
+    - 用户存在未完结订单数据
+    - 时间范围内有可查记录
   priority: 低
   steps:
     - id: step087-1
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3828,11 +3977,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-088
-  testCaseNo: ""
   path: PC端界面设计/资源管理/网络配置
   name: 分页查询正确_088
   type: 性能类
-  preconditions: 接口契约与文档一致; Mock 服务已启动
+  preconditions:
+    - 接口契约与文档一致
+    - Mock 服务已启动
   priority: 高
   steps:
     - id: step088-1
@@ -3859,11 +4009,12 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-089
-  testCaseNo: TT17800758397761088
   path: PC端界面设计/资源管理/存储管理
   name: 排序功能正确_089
   type: 兼容性
-  preconditions: 数据库 purchase_order 表存在测试数据; 用户角色为采购人
+  preconditions:
+    - 数据库 purchase_order 表存在测试数据
+    - 用户角色为采购人
   priority: 中
   steps:
     - id: step089-1
@@ -3902,11 +4053,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-090
-  testCaseNo: ""
   path: 移动端/首页/资讯流
   name: 筛选条件生效_090
   type: 安全类
-  preconditions: 前置依赖接口返回成功; Token 未过期
+  preconditions:
+    - 前置依赖接口返回成功
+    - Token 未过期
   priority: 低
   steps:
     - id: step090-1
@@ -3937,6 +4089,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3959,11 +4112,12 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-091
-  testCaseNo: TT17800758397761090
   path: 移动端/首页/搜索框
   name: 搜索关键字高亮_091
   type: 功能类
-  preconditions: 用户已登录系统; 用户拥有相应模块的访问权限
+  preconditions:
+    - 用户已登录系统
+    - 用户拥有相应模块的访问权限
   priority: 高
   steps:
     - id: step091-1
@@ -3982,6 +4136,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -3992,17 +4147,19 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-092
-  testCaseNo: ""
   path: 移动端/个人中心/我的订单
   name: 导出文件成功_092
   type: 界面类
-  preconditions: 数据库已初始化基础数据; 缓存服务可用
+  preconditions:
+    - 数据库已初始化基础数据
+    - 缓存服务可用
   priority: 中
   steps:
     - id: step092-1
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -4036,11 +4193,12 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-093
-  testCaseNo: TT17800758397761092
   path: API/订单服务/创建订单
   name: 导入文件校验_093
   type: 异常类
-  preconditions: 测试环境网络通畅; 依赖的下游服务正常运行
+  preconditions:
+    - 测试环境网络通畅
+    - 依赖的下游服务正常运行
   priority: 低
   steps:
     - id: step093-1
@@ -4091,11 +4249,12 @@
       db-expected:
         - 软删除标记被正确设置
 - tsId: TC-INPUT-094
-  testCaseNo: ""
   path: API/订单服务/取消订单
   name: 字段必填校验_094
   type: 性能类
-  preconditions: 浏览器版本符合要求; 页面已完整加载
+  preconditions:
+    - 浏览器版本符合要求
+    - 页面已完整加载
   priority: 高
   steps:
     - id: step094-1
@@ -4122,11 +4281,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-095
-  testCaseNo: TT17800758397761094
   path: API/支付服务/支付回调
   name: 字段长度校验_095
   type: 兼容性
-  preconditions: 管理员已开通该功能开关; 用户已完成实名认证
+  preconditions:
+    - 管理员已开通该功能开关
+    - 用户已完成实名认证
   priority: 中
   steps:
     - id: step095-1
@@ -4157,6 +4317,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -4167,11 +4328,13 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-096
-  testCaseNo: ""
   path: API/用户服务/登录鉴权
   name: 字段格式校验_096
   type: 安全类
-  preconditions: 订单服务可用; 支付服务可用; 消息队列正常
+  preconditions:
+    - 订单服务可用
+    - 支付服务可用
+    - 消息队列正常
   priority: 低
   steps:
     - id: step096-1
@@ -4190,6 +4353,7 @@
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -4223,17 +4387,19 @@
         - 接口耗时小于 500ms
       db-expected: ""
 - tsId: TC-INPUT-097
-  testCaseNo: TT17800758397761096
   path: API/用户服务/注册
   name: 弹窗交互正确_097
   type: 功能类
-  preconditions: 用户存在未完结订单数据; 时间范围内有可查记录
+  preconditions:
+    - 用户存在未完结订单数据
+    - 时间范围内有可查记录
   priority: 高
   steps:
     - id: step097-1
       operation: 在搜索框输入关键字并回车
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -4256,11 +4422,12 @@
       db-expected:
         - 数据状态字段被更新为预期值
 - tsId: TC-INPUT-098
-  testCaseNo: ""
   path: 管理后台/数据看板/总览
   name: Tab 切换刷新_098
   type: 界面类
-  preconditions: 接口契约与文档一致; Mock 服务已启动
+  preconditions:
+    - 接口契约与文档一致
+    - Mock 服务已启动
   priority: 中
   steps:
     - id: step098-1
@@ -4299,11 +4466,12 @@
       db-expected:
         - 关联表数据未被误更新
 - tsId: TC-INPUT-099
-  testCaseNo: TT17800758397761098
   path: 管理后台/数据看板/明细
   name: 下拉选项联动_099
   type: 异常类
-  preconditions: 数据库 purchase_order 表存在测试数据; 用户角色为采购人
+  preconditions:
+    - 数据库 purchase_order 表存在测试数据
+    - 用户角色为采购人
   priority: 低
   steps:
     - id: step099-1
@@ -4345,6 +4513,7 @@
       operation: 填写表单并提交
       data:
         - 空字符串
+        - null
         - 特殊字符 !@#$
       ui-expected:
         - 弹窗正常弹出
@@ -4355,11 +4524,12 @@
         - 相关表新增一条记录
         - 字段值与提交一致
 - tsId: TC-INPUT-100
-  testCaseNo: ""
   path: 管理后台/系统设置/参数配置
   name: 默认值填充_100
   type: 性能类
-  preconditions: 前置依赖接口返回成功; Token 未过期
+  preconditions:
+    - 前置依赖接口返回成功
+    - Token 未过期
   priority: 高
   steps:
     - id: step100-1

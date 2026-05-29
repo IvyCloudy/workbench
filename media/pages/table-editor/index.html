@@ -7,19 +7,29 @@
 </head>
 <body>
 <div class="xs-app">
+    <div class="xs-meta">
+        <span class="xs-bind-tag {{bindStatusClass}}">{{bindStatusText}}</span>
+        <div class="xs-meta-item"><span class="xs-meta-label">测试任务</span><span class="xs-meta-value xs-meta-task">{{testTaskNo}}</span></div>
+        <div class="xs-meta-item"><span class="xs-meta-label">测试任务名称</span><span class="xs-meta-value xs-meta-taskname">{{testTaskName}}</span></div>
+        <div class="xs-meta-item"><span class="xs-meta-label">子测试任务</span><span class="xs-meta-value xs-meta-subtask">{{subTestTaskName}}</span></div>
+    </div>
     <div class="xs-toolbar">
-        <div class="xs-icon-btn" data-action="openTextEditor" title="用 Text Editor 打开">
-            <svg viewBox="0 0 16 16"><path d="M4 1h5.5L13 4.5v9a.5.5 0 01-.5.5h-8a.5.5 0 01-.5-.5V1.5A.5.5 0 014 1zm5 .5V4h2.5L9 1.5zM5 7h5v1H5V7zm0 2h5v1H5V9zm0 2h3v1H5v-1z"/></svg>
+        <div class="xs-text-open" data-action="openTextEditor" title="用 Text Editor 打开">
+            <div class="xs-icon-btn">
+                <svg viewBox="0 0 16 16"><path d="M4 1h5.5L13 4.5v9a.5.5 0 01-.5.5h-8a.5.5 0 01-.5-.5V1.5A.5.5 0 014 1zm5 .5V4h2.5L9 1.5zM5 7h5v1H5V7zm0 2h5v1H5V9zm0 2h3v1H5v-1z"/></svg>
+            </div>
+            <span class="xs-text-open-label">测试案例</span>
         </div>
-        <span class="xs-title">测试案例</span>
         <div class="xs-search">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input type="text" id="searchInput" placeholder="搜索...">
             <span id="searchClear" style="display:none;cursor:pointer;color:#999;font-size:14px;line-height:1;padding:0 2px" title="清除搜索">✕</span>
         </div>
+        <div class="xs-icon-btn xs-tip xs-icon-btn-reset" id="searchReset" data-tip="重置全部筛选">
+            <svg width="16" height="16" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0 0 12 4a8 8 0 1 0 7.74 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+        </div>
         <button class="xs-btn xs-btn-p" id="pushBtn" disabled>推送</button>
-        <span class="xs-sp"></span>
-        <span class="xs-mod" id="modInfo">已修改 <strong id="modCount">0</strong></span>
+        <span style="flex:1"></span>
         <div class="xs-icon-btn" id="findBtn" title="查找">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         </div>
@@ -61,6 +71,25 @@
         <div class="xs-find-info" id="findInfo"></div>
     </div>
     <div class="xs-toast" id="toast"></div>
+    <!-- 推送结果弹窗：成功/部分成功/全部失败，由 editor.js 控制显隐 -->
+    <div class="xs-modal-overlay xs-pr-overlay" id="pushResultModal">
+        <div class="xs-modal-dialog xs-pr-dialog">
+            <div class="xs-modal-header xs-pr-header" id="pushResultHeader">
+                <span class="xs-pr-icon" id="pushResultIcon"></span>
+                <span class="xs-modal-title" id="pushResultTitle">推送结果</span>
+                <button class="xs-modal-close" id="pushResultClose" title="关闭">✕</button>
+            </div>
+            <div class="xs-pr-summary" id="pushResultSummary"></div>
+            <div class="xs-modal-body xs-pr-body">
+                <div class="xs-pr-list" id="pushResultList"></div>
+            </div>
+            <div class="xs-modal-footer">
+                <span id="pushResultHint" style="flex:1;font-size:12px;color:#888"></span>
+                <button class="xs-btn" id="pushResultCopyBtn" title="复制全部失败明细">复制失败明细</button>
+                <button class="xs-btn xs-btn-p" id="pushResultOkBtn">确定</button>
+            </div>
+        </div>
+    </div>
     <!-- 通用 prompt / confirm 模态（替代受 sandbox 限制的 window.prompt / window.confirm） -->
     <div class="xs-modal-overlay" id="xsPromptModal">
         <div class="xs-modal-dialog" style="width:380px;max-height:none">
@@ -81,6 +110,6 @@
 <script nonce="{{nonce}}">
 window.__EDITOR_CONFIG__ = { dataType: '{{dataType}}', msgType: '{{msgType}}' };
 </script>
-<script nonce="{{nonce}}" src="{{editorUri}}"></script>
+{{editorScripts}}
 </body>
 </html>

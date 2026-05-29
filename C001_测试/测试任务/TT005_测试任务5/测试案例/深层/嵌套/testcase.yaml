@@ -1,15 +1,15 @@
-- tsId: 9552bef2-8534-46b6-a9af-1d8ce523a8a2
+- tsId: 62e845e4-8ac4-4360-b59a-91cd46fa4853
   testCaseId: "1"
   testTaskNo: TASK001
   testTaskName: 复杂嵌套测试
   subTestTaskName: 测试1
   testPhaseName: ST阶段
-  testCaseNo: TC001
+  testCaseNo: TT17796309042871000
   testCaseName: 验证嵌套配置
   config:
     enabled: true
     timeout: 3000
-    retries: 3
+    retries: 4
     endpoints:
       - url: https://api.example.com/v1
         method: POST
@@ -45,32 +45,65 @@
     3. 数组正确转换为表格单元格
   testCaseCheckPoint: "33"
   source:
-    - "0": ""
-      "1": ""
-      "2": ""
-      name: 数据源A
+    - name: 数据源A
       type: database
-      connection:
-        host: localhost
-        port: 3306
-        database: testdb
       key: ""
-      nested: ""
-    - "0": ""
-      "1": ""
-      "2": ""
-      name: 数据源B
+      tags:
+        - 数据库
+        - 核心链路
+        - P0
+      steps:
+        - stepId: 1
+          action: 连接数据库
+          expect: 连接成功
+        - stepId: 2
+          action: 执行查询
+          expect: 返回结果
+      endpoints: ""
+    - name: 数据源B
       type: api
-      connection:
-        url: https://api.example.com
       key: ""
-      nested: ""
+      tags:
+        - API接口
+        - 外部依赖
+      steps:
+        - stepId: 1
+          action: 调用接口
+          expect: 返回200
+          params:
+            - name: page
+              type: int
+            - name: size
+              type: int
+      endpoints:
+        - path: /v1/users
+          methods:
+            - GET
+            - POST
+    - name: 数据源B
+      type: api
+      key: ""
+      tags: API接口; 外部依赖
+      steps:
+        - stepId: 1
+          action: 调用接口
+          expect: 返回200
+          params:
+            - name: page
+              type: int
+            - name: size
+              type: int
+      endpoints:
+        - path: /v1/users
+          methods:
+            - GET
+            - POST
   testType: "0"
   type: TMS
   testCaseDes: 手工
   cmbtId: 流程类
   designer: 张三/123454
-- tsId: e5dd1418-91b0-4491-a853-43013cb4c2e5
+- tsId: 7ee3a893-4775-4ecf-9a9b-2cd016031b0f
   testCaseId: "2"
   testTaskNo: TASK001
   testTaskName: 复杂嵌套测试
@@ -95,19 +128,43 @@
   description: ""
   expected: ""
   testCaseCheckPoint: ""
-  source: []
+  source:
+    - name: 自动化数据源
+      type: mock
+      key: ""
+      tags:
+        - 自动化
+        - Mock
+      steps:
+        - stepId: 1
+          action: 执行Mock
+          expect: 返回模拟数据
+          checks:
+            - equals
+            - notNull
+      endpoints:
+        - "[]"
+    - name: 空数组数据源
+      type: empty
+      key: ""
+      tags:
+        - "[]"
+      steps:
+        - "[]"
+      endpoints:
+        - "[]"
   testType: "1.5"
   type: A
   testCaseDes: 自动化
   cmbtId: 接口类
   designer: 李四/123457
-- tsId: e0a6bcaa-caac-49f5-a163-75dd7d1db568
+- tsId: 2848e539-b91d-42d7-92ad-41ea305c524a
   testCaseId: "3"
   testTaskNo: TASK002
   testTaskName: 边界值测试
   subTestTaskName: 测试2
   testPhaseName: SIT阶段
-  testCaseNo: TC003
+  testCaseNo: TT17796309042871002
   testCaseName: 长文本和特殊字符
   config:
     allowedChars: "!@#$%^&*()_+-=[]{}|;':\",./<>?"
@@ -136,49 +193,18 @@
     1. 所有特殊字符正确保存
     2. 换行符正确处理
     3. 编码正确显示
-  testCaseCheckPoint: "100"
+  testCaseCheckPoint: iiiii
   source:
-    - "0": ""
-      "1": ""
-      "2": ""
-      name: ""
-      type: ""
-      connection: ""
+    - name: 数值型源
+      type: boundary
       key: ""
-      nested: ""
-    - "0": ""
-      "1": ""
-      "2": ""
-      name: ""
-      type: ""
-      connection: ""
-      key: ""
-      nested: ""
-    - "0": ""
-      "1": ""
-      "2": ""
-      name: ""
-      type: ""
-      connection: ""
-      key: ""
-      nested: ""
-    - "0": ""
-      "1": ""
-      "2": ""
-      key: value
-      nested:
-        deep: true
-      name: ""
-      type: ""
-      connection: ""
-    - "0": 1
-      "1": 2
-      "2": 3
-      name: ""
-      type: ""
-      connection: ""
-      key: ""
-      nested: ""
+      tags:
+        - P0
+      steps:
+        - stepId: 1
+          action: 边界值测试
+          expect: 数值范围正确
+      endpoints: ""
   testType: "2"
   type: B
   testCaseDes: 性能

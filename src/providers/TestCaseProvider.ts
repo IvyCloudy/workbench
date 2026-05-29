@@ -5,22 +5,20 @@
  * ----------------------------------------------------------------------------
  *  职责：
  *    1. 提供「查询参数」初始化：
- *       - testTaskNo / subTestTaskName 从路径解析（resolveTaskInfo）
- *       - testPhaseName 从文件内容提取（ParamExtractor）
+ *       - 已绑定（task-bindings.json）：取后端真实 testTaskNo / subTestTaskName
+ *         + 文件 testPhaseName
+ *       - 未绑定：兜底取路径解析得到的 testTaskNo / subTestTaskName，testPhaseName
+ *         仍从文件内容提取，保证查询功能可用。
  *    2. 中转前端「查询」/「获取任务树」请求到 services/http。
  *    3. 将本次使用的查询参数写入本地缓存（storage.writeParams）。
- *  设计要点：
- *    - 类内包含三块職责：ParamExtractor / QueryService / Provider，各取所需，便于单测。
- *    - testTaskNo / subTestTaskName 严格与推送链路保持一致来源，避免两路双存。
  * ============================================================================
  */
 import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as path from 'path';
 import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider';
 import { writeParams } from '../services/storage';
 import { queryTestCases, fetchTaskTree } from '../services/http';
 import { resolveTaskInfo } from '../services/utils';
+import { getTaskInfoByFilePath, extractTestPhaseName } from '../utils/taskInfo';
 import type { WebviewMessage } from '../types';
 
 // ============================================
@@ -56,95 +54,6 @@ interface QueryResult {
     data?: any;
     error?: string;
     endOfData?: boolean;
-}
-
-const EMPTY_PARAMS: TestCaseParams = { testTaskNo: '', subTestTaskName: '', testPhaseName: '' };
-
-// ============================================
-// 文件参数提取
-// ============================================
-// testTaskNo / subTestTaskName 不再从文件内容提取，而是与推送链路保持一致，
-// 由 parseTaskInfoFromPath 从第三层目录 {testTaskNo}_{subTestTaskName} 解析；
-// 这里仅负责从 CSV / YAML / JSON 文件内容中提取 testPhaseName。
-
-class ParamExtractor {
-    async extractTestPhaseName(fileUri: string): Promise<string> {
-        try {
-            const content = await fs.promises.readFile(fileUri, 'utf-8');
-            const ext = path.extname(fileUri).toLowerCase();
-
-            if (ext === '.csv') return this.fromCsv(content);
-            if (ext === '.yaml' || ext === '.yml') return this.fromYaml(content);
-            if (ext === '.json') return this.fromJson(content);
-        } catch {
-            // fall through
-        }
-        return '';
-    }
-
-    private fromCsv(content: string): string {
-        const lines = content.split('\n').filter(l => l.trim());
-        if (lines.length < 2) return '';
-
-        const headers = this.parseCsvLine(lines[0]);
-        const data = this.parseCsvLine(lines[1]);
-        const idx = headers.findIndex(h => h.trim().toLowerCase() === 'testphasename');
-        return idx >= 0 ? (data[idx] || '').trim() : '';
-    }
-
-    private fromYaml(content: string): string {
-        try {
-            const YAML = require('yaml');
-            const parsed = YAML.parse(content);
-            const records = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
-            return records.length > 0 ? this.searchKey(records[0], 'testPhaseName') : '';
-        } catch {
-            return '';
-        }
-    }
-
-    private fromJson(content: string): string {
-        try {
-            const parsed = JSON.parse(content);
-            const records = Array.isArray(parsed) ? parsed : [parsed];
-            return records.length > 0 ? this.searchKey(records[0], 'testPhaseName') : '';
-        } catch {
-            return '';
-        }
-    }
-
-    /** 在对象中递归查找指定 key（大小写不敏感），返回首个匹配字符串值 */
-    private searchKey(obj: any, target: string): string {
-        if (!obj || typeof obj !== 'object') return '';
-        const lowerKey = target.toLowerCase();
-        for (const k of Object.keys(obj)) {
-            if (k.toLowerCase() === lowerKey) return String(obj[k] ?? '').trim();
-            if (typeof obj[k] === 'object' && !Array.isArray(obj[k])) {
-                const v = this.searchKey(obj[k], target);
-                if (v) return v;
-            }
-        }
-        return '';
-    }
-
-    private parseCsvLine(line: string): string[] {
-        const result: string[] = [];
-        let current = '';
-        let inQuotes = false;
-        for (let i = 0; i < line.length; i++) {
-            const ch = line[i];
-            if (ch === '"') {
-                inQuotes = !inQuotes;
-            } else if (ch === ',' && !inQuotes) {
-                result.push(current);
-                current = '';
-            } else {
-                current += ch;
-            }
-        }
-        result.push(current);
-        return result;
-    }
 }
 
 // ============================================
@@ -198,7 +107,6 @@ class QueryService {
 // ============================================
 
 export class TestCaseProvider extends BaseWebviewProvider {
-    private paramExtractor = new ParamExtractor();
     private queryService: QueryService;
     private readyParams: ReadyParams | null = null;
 
@@ -220,24 +128,34 @@ export class TestCaseProvider extends BaseWebviewProvider {
     /**
      * 显示 Webview 并加载文件参数
      *
-     * 参数来源（与推送链路保持一致）：
-     *   - testTaskNo / subTestTaskName：从第三层目录 {编号}_{子任务名} 解析
-     *     （路径形如 .../测试任务/<testTaskNo>_<subTestTaskName>/测试案例/<file>）
-     *   - testPhaseName：从文件内容（CSV header / YAML / JSON 字段）提取
+     * 参数来源：
+     *   - 优先走 getTaskInfoByFilePath（基于 task-bindings.json 的真实后端值）
+     *   - 未绑定时回退到 resolveTaskInfo + 文件内容提取 testPhaseName
      */
     async showWebview(fileUri: vscode.Uri): Promise<void> {
         const filePath = fileUri.fsPath;
-        const r = resolveTaskInfo(filePath);
-        const testPhaseName = await this.paramExtractor.extractTestPhaseName(filePath);
+        const result = await getTaskInfoByFilePath(this.context, filePath);
 
-        const params: TestCaseParams = {
-            testTaskNo: r.info.testTaskNo,
-            subTestTaskName: r.info.subTestTaskName,
-            testPhaseName,
-        };
-
-        if (!r.ok) {
-            vscode.window.showWarningMessage(r.error);
+        let params: TestCaseParams;
+        if (result.bind) {
+            const info = result.taskInfo as any;
+            params = {
+                testTaskNo: info.testTaskNo,
+                subTestTaskName: info.subTestTaskName,
+                testPhaseName: info.testPhaseName,
+            };
+        } else {
+            // 未绑定：兜底用路径解析 + 文件内容，保持原有可用性
+            const r = resolveTaskInfo(filePath);
+            const testPhaseName = await extractTestPhaseName(filePath);
+            params = {
+                testTaskNo: r.info.testTaskNo,
+                subTestTaskName: r.info.subTestTaskName,
+                testPhaseName,
+            };
+            if (!r.ok) {
+                vscode.window.showWarningMessage(r.error);
+            }
         }
 
         const config = vscode.workspace.getConfiguration('testcaseViewer');

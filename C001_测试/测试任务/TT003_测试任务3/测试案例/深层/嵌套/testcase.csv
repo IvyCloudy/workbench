@@ -1,0 +1,4 @@
+tsId,testCaseId,testTaskNo,testTaskName,subTestTaskName,testPhaseName,testCaseNo,testCaseName,testProduct,testCasePath,preCondition,description,expected,testCaseCheckPoint,source,testType,type,testCaseDes,cmbtId,designer
+790f7e69-f29d-4c75-8d47-a2e22811198c,1,TASK001,xxx验证,测试1,ST阶段,TT17796321998841000,100个人,,阶段2/test1222000/哦哦哦/,,1,2,33,"11,22,333",0.0,TMS,手工,流程类,,,张三/123454
+a0482a3e-b6c3-43a9-831a-c9bb3e126517,2,TASK001,xxx验证,测试1,UAT阶段,TC002,100个人,,阶段2/test1222000/哦哦哦/,,1,2,33,"11,22,333",0.0,A,手工,流程类,,,李四/123457
+24d8ad52-b375-4050-842c-67b0bd19010a,3,TASK002,xxx验证,测试2,UAT阶段,TT17796321998841002,100个人,,阶段2/test1222000/哦哦哦/,,1,2,33,"11,22,333",0.0,A,手工,流程类,,,李四/123457

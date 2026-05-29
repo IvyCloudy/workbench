@@ -45,26 +45,59 @@
     3. 数组正确转换为表格单元格
   testCaseCheckPoint: "33"
   source:
-    - "0": ""
-      "1": ""
-      "2": ""
-      name: 数据源A
+    - name: 数据源A
       type: database
-      connection:
-        host: localhost
-        port: 3306
-        database: testdb
       key: ""
-      nested: ""
-    - "0": ""
-      "1": ""
-      "2": ""
-      name: 数据源B
+      tags:
+        - 数据库
+        - 核心链路
+        - P0
+      steps:
+        - stepId: 1
+          action: 连接数据库
+          expect: 连接成功
+        - stepId: 2
+          action: 执行查询
+          expect: 返回结果
+      endpoints: ""
+    - name: 数据源B
       type: api
-      connection:
-        url: https://api.example.com
       key: ""
-      nested: ""
+      tags:
+        - API接口
+        - 外部依赖
+      steps:
+        - stepId: 1
+          action: 调用接口
+          expect: 返回200
+          params:
+            - name: page
+              type: int
+            - name: size
+              type: int
+      endpoints:
+        - path: /v1/users
+          methods:
+            - GET
+            - POST
+    - name: 数据源B
+      type: api
+      key: ""
+      tags: API接口; 外部依赖
+      steps:
+        - stepId: 1
+          action: 调用接口
+          expect: 返回200
+          params:
+            - name: page
+              type: int
+            - name: size
+              type: int
+      endpoints:
+        - path: /v1/users
+          methods:
+            - GET
+            - POST
   testType: "0"
   type: TMS
   testCaseDes: 手工
@@ -95,7 +128,31 @@
   description: ""
   expected: ""
   testCaseCheckPoint: ""
-  source: []
+  source:
+    - name: 自动化数据源
+      type: mock
+      key: ""
+      tags:
+        - 自动化
+        - Mock
+      steps:
+        - stepId: 1
+          action: 执行Mock
+          expect: 返回模拟数据
+          checks:
+            - equals
+            - notNull
+      endpoints:
+        - "[]"
+    - name: 空数组数据源
+      type: empty
+      key: ""
+      tags:
+        - "[]"
+      steps:
+        - "[]"
+      endpoints:
+        - "[]"
   testType: "1.5"
   type: A
   testCaseDes: 自动化
@@ -138,56 +195,16 @@
     3. 编码正确显示
   testCaseCheckPoint: iiiii
   source:
-    - "0": ""
-      "1": ""
-      "2": ""
-      name: ""
-      type: ""
-      connection: ""
+    - name: 数值型源
+      type: boundary
       key: ""
-      nested: ""
-    - "0": ""
-      "1": ""
-      "2": ""
-      name: ""
-      type: ""
-      connection: ""
-      key: ""
-      nested: ""
-    - "0": ""
-      "1": ""
-      "2": ""
-      name: ""
-      type: ""
-      connection: ""
-      key: ""
-      nested: ""
-    - "0": ""
-      "1": ""
-      "2": ""
-      key: value
-      nested:
-        deep: true
-      name: ""
-      type: ""
-      connection: ""
-    - "0": 1
-      "1": 2
-      "2": 999
-      name: ""
-      type: ""
-      connection: ""
-      key: ""
-      nested: ""
-    - "0": ""
-      "1": ""
-      "2": ""
-      name: ""
-      type: ""
-      connection: ""
-      key: value
-      nested:
-        deep: false
+      tags:
+        - P0
+      steps:
+        - stepId: 1
+          action: 边界值测试
+          expect: 数值范围正确
+      endpoints: ""
   testType: "2"
   type: B
   testCaseDes: 性能

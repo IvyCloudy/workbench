@@ -229,7 +229,15 @@ export class JsonFileParser implements FileParser {
             return origObj;
         }
 
-        const rawRows: any[] = Array.isArray(origDetailData) ? origDetailData : [];
+        // rawRows 来自原始解析数据，但复制/新增行可能超出其长度
+        // 对于这些行，从 rawRowGroups（深拷贝的原始结构）补充类型信息
+        let rawRows: any[] = Array.isArray(origDetailData) ? [...origDetailData] : [];
+        {
+            const rawExtra = detailTable.rawRowGroups?.[rowIdx] || [];
+            for (let ei = rawRows.length; ei < rawExtra.length && ei < editedRows.length; ei++) {
+                rawRows.push(rawExtra[ei]);
+            }
+        }
         const reconstructed: any[] = [];
         for (let di = 0; di < editedRows.length; di++) {
             const src: any = (di < rawRows.length && typeof rawRows[di] === 'object')

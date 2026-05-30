@@ -245,7 +245,15 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         const fileName = filePath.split(path.sep).pop() || '';
         // panel 唯一 ID，便于在多 tab 场景下区分日志
         const panelId = `${fileName}#${Math.random().toString(36).slice(2, 8)}`;
-        const log = (...args: any[]) => console.log(`[TC-EDITOR][${panelId}]`, ...args);
+        // 带毫秒时间戳的日志，方便比对前后端事件先后顺序
+        const log = (...args: any[]) => {
+            const d = new Date();
+            const hh = String(d.getHours()).padStart(2, '0');
+            const mm = String(d.getMinutes()).padStart(2, '0');
+            const ss = String(d.getSeconds()).padStart(2, '0');
+            const ms = String(d.getMilliseconds()).padStart(3, '0');
+            console.log(`[TC-EDITOR][${hh}:${mm}:${ss}.${ms}][${panelId}]`, ...args);
+        };
         const nonce = getNonce();
 
         log('▶ open', filePath);
@@ -295,14 +303,30 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         const ready = new Promise<void>((resolve) => { markReady = resolve; });
         BaseEditorProvider.panelMap.set(filePath, { panel: webviewPanel, ready, markReady });
 
-        // 自身落盘后短时间内忽略外部变更通知，避免触发自我反弹刷新
+        // 自身落盘后短时间内忽略外部变更通知，避免触发自我反弹刷新。
+        // 守护期需覆盖：parser.save 写盘耗时 + fsWatcher / onDidSaveTextDocument 通知延迟 + 防抖 150ms。
+        // 大文件 YAML 序列化 + 写盘可能 > 800ms，故放宽到 3 秒。
         let lastSelfSaveAt = 0;
-        const SELF_SAVE_GUARD_MS = 800;
+        const SELF_SAVE_GUARD_MS = 3000;
 
         const pushDataToWebview = async (forceReparse: boolean, reason: string, force?: boolean): Promise<void> => {
             try {
                 if (forceReparse || !session.cachedTableData) {
+                    // 解析前记录原 cache 的行数，用于识别"读到中间态空文件"的极端情况
+                    const prevRowsLen = (session.cachedTableData?.rows || []).length;
+                    const _parseStart = Date.now();
                     const result = await session.parser.parse(filePath);
+                    const _parseDur = Date.now() - _parseStart;
+                    const newRowsLen = (result.tableData?.rows || []).length;
+                    const newColsLen = (result.tableData?.headers || []).length;
+                    log(`🔍 parse done reason=${reason} prevRows=${prevRowsLen} newRows=${newRowsLen} cols=${newColsLen} dur=${_parseDur}ms force=${!!force}`);
+                    // 防御：force=true 时若新解析为 0 行而旧 cache > 0 行，
+                    // 多半是 fs.writeFile 尚未完全 flush，watcher 提前触发读到部分/空文件。
+                    // 直接放弃本次推送，保留旧缓存与前端现状，下次正常事件会重新触发。
+                    if (force && prevRowsLen > 0 && newRowsLen === 0) {
+                        log(`⚠ skip suspicious empty reparse (prev=${prevRowsLen}, reason=${reason}) — likely fs flush midway`);
+                        return;
+                    }
                     session.originalSourceData = result.sourceData;
                     // 仅确保 tsId 列存在；缺失时立刻落盘让 tsId 持久化
                     const ensured = ensureTrackingColumns(result.tableData, session.originalSourceData);
@@ -320,12 +344,16 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 const dataStr = JSON.stringify(session.cachedTableData);
                 const uint8Array = new TextEncoder().encode(dataStr);
                 const rowsLen = (session.cachedTableData?.rows || []).length;
-                log(`📤 push (${reason}) rows=${rowsLen} visible=${webviewPanel.visible} force=${!!force}`);
+                // 标记是否来自外部修改（fsWatcher / onDidSaveTextDocument）：
+                // 前端在用户有未保存修改时收到此标记会弹冲突合并对话框，避免静默覆盖。
+                const isExternal = reason.indexOf('externalChange') === 0;
+                log(`📤 push (${reason}) rows=${rowsLen} visible=${webviewPanel.visible} force=${!!force} external=${isExternal}`);
                 webviewPanel.webview.postMessage({
                     type: session.type + 'Data',
                     data: Array.from(uint8Array),
                     force: !!force,
-                    reason
+                    reason,
+                    externalChange: isExternal
                 });
             } catch (err: any) {
                 log('❌ push failed:', err?.message || err);
@@ -358,19 +386,22 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         // 同时通过 onDidSaveTextDocument 作为补充，确保 TextEditor 保存能被捕获到。
         let externalChangeTimer: NodeJS.Timeout | null = null;
         const handleExternalChange = (origin: string) => {
+            const now = Date.now();
+            const sinceSelfSave = lastSelfSaveAt ? (now - lastSelfSaveAt) : -1;
             // 自己刚刚 save 完短时间内的回声忽略
-            if (Date.now() - lastSelfSaveAt < SELF_SAVE_GUARD_MS) {
-                log(`🔁 ignore self-save echo (${origin})`);
+            if (lastSelfSaveAt && sinceSelfSave < SELF_SAVE_GUARD_MS) {
+                log(`🔁 ignore self-save echo (${origin}) sinceSelfSave=${sinceSelfSave}ms < ${SELF_SAVE_GUARD_MS}ms`);
                 return;
             }
+            log(`📥 external change scheduled (${origin}) sinceSelfSave=${sinceSelfSave}ms`);
             if (externalChangeTimer) clearTimeout(externalChangeTimer);
             // 去抖：合并短时间内的多次变更
             externalChangeTimer = setTimeout(() => {
                 externalChangeTimer = null;
-                log(`📥 external change (${origin}), reload`);
+                log(`📥 external change fired (${origin}), reload`);
                 // 使缓存失效，强制重新解析并下发；force=true 让前端绕过 “未保存修改不覆盖” 的兜底
                 session.cachedTableData = null;
-                pushDataToWebview(true, 'externalChange', true);
+                pushDataToWebview(true, 'externalChange:' + origin, true);
             }, 150);
         };
 
@@ -411,11 +442,23 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     // 通知等待方：webview 已就绪，可以接收推送结果消息
                     try { markReady(); } catch (_) { /* ignore */ }
                 } else if (msg?.type === 'save' && msg?.data) {
-                    lastSelfSaveAt = Date.now();
+                    const _saveStart = Date.now();
+                    const _inRows = (msg.data?.rows || []).length;
+                    const _inHeaders = (msg.data?.headers || []).length;
+                    log(`💾 save begin rows=${_inRows} cols=${_inHeaders}`);
+                    // 写盘前先打时间戳，覆盖 watcher 在 await 期间就回包的极端竞态
+                    lastSelfSaveAt = _saveStart;
                     await session.parser.save(filePath, msg.data, session.originalSourceData);
-                    // 文件已落盘，使缓存失效；下次重新可见或下次 init 时会重新解析
-                    session.cachedTableData = null;
+                    const _saveDur = Date.now() - _saveStart;
+                    // 写盘后再次刷新时间戳：fsWatcher / onDidSaveTextDocument 的通知通常发生在
+                    // writeFile 返回之后，从这一刻开始算 SELF_SAVE_GUARD_MS 才能可靠拦截自反弹。
+                    lastSelfSaveAt = Date.now();
+                    log(`💾 save done dur=${_saveDur}ms lastSelfSaveAt refreshed`);
+                    // 缓存与前端最新数据一致：直接复用 webview 提交上来的 data，
+                    // 避免置 null 后被外部触发的 reparse 在 fs flush 中读到部分内容/空数据。
+                    try { session.cachedTableData = msg.data; } catch (_) { session.cachedTableData = null; }
                     webviewPanel.webview.postMessage({ type: 'saved' });
+                    log(`💾 saved msg posted`);
                 } else if (msg?.type === 'pushTestCase' && msg?.data) {
                     const pushCtx: PushContext = {
                         session,
@@ -426,6 +469,12 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     await this.pushStrategy.push(msg.data, pushCtx, webviewPanel, this.context);
                 } else if (msg?.type === 'openTextEditor') {
                     await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
+                } else if (msg?.type === 'reload') {
+                    // 用户在前端工具栏点击 "刷新" / "重置并获取最新数据"：
+                    // 强制丢弃缓存重新解析磁盘文件，并以 force=true 让前端绕过 "未保存修改保护" 直接覆盖。
+                    log('📨 reload from webview');
+                    session.cachedTableData = null;
+                    await pushDataToWebview(true, 'reload', true);
                 }
             } catch (err: any) {
                 const errMsg = err?.message || String(err) || '操作失败';
@@ -478,15 +527,23 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         );
         // 表格编辑器脚本已按职能拆分到 editor/ 子目录下，按顺序加载等价于原 editor.js 单文件。
         // 注意：因函数声明在每个 <script> 内部独立提升（不跨脚本），文件加载顺序必须保持。
-        //   01-core         —— 全局状态 S、日志、撤销/重做、init 入口、消息分发、通用工具
-        //   02-render-bind  —— renderTable 渲染 + 工具栏/全局/表格事件绑定 + 行选/全选
-        //   03-cell-ops     —— 单元格编辑、右键菜单、行/列增删改、列宽列拖列选、行高行拖
-        //   04-push-find    —— 推送/保存、查找替换面板、Excel 风格列筛选
-        //   05-modals       —— 推送结果弹窗、通用 prompt/confirm、明细弹窗，并在末尾调用 init()
+        //   01-core            —— 全局状态 S、日志、撤销/重做、init 入口、消息分发、通用工具
+        //   02a-render         —— renderTable + 虚拟滚动 + 单元格 patchCell
+        //   02b-bind           —— 工具栏 / 全局快捷键 / 表格事件委托绑定
+        //   02c-row-cell-sel   —— 行号格 mousedown / 单元格 mousedown（行选 / 单元格矩形拖选）
+        //   02d-sel-utils      —— 选区辅助、信息统计、推送按钮 / 仅看失败按钮 状态同步
+        //   03a-cell-edit      —— 单元格编辑、右键菜单、行/列数据增删改/复制粘贴/清空
+        //   03b-resize-colsel  —— 列宽拖动 / 列选择（Excel 风格） / 行高拖动
+        //   04-push-find       —— 推送/保存、查找替换面板、Excel 风格列筛选
+        //   05-modals          —— 推送结果弹窗、通用 prompt/confirm、明细弹窗，并在末尾调用 init()
         const editorScriptFiles = [
             'editor/01-core.js',
-            'editor/02-render-bind.js',
-            'editor/03-cell-ops.js',
+            'editor/02a-render.js',
+            'editor/02b-bind.js',
+            'editor/02c-row-cell-sel.js',
+            'editor/02d-sel-utils.js',
+            'editor/03a-cell-edit.js',
+            'editor/03b-resize-colsel.js',
             'editor/04-push-find.js',
             'editor/05-modals.js'
         ];

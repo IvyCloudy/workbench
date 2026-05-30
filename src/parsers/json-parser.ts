@@ -34,8 +34,9 @@ export class JsonFileParser implements FileParser {
             // 使用"主表设计"：如果存在明细字段，主表使用顶层 key 作为列，避免路径展开与明细列冲突。
             // 否则保留原有路径展开逻辑。
             let headers: string[];
-            let rows: string[][];
-            if (detailTables.length > 0) {
+            let rows: any[][];
+            const isFlatTopLevel = detailTables.length > 0;
+            if (isFlatTopLevel) {
                 headers = this.collectTopLevelKeys(data);
                 rows = data.map(item => {
                     if (typeof item !== 'object' || item === null) return headers.map(() => '');
@@ -51,12 +52,32 @@ export class JsonFileParser implements FileParser {
                 });
             }
 
+            // 仅在「顶层 key 模式」识别标量数组列；路径展开模式因为列名是 a.b.c 形式，
+            // 与原始顶层字段不对应，统一保持现状（不做识别，避免误判）。
+            let columnTypes: { [field: string]: 'scalar' | 'string[]' | 'number[]' | 'detail' } | undefined;
+            if (isFlatTopLevel) {
+                columnTypes = this.detectColumnTypes(headers, data, detailTables);
+                // 还原标量数组列为真实数组（与 yaml-parser 行为一致），让 webview 走 chip + 多项编辑弹窗。
+                for (let ri = 0; ri < rows.length; ri++) {
+                    const orig = ri < data.length ? data[ri] : undefined;
+                    if (!orig || typeof orig !== 'object') continue;
+                    headers.forEach((h, ci) => {
+                        const t = columnTypes![h];
+                        if (t === 'string[]' || t === 'number[]') {
+                            const v = (orig as any)[h];
+                            rows[ri][ci] = Array.isArray(v) ? v.slice() : [];
+                        }
+                    });
+                }
+            }
+
             return {
                 tableData: {
                     headers,
                     rows,
                     detailTable: detailTables[0],
-                    detailTables: detailTables.length > 0 ? detailTables : undefined
+                    detailTables: detailTables.length > 0 ? detailTables : undefined,
+                    columnTypes
                 },
                 sourceData
             };
@@ -80,6 +101,9 @@ export class JsonFileParser implements FileParser {
         const useFlatTopLevel = tablesByField.size > 0;
 
         const records: any[] = rows.map((row, rowIdx) => {
+            // 取该行原始记录，用于标量数组列等的类型还原
+            const origRecord: any = (Array.isArray(originalData) && rowIdx < originalData.length)
+                ? originalData[rowIdx] : undefined;
             if (useFlatTopLevel) {
                 // 顶层 key 模式：逐列处理，detail 列走 reconstructDetail，其余列尝试 JSON.parse 还原
                 const record: any = {};
@@ -93,7 +117,17 @@ export class JsonFileParser implements FileParser {
                             return;
                         }
                     }
-                    record[h] = this.parseCellValue(row[i]);
+                    const origVal = origRecord ? origRecord[h] : undefined;
+                    // 当前端送回数组（chip 列）或原值是数组/对象/数字/布尔时，走 coerceValue 保真还原；
+                    // 否则按字符串路径走 parseCellValue（兼容老逻辑）。
+                    if (Array.isArray(row[i]) || Array.isArray(origVal)
+                        || (origVal && typeof origVal === 'object')
+                        || typeof origVal === 'boolean'
+                        || typeof origVal === 'number') {
+                        record[h] = this.coerceValue(row[i], origVal);
+                    } else {
+                        record[h] = this.parseCellValue(row[i]);
+                    }
                 });
                 return record;
             }
@@ -253,7 +287,17 @@ export class JsonFileParser implements FileParser {
         return reconstructed;
     }
 
-    private coerceValue(edited: string, origRaw: any): any {
+    private coerceValue(edited: any, origRaw: any): any {
+        // 新链路：前端已传入数组形态（标量数组列 chip 编辑后），按原数组的元素类型样本逐项还原
+        if (Array.isArray(edited)) {
+            let sample: any = undefined;
+            if (Array.isArray(origRaw)) {
+                for (const it of origRaw) {
+                    if (it !== null && it !== undefined && it !== '') { sample = it; break; }
+                }
+            }
+            return edited.map((it: any) => this.coerceArrayItem(it, sample));
+        }
         if (Array.isArray(origRaw)) {
             // 对象数组：优先按 JSON 解析
             if (origRaw.length > 0 && typeof origRaw[0] === 'object' && origRaw[0] !== null) {
@@ -261,7 +305,7 @@ export class JsonFileParser implements FileParser {
                 try { const v = JSON.parse(edited); if (Array.isArray(v)) return v; } catch { /* fall through */ }
             }
             return edited
-                ? edited.split('; ').map((s: string) => s.trim()).filter(Boolean)
+                ? String(edited).split('; ').map((s: string) => s.trim()).filter(Boolean)
                 : [];
         }
         if (origRaw && typeof origRaw === 'object') {
@@ -269,7 +313,7 @@ export class JsonFileParser implements FileParser {
             try { return JSON.parse(edited); } catch { return edited; }
         }
         if (typeof origRaw === 'boolean') {
-            return edited === 'true';
+            return edited === 'true' || edited === true;
         }
         if (typeof origRaw === 'number') {
             if (edited === '' || edited === null || edited === undefined) return null;
@@ -277,6 +321,77 @@ export class JsonFileParser implements FileParser {
             return Number.isNaN(n) ? edited : n;
         }
         return this.parseCellValue(edited);
+    }
+
+    /** 数组元素按样本类型还原（数字数组保数字、布尔数组保布尔，其它保字符串） */
+    private coerceArrayItem(item: any, sample: any): any {
+        if (item === null || item === undefined) return item;
+        if (typeof sample === 'number') {
+            if (typeof item === 'number') return item;
+            const s = String(item).trim();
+            if (s === '') return null;
+            if (!Number.isNaN(Number(s)) && /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(s)) return Number(s);
+            return item;
+        }
+        if (typeof sample === 'boolean') {
+            if (typeof item === 'boolean') return item;
+            const t = String(item).trim().toLowerCase();
+            if (t === 'true') return true;
+            if (t === 'false') return false;
+            return item;
+        }
+        return typeof item === 'string' ? item : String(item);
+    }
+
+    /**
+     * 列类型识别（与 yaml-parser 保持一致的保守策略）：
+     *   - 明细列（detailTables 中已有同名 field）→ 'detail'
+     *   - 非明细列：扫描每行同名字段；
+     *       * 全标量 → 'scalar'
+     *       * 全为标量数组（至少一行非空数组），元素同质字符串/数字 → 'string[]' / 'number[]'
+     *       * 任一行出现对象 / 混合形态 → 'scalar'（保守降级）
+     */
+    private detectColumnTypes(
+        headers: string[],
+        sourceData: any,
+        detailTables?: DetailTableData[]
+    ): { [field: string]: 'scalar' | 'string[]' | 'number[]' | 'detail' } {
+        const out: { [field: string]: 'scalar' | 'string[]' | 'number[]' | 'detail' } = {};
+        const detailFields = new Set<string>();
+        (detailTables || []).forEach(t => { if (t && t.field) detailFields.add(t.field); });
+        const rows: any[] = Array.isArray(sourceData) ? sourceData : [];
+        headers.forEach(h => {
+            if (detailFields.has(h)) { out[h] = 'detail'; return; }
+            if (rows.length === 0) { out[h] = 'scalar'; return; }
+            let allArrays = true;
+            let anyArray = false;
+            let elemKind: 'string' | 'number' | 'mixed' | 'unknown' = 'unknown';
+            for (const r of rows) {
+                if (!r || typeof r !== 'object') { allArrays = false; break; }
+                const v = (r as any)[h];
+                if (v === undefined || v === null) continue;
+                if (!Array.isArray(v)) { allArrays = false; break; }
+                anyArray = true;
+                for (const item of v) {
+                    if (item === null || item === undefined) continue;
+                    if (typeof item === 'object') { elemKind = 'mixed'; break; }
+                    if (typeof item === 'string') {
+                        if (elemKind === 'unknown') elemKind = 'string';
+                        else if (elemKind !== 'string') elemKind = 'mixed';
+                    } else if (typeof item === 'number') {
+                        if (elemKind === 'unknown') elemKind = 'number';
+                        else if (elemKind !== 'number') elemKind = 'mixed';
+                    } else {
+                        elemKind = 'mixed';
+                    }
+                }
+                if (elemKind === 'mixed') break;
+            }
+            if (allArrays && anyArray && elemKind === 'string') out[h] = 'string[]';
+            else if (allArrays && anyArray && elemKind === 'number') out[h] = 'number[]';
+            else out[h] = 'scalar';
+        });
+        return out;
     }
 
     // ============================================

@@ -25,8 +25,16 @@
             <input type="text" id="searchInput" placeholder="搜索...">
             <span id="searchClear" style="display:none;cursor:pointer;color:#999;font-size:14px;line-height:1;padding:0 2px" title="清除搜索">✕</span>
         </div>
-        <div class="xs-icon-btn xs-tip xs-icon-btn-reset" id="searchReset" data-tip="重置全部筛选">
+        <div class="xs-icon-btn xs-tip xs-icon-btn-reset" id="searchReset" data-tip="重置筛选并获取最新数据" title="重置筛选并获取最新数据">
             <svg width="16" height="16" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0 0 12 4a8 8 0 1 0 7.74 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+        </div>
+        <div class="xs-icon-btn xs-tip xs-icon-btn-failed is-disabled" id="failedFilterBtn" data-tip="暂无推送失败行" title="暂无推送失败行">
+            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 4h18l-7 8.6V20l-4 2v-9.4L3 4z" fill="currentColor"/>
+                <circle cx="19" cy="6" r="4" fill="#d93026"/>
+                <rect x="18.25" y="3.5" width="1.5" height="3.5" fill="#fff"/>
+                <rect x="18.25" y="7.5" width="1.5" height="1.5" fill="#fff"/>
+            </svg>
         </div>
         <button class="xs-btn xs-btn-p" id="pushBtn" disabled>推送</button>
         <span style="flex:1"></span>
@@ -37,7 +45,7 @@
     </div>
     <div class="xs-container" id="tableContainer"></div>
     <div class="xs-modal-overlay" id="detailModal">
-        <div class="xs-modal-dialog">
+        <div class="xs-modal-dialog xs-detail-dialog-v2">
             <div class="xs-modal-header">
                 <span class="xs-modal-title" id="detailModalTitle">步骤明细</span>
                 <button class="xs-modal-close" id="detailModalClose" title="关闭">✕</button>
@@ -45,8 +53,6 @@
             <div class="xs-modal-body" id="detailModalBody"></div>
             <div class="xs-modal-footer">
                 <span id="detailModInfo" style="display:none;font-size:11px;color:var(--d);flex:1">明细已修改</span>
-                <button class="xs-btn" id="detailCopyBtn" title="在所选行下方复制一份">复制行</button>
-                <button class="xs-btn" id="detailAddBtn" title="在末尾添加新行">添加行</button>
                 <button class="xs-btn" id="detailCancelBtn">取消</button>
                 <button class="xs-btn xs-btn-p" id="detailSaveBtn">保存</button>
             </div>
@@ -60,6 +66,7 @@
     <div class="xs-find" id="findPanel">
         <div class="xs-find-row">
             <input type="text" id="findInput" placeholder="查找...">
+            <button class="xs-btn xs-find-aa" id="findCaseBtn" title="区分大小写">Aa</button>
             <button class="xs-btn" id="prevBtn">上一个</button>
             <button class="xs-btn" id="nextBtn">下一个</button>
         </div>
@@ -103,6 +110,22 @@
             <div class="xs-modal-footer">
                 <button class="xs-btn" id="xsPromptCancel">取消</button>
                 <button class="xs-btn xs-btn-p" id="xsPromptOk">确定</button>
+            </div>
+        </div>
+    </div>
+    <!-- 标量数组列（string[] / number[]）的多项编辑弹窗 -->
+    <div class="xs-modal-overlay" id="arrEditModal">
+        <div class="xs-modal-dialog xs-arr-dialog">
+            <div class="xs-modal-header">
+                <span class="xs-modal-title" id="arrEditTitle">编辑列表</span>
+                <button class="xs-modal-close" id="arrEditClose" title="关闭">✕</button>
+            </div>
+            <div class="xs-modal-body xs-arr-body" id="arrEditBody"></div>
+            <div class="xs-modal-footer">
+                <button class="xs-btn" id="arrEditAddBtn" title="在末尾追加一项">+ 添加项</button>
+                <span style="flex:1"></span>
+                <button class="xs-btn" id="arrEditCancelBtn">取消</button>
+                <button class="xs-btn xs-btn-p" id="arrEditSaveBtn">保存</button>
             </div>
         </div>
     </div>

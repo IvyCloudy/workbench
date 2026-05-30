@@ -21,7 +21,12 @@
 
 export interface TableData {
     headers: string[];
-    rows: string[][];
+    /**
+     * 二维单元格值。绝大多数单元格为字符串；当 columnTypes[字段] === 'string[]' / 'number[]'
+     * 时，该列每行的单元格值可能直接是 JS 数组（保留原始数组形态以支持"标签芯片+多项编辑"），
+     * 这种数组只会在被识别为标量数组列的位置出现。
+     */
+    rows: any[][];
     detailTable?: DetailTableData;
     /**
      * 多明细字段：每一个顶层嵌套对象/对象数组字段对应一项。
@@ -29,6 +34,15 @@ export interface TableData {
      * 兼容字段：detailTable 仍保留，等同于 detailTables[0]（若存在）。
      */
     detailTables?: DetailTableData[];
+    /**
+     * 列类型（按表头字段名）。仅由解析器在 parse 时输出，webview 用于决定渲染/编辑形态：
+     *   - 'scalar'   ：普通文本列（默认，单行编辑）
+     *   - 'string[]' ：字符串数组（chip 展示 + 多项编辑弹窗），仅当全列每行都是该类型时识别
+     *   - 'number[]' ：数字数组（同上）
+     *   - 'detail'   ：嵌套对象 / 对象数组列，由 detailTables 接管
+     * 未识别 / 混合 / 脏数据 → 默认 'scalar'（保守降级）
+     */
+    columnTypes?: { [field: string]: 'scalar' | 'string[]' | 'number[]' | 'detail' };
 }
 
 export interface DetailTableData {

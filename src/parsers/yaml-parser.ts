@@ -24,6 +24,11 @@ import type { FileParser, FileParseResult } from './file-parser';
 interface YamlData {
     sheets: SheetData[];
     sourceData: any;
+    /**
+     * 表格主体对应的原始行数组（来自 findArrayData(value)），行号与 webview rows[ri] 对齐。
+     * 用于列类型推断与数组列原值还原；sourceData 顶层可能是包裹对象时两者不一致。
+     */
+    rowsSource?: any[];
     detailTable?: DetailTableData;
     detailTables?: DetailTableData[];
 }
@@ -39,7 +44,7 @@ export class YamlFileParser implements FileParser {
         if (!sheet) return { tableData: { headers: [], rows: [] }, sourceData: null };
 
         const headers: string[] = [];
-        const rows: string[][] = [];
+        const rows: any[][] = [];
 
         const row0 = sheet.rows[0];
         if (row0) {
@@ -52,9 +57,9 @@ export class YamlFileParser implements FileParser {
             if (ri === 0 && headers.length > 0) return;
             const row = sheet.rows[ri];
             if (!row) return;
-            const rowData: string[] = [];
+            const rowData: any[] = [];
             const cellKeys = Object.keys(row.cells).map(k => parseInt(k)).sort((a, b) => a - b);
-            cellKeys.forEach(ci => rowData[ci] = row.cells[ci]?.text || '');
+            cellKeys.forEach(ci => rowData[ci] = row.cells[ci]?.text ?? '');
             while (rowData.length < headers.length) rowData.push('');
             rows.push(rowData);
         });
@@ -64,15 +69,90 @@ export class YamlFileParser implements FileParser {
             sourceData = [sourceData];
         }
 
+        // 主表主体的原始行数组（与 webview rows[ri] 严格对齐）；顶层是包裹对象时与 sourceData 不同
+        const rowsSource: any[] = Array.isArray(data.rowsSource) ? data.rowsSource : sourceData;
+
+        // 计算每列类型（保守策略：只有该列每一行都是同质的标量数组才标 string[]/number[]）
+        // 同时把这些列的单元格从字符串还原为真实数组，让 webview 走 chip + 多项编辑弹窗。
+        const columnTypes = this.detectColumnTypes(headers, rowsSource, data.detailTables);
+        for (let ri = 0; ri < rows.length; ri++) {
+            const orig = ri < rowsSource.length ? rowsSource[ri] : undefined;
+            if (!orig || typeof orig !== 'object') continue;
+            headers.forEach((h, ci) => {
+                const t = columnTypes[h];
+                if (t === 'string[]' || t === 'number[]') {
+                    const v = orig[h];
+                    rows[ri][ci] = Array.isArray(v) ? v.slice() : [];
+                }
+            });
+        }
+
         return {
             tableData: {
                 headers,
                 rows,
                 detailTable: data.detailTable,
-                detailTables: data.detailTables
+                detailTables: data.detailTables,
+                columnTypes
             },
             sourceData
         };
+    }
+
+    /**
+     * 列类型识别（保守策略）：
+     *   - 明细列（detailTables 中已有同名 field）→ 'detail'
+     *   - 非明细列：扫描 sourceData 每行同名字段；
+     *       * 全为 string / number / boolean / null / undefined / ''  → 'scalar'
+     *       * 全为标量数组（其中至少有一行非 null/undefined 数组），且元素同质：
+     *           - 全字符串（含空字符串、null/undefined 视为同质允许）→ 'string[]'
+     *           - 全数字 → 'number[]'
+     *       * 任一行出现对象 / 混合形态 → 'scalar'（保守降级）
+     */
+    private detectColumnTypes(
+        headers: string[],
+        sourceData: any,
+        detailTables?: DetailTableData[]
+    ): { [field: string]: 'scalar' | 'string[]' | 'number[]' | 'detail' } {
+        const out: { [field: string]: 'scalar' | 'string[]' | 'number[]' | 'detail' } = {};
+        const detailFields = new Set<string>();
+        (detailTables || []).forEach(t => { if (t && t.field) detailFields.add(t.field); });
+        const rows: any[] = Array.isArray(sourceData) ? sourceData : [];
+        headers.forEach(h => {
+            if (detailFields.has(h)) { out[h] = 'detail'; return; }
+            if (rows.length === 0) { out[h] = 'scalar'; return; }
+            let allArrays = true;            // 是否每一行该字段都是数组（null/undefined 视为缺失，单独处理）
+            let anyArray = false;            // 是否至少出现过一次非空数组（避免全是 null 误判）
+            let elemKind: 'string' | 'number' | 'mixed' | 'unknown' = 'unknown';
+            for (const r of rows) {
+                if (!r || typeof r !== 'object') { allArrays = false; break; }
+                const v = (r as any)[h];
+                if (v === undefined || v === null) {
+                    // 缺失值不破坏判定，但需有至少一行是真实数组才会最终判定为数组列
+                    continue;
+                }
+                if (!Array.isArray(v)) { allArrays = false; break; }
+                anyArray = true;
+                for (const item of v) {
+                    if (item === null || item === undefined) continue;
+                    if (typeof item === 'object') { elemKind = 'mixed'; break; }
+                    if (typeof item === 'string') {
+                        if (elemKind === 'unknown') elemKind = 'string';
+                        else if (elemKind !== 'string') elemKind = 'mixed';
+                    } else if (typeof item === 'number') {
+                        if (elemKind === 'unknown') elemKind = 'number';
+                        else if (elemKind !== 'number') elemKind = 'mixed';
+                    } else {
+                        elemKind = 'mixed';
+                    }
+                }
+                if (elemKind === 'mixed') break;
+            }
+            if (allArrays && anyArray && elemKind === 'string') out[h] = 'string[]';
+            else if (allArrays && anyArray && elemKind === 'number') out[h] = 'number[]';
+            else out[h] = 'scalar';
+        });
+        return out;
     }
 
     async save(filePath: string, data: TableData, originalData?: any): Promise<void> {
@@ -90,12 +170,18 @@ export class YamlFileParser implements FileParser {
 
         const records: any[] = rows.map((row, rowIdx) => {
             const record: any = {};
+            // 取该行对应的原始记录（基于 1-based 主表行号 rowIdx 与 originalData 的下标对齐），
+            // 用于在主表标量字段回写时根据原类型（数组/数字/布尔/对象）做尽量保真的还原，
+            // 避免把原本是 string[] 的字段（如 preconditions）退化为 "a; b" 字符串落盘。
+            const origRecord: any = (Array.isArray(originalData) && rowIdx < originalData.length)
+                ? originalData[rowIdx] : undefined;
             headers.forEach((h, i) => {
                 const dt = tablesByField.get(h);
                 if (dt && originalData && dt.rowGroups) {
                     record[h] = this.reconstructDetail(rowIdx, dt, originalData, row, i);
                 } else {
-                    record[h] = this.parseCellValue(row[i]);
+                    const origVal = origRecord ? origRecord[h] : undefined;
+                    record[h] = this.coerceValue(row[i], origVal);
                 }
             });
             return record;
@@ -148,6 +234,7 @@ export class YamlFileParser implements FileParser {
         return {
             sheets: [sheet],
             sourceData,
+            rowsSource: parsed,
             detailTable: detailTables[0],
             detailTables: detailTables.length > 0 ? detailTables : undefined
         };
@@ -307,18 +394,34 @@ export class YamlFileParser implements FileParser {
         i: number
     ): any {
         const editedRows: string[][] = detailTable.rowGroups[rowIdx] || [];
+        const rawRowsFromFront: any[] = (detailTable.rawRowGroups && detailTable.rawRowGroups[rowIdx]) || [];
         const rawType = detailTable.rawRowTypes ? detailTable.rawRowTypes[rowIdx] : undefined;
         const origDetailData = rowIdx < originalData.length
             ? originalData[rowIdx]?.[detailTable.field] : undefined;
 
-        // 无明细时，回退到主表单元格值的解析
-        if (editedRows.length === 0) {
+        // 无明细且前端也没有 raw：回退到主表单元格值的解析
+        if (editedRows.length === 0 && rawRowsFromFront.length === 0) {
             return origDetailData !== undefined ? origDetailData : this.parseCellValue(row[i]);
         }
 
         const isObjectType = rawType === 'object'
             || (rawType === undefined && origDetailData && typeof origDetailData === 'object' && !Array.isArray(origDetailData));
 
+        // ---------- 优先信任前端 rawRowGroups（v2 弹窗写入的真实结构）----------
+        // v2 弹窗每次编辑都直接写到 detailTable.rawRowGroups[rowIdx][di][field]，
+        // 因此只要前端送来了 raw，我们就以它为权威，不再依赖 editedRows 字符串拆解。
+        if (rawRowsFromFront.length > 0) {
+            // 嵌套对象类型：取第一条作为对象返回
+            if (isObjectType) {
+                const r0 = rawRowsFromFront[0];
+                if (r0 && typeof r0 === 'object' && !Array.isArray(r0)) return { ...r0 };
+                return r0 ?? {};
+            }
+            // 对象数组类型：每条 step 浅拷贝一份，避免外部引用
+            return rawRowsFromFront.map(r => (r && typeof r === 'object') ? { ...r } : r);
+        }
+
+        // ---------- 兼容旧链路：仅有 editedRows（字符串二维结构）----------
         // 嵌套对象：用第一条子行重建一个对象返回
         if (isObjectType) {
             const editedFirst = editedRows[0] || [];
@@ -334,16 +437,8 @@ export class YamlFileParser implements FileParser {
             return origObj;
         }
 
-        // 对象数组：按子行重建数组
-        // rawRows 来自原始解析数据，但复制/新增行可能超出其长度
-        // 对于这些行，从 rawRowGroups（深拷贝的原始结构）补充类型信息
+        // 对象数组：按子行重建数组（旧链路）
         let rawRows: any[] = Array.isArray(origDetailData) ? [...origDetailData] : [];
-        {
-            const rawExtra = detailTable.rawRowGroups?.[rowIdx] || [];
-            for (let ei = rawRows.length; ei < rawExtra.length && ei < editedRows.length; ei++) {
-                rawRows.push(rawExtra[ei]);
-            }
-        }
         const reconstructed: any[] = [];
         for (let di = 0; di < editedRows.length; di++) {
             const src: any = (di < rawRows.length && typeof rawRows[di] === 'object')
@@ -360,19 +455,31 @@ export class YamlFileParser implements FileParser {
     }
 
     /**
-     * 把编辑后的字符串值，按原始字段类型尽量还原回原类型
+     * 把编辑后的值（字符串 or 数组）按原始字段类型尽量还原回原类型。
+     * - 当 edited 已经是 array（前端弹窗每项独立编辑后的真实数组），按元素样本类型还原元素，避免数字被引号化。
+     * - 当 edited 是字符串，沿用原有兼容逻辑（旧表格场景）。
      */
-    private coerceValue(edited: string, origRaw: any): any {
+    private coerceValue(edited: any, origRaw: any): any {
+        // 新链路：前端已传入数组形态，按原数组的元素类型样本逐项还原
+        if (Array.isArray(edited)) {
+            // 取一个非空样本判定元素类型
+            let sample: any = undefined;
+            if (Array.isArray(origRaw)) {
+                for (const it of origRaw) {
+                    if (it !== null && it !== undefined && it !== '') { sample = it; break; }
+                }
+            }
+            return edited.map((it: any) => this.coerceArrayItem(it, sample));
+        }
         if (Array.isArray(origRaw)) {
             // 对象数组：优先按 JSON 解析（明细子表会序列化为 JSON 字符串）
             if (origRaw.length > 0 && typeof origRaw[0] === 'object' && origRaw[0] !== null) {
                 if (!edited) return [];
                 try { const v = JSON.parse(edited); if (Array.isArray(v)) return v; } catch { /* fall through */ }
             }
-            // 标量数组：'; ' 分隔
-            return edited
-                ? edited.split('; ').map((s: string) => s.trim()).filter(Boolean)
-                : [];
+            // 标量数组（兼容老链路）：'; ' 分隔；空项保留
+            if (edited === '' || edited === null || edited === undefined) return [];
+            return String(edited).split('; ').map((s: string) => s);
         }
         if (origRaw && typeof origRaw === 'object') {
             // 嵌套对象：优先按 JSON 解析
@@ -380,7 +487,7 @@ export class YamlFileParser implements FileParser {
             try { return JSON.parse(edited); } catch { return edited; }
         }
         if (typeof origRaw === 'boolean') {
-            return edited === 'true';
+            return edited === 'true' || edited === true;
         }
         if (typeof origRaw === 'number') {
             // 保持空字符串为 null，避免被误转 0
@@ -389,6 +496,26 @@ export class YamlFileParser implements FileParser {
             return Number.isNaN(n) ? edited : n;
         }
         return this.parseCellValue(edited);
+    }
+
+    /** 数组元素按样本类型还原（数字数组保数字、布尔数组保布尔，其它保字符串） */
+    private coerceArrayItem(item: any, sample: any): any {
+        if (item === null || item === undefined) return item;
+        if (typeof sample === 'number') {
+            if (typeof item === 'number') return item;
+            const s = String(item).trim();
+            if (s === '') return null;
+            if (!Number.isNaN(Number(s)) && /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(s)) return Number(s);
+            return item;
+        }
+        if (typeof sample === 'boolean') {
+            if (typeof item === 'boolean') return item;
+            const t = String(item).trim().toLowerCase();
+            if (t === 'true') return true;
+            if (t === 'false') return false;
+            return item;
+        }
+        return typeof item === 'string' ? item : String(item);
     }
 
     // ============================================
@@ -412,6 +539,8 @@ export class YamlFileParser implements FileParser {
      * 明细子表单元格格式化：
      * - 仅支持一层展开，子表中再次出现的嵌套对象/对象数组会序列化为 JSON 字符串展示与编辑。
      * - 标量数组（字符串/数字/布尔）用 '; ' 连接展示，与 formatCellValue 行为保持一致。
+     * - 注意：弹窗会优先消费 rawRowGroups（保留原始数组形态）来实现「每项独立编辑」，
+     *   该方法仅作降级展示；保存路径不依赖此处生成的字符串。
      */
     private formatDetailCellValue(value: any): string {
         if (value === null || value === undefined) return '';

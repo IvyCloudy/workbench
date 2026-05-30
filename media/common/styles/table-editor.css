@@ -39,6 +39,15 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 /* 重置按钮：图标稍大占满容器，容器宽高强制一致避免被压窄 */
 .xs-icon-btn-reset{width:24px;min-width:24px;height:24px;padding:0;box-sizing:border-box}
 .xs-icon-btn-reset svg{width:16px;height:16px}
+/* 仅看推送失败按钮 */
+.xs-icon-btn-failed{width:24px;min-width:24px;height:24px;padding:0;box-sizing:border-box}
+.xs-icon-btn-failed svg{width:16px;height:16px}
+.xs-icon-btn-failed svg path{fill:var(--tl)}
+.xs-icon-btn-failed:hover svg path{fill:var(--p)}
+.xs-icon-btn-failed.active{background:#fde8e8;border-color:#d93026}
+.xs-icon-btn-failed.active svg path{fill:#d93026}
+.xs-icon-btn-failed.active:hover{background:#fbd9d9}
+.xs-icon-btn-failed.is-disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
 
 /* 自定义 tooltip：hover 立即显示，无浏览器原生 title 的 ~1s 延迟 */
 .xs-tip{position:relative}
@@ -67,28 +76,37 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 
 /* 表格样式 */
 .xs-table{border-collapse:collapse;table-layout:fixed;width:100%}
-.xs-th{background:#f5f5f5;border:1px solid var(--bd);padding:8px 24px 8px 8px;position:relative;user-select:none;font-weight:500;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
+.xs-th{background:#f5f5f5;border:1px solid var(--bd);padding:8px 18px 8px 8px;position:relative;user-select:none;font-weight:500;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
 .xs-th[data-sort]{background:#e3f2fd}
 .xs-th[data-sort]::after{content:'\25b2';margin-left:4px;font-size:10px;opacity:.5}
 .xs-th[data-sort="desc"]::after{content:'\25bc'}
 .xs-th-cb{width:50px;text-align:center;padding:8px;box-sizing:border-box;position:sticky;left:0;top:0;z-index:5;background:#f5f5f5}
+/* 左上角行号表头：仅显示 # 字符，不可选中也不可点击 */
+.xs-th-cb.xs-th-rownum{cursor:default;color:#999;font-weight:600;user-select:none}
 .xs-th:not(.xs-th-cb){position:sticky;top:0;z-index:2;background:#f5f5f5}
 .xs-th-text{display:inline;vertical-align:middle}
-.xs-th-filter{position:absolute;right:18px;top:50%;transform:translateY(-50%);cursor:pointer;opacity:.45;color:#666;padding:2px 4px;border-radius:2px;line-height:0;user-select:none;display:inline-flex;align-items:center;justify-content:center}
+.xs-th-filter{position:absolute;right:4px;top:50%;transform:translateY(-50%);cursor:pointer;opacity:.45;color:#666;padding:2px 4px;border-radius:2px;line-height:0;user-select:none;display:inline-flex;align-items:center;justify-content:center}
 .xs-th-filter .xs-funnel-icon{display:block;pointer-events:none}
 .xs-th:hover .xs-th-filter{opacity:1}
 .xs-th-filter:hover{background:rgba(0,120,212,.12);color:var(--p);opacity:1}
 .xs-th-filter.active{opacity:1;color:var(--p);background:rgba(0,120,212,.12)}
 
-/* 列调整器 */
-.xs-resizer{position:absolute;right:0;top:0;bottom:0;width:16px;cursor:col-resize;background:transparent;z-index:1}
-.xs-th:hover .xs-resizer{background:rgba(0,120,212,.1)}
-.xs-resizer:hover{background:var(--p)!important}
+/* 列调整器：保留 8px 命中宽度便于鼠标捕捉，但仅在最右侧 2px 位置显示细分隔线，
+   避免视觉上呈现"宽蓝条"误导用户以为是另一个可点击区域。
+   鼠标进入此手柄时光标变 col-resize，并显示主题色细分隔线，明确表示"只可拖动调整列宽"。 */
+.xs-resizer{position:absolute;right:-4px;top:0;bottom:0;width:8px;cursor:col-resize;background:transparent;z-index:3}
+.xs-resizer::after{content:'';position:absolute;right:4px;top:0;bottom:0;width:2px;background:transparent;transition:background .12s ease}
+.xs-resizer:hover::after{background:var(--p)}
 
 /* 单元格样式 */
 .xs-td{border:1px solid var(--bd);padding:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box;vertical-align:top}
-.xs-td-cb{width:50px;text-align:center;cursor:row-resize;position:sticky;left:0;z-index:3;background:#fff;overflow:visible;user-select:none}
+.xs-td-cb{width:50px;text-align:center;cursor:pointer;position:sticky;left:0;z-index:3;background:#fff;overflow:visible;user-select:none}
 .xs-td-cb input{cursor:pointer}
+/* 行号格内的行号文本：居中显示，禁止鼠标交互（事件由父 td 处理） */
+.xs-td-cb .xs-rownum{display:inline-block;color:#666;font-size:12px;font-variant-numeric:tabular-nums;line-height:1;user-select:none;pointer-events:none;font-weight:500}
+/* 行号格底部 3px 行高拖手柄：仅在该窄条上显示 row-resize 光标 */
+.xs-td-cb .xs-row-resizer{position:absolute;left:0;right:0;bottom:0;height:4px;cursor:row-resize;z-index:4}
+tbody tr:hover .xs-td-cb .xs-row-resizer{background:rgba(0,120,212,.25)}
 .xs-cell-wrap{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;word-break:break-word}
 /* 行高被人为调大后，单元格内容自动换行多行展示 */
 tbody tr.xs-tr-resized .xs-td{white-space:normal;overflow:auto}
@@ -122,6 +140,13 @@ tbody tr.selected{background:#e3f2fd}
 tbody tr.hidden{display:none}
 tbody tr td.xs-td-cb{text-align:center;background:inherit}
 tbody tr td.xs-td-cb input{width:16px;height:16px;cursor:pointer}
+
+/* 复选框 + 行号竖排堆叠（在同一列内显示） */
+.xs-cb-stack{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;line-height:1}
+.xs-rownum{display:inline-block;color:#999;font-size:10px;font-variant-numeric:tabular-nums;min-width:14px;line-height:1;user-select:none;pointer-events:none}
+.xs-rownum-h{display:inline-block;color:#999;font-size:10px;line-height:1;user-select:none;pointer-events:none}
+tbody tr.selected td.xs-td-cb .xs-rownum{color:var(--p)}
+tbody tr.xs-tr-push-failed td.xs-td-cb .xs-rownum{color:var(--d)}
 tbody tr.selected td.xs-td-cb{background:#e3f2fd}
 tbody tr:hover td.xs-td-cb{background:#f8f8f8}
 
@@ -140,10 +165,20 @@ tbody tr.xs-tr-push-failed.selected td.xs-td-cb{background:#fde8e8;box-shadow:in
 tbody tr.selected td.xs-td.xs-col-selected{background:#d3e6f7}
 tbody tr.xs-tr-push-failed td.xs-td.xs-col-selected{background:#f5dadc}
 
+/* 单元格矩形选区（Excel 风格）：拖动鼠标形成的矩形高亮，比单点 active 弱 */
+.xs-td.xs-cell-selected{background:#eaf3fb}
+tbody tr.selected td.xs-td.xs-cell-selected{background:#d3e6f7}
+tbody tr.xs-tr-push-failed td.xs-td.xs-cell-selected{background:#f5dadc}
+.xs-td.xs-cell-selected.xs-col-selected{background:#cfe4f8}
+/* 矩形锚点格：保持现有 active 高亮（outline 由 .xs-editable.active 提供） */
+
 /* 冻结列（如 tsId）：浅灰底 + 浅灰文字 + 禁止鼠标编辑光标，提示用户该列只读 */
 .xs-th.xs-th-frozen{background:#eef0f2 !important;color:#888}
 .xs-td.xs-td-frozen{background:#f7f8fa;color:#888;cursor:not-allowed}
 tbody tr.selected td.xs-td.xs-td-frozen{background:#dde7f3}
+/* 冻结列也参与单元格矩形选区（# 全选 / 跨列拖选）：保持冻结灰调，但加深以体现选中态 */
+.xs-td.xs-td-frozen.xs-cell-selected{background:#dde7f3}
+.xs-td.xs-td-frozen.xs-col-selected{background:#d3deeb}
 /* 失败行中的冻结列（tsId）：背景同步红底，文字保持冻结列默认灰色，确保高亮一致但不变红字 */
 tbody tr.xs-tr-push-failed td.xs-td.xs-td-frozen{background:#fde8e8}
 tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-frozen{background:#fbd9d9}
@@ -190,6 +225,8 @@ tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-frozen{background:#fbd9d9}
 .xs-find input[type="checkbox"]{width:auto}
 .xs-find-btns{display:flex;gap:4px;flex-wrap:wrap}
 .xs-find-info{font-size:11px;color:var(--tl);padding:4px 0}
+.xs-find-aa{padding:4px 8px;font-weight:600;letter-spacing:.5px}
+.xs-find-aa.active{background:var(--p);color:#fff;border-color:var(--p)}
 
 /* Toast提示 */
 .xs-toast{position:fixed;z-index:2000;background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:4px;padding:12px 16px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.15);display:none;left:50%;top:50%;transform:translate(-50%,-50%)}
@@ -264,3 +301,83 @@ tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-frozen{background:#fbd9d9}
 .xs-pr-row.is-link:hover{color:#005a9e}
 .xs-pr-reason{flex:1;color:#444;word-break:break-word;white-space:pre-wrap}
 .xs-pr-truncated{padding:8px 16px;font-size:12px;color:#888;background:#fafafa;border-top:1px solid #eee}
+
+/* ===== 明细弹窗 v2：左右双栏布局（步骤列表 + 字段卡片） ===== */
+.xs-detail-dialog-v2{width:90vw;max-width:1280px;height:82vh;max-height:82vh}
+.xs-detail-dialog-v2 .xs-modal-body{padding:0;display:flex;overflow:hidden}
+
+/* 左栏：步骤列表 */
+.xs-dv2-left{width:220px;min-width:200px;max-width:260px;border-right:1px solid var(--bd);background:#fafbfc;display:flex;flex-direction:column;flex-shrink:0}
+.xs-dv2-left-hd{padding:8px 12px;font-size:12px;color:#666;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;background:#f5f5f5;flex-shrink:0}
+.xs-dv2-left-hd-title{font-weight:600;color:#333}
+.xs-dv2-left-hd-count{color:#888;font-size:11px}
+.xs-dv2-steps{flex:1;overflow-y:auto;padding:4px 0}
+.xs-dv2-step{display:flex;align-items:center;padding:8px 12px;cursor:pointer;border-left:3px solid transparent;font-size:12px;gap:6px;position:relative}
+.xs-dv2-step:hover{background:#eef3fa}
+.xs-dv2-step.active{background:#e3f2fd;border-left-color:var(--p);font-weight:500}
+.xs-dv2-step.modified::after{content:'';position:absolute;right:8px;top:50%;transform:translateY(-50%);width:6px;height:6px;border-radius:50%;background:var(--w)}
+.xs-dv2-step-num{flex-shrink:0;width:22px;height:22px;line-height:22px;border-radius:50%;background:#dde3ec;color:#666;text-align:center;font-size:11px;font-weight:600}
+.xs-dv2-step.active .xs-dv2-step-num{background:var(--p);color:#fff}
+.xs-dv2-step-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#333}
+.xs-dv2-step-id{color:#888;font-size:11px}
+.xs-dv2-step-del{flex-shrink:0;width:18px;height:18px;line-height:16px;border-radius:50%;color:#999;cursor:pointer;text-align:center;font-size:13px;visibility:hidden;border:1px solid transparent}
+.xs-dv2-step:hover .xs-dv2-step-del{visibility:visible}
+.xs-dv2-step-del:hover{background:#e34d59;color:#fff;border-color:#e34d59}
+.xs-dv2-left-ft{padding:6px 8px;border-top:1px solid var(--bd);display:flex;gap:6px;flex-shrink:0;background:#f5f5f5}
+.xs-dv2-left-ft .xs-btn{flex:1;font-size:12px;padding:5px 8px}
+
+/* 右栏：字段卡片 */
+.xs-dv2-right{flex:1;overflow-y:auto;padding:14px 18px;background:#fff;min-width:0}
+.xs-dv2-empty{height:100%;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:13px}
+.xs-dv2-field{margin-bottom:14px;border:1px solid #e5e9ef;border-radius:6px;background:#fff;overflow:hidden}
+.xs-dv2-field-hd{display:flex;align-items:center;padding:8px 12px;background:#f7f9fc;border-bottom:1px solid #e5e9ef;gap:8px;font-size:12px}
+.xs-dv2-field-name{font-weight:600;color:#333}
+.xs-dv2-field-type{color:#888;font-size:11px;padding:1px 6px;background:#eef0f2;border-radius:10px}
+.xs-dv2-field-type.is-array{background:#e3f2fd;color:var(--p)}
+.xs-dv2-field-actions{margin-left:auto;display:flex;gap:6px}
+.xs-dv2-field-add{cursor:pointer;color:var(--p);font-size:12px;padding:2px 8px;border:1px dashed var(--p);border-radius:3px;background:transparent;line-height:1.4}
+.xs-dv2-field-add:hover{background:var(--p);color:#fff}
+.xs-dv2-field-body{padding:8px 12px}
+
+/* 标量字段：单行 textarea */
+.xs-dv2-scalar{width:100%;padding:6px 8px;border:1px solid var(--bd);border-radius:3px;font:inherit;font-size:12px;outline:none;resize:vertical;min-height:32px;line-height:1.5;box-sizing:border-box;background:#fff;font-family:inherit}
+.xs-dv2-scalar:focus{border-color:var(--p);box-shadow:0 0 0 2px rgba(0,120,212,.15)}
+.xs-dv2-scalar.modified{background:#fffbe6;border-color:#f3c969}
+
+/* 数组字段：每项独立条目 */
+.xs-dv2-arr-empty{padding:10px;text-align:center;color:#aaa;font-size:12px;border:1px dashed #e5e9ef;border-radius:3px}
+.xs-dv2-arr-item{display:flex;gap:6px;margin-bottom:6px;align-items:flex-start}
+.xs-dv2-arr-item:last-child{margin-bottom:0}
+.xs-dv2-arr-idx{flex-shrink:0;width:22px;line-height:30px;text-align:center;color:#888;font-size:11px;font-variant-numeric:tabular-nums}
+.xs-dv2-arr-input{flex:1;padding:6px 8px;border:1px solid var(--bd);border-radius:3px;font:inherit;font-size:12px;outline:none;resize:vertical;min-height:32px;line-height:1.5;box-sizing:border-box;background:#fff;font-family:inherit;width:100%;display:block;overflow:hidden}
+.xs-dv2-arr-input:focus{border-color:var(--p);box-shadow:0 0 0 2px rgba(0,120,212,.15)}
+.xs-dv2-arr-input.modified{background:#fffbe6;border-color:#f3c969}
+.xs-dv2-arr-del{flex-shrink:0;width:24px;height:30px;line-height:28px;text-align:center;color:#999;cursor:pointer;border:1px solid transparent;border-radius:3px;font-size:14px;background:transparent}
+.xs-dv2-arr-del:hover{background:#e34d59;color:#fff;border-color:#e34d59}
+
+/* ===== 标量数组列：chip 展示（主表单元格内）===== */
+.xs-cell-chips{display:flex;flex-wrap:nowrap;gap:4px;align-items:center;overflow:hidden;width:100%}
+.xs-chip{display:inline-flex;align-items:center;max-width:100%;padding:1px 8px;background:#e3f2fd;color:#0a4a78;border:1px solid #bcdcf5;border-radius:10px;font-size:11px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1}
+.xs-chip.is-empty{background:#f5f5f5;color:#999;border-color:#e0e0e0;font-style:italic}
+.xs-chip-more{display:inline-flex;align-items:center;padding:1px 6px;color:#888;font-size:11px;flex-shrink:0}
+tbody tr.xs-tr-resized .xs-cell-chips{flex-wrap:wrap}
+tbody tr.xs-tr-resized .xs-chip{white-space:normal}
+
+/* ===== 多项编辑弹窗 ===== */
+.xs-arr-dialog{width:520px;max-width:90vw;max-height:80vh;display:flex;flex-direction:column}
+.xs-arr-body{padding:12px 16px;overflow-y:auto;flex:1;min-height:80px}
+.xs-arr-empty{padding:18px;text-align:center;color:#aaa;font-size:12px;border:1px dashed #e5e9ef;border-radius:4px}
+.xs-arr-row{display:flex;gap:8px;margin-bottom:8px;align-items:flex-start}
+.xs-arr-row:last-child{margin-bottom:0}
+.xs-arr-row-idx{flex-shrink:0;width:24px;line-height:30px;text-align:center;color:#888;font-size:11px;font-variant-numeric:tabular-nums}
+.xs-arr-row-input{flex:1;padding:6px 8px;border:1px solid var(--bd);border-radius:3px;font:inherit;font-size:12px;outline:none;resize:vertical;min-height:32px;line-height:1.5;box-sizing:border-box;background:#fff;font-family:inherit;display:block;overflow:hidden;width:100%}
+.xs-arr-row-input:focus{border-color:var(--p);box-shadow:0 0 0 2px rgba(0,120,212,.15)}
+.xs-arr-row-input.is-invalid{border-color:var(--d);background:#fff5f5}
+.xs-arr-row-actions{display:flex;flex-direction:column;gap:2px;flex-shrink:0}
+.xs-arr-btn-mini{width:24px;height:14px;line-height:12px;text-align:center;color:#888;cursor:pointer;border:1px solid var(--bd);border-radius:3px;font-size:10px;background:#fff;padding:0}
+.xs-arr-btn-mini:hover{background:var(--p);color:#fff;border-color:var(--p)}
+.xs-arr-btn-mini:disabled{opacity:.4;cursor:not-allowed}
+.xs-arr-btn-mini:disabled:hover{background:#fff;color:#888;border-color:var(--bd)}
+.xs-arr-row-del{flex-shrink:0;width:30px;height:30px;line-height:28px;text-align:center;color:#999;cursor:pointer;border:1px solid transparent;border-radius:3px;font-size:14px;background:transparent}
+.xs-arr-row-del:hover{background:#e34d59;color:#fff;border-color:#e34d59}
+.xs-arr-tip{margin-top:6px;color:#888;font-size:11px;line-height:1.4}

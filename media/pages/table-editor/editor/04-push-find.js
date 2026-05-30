@@ -15,15 +15,22 @@
  *      - buildColValueStats / openColFilter / positionColFilter /
  *        syncSelectedToSearch / renderColFilterList / applyColFilter /
  *        closeColFilter
- *      筛选结果存放在 S._colFilters，由 02-render-bind.js 在 renderTable 中应用。
+ *      筛选结果存放在 S._colFilters，由 02a-render.js 在 renderTable 中应用。
  * ========================================================================== */
 
 
 // ==================== 推送 / 保存 ====================
 function pushChanges() {
-    if (S.sel.size === 0) { showToast('请先选择需要推送的行', 'error'); return; }
+    // 防重复点击：后端还未返回 pushDone/pushResult/pushError 之前，不允许再次 post
+    if (S._pushing) {
+        if (typeof showToast === 'function') showToast('推送中，请稍候…', 'info');
+        return;
+    }
+    var picked = (typeof getPushTargetRows === 'function')
+        ? getPushTargetRows()
+        : (S.sel.size > 0 ? Array.from(S.sel).sort(function (a, b) { return a - b; }) : []);
+    if (picked.length === 0) { showToast('请先选择需要推送的行', 'error'); return; }
     var headers = S.data.headers || [];
-    var picked = Array.from(S.sel).sort(function (a, b) { return a - b; });
     var tsCol = headers.indexOf('tsId');
     // 收集 tsId -> 真实表格行号 (1-based)，用于失败弹窗显示"第 X 行"，避免后端按数组下标导致行号错位
     var rowIndexMap = {};
@@ -39,21 +46,38 @@ function pushChanges() {
         }
         return record;
     });
-    // 发起新一轮推送前清空上一轮失败高亮（仅清本次选中的行），避免新旧混淆
-    if (S._pushFailedTsIds && S._pushFailedTsIds.size > 0) {
-        if (tsCol >= 0) {
-            picked.forEach(function (ri) {
-                var t = (S.data.rows[ri] || [])[tsCol];
-                if (t !== undefined && t !== null && t !== '') S._pushFailedTsIds.delete(String(t));
-            });
-            renderTable();
-        }
+    // 缓存本批参与推送的 tsId，供 pushResult 回来后做"本批成功 = 本批 - 本批失败"差集计算，
+    // 进而仅清除本批中已成功的失败标记，未参与本批的历史失败行保持高亮不变。
+    S._lastPushBatchTsIds = new Set();
+    if (tsCol >= 0) {
+        picked.forEach(function (ri) {
+            var t = (S.data.rows[ri] || [])[tsCol];
+            if (t !== undefined && t !== null && t !== '') {
+                S._lastPushBatchTsIds.add(String(t));
+            }
+        });
     }
+    // 置忙：锁定推送按钮与 UI，正常路径会在 pushDone/pushResult/pushError 清除。
+    S._pushing = true;
+    if (typeof updatePushBtn === 'function') updatePushBtn();
+    // 兑底：若后端 30s 内未回复任何消息，自动解锁，避免按钮永久置灰
+    if (S._pushTimeoutTimer) { try { clearTimeout(S._pushTimeoutTimer); } catch (_) {} }
+    S._pushTimeoutTimer = setTimeout(function () {
+        S._pushTimeoutTimer = null;
+        if (S._pushing) {
+            S._pushing = false;
+            if (typeof updatePushBtn === 'function') updatePushBtn();
+            if (typeof showToast === 'function') showToast('推送超时未响应，已解除按钮锁定', 'error');
+        }
+    }, 30000);
     S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap });
 }
 
 function saveFile() {
     if (!S.vscode) return;
+    var rows = (S.data && S.data.rows && S.data.rows.length) || 0;
+    var heads = (S.data && S.data.headers && S.data.headers.length) || 0;
+    dbg('💾 saveFile post rows=' + rows + ' cols=' + heads + ' mods=' + (S.mods ? S.mods.size : 0));
     S.vscode.postMessage({ type: 'save', data: S.data });
 }
 
@@ -65,6 +89,12 @@ function openFindPanel() {
     var fi = document.getElementById('findInput');
     var top = document.getElementById('searchInput');
     if (fi && top && top.value && !fi.value) fi.value = top.value;
+    // 同步 Aa 按钮的高亮状态
+    var caseBtn = document.getElementById('findCaseBtn');
+    if (caseBtn) {
+        if (S._findCaseSensitive) caseBtn.classList.add('active');
+        else caseBtn.classList.remove('active');
+    }
     if (fi) {
         fi.focus(); fi.select();
         rebuildFindMatches(fi.value || '');
@@ -133,14 +163,18 @@ function rebuildFindMatches(kw) {
     S._matchIdx = -1;
     clearFindHighlight();
     if (!S._findKw) return;
-    var lower = S._findKw.toLowerCase();
+    var caseSensitive = !!S._findCaseSensitive;
+    var needle = caseSensitive ? S._findKw : S._findKw.toLowerCase();
     var rows = (S.data && S.data.rows) || [];
     var headers = (S.data && S.data.headers) || [];
     rows.forEach(function (row, ri) {
         headers.forEach(function (_, ci) {
             var v = row[ci];
             if (v === null || v === undefined) return;
-            if (String(v).toLowerCase().indexOf(lower) >= 0) {
+            // 数组列：以 '; ' 拼接后参与查找（与主表 chip 走同一拼接规则）
+            var s = Array.isArray(v) ? formatCellValue(v) : String(v);
+            var hay = caseSensitive ? s : s.toLowerCase();
+            if (hay.indexOf(needle) >= 0) {
                 S._matches.push({ r: ri, c: ci });
             }
         });
@@ -175,12 +209,13 @@ function markText(node, kw, isActive) {
     if (!kw) return;
     var text = node.textContent || '';
     if (!text) return;
-    var lower = text.toLowerCase();
-    var lkw = kw.toLowerCase();
+    var caseSensitive = !!S._findCaseSensitive;
+    var hay = caseSensitive ? text : text.toLowerCase();
+    var needle = caseSensitive ? kw : kw.toLowerCase();
     var html = '';
     var i = 0;
     while (i < text.length) {
-        var hit = lower.indexOf(lkw, i);
+        var hit = hay.indexOf(needle, i);
         if (hit < 0) { html += escapeHtml(text.slice(i)); break; }
         html += escapeHtml(text.slice(i, hit));
         var cls = isActive ? 'xs-mk xs-mk-active' : 'xs-mk';
@@ -221,6 +256,10 @@ function stepFind(dir) {
 function focusActiveMatch() {
     if (S._matchIdx < 0 || S._matchIdx >= S._matches.length) return;
     var m = S._matches[S._matchIdx];
+    // 虚拟滚动模式下，目标行可能未渲染：先把它滚入视口触发渲染
+    if (S._virtualOn && typeof ensureRowVisible === 'function') {
+        ensureRowVisible(m.r);
+    }
     var td = document.querySelector('td.xs-editable[data-row="' + m.r + '"][data-col="' + m.c + '"]');
     if (td && td.scrollIntoView) td.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
 }
@@ -245,18 +284,25 @@ function replaceCurrent() {
         stepFind(1);
         return;
     }
+    // 数组列不支持查找替换（多项语义与 '; ' 分隔符容易窜乱，跳过）
+    if (typeof isArrayCol === 'function' && isArrayCol(m.c)) {
+        showToast('标量数组列不支持查找替换，请双击单元格在多项编辑弹窗中修改', 'error');
+        stepFind(1);
+        return;
+    }
     var oldCell = String(S.data.rows[m.r][m.c] === undefined ? '' : S.data.rows[m.r][m.c]);
     // 仅替换该单元格中第一处匹配（按用户预期：单步替换）
-    var lower = oldCell.toLowerCase();
-    var lkw = S._findKw.toLowerCase();
-    var hit = lower.indexOf(lkw);
+    var caseSensitive = !!S._findCaseSensitive;
+    var hay = caseSensitive ? oldCell : oldCell.toLowerCase();
+    var needle = caseSensitive ? S._findKw : S._findKw.toLowerCase();
+    var hit = hay.indexOf(needle);
     if (hit < 0) { stepFind(1); return; }
     var newCell = oldCell.slice(0, hit) + newVal + oldCell.slice(hit + S._findKw.length);
     pushHistory();
     S.data.rows[m.r][m.c] = newCell;
     S.mods.add(m.r + ',' + m.c);
     saveFile();
-    renderTable();
+    patchCell(m.r, m.c);
     // 重新搜索（单元格内可能还有其他命中）
     rebuildFindMatches(S._findKw);
     if (S._matches.length === 0) {
@@ -276,22 +322,25 @@ function replaceAll() {
     if (!S._findKw) { showToast('请输入查找内容', 'error'); return; }
     var rep = document.getElementById('replaceInput');
     var newVal = rep ? rep.value : '';
-    var lkw = S._findKw.toLowerCase();
+    var caseSensitive = !!S._findCaseSensitive;
+    var needle = caseSensitive ? S._findKw : S._findKw.toLowerCase();
     var count = 0;
     pushHistory();
     (S.data.rows || []).forEach(function (row, ri) {
         (S.data.headers || []).forEach(function (_, ci) {
             if (isFrozenCol(ci)) return; // tsId 列跳过
+            // 标量数组列跳过全量替换，避免语义窜乱
+            if (typeof isArrayCol === 'function' && isArrayCol(ci)) return;
             var v = row[ci];
             if (v === null || v === undefined) return;
             var s = String(v);
-            if (s.toLowerCase().indexOf(lkw) < 0) return;
-            // 全部替换（大小写不敏感）
+            var hay = caseSensitive ? s : s.toLowerCase();
+            if (hay.indexOf(needle) < 0) return;
+            // 全部替换（根据开关决定是否区分大小写）
             var out = '';
             var i = 0;
-            var lo = s.toLowerCase();
             while (i < s.length) {
-                var h = lo.indexOf(lkw, i);
+                var h = hay.indexOf(needle, i);
                 if (h < 0) { out += s.slice(i); break; }
                 out += s.slice(i, h) + newVal;
                 i = h + S._findKw.length;
@@ -309,9 +358,31 @@ function replaceAll() {
     closeFindPanel();
 }
 
-// ==================== 列筛选（Excel 风格） ====================
-// 计算「除指定列外」的其他筛选+顶部搜索通过的行，用于在筛选弹窗中正确给出值的计数
+// 计算「除指定列外」的其他筛选+顶部搜索通过的行，用于在筛选弹窗中正确给出值的计数。
+// 缓存优化：同一个筛选弹窗会多次调用（连续点选项、输入搜索词），
+// 结果仅依赖 (S.data, S._searchKw, S._colFilters)，未变时复用。
+function _filtersCacheKey() {
+    var parts = ['kw=' + (S._searchKw || ''), 'rows=' + ((S.data && S.data.rows && S.data.rows.length) || 0)];
+    if (S._colFilters) {
+        var keys = Object.keys(S._colFilters).map(function (k) { return parseInt(k, 10); }).sort(function (a, b) { return a - b; });
+        for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            var set = S._colFilters[k];
+            if (!(set instanceof Set)) continue;
+            var arr = Array.from(set);
+            arr.sort();
+            parts.push(k + ':' + arr.join('\u0001'));
+        }
+    }
+    return parts.join('|');
+}
 function getRowsPassingOtherFilters(excludeCol) {
+    var sig = _filtersCacheKey();
+    if (!S._otherFiltersCache || S._otherFiltersCache.sig !== sig) {
+        S._otherFiltersCache = { sig: sig, byCol: {} };
+    }
+    var bucket = S._otherFiltersCache.byCol;
+    if (bucket['c' + excludeCol]) return bucket['c' + excludeCol];
     var rows = (S.data && S.data.rows) || [];
     var headers = (S.data && S.data.headers) || [];
     var skw = (S._searchKw || '').toLowerCase();
@@ -321,7 +392,9 @@ function getRowsPassingOtherFilters(excludeCol) {
             var hit = false;
             for (var k = 0; k < headers.length; k++) {
                 var cv = row[k];
-                if (cv !== null && cv !== undefined && String(cv).toLowerCase().indexOf(skw) >= 0) { hit = true; break; }
+                if (cv === null || cv === undefined) continue;
+                var cvStr = Array.isArray(cv) ? formatCellValue(cv) : String(cv);
+                if (cvStr.toLowerCase().indexOf(skw) >= 0) { hit = true; break; }
             }
             if (!hit) return;
         }
@@ -331,11 +404,15 @@ function getRowsPassingOtherFilters(excludeCol) {
             var allow = S._colFilters[fc];
             var fcIdx = parseInt(fc, 10);
             var cellVal = row[fcIdx];
-            var cellKey = (cellVal === null || cellVal === undefined || cellVal === '') ? '__BLANK__' : String(cellVal);
+            var cellKey;
+            if (cellVal === null || cellVal === undefined || cellVal === '') cellKey = '__BLANK__';
+            else if (Array.isArray(cellVal)) cellKey = (cellVal.length === 0 ? '__BLANK__' : formatCellValue(cellVal));
+            else cellKey = String(cellVal);
             if (!allow.has(cellKey)) return;
         }
         out.push(row);
     });
+    bucket['c' + excludeCol] = out;
     return out;
 }
 
@@ -345,7 +422,10 @@ function buildColValueStats(col) {
     var map = new Map(); // key -> count
     rows.forEach(function (row) {
         var v = row[col];
-        var key = (v === null || v === undefined || v === '') ? '__BLANK__' : String(v);
+        var key;
+        if (v === null || v === undefined || v === '') key = '__BLANK__';
+        else if (Array.isArray(v)) key = (v.length === 0 ? '__BLANK__' : formatCellValue(v));
+        else key = String(v);
         map.set(key, (map.get(key) || 0) + 1);
     });
     // 转成数组并按值字典序排序；空值置底

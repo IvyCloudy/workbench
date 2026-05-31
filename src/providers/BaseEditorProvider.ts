@@ -23,6 +23,7 @@ import { getNonce, isInQualifiedDir, buildErrorHtml, FILE_PATTERNS, TS_ID_COLUMN
 import { getHeaderTaskInfoByFilePath } from '../utils/taskInfo';
 import { pushTestCase } from '../services/http';
 import { createParser, ensureTrackingColumns, applyTestCaseNos, type FileParser, type FileType } from '../parsers';
+import { trackEvent, trackError, trackException, handleWebviewTelemetry } from '../services/telemetry';
 
 // 重新导出工具，便于子类使用
 export { isInQualifiedDir, FILE_PATTERNS };
@@ -62,12 +63,17 @@ export class PushViaHttpClient implements PushStrategy {
         extensionContext?: vscode.ExtensionContext
     ): Promise<void> {
         if (!extensionContext) throw new Error('ExtensionContext 不可用，无法推送');
+        const _pushStart = Date.now();
+        const _ext = path.extname(ctx.filePath).toLowerCase();
+        const _rowCount = Array.isArray(data) ? data.length : 0;
+        trackEvent('editorPush.start', { ext: _ext }, { rowCount: _rowCount });
 
         // 任务信息统一由 getHeaderTaskInfoByFilePath 提供：未绑定一律拒绝推送
         const header = getHeaderTaskInfoByFilePath(extensionContext, ctx.filePath);
         if (!header.bind) {
             const message = '未绑定任务，无法推送。请先在 task-bindings.json 中完成绑定。';
             webviewPanel.webview.postMessage({ type: 'pushError', message });
+            trackError('editorPush.rejected', { reason: 'unbound', ext: _ext });
             throw new Error(message);
         }
         const taskInfo = {
@@ -109,6 +115,10 @@ export class PushViaHttpClient implements PushStrategy {
         const result = await pushTestCase(extensionContext, pushData, taskInfo, path.basename(ctx.filePath));
         if (result.returnCode !== 'SUC0000') {
             webviewPanel.webview.postMessage({ type: 'pushError', message: result.errorMsg || '推送失败' });
+            trackError('editorPush.failed', {
+                ext: _ext,
+                returnCode: result.returnCode || '',
+            }, { rowCount: _rowCount, durationMs: Date.now() - _pushStart });
             return;
         }
 
@@ -173,6 +183,17 @@ export class PushViaHttpClient implements PushStrategy {
             successCount: successMappings.length,
             failures: failureItems,
             total,
+        });
+
+        // 埋点：推送结果汇总
+        trackEvent('editorPush.complete', {
+            ext: _ext,
+            outcome: failures.length === 0 ? 'allSuccess' : (successMappings.length === 0 ? 'allFail' : 'partial'),
+        }, {
+            rowCount: total,
+            successCount: successMappings.length,
+            failedCount: failures.length,
+            durationMs: Date.now() - _pushStart,
         });
 
         // 通知前端推送流程已完成（用于隐藏 loading 之类的状态）
@@ -435,12 +456,15 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
 
         // ⚠ 关键：必须先绑定 onDidReceiveMessage 再设置 webview.html
         webviewPanel.webview.onDidReceiveMessage(async (msg: any) => {
+            // webview 来的埋点消息优先转发，不走后续业务分支
+            if (handleWebviewTelemetry(msg)) return;
             try {
                 if (msg?.type === 'init') {
                     log('📨 init from webview');
                     await pushDataToWebview(true, 'init');
                     // 通知等待方：webview 已就绪，可以接收推送结果消息
                     try { markReady(); } catch (_) { /* ignore */ }
+                    trackEvent('editor.opened', { fileType: session.type });
                 } else if (msg?.type === 'save' && msg?.data) {
                     const _saveStart = Date.now();
                     const _inRows = (msg.data?.rows || []).length;
@@ -454,6 +478,11 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     // writeFile 返回之后，从这一刻开始算 SELF_SAVE_GUARD_MS 才能可靠拦截自反弹。
                     lastSelfSaveAt = Date.now();
                     log(`💾 save done dur=${_saveDur}ms lastSelfSaveAt refreshed`);
+                    trackEvent('editor.saved', { fileType: session.type }, {
+                        rows: _inRows,
+                        cols: _inHeaders,
+                        durationMs: _saveDur,
+                    });
                     // 缓存与前端最新数据一致：直接复用 webview 提交上来的 data，
                     // 避免置 null 后被外部触发的 reparse 在 fs flush 中读到部分内容/空数据。
                     try { session.cachedTableData = msg.data; } catch (_) { session.cachedTableData = null; }
@@ -478,6 +507,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 }
             } catch (err: any) {
                 const errMsg = err?.message || String(err) || '操作失败';
+                trackException('editor.message.error', err, { msgType: msg?.type, fileType: session.type });
                 if (msg?.type === 'save') {
                     webviewPanel.webview.postMessage({ type: 'saveError', message: errMsg });
                 } else if (msg?.type === 'pushTestCase') {

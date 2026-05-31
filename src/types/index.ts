@@ -115,6 +115,10 @@ export interface AppConfig {
     userId: string;
     userName: string;
     sm2PublicKey: string;
+    /** 埋点网关地址，留空则回退到 apiUrl */
+    telemetryUrl?: string;
+    /** 埋点网关鉴权 Token，对应网关 X-Telemetry-Token */
+    telemetryToken?: string;
 }
 
 // ============================================

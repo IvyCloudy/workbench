@@ -25,6 +25,7 @@ import { pushTestCase } from './services/http';
 import { applyTestCaseNos, createParser, detectFileType, ensureTrackingColumns, parseFileToRows } from './parsers';
 import { ensureBindingsFile } from './utils/taskInfoStore';
 import { getHeaderTaskInfoByFilePath } from './utils/taskInfo';
+import { initTelemetry, trackEvent, trackError, trackException } from './services/telemetry';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
@@ -100,10 +101,13 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     }
     const target = targets[0];
     const filePath = target.fsPath;
+    const fileExt = path.extname(filePath).toLowerCase();
+    const pushStart = Date.now();
 
     const fileCheck = FileTypeChecker.isQualifiedFile(target);
     if (!fileCheck.qualified) {
         vscode.window.showWarningMessage(`文件不在允许的目录下: ${path.basename(filePath)}`);
+        trackError('explorerPush.rejected', { reason: 'unqualified', ext: fileExt });
         return;
     }
 
@@ -111,6 +115,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     const header = getHeaderTaskInfoByFilePath(context, filePath);
     if (!header.bind) {
         vscode.window.showWarningMessage(`未绑定任务，无法推送：${path.basename(filePath)}`);
+        trackError('explorerPush.rejected', { reason: 'unbound', ext: fileExt });
         return;
     }
     const taskInfo = {
@@ -121,6 +126,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     const rows = await parseFileToRows(filePath);
     if (!rows || rows.length === 0) {
         vscode.window.showWarningMessage(`文件无数据: ${path.basename(filePath)}`);
+        trackError('explorerPush.rejected', { reason: 'empty', ext: fileExt });
         return;
     }
 
@@ -128,9 +134,14 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     const panel = await ensureOpenedInTestcaseEditor(target);
 
     console.log(`[推送] 文件: ${filePath}, ${rows.length} 行`);
+    trackEvent('explorerPush.start', { ext: fileExt }, { rowCount: rows.length });
     const pushResult = await pushTestCase(context, rows, taskInfo, path.basename(filePath));
     if (pushResult.returnCode !== 'SUC0000') {
         vscode.window.showErrorMessage(`推送失败: ${pushResult.errorMsg || '未知错误'}`);
+        trackError('explorerPush.failed', {
+            ext: fileExt,
+            returnCode: pushResult.returnCode || '',
+        }, { rowCount: rows.length, durationMs: Date.now() - pushStart });
         return;
     }
 
@@ -178,6 +189,17 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
             reason: f.reason,
             rowIndex: ri !== undefined ? ri + 1 : undefined,
         };
+    });
+
+    // 埋点：推送结果汇总
+    trackEvent('explorerPush.complete', {
+        ext: fileExt,
+        outcome: failures.length === 0 ? 'allSuccess' : (successMappings.length === 0 ? 'allFail' : 'partial'),
+    }, {
+        rowCount: rows.length,
+        successCount: successMappings.length,
+        failedCount: failures.length,
+        durationMs: Date.now() - pushStart,
     });
 
     // 统一通过对应 webview 弹窗展示（与编辑器内推送一致）
@@ -232,11 +254,23 @@ function registerEditorCommands(
 // ============================================
 
 export function activate(context: vscode.ExtensionContext) {
+    const _activateStart = Date.now();
     console.log('[Extension] 插件激活中...');
+
+    // 埋点初始化（必须尽早，且尊重用户 telemetry 设置）
+    initTelemetry(context).catch(err => {
+        console.warn('[Extension] 初始化埋点失败（已忽略）:', err?.message || err);
+    });
+
+    // 全局未捕获异常上报（兜底）
+    process.on('unhandledRejection', (reason: any) => {
+        try { trackException('extension.unhandledRejection', reason); } catch (_) { /* ignore */ }
+    });
 
     // 初始化测试任务绑定文件（不存在则创建空模板，并打印路径便于用户定位）
     ensureBindingsFile(context).catch(err => {
         console.error('[Extension] 初始化绑定文件失败:', err?.message || err);
+        trackException('bindings.initFailed', err);
     });
 
     const tableBrowserProvider = new TableBrowserProvider(context.extensionUri, context);
@@ -258,10 +292,14 @@ export function activate(context: vscode.ExtensionContext) {
         ),
 
         // 全局命令
-        vscode.commands.registerCommand('tableBrowser.open', () => tableBrowserProvider.show()),
+        vscode.commands.registerCommand('tableBrowser.open', () => {
+            trackEvent('command.executed', { command: 'tableBrowser.open' });
+            return tableBrowserProvider.show();
+        }),
         vscode.commands.registerCommand('testcaseViewer.viewOnline', async () => {
             const uri = getActiveFileUri();
             if (uri && isTestCaseFile(uri)) {
+                trackEvent('command.executed', { command: 'testcaseViewer.viewOnline' });
                 await testCaseProvider.showWebview(uri);
             }
         }),
@@ -273,11 +311,13 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand(
             'testcaseViewer.pushTestCaseFromExplorer',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
+                trackEvent('command.executed', { command: 'testcaseViewer.pushTestCaseFromExplorer' });
                 try {
                     const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
                     await handleFilePush(targets, context);
                 } catch (err: any) {
                     vscode.window.showErrorMessage(`推送失败: ${err.message || err}`);
+                    trackException('explorerPush.uncaught', err);
                 }
             }
         ),
@@ -288,6 +328,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     updateShowIcon();
     console.log('[Extension] 插件激活完成');
+    trackEvent('extension.activate.done', undefined, { activateMs: Date.now() - _activateStart });
 }
 
 export function deactivate() {

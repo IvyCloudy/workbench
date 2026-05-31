@@ -1,0 +1,50 @@
+version: '3.8'
+
+# =============================================================================
+#  Metabase 本地一键启动
+# -----------------------------------------------------------------------------
+#  用途：连接本地 MySQL（workbench_telemetry 库）做埋点数据可视化
+#  使用：
+#    1) cd telemetry-server/metabase
+#    2) docker compose up -d
+#    3) 浏览器打开 http://localhost:3001
+#    4) 首次进入会让你创建管理员账号 + 添加数据源
+#       - 数据库类型选 MySQL
+#       - Host 填 host.docker.internal （Mac/Win）或 172.17.0.1 （Linux）
+#       - Port 3306
+#       - Database name: workbench_telemetry
+#       - Username/Password: 用你 .env 里配置的那一对
+#  停止：docker compose down
+#  完全清理：docker compose down -v   （会删掉 metabase 自己的元数据）
+# =============================================================================
+
+services:
+  metabase:
+    image: metabase/metabase:v0.50.20
+    container_name: telemetry-metabase
+    restart: unless-stopped
+    ports:
+      # 故意用 3001，避开你网关常用的 3000 端口
+      - "3001:3000"
+    environment:
+      # Metabase 自身元数据用内置 H2，零依赖；如需更稳可换 PostgreSQL
+      MB_DB_TYPE: h2
+      MB_DB_FILE: /metabase-data/metabase.db
+      # 默认时区（图表里的"按天聚合"会用这个时区切日）
+      MB_SITE_LOCALE: zh_CN
+      JAVA_TIMEZONE: Asia/Shanghai
+    volumes:
+      - metabase-data:/metabase-data
+    extra_hosts:
+      # 让容器内能用 host.docker.internal 解析到宿主机（Linux 也可用）
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  metabase-data:
+    name: telemetry-metabase-data

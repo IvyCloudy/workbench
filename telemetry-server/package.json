@@ -1,0 +1,22 @@
+{
+  "name": "workbench-telemetry-server",
+  "version": "1.0.0",
+  "description": "Workbench 插件埋点接收网关（极简自建版）",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "NODE_ENV=development node src/server.js",
+    "migrate": "node scripts/migrate.js",
+    "stats:daily": "node scripts/stats-daily.js",
+    "query": "node scripts/query.js",
+    "cleanup": "node scripts/cleanup.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "mysql2": "^3.11.0"
+  },
+  "license": "MIT"
+}

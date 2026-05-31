@@ -6,7 +6,6 @@ package-lock.json
 
 # telemetry-server 本地依赖与运行产物
 /telemetry-server/node_modules/
-/telemetry-server/.env
 /telemetry-server/data/
 
 # Metabase 驱动与示例数据库（体积大，部署时按需下载）

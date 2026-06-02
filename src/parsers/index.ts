@@ -55,9 +55,9 @@ export function detectFileType(filePath: string): FileType | null {
  *   - 不存在则插入到 headers 最前面，并为每行补 uuid
  *   - 已存在但部分行为空，逐行补 uuid
  *
- * 同时把 tsId 字段回写到 sourceData（YAML/JSON 用于 save 重建嵌套结构时也能保留 tsId）。
+ * 同时把 testcase_id 字段回写到 sourceData（YAML/JSON 用于 save 重建嵌套结构时也能保留 testcase_id）。
  *
- * @returns generated  是否产生了新的 uuid（true 时调用方应立刻 save 让 tsId 持久化）
+ * @returns generated  是否产生了新的 uuid（true 时调用方应立刻 save 让 testcase_id 持久化）
  */
 export function ensureTrackingColumns(
     tableData: TableData,

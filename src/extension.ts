@@ -88,7 +88,7 @@ async function ensureOpenedInTestcaseEditor(uri: vscode.Uri): Promise<vscode.Web
  *   3. parseFileToRows 解析为推送用二维数组（CSV/YAML/JSON 透明）。
  *   4. 确保文件以 testcase 编辑器打开（未开则 openWith，已开则 reveal）。
  *   5. pushTestCase 调后端，按返回逐条分类（成功/失败）。
- *   6. 成功项按 tsId 回写 testCaseNo 到原文件。
+ *   6. 成功项按 testcase_id 回写 testCaseNo 到原文件。
  *   7. 向该 webview postMessage('pushResult')，由前端弹窗展示结果。
  *
  * 多文件场景暂不支持，后续再设计。

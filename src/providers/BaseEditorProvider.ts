@@ -14,7 +14,7 @@
  *  关键设计：
  *    - resolveCustomEditor 里调用 workbench.action.keepEditor，避免「预览 Tab」被互相覆盖。
  *    - cachedTableData 作为可见性变化时的快照，避免反复重解。
- *    - tsId 由 ensureTrackingColumns 代为生成，生成后立即 save 落盘，保证推送响应能匹配。
+ *    - testcase_id 由 ensureTrackingColumns 代为生成，生成后立即 save 落盘，保证推送响应能匹配。
  * ============================================================================
  */
 import * as vscode from 'vscode';
@@ -78,7 +78,7 @@ export class PushViaHttpClient implements PushStrategy {
         // 重新解析文件获取原始结构化数据。
         // 前端 table 中嵌套对象/数组字段被渲染为显示文本（如 "[2 项]"），
         // 但文件落盘时 parser.save 通过 reconstructDetail 保留了正确结构。
-        // 此处重新 parse 并用 tsId 匹配，确保推送的是原始数据而非显示文本。
+        // 此处重新 parse 并用 testcase_id 匹配，确保推送的是原始数据而非显示文本。
         let pushData: any[] = data;
         try {
             const parsed = await ctx.session.parser.parse(ctx.filePath);
@@ -335,7 +335,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                         try {
                             lastSelfSaveAt = Date.now();
                             await session.parser.save(filePath, session.cachedTableData, session.originalSourceData);
-                            log('💾 tsId 已补全并落盘');
+                            log('💾 testcase_id 已补全并落盘');
                         } catch (e: any) {
                             log('⚠ tsId 落盘失败:', e?.message || e);
                         }

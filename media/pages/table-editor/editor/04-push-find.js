@@ -31,8 +31,8 @@ function pushChanges() {
         : (S.sel.size > 0 ? Array.from(S.sel).sort(function (a, b) { return a - b; }) : []);
     if (picked.length === 0) { showToast('请先选择需要推送的行', 'error'); return; }
     var headers = S.data.headers || [];
-    var tsCol = headers.indexOf('tsId');
-    // 收集 tsId -> 真实表格行号 (1-based)，用于失败弹窗显示"第 X 行"，避免后端按数组下标导致行号错位
+    var tsCol = headers.indexOf('testcase_id');
+    // 收集 testcase_id -> 真实表格行号 (1-based)，用于失败弹窗显示"第 X 行"，避免后端按数组下标导致行号错位
     var rowIndexMap = {};
     var payload = picked.map(function (ri) {
         var record = {};
@@ -280,7 +280,7 @@ function replaceCurrent() {
     var newVal = rep ? rep.value : '';
     var m = S._matches[S._matchIdx];
     if (isFrozenCol(m.c)) {
-        showToast('tsId 列为系统列，跳过替换', 'error');
+        showToast('testcase_id 列为系统列，跳过替换', 'error');
         stepFind(1);
         return;
     }

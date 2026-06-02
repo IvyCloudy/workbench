@@ -402,7 +402,7 @@ function bindDocument() {
                 saveFile();
                 renderTable();
                 var msg = '已粘贴 ' + changed + ' 个单元格';
-                if (skippedTsId) msg += '（tsId 列已跳过）';
+                if (skippedTsId) msg += '（testcase_id 列已跳过）';
                 if (typeof showToast === 'function') showToast(msg, 'success');
             }).catch(function (err) {
                 if (typeof showToast === 'function') showToast('读取剪贴板失败：' + (err && err.message ? err.message : err), 'error');

@@ -3,7 +3,7 @@
  * -----------------------------------------------------------------------------
  * 由原 03-cell-ops.js 拆分而来，集中处理用户对表格内容的所有交互式编辑动作：
  *   1. 单元格编辑：selectCell / onCellDblClick / startEdit
- *      （进入编辑、提交修改、Esc 取消、tsId 等冻结列禁止编辑、批量写入选区）
+ *      （进入编辑、提交修改、Esc 取消、testcase_id 等冻结列禁止编辑、批量写入选区）
  *   2. 右键菜单：showContextMenu / hideContextMenu
  *      （根据点击位置动态构造菜单项：插入 / 删除 / 复制 / 粘贴 / 清空 / 推送 等）
  *   3. 行/列数据操作：insertRow / deleteRow / deleteSelectedRows /
@@ -28,10 +28,10 @@ function onCellDblClick(e) {
     var td = e.currentTarget;
     var ri = parseInt(td.getAttribute('data-row'), 10);
     var ci = parseInt(td.getAttribute('data-col'), 10);
-    // tsId 列冻结：不允许双击进入编辑
+    // testcase_id 列冻结：不允许双击进入编辑
     if (isFrozenCol(ci)) {
         e.preventDefault();
-        showToast('tsId 列为系统列，不允许编辑', 'error');
+        showToast('testcase_id 列为系统列，不允许编辑', 'error');
         return;
     }
     // 明细列：双击也打开弹窗，不进入编辑
@@ -58,9 +58,9 @@ function startEdit(e) {
     var td = e.currentTarget;
     var ri = parseInt(td.getAttribute('data-row'), 10);
     var ci = parseInt(td.getAttribute('data-col'), 10);
-    // tsId 列冻结：不允许进入编辑
+    // testcase_id 列冻结：不允许进入编辑
     if (isFrozenCol(ci)) {
-        showToast('tsId 列为系统列，不允许编辑', 'error');
+        showToast('testcase_id 列为系统列，不允许编辑', 'error');
         return;
     }
     // 防御：行/列下标不合法时直接放弃编辑（如表格已被刷新/删除行列）
@@ -206,7 +206,7 @@ function showContextMenu(e) {
         items.push({ label: '删除该列', action: function () { deleteCol(S._ctxCol); }, disabled: S._ctxCol < 0 || isFrozenCol(S._ctxCol) });
         items.push({ label: '重命名列', action: function () { renameCol(S._ctxCol); }, disabled: S._ctxCol < 0 || isFrozenCol(S._ctxCol) });
         if (S.colSel.size > 0) {
-            // 冻结列（tsId）不参与清空 / 批量填充：只统计可操作列数；全为冻结列时灰显
+            // 冻结列（testcase_id）不参与清空 / 批量填充：只统计可操作列数；全为冻结列时灰显
             var _opCntH = 0;
             S.colSel.forEach(function (ci) { if (!isFrozenCol(ci)) _opCntH++; });
             items.push({ divider: true });
@@ -277,7 +277,7 @@ function showContextMenu(e) {
             items.push({ label: '删除选中行 (' + S.sel.size + ')', action: deleteSelectedRows });
         }
         if (S.colSel.size > 0) {
-            // 冻结列（tsId）不参与清空 / 批量填充：只统计可操作列数；全为冻结列时灰显
+            // 冻结列（testcase_id）不参与清空 / 批量填充：只统计可操作列数；全为冻结列时灰显
             var _opCntC = 0;
             S.colSel.forEach(function (ci) { if (!isFrozenCol(ci)) _opCntC++; });
             items.push({ divider: true });
@@ -336,8 +336,8 @@ function insertRow(at) {
     headers.forEach(function (_, ci) {
         if (typeof isArrayCol === 'function' && isArrayCol(ci)) newRow[ci] = [];
     });
-    // 新行自动生成 tsId；testCaseNo 保留为空（由推送响应回写）
-    var tsCol = headers.indexOf('tsId');
+    // 新行自动生成 testcase_id；testCaseNo 保留为空（由推送响应回写）
+    var tsCol = headers.indexOf('testcase_id');
     if (tsCol >= 0) newRow[tsCol] = genUuidV4();
     if (at < 0) at = 0;
     if (at > S.data.rows.length) at = S.data.rows.length;
@@ -453,9 +453,9 @@ function insertCol(at) {
 
 function deleteCol(ci) {
     if (ci < 0 || ci >= S.data.headers.length) return;
-    // 冻结列（tsId）禁止删除：tsId 是行的稳定标识，删除会破坏推送语义与失败标记联动
+    // 冻结列（testcase_id）禁止删除：testcase_id 是行的稳定标识，删除会破坏推送语义与失败标记联动
     if (isFrozenCol(ci)) {
-        showToast('tsId 列为冻结列，不允许删除', 'error');
+        showToast('testcase_id 列为冻结列，不允许删除', 'error');
         return;
     }
     xsConfirm('确定删除该列？', function () {
@@ -497,9 +497,9 @@ function deleteCol(ci) {
 
 function renameCol(ci) {
     if (ci < 0 || ci >= S.data.headers.length) return;
-    // 冻结列（tsId）禁止重命名：很多依赖 headers.indexOf('tsId') 的逻辑（推送、失败映射、行高/列宽索引等）会失效
+    // 冻结列（testcase_id）禁止重命名：很多依赖 headers.indexOf('testcase_id') 的逻辑（推送、失败映射、行高/列宽索引等）会失效
     if (isFrozenCol(ci)) {
-        showToast('tsId 列为冻结列，不允许重命名', 'error');
+        showToast('testcase_id 列为冻结列，不允许重命名', 'error');
         return;
     }
     xsPrompt('重命名列', S.data.headers[ci], function (name) {
@@ -607,12 +607,12 @@ function pasteCell() {
         saveFile();
         renderTable();
         var msg = '已粘贴 ' + changed + ' 个单元格';
-        if (skippedTsId) msg += '（tsId 列已跳过）';
+        if (skippedTsId) msg += '（testcase_id 列已跳过）';
         showToast(msg, 'success');
         return;
     }
     // 单值粘贴：原逻辑
-    if (isFrozenCol(S._ctxCol)) { showToast('tsId 列不允许粘贴', 'error'); return; }
+    if (isFrozenCol(S._ctxCol)) { showToast('testcase_id 列不允许粘贴', 'error'); return; }
     pushHistory();
     var target = S.clip;
     var isArr = typeof isArrayCol === 'function' && isArrayCol(S._ctxCol);
@@ -663,12 +663,12 @@ function clearCell() {
         saveFile();
         renderTable();
         var msg = '已清空 ' + changed + ' 个单元格';
-        if (skippedTsId) msg += '（tsId 列已跳过）';
+        if (skippedTsId) msg += '（testcase_id 列已跳过）';
         showToast(msg, 'success');
         return;
     }
     if (S._ctxRow < 0 || S._ctxCol < 0) return;
-    if (isFrozenCol(S._ctxCol)) { showToast('tsId 列不允许清空', 'error'); return; }
+    if (isFrozenCol(S._ctxCol)) { showToast('testcase_id 列不允许清空', 'error'); return; }
     pushHistory();
     // 标量数组列清空 → 空数组，保持列类型不变
     if (typeof isArrayCol === 'function' && isArrayCol(S._ctxCol)) {
@@ -705,9 +705,9 @@ function copyRowInline() {
     var at = S._ctxRow + 1;
     // 深拷贝：避免数组单元格被多行引用共享
     var newRow = src.map(function (v) { return Array.isArray(v) ? v.slice() : v; });
-    // 复制行需要重新生成 tsId（避免两行同 id），并清空已回写的 testCaseNo
+    // 复制行需要重新生成 testcase_id（避免两行同 id），并清空已回写的 testCaseNo
     var headers0 = S.data.headers || [];
-    var tsCol0 = headers0.indexOf('tsId');
+    var tsCol0 = headers0.indexOf('testcase_id');
     var tcCol0 = headers0.indexOf('testCaseNo');
     if (tsCol0 >= 0) newRow[tsCol0] = genUuidV4();
     if (tcCol0 >= 0) newRow[tcCol0] = '';
@@ -747,7 +747,7 @@ function pushFromContextMenu() {
             return;
         }
     }
-    var tsCol = headers.indexOf('tsId');
+    var tsCol = headers.indexOf('testcase_id');
     var rowIndexMap = {};
     var payload = indices.map(function (ri) {
         var record = {};

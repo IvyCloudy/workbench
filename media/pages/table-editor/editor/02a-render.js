@@ -79,7 +79,7 @@ function _computeViewRows() {
     var hasColFilters = S._colFilters && Object.keys(S._colFilters).length > 0;
     // 仅看推送失败：当 _failedOnly=true 且 _pushFailedTsIds 非空时启用
     var failedOnly = !!(S._failedOnly && S._pushFailedTsIds && S._pushFailedTsIds.size > 0);
-    var failedTsCol = failedOnly ? headers.indexOf('tsId') : -1;
+    var failedTsCol = failedOnly ? headers.indexOf('testcase_id') : -1;
     if (failedOnly && failedTsCol < 0) {
         // 没有 tsId 列就无法定位失败行，自动失效该筛选
         failedOnly = false;
@@ -146,7 +146,7 @@ html += '<th class="xs-th xs-th-cb xs-th-rownum" title="点击全选整表">#</t
         var filterCls = hasFilter ? ' active' : '';
         var filterTitle = hasFilter ? '已应用筛选 (点击修改)' : '筛选';
         var colSelCls = S.colSel.has(j) ? ' xs-col-selected' : '';
-        var frozenCls = (String(hdr) === 'tsId') ? ' xs-th-frozen' : '';
+        var frozenCls = (String(hdr) === 'testcase_id') ? ' xs-th-frozen' : '';
         html += '<th class="xs-th' + colSelCls + frozenCls + '" data-col="' + j + '">'
             + '<span class="xs-th-text">' + escapeHtml(String(hdr)) + '</span>'
             + '<span class="xs-th-filter' + filterCls + '" data-filter-col="' + j + '" title="' + filterTitle + '">'
@@ -211,7 +211,7 @@ function _buildRowHtml(ri, tsIdColIdx) {
         var v = row[ci];
         var modCls = S.mods.has(ri + ',' + ci) ? ' modified' : '';
         var colSelCls2 = S.colSel.has(ci) ? ' xs-col-selected' : '';
-        var frozenCls2 = (String(headers[ci]) === 'tsId') ? ' xs-td-frozen' : '';
+        var frozenCls2 = (String(headers[ci]) === 'testcase_id') ? ' xs-td-frozen' : '';
         var isDetail = hasDetailRowsAtCol(ri, ci);
         var isArrCol = (typeof isArrayCol === 'function') && isArrayCol(ci);
         var rawText = formatCellValue(v);
@@ -242,7 +242,7 @@ function _renderAllBody() {
     var tbody = document.getElementById('xsTbody');
     if (!tbody) return;
     var headers = (S.data && S.data.headers) || [];
-    var tsIdColIdx = headers.indexOf('tsId');
+    var tsIdColIdx = headers.indexOf('testcase_id');
     var view = S._viewRows || [];
     var parts = new Array(view.length);
     for (var i = 0; i < view.length; i++) parts[i] = _buildRowHtml(view[i], tsIdColIdx);
@@ -315,7 +315,7 @@ function _renderVirtualBody() {
 
     var topH = offs[from] || 0;
     var bottomH = (offs[view.length] || 0) - (offs[to] || 0);
-    var tsIdColIdx = headers.indexOf('tsId');
+    var tsIdColIdx = headers.indexOf('testcase_id');
     var parts = [];
     // 顶部 spacer（用一行 td colspan 撑高）
     parts.push('<tr class="xs-vspacer" aria-hidden="true" style="height:' + topH + 'px"><td colspan="' + totalCols + '" style="padding:0;border:0"></td></tr>');
@@ -416,7 +416,7 @@ function patchCell(ri, ci) {
     if (S.mods.has(ri + ',' + ci)) td.classList.add('modified'); else td.classList.remove('modified');
     if (isDetail) td.classList.add('xs-detail-cell'); else td.classList.remove('xs-detail-cell');
     if (isArrCol) td.classList.add('xs-arr-cell'); else td.classList.remove('xs-arr-cell');
-    var frozen = (String(headers[ci]) === 'tsId');
+    var frozen = (String(headers[ci]) === 'testcase_id');
     if (frozen) td.classList.add('xs-td-frozen'); else td.classList.remove('xs-td-frozen');
     // tooltip 同步
     if (rawText) td.setAttribute('title', rawText); else td.removeAttribute('title');

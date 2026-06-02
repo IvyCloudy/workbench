@@ -270,7 +270,7 @@ export function resolveTaskInfo(filePath: string): ResolveTaskInfoResult {
 // ============================================
 
 /** 推送追踪列：行的唯一 id，请求时回传给后端，用于响应回写匹配 */
-export const TS_ID_COLUMN = 'tsId';
+export const TS_ID_COLUMN = 'testcase_id';
 /** 推送成功回写列：成功时存放后端返回的 testCaseNo */
 export const TEST_CASE_NO_COLUMN = 'testCaseNo';
 

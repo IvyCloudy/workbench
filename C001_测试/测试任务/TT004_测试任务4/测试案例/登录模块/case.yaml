@@ -1,4 +1,4 @@
-- tsId: 51d348f3-e2e9-46d4-b1ba-b142ea644d97
+- testcase_id: 51d348f3-e2e9-46d4-b1ba-b142ea644d97
   testCaseNo: TT17796322103131000
   id: stepid1
   operation: 登录系统
@@ -6,7 +6,7 @@
   ui-expected: 登录页面正常显示; 登录成功提示信息
   api-expected: 登录接口返回成功状态; 获取用户权限信息成功
   db-expected: xx; xxxx
-- tsId: 27629d3b-cd36-4fd1-b4e3-232f512fd119
+- testcase_id: 27629d3b-cd36-4fd1-b4e3-232f512fd119
   testCaseNo: ""
   id: stepid2
   operation: 点击「云订单」菜单进入订单查询页
@@ -14,7 +14,7 @@
   ui-expected: 菜单栏显示「云订单」菜单项; 点击后页面正常跳转
   api-expected: ""
   db-expected: ""
-- tsId: bffbaa96-b5b1-40ad-becb-9adea00a73ba
+- testcase_id: bffbaa96-b5b1-40ad-becb-9adea00a73ba
   testCaseNo: TT17796322103131002
   id: tcs3
   operation: 默认进入未完结订单列表页面
@@ -22,7 +22,7 @@
   ui-expected: 订单号字段显示正确; 订单状态字段显示正确; 供应商字段显示正确; 采购人字段显示正确; 下单时间字段显示正确
   api-expected: ""
   db-expected: ""
-- tsId: 3ca0af91-6150-409f-961b-df7b9aba61b5
+- testcase_id: 3ca0af91-6150-409f-961b-df7b9aba61b5
   testCaseNo: ""
   id: stepid3
   operation: 默认进入未完结订单列表页面

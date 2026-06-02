@@ -262,6 +262,16 @@ function showContextMenu(e) {
             label: _hasArea ? ('清空选区 (' + _areaSize + ')') : '清空单元格',
             action: clearCell, disabled: S._ctxCol < 0
         });
+        // 单元格矩形选区：批量填充功能（跳过冻结列，全为冻结列时灰显）
+        if (_hasArea) {
+            var _fillOpCnt = 0;
+            for (var _fc = _rc2.c1; _fc <= _rc2.c2; _fc++) { if (!isFrozenCol(_fc)) _fillOpCnt++; }
+            items.push({
+                label: '批量填充选区 (' + _areaSize + ')…',
+                action: fillSelectedCells,
+                disabled: _fillOpCnt === 0
+            });
+        }
         items.push({ divider: true });
         items.push({ label: '在下方复制此行', action: copyRowInline, disabled: S._ctxRow < 0 });
         items.push({ label: '在上方插入行', action: function () { insertRow(S._ctxRow); }, disabled: S._ctxRow < 0 });
@@ -679,6 +689,53 @@ function clearCell() {
     S.mods.add(S._ctxRow + ',' + S._ctxCol);
     saveFile();
     patchCell(S._ctxRow, S._ctxCol);
+}
+
+// 批量填充单元格矩形选区：弹出输入框，输入值后填充整个选区（跳过冻结列）
+function fillSelectedCells() {
+    var rc = (typeof getCellSelRect === 'function') ? getCellSelRect() : null;
+    if (!rc || (rc.r1 === rc.r2 && rc.c1 === rc.c2)) {
+        showToast('请先拖选一个单元格区域', 'error');
+        return;
+    }
+    xsPrompt('填充选中区域的值（作用于 ' + (rc.r2 - rc.r1 + 1) + '\u00d7' + (rc.c2 - rc.c1 + 1) + ' 格）', '', function (val) {
+        if (val === null) return; // 取消
+        var rows = (S.data && S.data.rows) || [];
+        var rowList = (typeof getSelRectRows === 'function') ? getSelRectRows() : null;
+        if (!rowList || rowList.length === 0) {
+            rowList = [];
+            for (var rr = rc.r1; rr <= rc.r2; rr++) rowList.push(rr);
+        }
+        var changed = 0, skippedTsId = false;
+        pushHistory();
+        for (var i = 0; i < rowList.length; i++) {
+            var r = rowList[i];
+            for (var c = rc.c1; c <= rc.c2; c++) {
+                if (isFrozenCol(c)) { skippedTsId = true; continue; }
+                var row = rows[r]; if (!row) continue;
+                var isArr = typeof isArrayCol === 'function' && isArrayCol(c);
+                var nv;
+                if (isArr) {
+                    nv = (val === '') ? [] : val.split(/;\s*|\n+/).map(function (x) { return x.trim(); }).filter(function (x) { return x !== ''; });
+                } else {
+                    nv = val;
+                }
+                var ov = row[c];
+                var oldStr = Array.isArray(ov) ? formatCellValue(ov) : (ov == null ? '' : String(ov));
+                var newStr = Array.isArray(nv) ? formatCellValue(nv) : String(nv);
+                if (oldStr !== newStr) {
+                    row[c] = nv;
+                    S.mods.add(r + ',' + c);
+                    changed++;
+                }
+            }
+        }
+        saveFile();
+        renderTable();
+        var msg = '已批量填充 ' + changed + ' 个单元格';
+        if (skippedTsId) msg += '（testcase_id 列已跳过）';
+        showToast(msg, 'success');
+    });
 }
 
 function copyRow() {

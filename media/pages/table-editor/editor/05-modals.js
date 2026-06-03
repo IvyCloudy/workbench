@@ -34,13 +34,10 @@ function showPushResultModal(payload) {
     if (!modal) return;
     var p = payload || {};
     var fileName = p.fileName || '';
+    var errorMsg = p.error || '';   // 纯错误消息（前置校验失败等场景，无 failures）
     var successCount = p.successCount || 0;
     var failures = Array.isArray(p.failures) ? p.failures : [];
     var total = (p.total != null) ? p.total : (successCount + failures.length);
-
-    var allFailed = (failures.length > 0 && successCount === 0);
-    var allSuccess = (failures.length === 0);
-    var status = allSuccess ? 'success' : (allFailed ? 'error' : 'warning');
 
     var header = document.getElementById('pushResultHeader');
     var iconEl = document.getElementById('pushResultIcon');
@@ -49,6 +46,24 @@ function showPushResultModal(payload) {
     var listEl = document.getElementById('pushResultList');
     var hintEl = document.getElementById('pushResultHint');
     var copyBtn = document.getElementById('pushResultCopyBtn');
+
+    // 纯错误消息分支（前置校验失败，无推送数据）
+    if (errorMsg) {
+        if (header) header.className = 'xs-modal-header xs-pr-header is-error';
+        if (iconEl) iconEl.textContent = '✕';
+        if (titleEl) titleEl.textContent = '推送失败' + (fileName ? ('：' + fileName) : '');
+        if (summaryEl) summaryEl.innerHTML = '';
+        if (listEl) listEl.innerHTML = '<div class="xs-pr-empty">' + escapeHtml(errorMsg) + '</div>';
+        if (hintEl) hintEl.textContent = '';
+        if (copyBtn) copyBtn.style.display = 'none';
+        bindPushResultModal();
+        modal.classList.add('show');
+        return;
+    }
+
+    var allFailed = (failures.length > 0 && successCount === 0);
+    var allSuccess = (failures.length === 0);
+    var status = allSuccess ? 'success' : (allFailed ? 'error' : 'warning');
 
     // 头部状态
     if (header) header.className = 'xs-modal-header xs-pr-header is-' + status;
@@ -76,7 +91,7 @@ function showPushResultModal(payload) {
             for (var i = 0; i < renderCount; i++) {
                 var f = failures[i] || {};
                 var hasRow = (f.rowIndex != null && f.rowIndex > 0);
-                var rowText = hasRow ? ('第 ' + f.rowIndex + ' 行') : ('tsId ' + (f.tsId ? String(f.tsId).slice(0, 8) + '…' : '(无)'));
+                var rowText = hasRow ? ('第 ' + f.rowIndex + ' 行') : ('testcase_id ' + (f.tsId ? String(f.tsId).slice(0, 8) + '…' : '(无)'));
                 var rowCls = 'xs-pr-row' + (hasRow ? ' is-link' : '');
                 var rowAttr = hasRow ? (' data-row="' + f.rowIndex + '" title="点击定位到该行"') : '';
                 html += '<div class="xs-pr-item">'

@@ -20,7 +20,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getNonce, isInQualifiedDir, buildErrorHtml, FILE_PATTERNS, TS_ID_COLUMN, escapeHtml } from '../services/utils';
-import { getHeaderTaskInfoByFilePath } from '../utils/taskInfo';
+import { getCurrentTaskInfo } from '../utils/taskInfo';
+import { showPushErrorModal, showPushResult, showPushDone, showSaveResult } from '../utils/message';
 import { pushTestCase } from '../services/http';
 import { createParser, ensureTrackingColumns, applyTestCaseNos, type FileParser, type FileType } from '../parsers';
 
@@ -63,16 +64,16 @@ export class PushViaHttpClient implements PushStrategy {
     ): Promise<void> {
         if (!extensionContext) throw new Error('ExtensionContext 不可用，无法推送');
 
-        // 任务信息统一由 getHeaderTaskInfoByFilePath 提供：未绑定一律拒绝推送
-        const header = getHeaderTaskInfoByFilePath(extensionContext, ctx.filePath);
-        if (!header.bind) {
-            const message = '未绑定任务，无法推送。请先在 task-bindings.json 中完成绑定。';
-            webviewPanel.webview.postMessage({ type: 'pushError', message });
-            throw new Error(message);
+        // 任务信息统一由 getCurrentTaskInfo 提供：未绑定一律拒绝推送
+        const currentTask = await getCurrentTaskInfo(ctx.filePath);
+        if (!currentTask.bind) {
+            showPushErrorModal(webviewPanel, path.basename(ctx.filePath),
+                '未绑定任务，无法推送。请先在 task-bindings.json 中完成绑定。');
+            return;
         }
         const taskInfo = {
-            testTaskNo: header.testTaskNo,
-            subTestTaskName: header.subTestTaskName,
+            testTaskNo: currentTask.testTaskNo,
+            subTestTaskName: currentTask.subTestTaskName,
         };
 
         // 重新解析文件获取原始结构化数据。
@@ -108,7 +109,7 @@ export class PushViaHttpClient implements PushStrategy {
 
         const result = await pushTestCase(extensionContext, pushData, taskInfo, path.basename(ctx.filePath));
         if (result.returnCode !== 'SUC0000') {
-            webviewPanel.webview.postMessage({ type: 'pushError', message: result.errorMsg || '推送失败' });
+            showPushErrorModal(webviewPanel, path.basename(ctx.filePath), result.errorMsg || '推送失败');
             return;
         }
 
@@ -125,19 +126,21 @@ export class PushViaHttpClient implements PushStrategy {
             else if (t === '2') failures.push({ tsId: sid, reason: dataField });
         });
 
-        // 成功项：扩展端按 tsId 回写 testCaseNo 到原文件，并刷新前端
-        // 注意：cachedTableData 在 webview 调用 save 后会被置为 null（保证下次重新解析），
-        // 因此这里不能依赖 session.cachedTableData，而是统一从磁盘最新状态重新解析回写。
+        // 成功项：扩展端按 tsId 回写 testCaseNo 到原文件。
+        // testCaseNo 落盘后刷新前端数据 —— 但有失败项时跳过刷新，
+        // 避免刷新触发的 renderTable() 擦除 showPushResult 设置的失败行高亮。
         if (successMappings.length > 0) {
             try {
                 const parsed = await ctx.session.parser.parse(ctx.filePath);
                 ensureTrackingColumns(parsed.tableData, parsed.sourceData);
                 applyTestCaseNos(parsed.tableData, parsed.sourceData, successMappings);
                 await ctx.session.parser.save(ctx.filePath, parsed.tableData, parsed.sourceData);
-                // 落盘后让缓存失效；refresh 内部 forceReparse=true 会重新解析并发给前端
+                // 落盘后让缓存失效，下次可见切换 / 手动刷新时自动重读最新文件
                 ctx.session.cachedTableData = null;
                 ctx.session.originalSourceData = parsed.sourceData;
-                await ctx.refresh('pushSuccess');
+                if (failures.length === 0) {
+                    await ctx.refresh('pushSuccess');
+                }
             } catch (err: any) {
                 console.error('[推送] testCaseNo 回写失败:', err?.message || err);
             }
@@ -153,6 +156,9 @@ export class PushViaHttpClient implements PushStrategy {
                 if (id) tsIdToRowIndex.set(id, i);
             });
         }
+        console.log('[推送][调试] failures=', JSON.stringify(failures));
+        console.log('[推送][调试] frontRowIndexMap=', JSON.stringify(frontRowIndexMap));
+        console.log('[推送][调试] tsIdToRowIndex=', JSON.stringify(Array.from(tsIdToRowIndex.entries())));
         const failureItems = failures.map(f => {
             const front = frontRowIndexMap[f.tsId];
             let rowIndex: number | undefined;
@@ -161,22 +167,14 @@ export class PushViaHttpClient implements PushStrategy {
             } else if (tsIdToRowIndex.has(f.tsId)) {
                 rowIndex = tsIdToRowIndex.get(f.tsId)! + 1;
             }
+            console.log(`[推送][调试] failure tsId="${f.tsId}" front=${front} rowIndex=${rowIndex}`);
             return { tsId: f.tsId, reason: f.reason, rowIndex };
         });
 
         const total = Array.isArray(pushData) ? pushData.length : (successMappings.length + failures.length);
 
-        // 编辑器内推送：直接复用前端 webview 弹窗（同一个 panel 内嵌），不再调用 showPushResult 走独立 webview
-        webviewPanel.webview.postMessage({
-            type: 'pushResult',
-            fileName: path.basename(ctx.filePath),
-            successCount: successMappings.length,
-            failures: failureItems,
-            total,
-        });
-
-        // 通知前端推送流程已完成（用于隐藏 loading 之类的状态）
-        webviewPanel.webview.postMessage({ type: 'pushDone' });
+        showPushResult(webviewPanel, path.basename(ctx.filePath), successMappings.length, failureItems, total);
+        showPushDone(webviewPanel);
     }
 }
 
@@ -457,7 +455,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     // 缓存与前端最新数据一致：直接复用 webview 提交上来的 data，
                     // 避免置 null 后被外部触发的 reparse 在 fs flush 中读到部分内容/空数据。
                     try { session.cachedTableData = msg.data; } catch (_) { session.cachedTableData = null; }
-                    webviewPanel.webview.postMessage({ type: 'saved' });
+                    showSaveResult(webviewPanel, true);
                     log(`💾 saved msg posted`);
                 } else if (msg?.type === 'pushTestCase' && msg?.data) {
                     const pushCtx: PushContext = {
@@ -478,36 +476,19 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 }
             } catch (err: any) {
                 const errMsg = err?.message || String(err) || '操作失败';
-                if (msg?.type === 'save') {
-                    webviewPanel.webview.postMessage({ type: 'saveError', message: errMsg });
-                } else if (msg?.type === 'pushTestCase') {
-                    webviewPanel.webview.postMessage({ type: 'pushError', message: errMsg });
-                }
-                if (msg?.type === 'pushTestCase' && /无法连接后端服务|连接.*超时|连接被重置/.test(errMsg)) {
-                    const pick = await vscode.window.showErrorMessage(
-                        `[${this.formatTypeName(session.type)}] ${errMsg}`,
-                        '打开配置', '查看帮助'
-                    );
-                    if (pick === '打开配置') {
-                        vscode.commands.executeCommand('workbench.action.openSettings', 'testcaseViewer.apiUrl');
-                    } else if (pick === '查看帮助') {
-                        vscode.window.showInformationMessage(
-                            '本地调试请先启动 Mock 服务：在终端执行 `node mock-server.js`，默认监听 127.0.0.1:8081。'
-                        );
-                    }
-                } else {
-                    vscode.window.showErrorMessage(`[${this.formatTypeName(session.type)}] ${errMsg}`);
+                if (msg?.type === 'save') {                 } else if (msg?.type === 'pushTestCase') {
+                    showPushErrorModal(webviewPanel, path.basename(filePath), errMsg);
                 }
             }
         });
 
         // 表头展示：仅用 task-bindings.json 中的真实后端值；
         // 未绑定（或未命中）时三项为空串，由 buildEditorHtml 渲染为 "-"
-        const headerTaskInfo = this.context
-            ? getHeaderTaskInfoByFilePath(this.context, filePath)
+        const currentTask = this.context
+            ? await getCurrentTaskInfo(filePath)
             : { bind: false, testTaskNo: '', testTaskName: '', subTestTaskName: '' };
 
-        webviewPanel.webview.html = await this.buildEditorHtml(nonce, webviewPanel, session.type, headerTaskInfo);
+        webviewPanel.webview.html = await this.buildEditorHtml(nonce, webviewPanel, session.type, currentTask);
         log('✅ html ready');
     }
 

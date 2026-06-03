@@ -78,6 +78,21 @@
         <div class="xs-find-info" id="findInfo"></div>
     </div>
     <div class="xs-toast" id="toast"></div>
+    <!-- 通用模态框：由扩展端 showModal 消息触发，动态填充内容 -->
+    <div class="xs-modal-overlay" id="xsInfoModal">
+        <div class="xs-modal-dialog" style="width:420px;max-width:90vw">
+            <div class="xs-modal-header" id="xsInfoHeader">
+                <span class="xs-pr-icon" id="xsInfoIcon"></span>
+                <span class="xs-modal-title" id="xsInfoTitle"></span>
+                <button class="xs-modal-close" id="xsInfoClose" title="关闭">✕</button>
+            </div>
+            <div class="xs-modal-body" id="xsInfoBody" style="white-space:pre-wrap;word-break:break-word"></div>
+            <div class="xs-modal-footer" id="xsInfoFooter">
+                <span id="xsInfoExtraBtns" style="flex:1;display:flex;gap:8px"></span>
+                <button class="xs-btn xs-btn-p" id="xsInfoOkBtn">确定</button>
+            </div>
+        </div>
+    </div>
     <!-- 推送结果弹窗：成功/部分成功/全部失败，由 editor.js 控制显隐 -->
     <div class="xs-modal-overlay xs-pr-overlay" id="pushResultModal">
         <div class="xs-modal-dialog xs-pr-dialog">

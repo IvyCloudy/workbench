@@ -19,6 +19,7 @@ import { writeParams } from '../services/storage';
 import { queryTestCases, fetchTaskTree } from '../services/http';
 import { resolveTaskInfo } from '../services/utils';
 import { getTaskInfoByFilePath, extractTestPhaseName } from '../utils/taskInfo';
+import { showModal } from '../utils/message';
 import type { WebviewMessage } from '../types';
 
 // ============================================
@@ -154,7 +155,7 @@ export class TestCaseProvider extends BaseWebviewProvider {
                 testPhaseName,
             };
             if (!r.ok) {
-                vscode.window.showWarningMessage(r.error);
+                showModal(this.panel, 'warning', '任务解析', r.error);
             }
         }
 

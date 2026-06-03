@@ -17,6 +17,7 @@ import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider'
 import { CsvFileParser } from '../parsers/csv-parser';
 import { batchImportData } from '../services/http';
 import { FileTreeService } from './common/FileTreeService';
+import { showToast, showModal } from '../utils/message';
 import type { WebviewMessage } from '../types';
 
 // ============================================
@@ -97,7 +98,7 @@ export class TableBrowserProvider extends BaseWebviewProvider {
         const headers = msg.headers as string[];
 
         if (!selectedRows || selectedRows.length === 0) {
-            vscode.window.showWarningMessage('请先勾选要发送的数据');
+            showToast(this.panel, 'warning', '请先勾选要发送的数据');
             return;
         }
 
@@ -106,14 +107,14 @@ export class TableBrowserProvider extends BaseWebviewProvider {
 
             if (result.returnCode === 'SUC0000') {
                 this.postMessage({ command: 'sendResult', success: true, message: '数据发送成功' });
-                vscode.window.showInformationMessage('数据发送成功');
+                showToast(this.panel, 'success', '数据发送成功');
             } else {
                 this.postMessage({ command: 'sendResult', success: false, message: result.errorMsg || '发送失败' });
-                vscode.window.showErrorMessage(result.errorMsg || '发送失败');
+                showToast(this.panel, 'error', result.errorMsg || '发送失败');
             }
         } catch (e: any) {
             this.postMessage({ command: 'sendResult', success: false, message: e.message || '发送失败' });
-            vscode.window.showErrorMessage(e.message || '发送失败');
+            showToast(this.panel, 'error', e.message || '发送失败');
         }
     }
 }

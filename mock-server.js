@@ -211,7 +211,7 @@ var server = http.createServer(function (req, res) {
             // 调试约定：第偶数条（索引为偶数：第 1、3、5... 条用户看到的行）模拟成功，
             // 其余模拟失败，用于联调"成功回写 + 失败弹窗"全链路。
             var resultBody = data.map(function (rec, i) {
-                var tsId = rec && rec.tsId ? String(rec.tsId) : '';
+                var tsId = rec && rec.testcase_id ? String(rec.testcase_id) : '';
                 if (i % 2 === 0) {
                     return {
                         data: 'TT' + Date.now() + (1000 + i),

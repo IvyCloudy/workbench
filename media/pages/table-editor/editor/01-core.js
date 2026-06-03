@@ -413,6 +413,8 @@ window.addEventListener('message', function (e) {
         S._pushing = false;
         if (typeof updatePushBtn === 'function') updatePushBtn();
         showToast('推送失败: ' + (m.message || ''), 'error');
+    } else if (m.type === 'showModal') {
+        showXsInfoModal(m.modalType || 'info', m.title || '', m.message || '');
     }
 });
 
@@ -493,3 +495,59 @@ function showToast(msg, type) {
         t.style.display = 'none';
     }, 2000);
 }
+
+// ==================== 通用信息模态框（由扩展端 showModal 驱动） ====================
+var XS_INFO_ICON = { success: '✓', error: '✕', warning: '!', info: 'i' };
+var XS_INFO_COLOR = { success: '#28a745', error: '#dc3545', warning: '#f0a020', info: '#0078d4' };
+var XS_INFO_BG = {
+    success: 'linear-gradient(180deg,#e6f4ea,#f3faf5)',
+    error:   'linear-gradient(180deg,#fdecea,#fdf3f3)',
+    warning: 'linear-gradient(180deg,#fef3e0,#fff8ec)',
+    info:    'linear-gradient(180deg,#e8f0fe,#f3f8ff)'
+};
+function bindXsInfoModal() {
+    if (S._xsInfoBound) return;
+    S._xsInfoBound = true;
+    var modal = document.getElementById('xsInfoModal');
+    var close = document.getElementById('xsInfoClose');
+    var ok = document.getElementById('xsInfoOkBtn');
+    if (close) close.addEventListener('click', closeXsInfoModal);
+    if (ok) ok.addEventListener('click', closeXsInfoModal);
+    if (modal) modal.addEventListener('click', function (e) { if (e.target === modal) closeXsInfoModal(); });
+    document.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape') {
+            var m = document.getElementById('xsInfoModal');
+            if (m && m.classList.contains('show')) {
+                ev.preventDefault();
+                closeXsInfoModal();
+            }
+        }
+    });
+}
+function showXsInfoModal(modalType, title, message) {
+    bindXsInfoModal();
+    var header = document.getElementById('xsInfoHeader');
+    var iconEl = document.getElementById('xsInfoIcon');
+    var titleEl = document.getElementById('xsInfoTitle');
+    var bodyEl = document.getElementById('xsInfoBody');
+    var footer = document.getElementById('xsInfoFooter');
+    var extraBtns = document.getElementById('xsInfoExtraBtns');
+    var type = modalType || 'info';
+    var color = XS_INFO_COLOR[type] || XS_INFO_COLOR.info;
+    if (header) header.style.background = XS_INFO_BG[type] || XS_INFO_BG.info;
+    if (iconEl) { iconEl.textContent = XS_INFO_ICON[type] || 'i'; iconEl.style.background = color; }
+    if (titleEl) titleEl.textContent = title || '提示';
+    if (bodyEl) bodyEl.innerHTML = escapeHtml(message || '');
+    if (extraBtns) extraBtns.innerHTML = '';
+    if (footer) footer.style.display = '';
+    // 隐藏 footer 里的 ok 按钮旁边不需要的额外元素
+    var okBtn = document.getElementById('xsInfoOkBtn');
+    if (okBtn) { okBtn.style.display = ''; okBtn.style.background = color; okBtn.style.borderColor = color; }
+    var modal = document.getElementById('xsInfoModal');
+    if (modal) modal.classList.add('show');
+}
+function closeXsInfoModal() {
+    var modal = document.getElementById('xsInfoModal');
+    if (modal) modal.classList.remove('show');
+}
+

@@ -49,6 +49,38 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 .xs-icon-btn-failed.active:hover{background:#fbd9d9}
 .xs-icon-btn-failed.is-disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
 
+/* "仅看已修改行"筛选按钮（铅笔图标，黄色系高亮态与修改色一致） */
+.xs-icon-btn-modified{width:24px;min-width:24px;height:24px;padding:0;box-sizing:border-box}
+.xs-icon-btn-modified svg{width:16px;height:16px}
+.xs-icon-btn-modified svg path{fill:var(--tl)}
+.xs-icon-btn-modified:hover svg path{fill:var(--p)}
+.xs-icon-btn-modified.active{background:#fff9c4;border-color:#fbc02d}
+.xs-icon-btn-modified.active svg path{fill:#f9a825}
+.xs-icon-btn-modified.active:hover{background:#fff176}
+.xs-icon-btn-modified.is-disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
+
+/* "仅看新增行"筛选按钮（加号图标，绿色系高亮态与新行一致） */
+.xs-icon-btn-added{width:24px;min-width:24px;height:24px;padding:0;box-sizing:border-box;border-color:#c8e6c9}
+.xs-icon-btn-added svg{width:16px;height:16px}
+.xs-icon-btn-added .xs-ib-fg rect{fill:var(--tl)}
+.xs-icon-btn-added:hover{border-color:#81c784;background:#e8f5e9}
+.xs-icon-btn-added:hover .xs-ib-fg rect{fill:#43a047}
+.xs-icon-btn-added.active{background:#e8f5e9;border-color:#43a047;box-shadow:0 0 0 2px rgba(67,160,71,.25)}
+.xs-icon-btn-added.active .xs-ib-fg rect{fill:#2e7d32}
+.xs-icon-btn-added.active:hover{background:#c8e6c9}
+.xs-icon-btn-added.is-disabled{opacity:.4;cursor:not-allowed;pointer-events:none;border-color:var(--bd)}
+
+/* "仅看已删除行"筛选按钮（垃圾桶图标，红色系） */
+.xs-icon-btn-deleted{width:24px;min-width:24px;height:24px;padding:0;box-sizing:border-box;border-color:#efcdcd}
+.xs-icon-btn-deleted svg{width:16px;height:16px}
+.xs-icon-btn-deleted .xs-ib-fg path{fill:var(--tl)}
+.xs-icon-btn-deleted:hover{border-color:#e57373;background:#fce4e4}
+.xs-icon-btn-deleted:hover .xs-ib-fg path{fill:#c62828}
+.xs-icon-btn-deleted.active{background:#fce4e4;border-color:#c62828;box-shadow:0 0 0 2px rgba(198,40,40,.25)}
+.xs-icon-btn-deleted.active .xs-ib-fg path{fill:#b71c1c}
+.xs-icon-btn-deleted.active:hover{background:#fbd9d9}
+.xs-icon-btn-deleted.is-disabled{opacity:.4;cursor:not-allowed;pointer-events:none;border-color:var(--bd)}
+
 /* 自定义 tooltip：hover 立即显示，无浏览器原生 title 的 ~1s 延迟 */
 .xs-tip{position:relative}
 .xs-tip::after{
@@ -158,6 +190,37 @@ tbody tr.xs-tr-push-failed:hover td.xs-td-cb{background:#fbd9d9}
 /* 同时被选中时：保持失败红底（更重要的语义），仅以勾选框列的蓝条提示选中态 */
 tbody tr.xs-tr-push-failed.selected{background:#fde8e8}
 tbody tr.xs-tr-push-failed.selected td.xs-td-cb{background:#fde8e8;box-shadow:inset 3px 0 0 var(--d),inset -2px 0 0 var(--p)}
+
+/* 逐格高亮（编辑保存后，精确定位变更单元格）：浅黄色 */
+.xs-td.xs-td-push-updated{background:#fff9c4 !important}
+tbody tr:hover td.xs-td.xs-td-push-updated{background:#fff176 !important}
+tbody tr.selected td.xs-td.xs-td-push-updated{background:#ffee58 !important}
+tbody tr.xs-tr-push-failed td.xs-td.xs-td-push-updated{background:#fde8e8 !important;box-shadow:inset 3px 0 0 #fdd835 !important}
+tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-push-updated{background:#fbd9d9 !important;box-shadow:inset 3px 0 0 #fdd835 !important}
+tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-push-updated{background:#fde8e8 !important;box-shadow:inset 3px 0 0 #fdd835 !important}
+
+/* 整行高亮（推送/外部变更后，行级变化）：浅橙色提醒，与逐格黄色/行选蓝色区分 */
+.xs-td.xs-td-push-updated-row{background:#fff3e0 !important}
+tbody tr:hover td.xs-td.xs-td-push-updated-row{background:#ffe0b2 !important}
+tbody tr.selected td.xs-td.xs-td-push-updated-row{background:#ffcc80 !important}
+tbody tr.xs-tr-push-failed td.xs-td.xs-td-push-updated-row{background:#fde8e8 !important;box-shadow:inset 3px 0 0 #ff9800 !important}
+tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-push-updated-row{background:#fbd9d9 !important;box-shadow:inset 3px 0 0 #ff9800 !important}
+tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-push-updated-row{background:#fbd9d9 !important;box-shadow:inset 3px 0 0 #ff9800 !important}
+tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-push-updated-row{background:#fde8e8 !important;box-shadow:inset 3px 0 0 #ff9800 !important}
+
+/* 新增行高亮（推送后新增的行）：绿色系 */
+.xs-td.xs-td-push-added{background:#e8f5e9 !important}
+tbody tr:hover td.xs-td.xs-td-push-added{background:#c8e6c9 !important}
+tbody tr.selected td.xs-td.xs-td-push-added{background:#a5d6a7 !important}
+tbody tr.xs-tr-push-failed td.xs-td.xs-td-push-added{background:#fde8e8 !important;box-shadow:inset 3px 0 0 #43a047 !important}
+tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-push-added{background:#fbd9d9 !important;box-shadow:inset 3px 0 0 #43a047 !important}
+tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-push-added{background:#fde8e8 !important;box-shadow:inset 3px 0 0 #43a047 !important}
+
+/* Ghost 行（被删除的行占位）：淡红底 + 删除线 + 灰色文字 */
+.xs-ghost-sep td{background:#fce4e4;color:#c62828;font-weight:500;font-size:11px;padding:4px 8px;text-align:center;border-top:2px solid #ef9a9a}
+.xs-ghost-row td.xs-td-ghost{background:#fff0f0;color:#aaa;font-size:11px;padding:2px 8px}
+.xs-ghost-row td.xs-td-ghost del{color:#999}
+.xs-ghost-row td.xs-ghost-cb{background:#fce4e4;color:#d32f2f;text-align:center;font-size:11px;padding:2px 4px}
 
 /* 列选中（Excel 风格）：表头加深、单元格浅蓝；不覆盖行选中（同时存在时使用渐变叠加色） */
 .xs-th.xs-col-selected{background:#cfe4f8 !important;box-shadow:inset 0 3px 0 var(--p)}

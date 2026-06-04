@@ -102,6 +102,16 @@ var S = {
     _debug: __DBG_DEFAULT,
     // 推送中标志：避免连点 push 按钮重复发送
     _pushing: false,
+    // "仅看已修改行"筛选开关（基于快照差异高亮信息）
+    _modifiedOnly: false,
+    // 被删除行的快照信息（用于渲染 ghost 行）
+    _deletedInfos: [],
+    // "仅看新增行"筛选开关
+    _addedOnly: false,
+    // "仅看已删除行"筛选开关
+    _deletedOnly: false,
+    // 明细弹窗中修改过的单元格标记（持久化，不受 S.mods.clear() 影响）
+    _detailModCellKeys: new Set(),
     // toast 当前隐藏定时器（避免连续 toast 互相截断）
     _toastTimer: null
 };
@@ -177,6 +187,8 @@ function restoreSnapshot(snap) {
     if (S._pushFailedTsIds && S._pushFailedTsIds.size) S._pushFailedTsIds = new Set();
     if (S._pushFailedReasons && S._pushFailedReasons.size) S._pushFailedReasons = new Map();
     if (S._failedOnly) S._failedOnly = false;
+    if (S._modifiedOnly) S._modifiedOnly = false;
+    S._deletedInfos = [];
     renderTable();
     saveFile();
 }
@@ -353,6 +365,26 @@ window.addEventListener('message', function (e) {
         // 例外：当扩展端带 force=true（如外部 TextEditor 修改了文件），强制覆盖以同步最新内容。
         if (hasUserChanges && alreadyRendered && !m.force) {
             dbg('⏭ skip repush (user changes)');
+            // saveHighlight 等 reason 带高亮信息时，仍更新 highlightedCells 避免高亮丢失
+            if ('highlightedCells' in m) {
+                if (m.highlightedCells && m.highlightedCells.colIdx != null && Array.isArray(m.highlightedCells.rowIndices)) {
+                    var hl = {
+                        colIdx: m.highlightedCells.colIdx,
+                        rowSet: new Set(m.highlightedCells.rowIndices),
+                        cells: null
+                    };
+                    if (m.highlightedCells.cells && Array.isArray(m.highlightedCells.cells)) {
+                        hl.cells = new Set();
+                        for (var ci_hl2 = 0; ci_hl2 < m.highlightedCells.cells.length; ci_hl2++) {
+                            var c2 = m.highlightedCells.cells[ci_hl2];
+                            hl.cells.add(c2[0] + ':' + c2[1]);
+                        }
+                    }
+                    S._highlightedCells = hl;
+                } else {
+                    S._highlightedCells = null;
+                }
+            }
             renderTable();
             return;
         }
@@ -372,6 +404,7 @@ window.addEventListener('message', function (e) {
         dbg('🎨 render rows=' + S.data.rows.length + ' force=' + !!m.force + ' reason=' + (m.reason || ''));
         S.sel.clear();
         S.mods.clear();
+        S._detailModCellKeys.clear();
         // 数据重装载：仅当列结构发生变化时才清空列筛选（避免抹掉持久化恢复的筛选）
         var _newHeadSig = (S.data.headers || []).join('\u0001');
         if (S._lastHeadSig !== _newHeadSig) {
@@ -384,6 +417,55 @@ window.addEventListener('message', function (e) {
             S._pushFailedReasons = new Map();
             S._lastPushBatchTsIds = new Set();
             S._failedOnly = false;
+            S._modifiedOnly = false;
+            S._highlightedCells = null;
+        }
+        // 高亮信息更新（必须在 _lastHeadSig 检查之后，避免首次 init 被列变化分支覆盖）
+        // 仅在字段存在时更新：visible/reload 等不带 highlightedCells 时保留已有高亮
+        if ('highlightedCells' in m) {
+            if (m.highlightedCells && m.highlightedCells.colIdx != null && Array.isArray(m.highlightedCells.rowIndices)) {
+                var hl = {
+                    colIdx: m.highlightedCells.colIdx,
+                    rowSet: new Set(m.highlightedCells.rowIndices),
+                    cells: null
+                };
+                // cells 为 [rowIdx, colIdx][] 扁平数组，用于精确逐格高亮
+                if (m.highlightedCells.cells && Array.isArray(m.highlightedCells.cells)) {
+                    hl.cells = new Set();
+                    for (var ci_hl = 0; ci_hl < m.highlightedCells.cells.length; ci_hl++) {
+                        var c = m.highlightedCells.cells[ci_hl];
+                        hl.cells.add(c[0] + ':' + c[1]);
+                    }
+                }
+                S._highlightedCells = hl;
+            } else {
+                S._highlightedCells = null;
+            }
+        }
+        // 删除行信息（快照中有但当前数据中已不存在的行）
+        if ('deletedInfos' in m) {
+            if (m.deletedInfos && Array.isArray(m.deletedInfos) && m.deletedInfos.length > 0) {
+                S._deletedInfos = m.deletedInfos;
+            } else {
+                S._deletedInfos = [];
+                // 如果没有已删除行，自动关闭"仅看已删除行"筛选
+                if (S._deletedOnly) S._deletedOnly = false;
+            }
+        }
+        // 新增行信息（快照中不存在但当前数据中出现的行）
+        if ('addedInfos' in m) {
+            if (m.addedInfos && Array.isArray(m.addedInfos) && m.addedInfos.length > 0) {
+                S._addedInfos = m.addedInfos;
+                S._addedRowSet = new Set();
+                for (var ai = 0; ai < m.addedInfos.length; ai++) {
+                    S._addedRowSet.add(m.addedInfos[ai].rowIndex);
+                }
+            } else {
+                S._addedInfos = [];
+                S._addedRowSet = new Set();
+                // 如果没有新增行，自动关闭"仅看新增行"筛选
+                if (S._addedOnly) S._addedOnly = false;
+            }
         }
         clearHistory();
         renderTable();

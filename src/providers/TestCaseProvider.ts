@@ -18,7 +18,7 @@ import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider'
 import { writeParams } from '../services/storage';
 import { queryTestCases, fetchTaskTree } from '../services/http';
 import { resolveTaskInfo } from '../services/utils';
-import { getTaskInfoByFilePath, extractTestPhaseName } from '../utils/taskInfo';
+import { getTaskInfoByFilePath, extractTestPhaseName } from '../utils/command';
 import { showModal } from '../utils/message';
 import type { WebviewMessage } from '../types';
 

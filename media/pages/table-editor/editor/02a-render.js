@@ -54,6 +54,9 @@ function renderTable() {
     updateSelectionInfo();
     updatePushBtn();
     if (typeof updateFailedFilterBtn === 'function') updateFailedFilterBtn();
+    if (typeof updateModifiedFilterBtn === 'function') updateModifiedFilterBtn();
+    if (typeof updateAddedFilterBtn === 'function') updateAddedFilterBtn();
+    if (typeof updateDeletedFilterBtn === 'function') updateDeletedFilterBtn();
     updateSearchClear();
     if (typeof updateColSelClasses === 'function') updateColSelClasses();
     if (typeof updateCellSelClasses === 'function') updateCellSelClasses();
@@ -84,7 +87,17 @@ function _computeViewRows() {
         // 没有 tsId 列就无法定位失败行，自动失效该筛选
         failedOnly = false;
     }
-    if (!skw && !hasColFilters && !failedOnly) {
+    // 仅看已修改行：基于快照差异高亮信息（rowSet 包含所有变更行）
+    var modifiedOnly = !!(S._modifiedOnly && S._highlightedCells && S._highlightedCells.rowSet && S._highlightedCells.rowSet.size > 0);
+    // 仅看新增行：基于新增行索引集合
+    var addedOnly = !!(S._addedOnly && S._addedRowSet && S._addedRowSet.size > 0);
+    // 仅看已删除行：展示 ghost 行，隐藏所有常规行
+    var deletedOnly = !!(S._deletedOnly && S._deletedInfos && S._deletedInfos.length > 0);
+    if (deletedOnly) {
+        // 仅看已删除行时，常规行全部隐藏，只展示 ghost 区域
+        return [];
+    }
+    if (!skw && !hasColFilters && !failedOnly && !modifiedOnly && !addedOnly) {
         // 直接整段：避免大数组 push 开销
         var arr = new Array(rows.length);
         for (var i = 0; i < rows.length; i++) arr[i] = i;
@@ -124,9 +137,45 @@ function _computeViewRows() {
             if (_tsv === undefined || _tsv === null || _tsv === '') continue;
             if (!S._pushFailedTsIds.has(String(_tsv))) continue;
         }
+        if (modifiedOnly) {
+            if (!S._highlightedCells.rowSet.has(ri)) continue;
+        }
+        if (addedOnly) {
+            if (!S._addedRowSet.has(ri)) continue;
+        }
         out.push(ri);
     }
     return out;
+}
+
+// 构建 ghost 行 HTML（快照中有但当前数据中已删除的行，显示在表格底部）
+function _buildGhostRowsHtml(headers) {
+    var infos = S._deletedInfos;
+    if (!infos || infos.length === 0) return '';
+    var tsIdIdx = headers.indexOf('testcase_id');
+    var tcIdx = headers.indexOf('testCaseNo');
+    if (tsIdIdx < 0) return '';
+    var totalCols = headers.length + 1; // +1 是复选框列
+    var html = '<tr class="xs-ghost-sep"><td colspan="' + totalCols + '">已删除 ' + infos.length + ' 行</td></tr>';
+    for (var i = 0; i < infos.length; i++) {
+        var info = infos[i];
+        var cells = info.cells || [];
+        html += '<tr class="xs-ghost-row">';
+        html += '<td class="xs-td xs-td-cb xs-ghost-cb">🗑</td>';
+        for (var ci = 0; ci < headers.length; ci++) {
+            var val = '';
+            if (String(headers[ci]) === 'testcase_id') {
+                // testcase_id 直接取 info.tsId，避免依赖 cells 中可能过期的值
+                val = info.tsId || '';
+            } else {
+                // cells 长度与 headers 一致（testCaseNo 位置为空字符串），直接用 ci 索引
+                val = (ci < cells.length && cells[ci] !== undefined && cells[ci] !== '') ? cells[ci] : '';
+            }
+            html += '<td class="xs-td xs-td-ghost"><del>' + escapeHtml(val) + '</del></td>';
+        }
+        html += '</tr>';
+    }
+    return html;
 }
 
 // 构建表格骨架（colgroup + thead + 空 tbody），不含具体 tr
@@ -209,7 +258,25 @@ function _buildRowHtml(ri, tsIdColIdx) {
         + '</td>';
     for (var ci = 0; ci < headers.length; ci++) {
         var v = row[ci];
-        var modCls = S.mods.has(ri + ',' + ci) ? ' modified' : '';
+        var modCls = (S.mods.has(ri + ',' + ci) || (S._detailModCellKeys && S._detailModCellKeys.has(ri + ',' + ci))) ? ' modified' : '';
+        var hiliCls = '';
+        if (S._highlightedCells) {
+            // 精确逐格高亮优先（编辑保存场景）→ 绿色
+            if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
+                hiliCls = ' xs-td-push-updated';
+            } else if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)) {
+                // colIdx === -1 表示整行任意列变化，高亮该行所有单元格 → 橙色
+                if (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci) {
+                    hiliCls = ' xs-td-push-updated-row';
+                }
+            }
+        }
+        // 新增行高亮 → 绿色，优先级高于修改高亮（同时是新增+修改时以新增为准）
+        if (S._addedRowSet && S._addedRowSet.has(ri)) {
+            hiliCls = ' xs-td-push-added';
+            // 新增行的 modCls 应移除，避免与前端的 modified 标记混淆
+            modCls = '';
+        }
         var colSelCls2 = S.colSel.has(ci) ? ' xs-col-selected' : '';
         var frozenCls2 = (String(headers[ci]) === 'testcase_id') ? ' xs-td-frozen' : '';
         var isDetail = hasDetailRowsAtCol(ri, ci);
@@ -230,7 +297,7 @@ function _buildRowHtml(ri, tsIdColIdx) {
             inner = escapeHtml(rawText);
             titleAttr = rawText ? ' title="' + escapeHtml(rawText) + '"' : '';
         }
-        html += '<td class="xs-td xs-editable' + modCls + colSelCls2 + frozenCls2 + (isDetail ? ' xs-detail-cell' : '') + arrCellCls + '" data-row="' + ri + '" data-col="' + ci + '"' + titleAttr + '>'
+        html += '<td class="xs-td xs-editable' + modCls + colSelCls2 + frozenCls2 + hiliCls + (isDetail ? ' xs-detail-cell' : '') + arrCellCls + '" data-row="' + ri + '" data-col="' + ci + '"' + titleAttr + '>'
             + '<div class="xs-cell-wrap">' + inner + '</div></td>';
     }
     html += '</tr>';
@@ -246,7 +313,7 @@ function _renderAllBody() {
     var view = S._viewRows || [];
     var parts = new Array(view.length);
     for (var i = 0; i < view.length; i++) parts[i] = _buildRowHtml(view[i], tsIdColIdx);
-    tbody.innerHTML = parts.join('');
+    tbody.innerHTML = parts.join('') + _buildGhostRowsHtml(headers);
 }
 
 // 计算每个 view 行的累积偏移表 _rowOffsets[i] = 第 i 行的 top 像素
@@ -321,7 +388,7 @@ function _renderVirtualBody() {
     parts.push('<tr class="xs-vspacer" aria-hidden="true" style="height:' + topH + 'px"><td colspan="' + totalCols + '" style="padding:0;border:0"></td></tr>');
     for (var i = from; i < to; i++) parts.push(_buildRowHtml(view[i], tsIdColIdx));
     parts.push('<tr class="xs-vspacer" aria-hidden="true" style="height:' + bottomH + 'px"><td colspan="' + totalCols + '" style="padding:0;border:0"></td></tr>');
-    tbody.innerHTML = parts.join('');
+    tbody.innerHTML = parts.join('') + _buildGhostRowsHtml(headers);
     // 重渲后恢复查找高亮（仅对当前可见行有效）
     if (S._findKw) paintFindHighlight();
     if (typeof updateColSelClasses === 'function') updateColSelClasses();

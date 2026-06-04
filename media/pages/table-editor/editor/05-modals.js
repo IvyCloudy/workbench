@@ -179,11 +179,58 @@ function showPushResultModal(payload) {
     // 一次推送结果消费完毕，清空本批缓存
     S._lastPushBatchTsIds = null;
 
+    // 清除本批推送行的 S.mods 修改高亮（推送完成 = 修改已提交）
+    // 失败行由 S._pushFailedTsIds 提供红色高亮，不再需要黄色 modified 标记
+    // 兜底：若 _lastPushBatchRowIndices 缺失，从 _lastPushBatchTsIds 反推行索引
+    var pushRowIndices = S._lastPushBatchRowIndices;
+    if ((!pushRowIndices || pushRowIndices.length === 0) && batchSet && batchSet.size > 0) {
+        var tsColFallback = (S.data && S.data.headers ? S.data.headers.indexOf('testcase_id') : -1);
+        if (tsColFallback >= 0) {
+            pushRowIndices = [];
+            for (var ri2 = 0; ri2 < (S.data.rows && S.data.rows.length || 0); ri2++) {
+                var tid2 = (S.data.rows[ri2] || [])[tsColFallback];
+                if (tid2 !== undefined && tid2 !== null && tid2 !== '' && batchSet.has(String(tid2))) {
+                    pushRowIndices.push(ri2);
+                }
+            }
+        }
+    }
+    if (pushRowIndices && pushRowIndices.length > 0) {
+        var modsToDelete = [];
+        S.mods.forEach(function (key) {
+            var commaIdx = key.indexOf(',');
+            if (commaIdx > -1 && pushRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
+                modsToDelete.push(key);
+            }
+        });
+        modsToDelete.forEach(function (k) { S.mods.delete(k); });
+        // 同步清除 _detailModCellKeys 中对应批次行的条目，否则明细弹窗修改的高亮仍会残留
+        if (S._detailModCellKeys && S._detailModCellKeys.size > 0) {
+            var detailToDelete = [];
+            S._detailModCellKeys.forEach(function (key) {
+                var commaIdx = key.indexOf(',');
+                if (commaIdx > -1 && pushRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
+                    detailToDelete.push(key);
+                }
+            });
+            detailToDelete.forEach(function (k) { S._detailModCellKeys.delete(k); });
+        }
+        S._lastPushBatchRowIndices = null;
+    }
+
+    // 推送后回写的 testCaseNo 单元格高亮信息
+    if (p.highlightedCells && p.highlightedCells.colIdx != null && Array.isArray(p.highlightedCells.rowIndices)) {
+        S._highlightedCells = {
+            colIdx: p.highlightedCells.colIdx,
+            rowSet: new Set(p.highlightedCells.rowIndices)
+        };
+    }
+
     try { renderTable(); } catch (_) { /* ignore */ }
 
     // 缓存全量明细文本，便于复制
     S._pushResultDetailText = failures.map(function (f, i) {
-        var rowPart = (f.rowIndex != null && f.rowIndex > 0) ? ('第 ' + f.rowIndex + ' 行') : ('tsId ' + (f.tsId || '(无)'));
+        var rowPart = (f.rowIndex != null && f.rowIndex > 0) ? ('第 ' + f.rowIndex + ' 行') : ('testcase_id ' + (f.tsId || '(无)'));
         return (i + 1) + '. ' + rowPart + '：' + (f.reason || '');
     }).join('\n');
 
@@ -940,10 +987,30 @@ function saveDetailModal() {
     var dt = getCurrentDetailTable();
     var ri = S._detailRowIdx;
     if (!dt || ri < 0) { closeDetailModal(false); return; }
+
+    // 0) 检测是否有实际内容变更，避免"未修改但被标记为已修改"的假阳性
+    var rawRows = (dt.rawRowGroups && dt.rawRowGroups[ri]) || [];
+    var backupRaws = (S._detailBackup && S._detailBackup.raws) || null;
+    if (backupRaws) {
+        // 快检：_dv2StepMods 通过 textarea change 事件记录用户编辑过哪些步骤；
+        //       若 size===0 说明弹窗内完全未操作 → 无变更
+        if (S._dv2StepMods && S._dv2StepMods.size === 0) {
+            closeDetailModal(false);
+            return;
+        }
+        // 深度比对：即使 change 事件触发过（用户输入后又删回原值），
+        //           JSON 序列化比对能准确判断 rawRows 是否真的变了
+        try {
+            if (JSON.stringify(rawRows) === JSON.stringify(backupRaws)) {
+                closeDetailModal(false);
+                return;
+            }
+        } catch (_) { /* 序列化异常时保守处理，继续执行保存 */ }
+    }
     pushHistory();
 
     // 1) 从 rawRowGroups 反向同步 rowGroups（字符串二维结构，兼容主表显示路径）
-    var rawRows = (dt.rawRowGroups && dt.rawRowGroups[ri]) || [];
+    rawRows = (dt.rawRowGroups && dt.rawRowGroups[ri]) || [];
     var headers = dt.headers || [];
     var newRowGroup = rawRows.map(function (raw) {
         return headers.map(function (h) {
@@ -968,9 +1035,9 @@ function saveDetailModal() {
     // 2) 同步主表显示：当前明细字段对应列展示项数/字段数
     var mainHeaders = (S.data && S.data.headers) || [];
     var colIdx = mainHeaders.indexOf(dt.field);
+    var displayText = '';
     if (colIdx >= 0) {
         var rawType = (dt.rawRowTypes && dt.rawRowTypes[ri]) || 'array';
-        var displayText;
         if (rawRows.length === 0) {
             displayText = rawType === 'object' ? '{}' : '[]';
         } else if (rawType === 'object') {
@@ -985,12 +1052,20 @@ function saveDetailModal() {
         } else {
             displayText = '[' + rawRows.length + ' 项]';
         }
-        S.data.rows[ri][colIdx] = displayText;
         S.mods.add(ri + ',' + colIdx);
+        S._detailModCellKeys.add(ri + ',' + colIdx);
     }
 
-    // 3) 落盘 + 主表重渲
+    // 3) 落盘：saveFile 通过 postMessage 发送 S.data，结构化克隆在发信瞬间做快照。
+    //    先把真实 JSON 写入外层单元格，让后端 diff 能检测到结构化字段的内容变更；
+    //    发完立刻恢复摘要显示，保证主表展示不受影响。
+    if (colIdx >= 0) {
+        try { S.data.rows[ri][colIdx] = JSON.stringify(rawRows); } catch (_) { S.data.rows[ri][colIdx] = displayText || '[]'; }
+    }
     saveFile();
+    if (colIdx >= 0) {
+        S.data.rows[ri][colIdx] = displayText;
+    }
     renderTable();
     closeDetailModal(false);
     showToast('明细已保存', 'success');

@@ -144,7 +144,7 @@ function startEdit(e) {
                     td.classList.remove('xs-editing');
                     renderTable();
                     var msg = '已批量填充 ' + changed + ' 个单元格';
-                    if (skippedTsId) msg += '（tsId 列已跳过）';
+                    if (skippedTsId) msg += '（testcase_id 列已跳过）';
                     if (typeof showToast === 'function') showToast(msg, 'success');
                     return;
                 }
@@ -377,6 +377,21 @@ function insertRow(at) {
 function deleteRow(ri) {
     if (ri < 0 || ri >= S.data.rows.length) return;
     pushHistory();
+    // 立即记录删除行信息，实现实时 ghost 行展示（不等扩展端异步回包）
+    var headers = (S.data && S.data.headers) || [];
+    var tsIdIdx = headers.indexOf('testcase_id');
+    var rowToDelete = S.data.rows[ri];
+    if (tsIdIdx >= 0) {
+        var tsId = rowToDelete[tsIdIdx] != null ? String(rowToDelete[tsIdIdx]) : '';
+        if (tsId) {
+            var delCells = [];
+            for (var hi = 0; hi < headers.length; hi++) {
+                var v = hi < rowToDelete.length ? rowToDelete[hi] : undefined;
+                delCells.push(v == null ? '' : String(v));
+            }
+            S._deletedInfos = (S._deletedInfos || []).concat([{ tsId: tsId, cells: delCells }]);
+        }
+    }
     S.data.rows.splice(ri, 1);
     var ns = new Set();
     S.sel.forEach(function (i) { if (i !== ri) ns.add(i > ri ? i - 1 : i); });
@@ -402,6 +417,23 @@ function deleteSelectedRows() {
     if (S.sel.size === 0) return;
     pushHistory();
     var sorted = Array.from(S.sel).sort(function (a, b) { return b - a; });
+    // 立即记录所有被删除行的信息，实现实时 ghost 行展示
+    var headers = (S.data && S.data.headers) || [];
+    var tsIdIdx = headers.indexOf('testcase_id');
+    if (tsIdIdx >= 0) {
+        for (var di = 0; di < sorted.length; di++) {
+            var rowToDelete = S.data.rows[sorted[di]];
+            var tsId = rowToDelete[tsIdIdx] != null ? String(rowToDelete[tsIdIdx]) : '';
+            if (tsId) {
+                var delCells = [];
+                for (var hi = 0; hi < headers.length; hi++) {
+                    var v = hi < rowToDelete.length ? rowToDelete[hi] : undefined;
+                    delCells.push(v == null ? '' : String(v));
+                }
+                S._deletedInfos = (S._deletedInfos || []).concat([{ tsId: tsId, cells: delCells }]);
+            }
+        }
+    }
     sorted.forEach(function (i) { S.data.rows.splice(i, 1); });
     // 同步行高索引：依次处理所有被删行（已按降序，逐个 -1 调整后续索引）
     if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
@@ -794,6 +826,11 @@ function copyRowInline() {
 }
 
 function pushFromContextMenu() {
+    // 防重复点击（与 pushChanges 行为一致）
+    if (S._pushing) {
+        if (typeof showToast === 'function') showToast('推送中，请稍候…', 'info');
+        return;
+    }
     var headers = S.data.headers || [];
     // 优先推送选中行（行选 + 单元格矩形选区均算）；如未选中，则推送右键所在行
     var indices = (typeof getPushTargetRows === 'function') ? getPushTargetRows() : [];
@@ -818,6 +855,8 @@ function pushFromContextMenu() {
         }
         return record;
     });
+    // 缓存本批参与推送的行索引，供 pushResult 回来后清除对应的 S.mods 修改高亮。
+    S._lastPushBatchRowIndices = indices.slice();
     // 缓存本批参与推送的 tsId（与 pushChanges 行为一致），供 pushResult 回来后做差集清理：
     // 本批中本次成功的 tsId 会从失败集合中移除，从而在"仅看推送失败"模式下被正确隐藏。
     S._lastPushBatchTsIds = new Set();
@@ -829,5 +868,17 @@ function pushFromContextMenu() {
             }
         });
     }
+    // 置忙（与 pushChanges 行为一致）
+    S._pushing = true;
+    if (typeof updatePushBtn === 'function') updatePushBtn();
+    if (S._pushTimeoutTimer) { try { clearTimeout(S._pushTimeoutTimer); } catch (_) {} }
+    S._pushTimeoutTimer = setTimeout(function () {
+        S._pushTimeoutTimer = null;
+        if (S._pushing) {
+            S._pushing = false;
+            if (typeof updatePushBtn === 'function') updatePushBtn();
+            if (typeof showToast === 'function') showToast('推送超时未响应，已解除按钮锁定', 'error');
+        }
+    }, 30000);
     S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap });
 }

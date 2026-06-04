@@ -72,7 +72,9 @@ export async function getTaskInfoByFilePath(
 
     // Step1: 查找绑定
     const entry = findBindingByPath(filePath);
-    if (!entry) return { bind: false, taskInfo: {} };
+    if (!entry || !entry.bind || !entry.taskInfo) return { bind: false, taskInfo: {} };
+
+    const info = entry.taskInfo!;
 
     // Step2: 提取 testPhaseName
     const testPhaseName = await extractTestPhaseName(filePath);
@@ -80,33 +82,33 @@ export async function getTaskInfoByFilePath(
 
     // Step3: 在 testPhaseList 中查找匹配的阶段 ID
     let phaseId = 0;
-    if (entry.testPhaseList && Array.isArray(entry.testPhaseList)) {
-        const matched = entry.testPhaseList.find(p => p.testPhaseName === testPhaseName);
+    if (info.testPhaseList && Array.isArray(info.testPhaseList)) {
+        const matched = info.testPhaseList.find(p => p.testPhaseName === testPhaseName);
         if (matched && matched.testPhaseId != null) {
             phaseId = matched.testPhaseId;
         }
     }
     // 向后兼容：如果当前阶段的名称等于文件中的阶段名，直接取 testPhaseId
-    if (phaseId === 0 && entry.testPhaseName === testPhaseName && entry.testPhaseId != null) {
-        phaseId = entry.testPhaseId;
+    if (phaseId === 0 && info.testPhaseName === testPhaseName && info.testPhaseId != null) {
+        phaseId = info.testPhaseId;
     }
     if (phaseId === 0) {
         return { bind: false, taskInfo: {} };
     }
 
     // Step4: 各字段齐备校验
-    if (!entry.testTaskNo || !entry.testTaskName ||
-        entry.subTestTaskId == null || !entry.subTestTaskName) {
+    if (!info.testTaskNo || !info.testTaskName ||
+        info.subTestTaskId == null || !info.subTestTaskName) {
         return { bind: false, taskInfo: {} };
     }
 
     return {
         bind: true,
         taskInfo: {
-            testTaskNo: entry.testTaskNo,
-            testTaskName: entry.testTaskName,
-            subTestTaskId: Number(entry.subTestTaskId),
-            subTestTaskName: entry.subTestTaskName,
+            testTaskNo: info.testTaskNo,
+            testTaskName: info.testTaskName,
+            subTestTaskId: Number(info.subTestTaskId),
+            subTestTaskName: info.subTestTaskName,
             testPhaseName,
             phaseId,
         },
@@ -142,13 +144,13 @@ export async function getCurrentTaskInfo(fullPath: string): Promise<HeaderTaskIn
     if (!fullPath) return empty;
 
     const entry = findBindingByPath(fullPath);
-    if (!entry) return empty;
+    if (!entry || !entry.bind || !entry.taskInfo) return empty;
 
     return {
         bind: true,
-        testTaskNo: entry.testTaskNo || '',
-        testTaskName: entry.testTaskName || '',
-        subTestTaskName: entry.subTestTaskName || '',
+        testTaskNo: entry.taskInfo.testTaskNo || '',
+        testTaskName: entry.taskInfo.testTaskName || '',
+        subTestTaskName: entry.taskInfo.subTestTaskName || '',
     };
 }
 

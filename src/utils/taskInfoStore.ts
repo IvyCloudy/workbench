@@ -9,8 +9,8 @@
  *    3. 提供 findBindingByPath(filePath) / getAllBoundItems() 给上层查询。
  *  设计要点：
  *    - 使用 globalStorageUri，跨工作区共享同一份绑定（用户全局维护即可）。
- *    - 文件格式为 JSON 数组，每项含 rootPath + childPath 组合成完整路径。
- *    - 未绑定时 rootPath / childPath 为空串，绑定后 append 子任务/阶段信息。
+ *    - 文件格式为 JSON 数组，每项为 CurrentTask，含 bind 标记 与 taskInfo 字段。
+ *    - 绑定后 taskInfo 包含 rootPath + childPath 等完整项目信息。
  *    - 使用内存缓存 + mtime 校验，避免每次访问都做磁盘 IO。
  * ============================================================================
  */
@@ -31,8 +31,8 @@ export interface TestPhaseItem {
     accTestFlag: string;
 }
 
-/** 单个测试任务的绑定记录（对应 tt.json 的单条结构） */
-export interface TaskBindingItem {
+/** 项目信息（绑定后存在的字段） */
+export interface Project {
     /** 显示名称，形如 "TT2026040017_测试DEMO" */
     name: string;
     /** 项目根绝对路径（未绑定时为空串） */
@@ -59,15 +59,23 @@ export interface TaskBindingItem {
     testPhaseName?: string;
     /** 回归标记 */
     gchFlag?: string;
-    /** 可选阶段列表（绑定后存在，替代旧 phaseBindings） */
+    /** 可选阶段列表（绑定后存在） */
     testPhaseList?: TestPhaseItem[];
+}
+
+/** 单个测试任务的绑定记录（对应 task-bindings.json 的单条结构） */
+export interface CurrentTask {
+    /** 是否已绑定 */
+    bind: boolean;
+    /** 项目信息（绑定后存在） */
+    taskInfo?: Project;
 }
 
 // ============================================
 // 默认模板
 // ============================================
 
-function buildEmptyTemplate(): TaskBindingItem[] {
+function buildEmptyTemplate(): CurrentTask[] {
     return [];
 }
 
@@ -75,7 +83,7 @@ function buildEmptyTemplate(): TaskBindingItem[] {
 // 内部状态
 // ============================================
 
-let cachedItems: TaskBindingItem[] | null = null;
+let cachedItems: CurrentTask[] | null = null;
 let cachedMtimeMs = 0;
 let resolvedFilePath: string | null = null;
 
@@ -124,8 +132,9 @@ export function getBindingsFilePath(context?: vscode.ExtensionContext): string {
 /**
  * 读取并缓存绑定文件内容。出错时返回空数组，不抛异常。
  * 使用 mtime 比对，文件未变更时直接返回缓存。
+ * 自动检测旧版 TaskBindingItem 格式并迁移为 CurrentTask。
  */
-function loadBindings(filePath: string): TaskBindingItem[] {
+function loadBindings(filePath: string): CurrentTask[] {
     if (!filePath) return [];
     try {
         const stat = fs.statSync(filePath);
@@ -137,8 +146,32 @@ function loadBindings(filePath: string): TaskBindingItem[] {
         if (!Array.isArray(parsed)) {
             console.warn('[TaskBindings] 文件不是数组，返回空');
             cachedItems = [];
+        } else if (parsed.length > 0 && 'rootPath' in parsed[0]) {
+            // 旧版 TaskBindingItem（平铺字段）→ 内存中转为 CurrentTask，磁盘文件不变
+            cachedItems = parsed.map((item: any) => ({
+                bind: !!(item.rootPath && item.childPath),
+                taskInfo: {
+                    name: item.name || '',
+                    rootPath: item.rootPath || '',
+                    childPath: item.childPath || '',
+                    paths: item.paths || [],
+                    tags: item.tags || [],
+                    enabled: item.enabled ?? true,
+                    profile: item.profile || '',
+                    testTaskId: item.testTaskId || '',
+                    testTaskNo: item.testTaskNo || '',
+                    testTaskName: item.testTaskName || '',
+                    subTestTaskId: item.subTestTaskId,
+                    subTestTaskName: item.subTestTaskName,
+                    testPhaseId: item.testPhaseId,
+                    testPhaseName: item.testPhaseName,
+                    gchFlag: item.gchFlag,
+                    testPhaseList: item.testPhaseList,
+                },
+            }));
+            console.log('[TaskBindings] 已读取旧版绑定格式（内存转换）');
         } else {
-            cachedItems = parsed as TaskBindingItem[];
+            cachedItems = parsed as CurrentTask[];
         }
         cachedMtimeMs = stat.mtimeMs;
         return cachedItems;
@@ -157,14 +190,15 @@ function loadBindings(filePath: string): TaskBindingItem[] {
  */
 export function findBindingByPath(
     filePath: string
-): TaskBindingItem | null {
+): CurrentTask | null {
     if (!filePath) return null;
     const bindingsPath = getBindingsFilePath();
     const items = loadBindings(bindingsPath);
     const normalized = filePath.replace(/\\/g, '/');
     for (const item of items) {
-        if (!item.rootPath || !item.childPath) continue;
-        const folderPath = path.join(item.rootPath, item.childPath).replace(/\\/g, '/');
+        if (!item.bind || !item.taskInfo) continue;
+        if (!item.taskInfo.rootPath || !item.taskInfo.childPath) continue;
+        const folderPath = path.join(item.taskInfo.rootPath, item.taskInfo.childPath).replace(/\\/g, '/');
         if (normalized.startsWith(folderPath + '/')) {
             return item;
         }
@@ -173,13 +207,13 @@ export function findBindingByPath(
 }
 
 /**
- * 返回所有已绑定（rootPath 和 childPath 均非空）的绑定项。
+ * 返回所有已绑定（bind === true）的绑定项。
  * 供 FileDecorationProvider / TreeView 使用。
  */
-export function getAllBoundItems(context?: vscode.ExtensionContext): TaskBindingItem[] {
+export function getAllBoundItems(context?: vscode.ExtensionContext): CurrentTask[] {
     const filePath = getBindingsFilePath(context);
     const items = loadBindings(filePath);
-    return items.filter(it => it.rootPath && it.childPath);
+    return items.filter(it => it.bind);
 }
 
 /**
@@ -187,7 +221,7 @@ export function getAllBoundItems(context?: vscode.ExtensionContext): TaskBinding
  */
 export function getAllBoundFolderPaths(context?: vscode.ExtensionContext): string[] {
     return getAllBoundItems(context).map(item =>
-        path.join(item.rootPath, item.childPath).replace(/\\/g, '/')
+        path.join(item.taskInfo!.rootPath, item.taskInfo!.childPath).replace(/\\/g, '/')
     );
 }
 
@@ -197,12 +231,13 @@ export function getAllBoundFolderPaths(context?: vscode.ExtensionContext): strin
 export function findBindingByFolderPath(
     context: vscode.ExtensionContext,
     folderPath: string
-): TaskBindingItem | null {
+): CurrentTask | null {
     if (!folderPath) return null;
     const normalized = folderPath.replace(/\\/g, '/');
     const items = getAllBoundItems(context);
     for (const item of items) {
-        const itemPath = path.join(item.rootPath, item.childPath).replace(/\\/g, '/');
+        if (!item.taskInfo) continue;
+        const itemPath = path.join(item.taskInfo.rootPath, item.taskInfo.childPath).replace(/\\/g, '/');
         if (normalized === itemPath || normalized.startsWith(itemPath + '/')) {
             return item;
         }

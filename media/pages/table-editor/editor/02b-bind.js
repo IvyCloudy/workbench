@@ -19,6 +19,41 @@ function bindToolbar() {
             var hasFailed = !!(S._pushFailedTsIds && S._pushFailedTsIds.size > 0);
             if (!hasFailed) return;
             S._failedOnly = !S._failedOnly;
+            if (S._failedOnly) { S._modifiedOnly = false; S._addedOnly = false; S._deletedOnly = false; }
+            renderTable();
+        });
+    }
+    var modifiedFilterBtn = document.getElementById('modifiedFilterBtn');
+    if (modifiedFilterBtn) {
+        modifiedFilterBtn.addEventListener('click', function () {
+            if (modifiedFilterBtn.classList.contains('is-disabled')) return;
+            var hasModified = !!(S._highlightedCells && S._highlightedCells.rowSet && S._highlightedCells.rowSet.size > 0);
+            if (!hasModified) return;
+            S._modifiedOnly = !S._modifiedOnly;
+            // 互斥：切换仅看修改行时关闭其他筛选
+            if (S._modifiedOnly) { S._failedOnly = false; S._addedOnly = false; S._deletedOnly = false; }
+            renderTable();
+        });
+    }
+    var addedFilterBtn = document.getElementById('addedFilterBtn');
+    if (addedFilterBtn) {
+        addedFilterBtn.addEventListener('click', function () {
+            if (addedFilterBtn.classList.contains('is-disabled')) return;
+            var hasAdded = !!(S._addedRowSet && S._addedRowSet.size > 0);
+            if (!hasAdded) return;
+            S._addedOnly = !S._addedOnly;
+            if (S._addedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._deletedOnly = false; }
+            renderTable();
+        });
+    }
+    var deletedFilterBtn = document.getElementById('deletedFilterBtn');
+    if (deletedFilterBtn) {
+        deletedFilterBtn.addEventListener('click', function () {
+            if (deletedFilterBtn.classList.contains('is-disabled')) return;
+            var hasDeleted = !!(S._deletedInfos && S._deletedInfos.length > 0);
+            if (!hasDeleted) return;
+            S._deletedOnly = !S._deletedOnly;
+            if (S._deletedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._addedOnly = false; }
             renderTable();
         });
     }
@@ -70,13 +105,18 @@ function bindToolbar() {
             updateSearchClear();
             // 清空所有列筛选
             S._colFilters = {};
-            // 关闭"仅看推送失败"筛选；失败标记本身保留（除非用户明确清除/再次推送），但视图回到全部。
+            // 关闭所有筛选
             S._failedOnly = false;
+            S._modifiedOnly = false;
+            S._addedOnly = false;
+            S._deletedOnly = false;
+            // _deletedInfos 由后端 diff 重新下发，此处不提前清空以免渲染闪烁
             // 关闭可能打开的列筛选弹窗（若存在该函数）
             try { if (typeof closeColFilter === 'function') closeColFilter(); } catch (e) {}
             // 清掉 mods（高亮）与撤销栈：刷新后磁盘 = 内存，旧撤销点不再有意义；
             // 同时避免随后扩展端 force 推送被前端 hasUserChanges 兜底拦截。
             if (S.mods && S.mods.size > 0) S.mods.clear();
+            if (S._detailModCellKeys && S._detailModCellKeys.size > 0) S._detailModCellKeys.clear();
             if (typeof clearHistory === 'function') clearHistory();
             renderTable();
             // 提示进行中：成功覆盖会在收到磁盘最新数据后再次提示

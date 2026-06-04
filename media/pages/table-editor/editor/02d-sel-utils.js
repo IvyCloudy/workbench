@@ -290,3 +290,63 @@ function updateFailedFilterBtn() {
     btn.setAttribute('title', tip);
     if (S._failedOnly) btn.classList.add('active'); else btn.classList.remove('active');
 }
+
+// 同步"仅看已修改行"按钮的禁用 / 激活状态与计数 tooltip
+function updateModifiedFilterBtn() {
+    var btn = document.getElementById('modifiedFilterBtn');
+    if (!btn) return;
+    var n = (S._highlightedCells && S._highlightedCells.rowSet && S._highlightedCells.rowSet.size) || 0;
+    if (n === 0) {
+        btn.classList.add('is-disabled');
+        btn.classList.remove('active');
+        btn.setAttribute('data-tip', '暂无修改行');
+        btn.setAttribute('title', '暂无修改行');
+        if (S._modifiedOnly) S._modifiedOnly = false;
+        return;
+    }
+    btn.classList.remove('is-disabled');
+    var tip = S._modifiedOnly ? ('已仅看修改行 (' + n + ')，点击退出') : ('仅看修改行 (' + n + ')');
+    btn.setAttribute('data-tip', tip);
+    btn.setAttribute('title', tip);
+    if (S._modifiedOnly) btn.classList.add('active'); else btn.classList.remove('active');
+}
+
+// 同步"仅看新增行"按钮的禁用 / 激活状态与计数 tooltip
+function updateAddedFilterBtn() {
+    var btn = document.getElementById('addedFilterBtn');
+    if (!btn) return;
+    var n = (S._addedRowSet && S._addedRowSet.size) || 0;
+    if (n === 0) {
+        btn.classList.add('is-disabled');
+        btn.classList.remove('active');
+        btn.setAttribute('data-tip', '暂无新增行');
+        btn.setAttribute('title', '暂无新增行');
+        if (S._addedOnly) S._addedOnly = false;
+        return;
+    }
+    btn.classList.remove('is-disabled');
+    var tip = S._addedOnly ? ('已仅看新增行 (' + n + ')，点击退出') : ('仅看新增行 (' + n + ')');
+    btn.setAttribute('data-tip', tip);
+    btn.setAttribute('title', tip);
+    if (S._addedOnly) btn.classList.add('active'); else btn.classList.remove('active');
+}
+
+// 同步"仅看已删除行"按钮的禁用 / 激活状态与计数 tooltip
+function updateDeletedFilterBtn() {
+    var btn = document.getElementById('deletedFilterBtn');
+    if (!btn) return;
+    var n = (S._deletedInfos && S._deletedInfos.length) || 0;
+    if (n === 0) {
+        btn.classList.add('is-disabled');
+        btn.classList.remove('active');
+        btn.setAttribute('data-tip', '暂无已删除行');
+        btn.setAttribute('title', '暂无已删除行');
+        if (S._deletedOnly) S._deletedOnly = false;
+        return;
+    }
+    btn.classList.remove('is-disabled');
+    var tip = S._deletedOnly ? ('已仅看已删除行 (' + n + ')，点击退出') : ('仅看已删除行 (' + n + ')');
+    btn.setAttribute('data-tip', tip);
+    btn.setAttribute('title', tip);
+    if (S._deletedOnly) btn.classList.add('active'); else btn.classList.remove('active');
+}

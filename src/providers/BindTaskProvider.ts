@@ -107,9 +107,10 @@ class BindTasksTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
     getChildren(): vscode.TreeItem[] {
         const items = getAllBoundItems(effectiveContext!);
         return items.map(entry => {
-            const taskName = entry.name;
-            const description = `${entry.testTaskNo} / ${entry.subTestTaskName || ''}`;
-            const fullPath = path.join(entry.rootPath, entry.childPath);
+            const info = entry.taskInfo!;
+            const taskName = info.name || '';
+            const description = `${info.testTaskNo || ''} / ${info.subTestTaskName || ''}`;
+            const fullPath = path.join(info.rootPath || '', info.childPath || '');
 
             const item = new vscode.TreeItem(
                 `🔗 ${taskName}`,
@@ -218,9 +219,16 @@ export function registerBindTaskFeatures(context: vscode.ExtensionContext): vsco
         vscode.window.registerFileDecorationProvider(taskFolderDecorationProvider)
     );
 
-    // 2. "已绑定任务" TreeView
+    // 2. "已绑定任务" TreeView —— 使用 createTreeView 以便监听显隐事件
+    const bindTaskTreeView = vscode.window.createTreeView('boundTasks', {
+        treeDataProvider: bindTasksTreeProvider,
+    });
+    disposables.push(bindTaskTreeView);
+    // 视图变为可见时自动刷新（打开资源管理器/切换回 Explorer 时触发）
     disposables.push(
-        vscode.window.registerTreeDataProvider('boundTasks', bindTasksTreeProvider)
+        bindTaskTreeView.onDidChangeVisibility(e => {
+            if (e.visible) bindTasksTreeProvider.refresh();
+        })
     );
 
     // 3. revealBoundTask 命令

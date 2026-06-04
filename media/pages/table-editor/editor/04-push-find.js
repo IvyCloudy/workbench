@@ -46,6 +46,8 @@ function pushChanges() {
         }
         return record;
     });
+    // 缓存本批参与推送的行索引，供 pushResult 回来后清除对应的 S.mods 修改高亮。
+    S._lastPushBatchRowIndices = picked.slice();
     // 缓存本批参与推送的 tsId，供 pushResult 回来后做"本批成功 = 本批 - 本批失败"差集计算，
     // 进而仅清除本批中已成功的失败标记，未参与本批的历史失败行保持高亮不变。
     S._lastPushBatchTsIds = new Set();

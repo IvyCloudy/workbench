@@ -25,9 +25,12 @@ import { registerBindTaskFeatures } from './providers/BindTaskProvider';
 import { pushTestCase } from './services/http';
 import { applyTestCaseNos, createParser, detectFileType, ensureTrackingColumns, parseFileToRows } from './parsers';
 import { ensureBindingsFile } from './utils/taskInfoStore';
-import { getCurrentTaskInfo } from './utils/taskInfo';
+import { getCurrentTaskInfo } from './utils/command';
 import { showPushErrorModal, showPushResult, showModal } from './utils/message';
+import { ensureHighlightFile } from './utils/highlightStore';
+import { ensureSnapshotFile, savePushSnapshot, getDeletedSnapshotIds } from './utils/pushSnapshotStore';
 import { TS_ID_COLUMN } from './services/utils';
+import { ensureDeletedRowsFile, syncDeletedRows, refreshAndGetDeletedRows, getPendingDeletedRows, markDeletedRows } from './utils/deletedRowsStore';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
@@ -167,7 +170,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
         else if (t === '2') failures.push({ tsId: sid, reason: dataField });
     });
 
-    // 把成功项的 testCaseNo 回写到原文件（按 tsId 匹配）
+    // 把成功项的 testCaseNo 回写到原文件（按 testcase_id 匹配）
     if (successMappings.length > 0) {
         try {
             const fileType = detectFileType(filePath);
@@ -177,13 +180,17 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
                 ensureTrackingColumns(parsed.tableData, parsed.sourceData);
                 applyTestCaseNos(parsed.tableData, parsed.sourceData, successMappings);
                 await parser.save(filePath, parsed.tableData, parsed.sourceData);
+                // 推送成功后仅更新已推送行的快照基线，未推送行保持旧快照不变
+                // 确保之后把未推送行改回旧值时 diff 无变化 → 高亮正确清除
+                const pushedTsIds = new Set(successMappings.map(m => m.tsId));
+                await savePushSnapshot(filePath, parsed.tableData, pushedTsIds);
             }
         } catch (err: any) {
             console.error(`[推送] 回写 testCaseNo 失败: ${err?.message || err}`);
         }
     }
 
-    // 失败明细按 tsId 反查为 "第 N 行"
+    // 失败明细按 testcase_id 反查为 "第 N 行"
     const tsIdToIndex = new Map<string, number>();
     rows.forEach((rec: any, i) => {
         const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
@@ -237,6 +244,21 @@ export async function activate(context: vscode.ExtensionContext) {
         console.error('[Extension] 初始化绑定文件失败:', err?.message || err);
     });
 
+    // 初始化高亮存储文件（用于持久化推送后 testCaseNo 单元格的高亮标识）
+    await ensureHighlightFile(context).catch(err => {
+        console.error('[Extension] 初始化高亮存储文件失败:', err?.message || err);
+    });
+
+    // 初始化推送快照存储文件（每次推送后记录基线，后续差异比对用）
+    await ensureSnapshotFile(context).catch(err => {
+        console.error('[Extension] 初始化快照存储文件失败:', err?.message || err);
+    });
+
+    // 初始化已删除行追踪存储文件（管理待同步的删除行记录）
+    await ensureDeletedRowsFile(context).catch(err => {
+        console.error('[Extension] 初始化删除行存储文件失败:', err?.message || err);
+    });
+
     // 注册绑定任务相关功能（装饰器 + TreeView + revealBoundTask 命令 + 监听）
     const bindTaskDisposables = registerBindTaskFeatures(context);
 
@@ -282,6 +304,45 @@ export async function activate(context: vscode.ExtensionContext) {
                     const baseName = targets[0] ? path.basename(targets[0].fsPath) : '';
                     const panel = targets[0] ? BaseEditorProvider.getPanel(targets[0].fsPath) : undefined;
                     showPushErrorModal(panel, baseName, `推送失败: ${err.message || err}`);
+                }
+            }
+        ),
+
+        // 已删除行同步命令（将已删除行同步到线上并清除本地快照）
+        vscode.commands.registerCommand(
+            'workbench.syncDeletedRows',
+            async () => {
+                const uri = getActiveFileUri();
+                if (!uri || !isTestCaseFile(uri)) {
+                    vscode.window.showInformationMessage('请先打开测试案例文件再执行同步');
+                    return;
+                }
+                try {
+                    const fileType = detectFileType(uri.fsPath);
+                    if (!fileType) {
+                        vscode.window.showErrorMessage('不支持的文件类型');
+                        return;
+                    }
+                    const parser = createParser(fileType);
+                    const parsed = await parser.parse(uri.fsPath);
+                    const deletedRows = refreshAndGetDeletedRows(uri.fsPath, parsed.tableData);
+                    if (deletedRows.length === 0) {
+                        vscode.window.showInformationMessage('当前文件无待同步的已删除行');
+                        return;
+                    }
+                    const result = await syncDeletedRows(uri.fsPath);
+                    if (result.failed.length > 0) {
+                        vscode.window.showInformationMessage(
+                            `删除行同步提示\n\n${result.failed.map(f => `${f.tsId}: ${f.reason}`).join('\n')}`,
+                            { modal: true }
+                        );
+                    }
+                    if (result.synced.length > 0) {
+                        vscode.window.showInformationMessage(`已同步 ${result.synced.length} 行删除记录`);
+                    }
+                } catch (err: any) {
+                    console.error('[syncDeletedRows] 失败:', err?.message || err);
+                    vscode.window.showErrorMessage(`删除行同步失败: ${err?.message || err}`);
                 }
             }
         ),

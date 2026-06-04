@@ -238,7 +238,7 @@ function applyColumnsBulk(fillVal) {
         targets.push(ci);
     });
     if (targets.length === 0) {
-        showToast('tsId 列不允许清空/填充，已跳过', 'error');
+        showToast('testcase_id 列不允许清空/填充，已跳过', 'error');
         return;
     }
     pushHistory();
@@ -291,7 +291,7 @@ function applyColumnsBulk(fillVal) {
     renderTable();
     var verb = (fillVal === undefined) ? '清空' : '填充';
     var msg = '已' + verb + ' ' + targets.length + ' 列、' + changed + ' 个单元格';
-    if (skippedTsId) msg += '（tsId 已自动跳过）';
+    if (skippedTsId) msg += '（testcase_id 已自动跳过）';
     showToast(msg, 'success');
 }
 

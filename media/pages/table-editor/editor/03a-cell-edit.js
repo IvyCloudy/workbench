@@ -153,13 +153,8 @@ function startEdit(e) {
                 saveFile();
             }
         }
-        var curVal = row[ci];
         td.classList.remove('xs-editing');
-        td.innerHTML = '<div class="xs-cell-wrap">' + escapeHtml(formatCellValue(curVal)) + '</div>';
-        if (S.mods.has(ri + ',' + ci)) td.classList.add('modified');
-        // 同步刷新 tooltip
-        var ftxt = formatCellValue(curVal);
-        if (ftxt) td.setAttribute('title', ftxt); else td.removeAttribute('title');
+        patchCell(ri, ci);
     }
     input.addEventListener('blur', function () { commit(true); });
     input.addEventListener('keydown', function (ev) {
@@ -353,6 +348,14 @@ function insertRow(at) {
     if (at > S.data.rows.length) at = S.data.rows.length;
     pushHistory();
     S.data.rows.splice(at, 0, newRow);
+    if (!S._addedRowSet) S._addedRowSet = new Set();
+    // 插入位置之后已有的新增行索引整体+1
+    if (S._addedRowSet.size > 0) {
+        var toShift = [];
+        S._addedRowSet.forEach(function (ri) { if (ri >= at) toShift.push(ri); });
+        toShift.forEach(function (ri) { S._addedRowSet.delete(ri); S._addedRowSet.add(ri + 1); });
+    }
+    S._addedRowSet.add(at);
     // 更新选中集合（被插入位置之后的索引整体+1）
     var ns = new Set();
     S.sel.forEach(function (i) { ns.add(i >= at ? i + 1 : i); });
@@ -393,6 +396,13 @@ function deleteRow(ri) {
         }
     }
     S.data.rows.splice(ri, 1);
+    // 同步新增行集合：被删行移除，后续行 -1
+    if (S._addedRowSet && S._addedRowSet.size > 0) {
+        S._addedRowSet.delete(ri);
+        var toShiftBack = [];
+        S._addedRowSet.forEach(function (i) { if (i > ri) toShiftBack.push(i); });
+        toShiftBack.forEach(function (i) { S._addedRowSet.delete(i); S._addedRowSet.add(i - 1); });
+    }
     var ns = new Set();
     S.sel.forEach(function (i) { if (i !== ri) ns.add(i > ri ? i - 1 : i); });
     S.sel = ns;
@@ -435,6 +445,17 @@ function deleteSelectedRows() {
         }
     }
     sorted.forEach(function (i) { S.data.rows.splice(i, 1); });
+    // 同步新增行集合：被删行移除，后续行按删除数量整体左移
+    if (S._addedRowSet && S._addedRowSet.size > 0) {
+        var newAdded = new Set();
+        S._addedRowSet.forEach(function (ri) {
+            if (sorted.indexOf(ri) >= 0) return; // 被删行，移除
+            var shift = 0;
+            for (var si = 0; si < sorted.length; si++) { if (sorted[si] < ri) shift++; }
+            newAdded.add(ri - shift);
+        });
+        S._addedRowSet = newAdded;
+    }
     // 同步行高索引：依次处理所有被删行（已按降序，逐个 -1 调整后续索引）
     if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
         var rhArr = Object.keys(S.rowHeights).map(function (k) { return { i: parseInt(k, 10), v: S.rowHeights[k] }; });

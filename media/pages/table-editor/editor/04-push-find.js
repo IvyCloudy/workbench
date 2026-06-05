@@ -169,7 +169,14 @@ function rebuildFindMatches(kw) {
     var needle = caseSensitive ? S._findKw : S._findKw.toLowerCase();
     var rows = (S.data && S.data.rows) || [];
     var headers = (S.data && S.data.headers) || [];
+    // 当 toggle 过滤（仅看失败/修改/新增/删除）激活时，find 只搜索可见行
+    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly;
+    var visibleRows = null;
+    if (hasToggle && S._viewRows && S._viewRows.length >= 0) {
+        visibleRows = new Set(S._viewRows);
+    }
     rows.forEach(function (row, ri) {
+        if (visibleRows && !visibleRows.has(ri)) return;
         headers.forEach(function (_, ci) {
             var v = row[ci];
             if (v === null || v === undefined) return;
@@ -328,7 +335,13 @@ function replaceAll() {
     var needle = caseSensitive ? S._findKw : S._findKw.toLowerCase();
     var count = 0;
     pushHistory();
+    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly;
+    var visibleRows = null;
+    if (hasToggle && S._viewRows && S._viewRows.length >= 0) {
+        visibleRows = new Set(S._viewRows);
+    }
     (S.data.rows || []).forEach(function (row, ri) {
+        if (visibleRows && !visibleRows.has(ri)) return;
         (S.data.headers || []).forEach(function (_, ci) {
             if (isFrozenCol(ci)) return; // tsId 列跳过
             // 标量数组列跳过全量替换，避免语义窜乱

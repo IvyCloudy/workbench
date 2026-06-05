@@ -20,19 +20,33 @@ function bindToolbar() {
             if (!hasFailed) return;
             S._failedOnly = !S._failedOnly;
             if (S._failedOnly) { S._modifiedOnly = false; S._addedOnly = false; S._deletedOnly = false; }
+            S._highlightedCells = null;
             renderTable();
+            if (S._failedOnly && S._viewRows && S._viewRows.length > 0) {
+                S.sel = new Set(S._viewRows);
+                updateRowSelClasses();
+                updateSelectionInfo();
+                updatePushBtn();
+            }
         });
     }
     var modifiedFilterBtn = document.getElementById('modifiedFilterBtn');
     if (modifiedFilterBtn) {
         modifiedFilterBtn.addEventListener('click', function () {
             if (modifiedFilterBtn.classList.contains('is-disabled')) return;
-            var hasModified = !!(S._highlightedCells && S._highlightedCells.rowSet && S._highlightedCells.rowSet.size > 0);
+            var hasModified = (typeof _getModifiedRowSet === 'function') ? _getModifiedRowSet().size > 0 : false;
             if (!hasModified) return;
             S._modifiedOnly = !S._modifiedOnly;
             // 互斥：切换仅看修改行时关闭其他筛选
             if (S._modifiedOnly) { S._failedOnly = false; S._addedOnly = false; S._deletedOnly = false; }
+            S._highlightedCells = null;
             renderTable();
+            if (S._modifiedOnly && S._viewRows && S._viewRows.length > 0) {
+                S.sel = new Set(S._viewRows);
+                updateRowSelClasses();
+                updateSelectionInfo();
+                updatePushBtn();
+            }
         });
     }
     var addedFilterBtn = document.getElementById('addedFilterBtn');
@@ -43,7 +57,14 @@ function bindToolbar() {
             if (!hasAdded) return;
             S._addedOnly = !S._addedOnly;
             if (S._addedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._deletedOnly = false; }
+            S._highlightedCells = null;
             renderTable();
+            if (S._addedOnly && S._viewRows && S._viewRows.length > 0) {
+                S.sel = new Set(S._viewRows);
+                updateRowSelClasses();
+                updateSelectionInfo();
+                updatePushBtn();
+            }
         });
     }
     var deletedFilterBtn = document.getElementById('deletedFilterBtn');
@@ -54,6 +75,7 @@ function bindToolbar() {
             if (!hasDeleted) return;
             S._deletedOnly = !S._deletedOnly;
             if (S._deletedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._addedOnly = false; }
+            S._highlightedCells = null;
             renderTable();
         });
     }

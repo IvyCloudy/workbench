@@ -21,16 +21,19 @@ function selectAllCells() {
     if (rows.length === 0 || cols.length === 0) return;
     // 取当前可见的原始行号列表；若尚未渲染过（_viewRows 为空），退化为整表
     var view = (S._viewRows && S._viewRows.length) ? S._viewRows : null;
-    var firstR, lastR;
+    var targetRows = view || rows.map(function(_, i) { return i; });
+    // 已全选则取消全选，否则全选（不管过滤条件）
+    var alreadyAllSelected = targetRows.length > 0 && targetRows.every(function(r) { return S.sel.has(r); });
     S.sel.clear();
-    if (view) {
-        firstR = view[0];
-        lastR = view[view.length - 1];
-        for (var i = 0; i < view.length; i++) S.sel.add(view[i]);
+    var firstR, lastR;
+    if (!alreadyAllSelected) {
+        firstR = targetRows[0];
+        lastR = targetRows[targetRows.length - 1];
+        for (var i = 0; i < targetRows.length; i++) S.sel.add(targetRows[i]);
     } else {
+        // 取消全选：选区置空
         firstR = 0;
-        lastR = rows.length - 1;
-        for (var k = 0; k <= lastR; k++) S.sel.add(k);
+        lastR = 0;
     }
     // 注意：cellSel 的 anchor/focus 直接使用真实行号；由于视图行号在原始坐标下不一定连续
     // （仅看失败/列筛选可能跳号），矩形高亮在 updateCellSelClasses 中按 r1..r2 范围着色，
@@ -179,9 +182,15 @@ function updateSelectionInfo() {
         return;
     }
     var hasColFilters = S._colFilters && Object.keys(S._colFilters).length > 0;
-    if (S._searchKw || hasColFilters) {
+    var hasToggleFilter = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly;
+    if (S._searchKw || hasColFilters || hasToggleFilter) {
         var matched = countMatchedRows();
-        info.textContent = '已选 ' + S.sel.size + ' 行，筛选 ' + matched + ' / ' + total + ' 行';
+        var visibleSelected = 0;
+        if (S.sel && S.sel.size > 0) {
+            var viewSet = new Set(S._viewRows || []);
+            S.sel.forEach(function (ri) { if (viewSet.has(ri)) visibleSelected++; });
+        }
+        info.textContent = '已选 ' + visibleSelected + ' 行，筛选 ' + matched + ' / ' + total + ' 行';
     } else {
         info.textContent = '已选 ' + S.sel.size + ' 行，共 ' + total + ' 行';
     }
@@ -191,9 +200,29 @@ function countMatchedRows() {
     var skw = (S._searchKw || '').toLowerCase();
     var h = S.data.headers || [];
     var hasColFilters = S._colFilters && Object.keys(S._colFilters).length > 0;
-    if (!skw && !hasColFilters) return (S.data.rows || []).length;
+    var hasToggleFilter = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly;
+    if (!skw && !hasColFilters && !hasToggleFilter) return (S.data.rows || []).length;
+    // 仅看已删除行：普通行全部隐藏，计数来自 ghost 行
+    if (S._deletedOnly) return (S._deletedInfos && S._deletedInfos.length) || 0;
     var count = 0;
-    (S.data.rows || []).forEach(function (row) {
+    (S.data.rows || []).forEach(function (row, ri) {
+        if (hasToggleFilter) {
+            if (S._failedOnly && S._pushFailedTsIds) {
+                var hdr = S.data.headers || [];
+                var tsCol = hdr.indexOf('testcase_id');
+                if (tsCol >= 0) {
+                    var tsv = row[tsCol];
+                    if (tsv === undefined || tsv === null || tsv === '') return;
+                    if (!S._pushFailedTsIds.has(String(tsv))) return;
+                }
+            }
+            if (S._modifiedOnly) {
+                if (!(typeof _getModifiedRowSet === 'function' && _getModifiedRowSet().has(ri))) return;
+            }
+            if (S._addedOnly && S._addedRowSet) {
+                if (!S._addedRowSet.has(ri)) return;
+            }
+        }
         if (skw) {
             var hit = false;
             for (var k = 0; k < h.length; k++) {
@@ -220,6 +249,24 @@ function countMatchedRows() {
         count++;
     });
     return count;
+}
+
+// 从 S.mods / S._detailModCellKeys 计算有未提交修改的行集合（用于"仅看修改"过滤）
+function _getModifiedRowSet() {
+    var rows = new Set();
+    if (S.mods) {
+        S.mods.forEach(function (key) {
+            var commaIdx = key.indexOf(',');
+            if (commaIdx > 0) rows.add(parseInt(key.substring(0, commaIdx), 10));
+        });
+    }
+    if (S._detailModCellKeys) {
+        S._detailModCellKeys.forEach(function (key) {
+            var commaIdx = key.indexOf(',');
+            if (commaIdx > 0) rows.add(parseInt(key.substring(0, commaIdx), 10));
+        });
+    }
+    return rows;
 }
 
 // 计算"当前可推送的行集合"：优先行选 S.sel；若没有行选但存在单元格矩形选区，
@@ -295,7 +342,7 @@ function updateFailedFilterBtn() {
 function updateModifiedFilterBtn() {
     var btn = document.getElementById('modifiedFilterBtn');
     if (!btn) return;
-    var n = (S._highlightedCells && S._highlightedCells.rowSet && S._highlightedCells.rowSet.size) || 0;
+    var n = (typeof _getModifiedRowSet === 'function') ? _getModifiedRowSet().size : 0;
     if (n === 0) {
         btn.classList.add('is-disabled');
         btn.classList.remove('active');

@@ -20,7 +20,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getNonce, isInQualifiedDir, buildErrorHtml, FILE_PATTERNS, TS_ID_COLUMN, escapeHtml } from '../services/utils';
-import { getCurrentTaskInfo } from '../utils/command';
+import { getCurrentTaskInfo, type GetCurrentTaskInfoResult } from '../utils/command';
 import { showPushErrorModal, showPushResult, showPushDone, showSaveResult } from '../utils/message';
 import { setHighlight, clearHighlight } from '../utils/highlightStore';
 import { savePushSnapshot, diffPushSnapshot, type RowDiff, type DiffResult, type DeletedRowInfo, type AddedRowInfo } from '../utils/pushSnapshotStore';
@@ -80,8 +80,8 @@ export class PushViaHttpClient implements PushStrategy {
             return;
         }
         const taskInfo = {
-            testTaskNo: currentTask.testTaskNo,
-            subTestTaskName: currentTask.subTestTaskName,
+            testTaskNo: currentTask.taskInfo.testTaskNo || '',
+            subTestTaskName: currentTask.taskInfo.subTestTaskName || '',
         };
 
         // 重新解析文件获取原始结构化数据。
@@ -148,10 +148,15 @@ export class PushViaHttpClient implements PushStrategy {
                 ctx.markSelfSave?.();
                 await ctx.session.parser.save(ctx.filePath, parsed.tableData, parsed.sourceData);
                 ctx.markSelfSave?.();
-                // 推送成功后仅更新已推送行的快照基线，未推送行保持旧快照不变
-                // 确保之后把未推送行改回旧值时 diff 无变化 → 高亮正确清除
-                const pushedTsIds = new Set(successMappings.map(m => m.tsId));
-                await savePushSnapshot(ctx.filePath, parsed.tableData, pushedTsIds);
+                // 所有已推送行（无论成功/失败）更新快照基线，使下次 diff 不再标记为修改
+                const allPushedTsIds = new Set<string>();
+                if (Array.isArray(pushData)) {
+                    for (const rec of pushData) {
+                        const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
+                        if (id) allPushedTsIds.add(id);
+                    }
+                }
+                await savePushSnapshot(ctx.filePath, parsed.tableData, allPushedTsIds);
                 if (oldHL && oldHL.rowIndices && oldHL.rowIndices.length > 0) {
                     const rows = parsed.tableData.rows;
                     const tsIdIdx = parsed.tableData.headers.indexOf(TS_ID_COLUMN);
@@ -159,12 +164,12 @@ export class PushViaHttpClient implements PushStrategy {
                     const remainingCells: [number, number][] = [];
                     for (const ri of oldHL.rowIndices) {
                         const id = tsIdIdx >= 0 && ri < rows.length ? String(rows[ri]?.[tsIdIdx] ?? '') : '';
-                        if (!pushedTsIds.has(id)) remainingRows.push(ri);
+                        if (!allPushedTsIds.has(id)) remainingRows.push(ri);
                     }
                     if (oldHL.cells) {
                         for (const [ri, ci] of oldHL.cells) {
                             const id = tsIdIdx >= 0 && ri < rows.length ? String(rows[ri]?.[tsIdIdx] ?? '') : '';
-                            if (!pushedTsIds.has(id)) remainingCells.push([ri, ci]);
+                            if (!allPushedTsIds.has(id)) remainingCells.push([ri, ci]);
                         }
                     }
                     ctx.session.highlightedCells = remainingRows.length > 0
@@ -183,6 +188,37 @@ export class PushViaHttpClient implements PushStrategy {
             } catch (err: any) {
                 console.error('[推送] testCaseNo 回写失败:', err?.message || err);
             }
+        } else if (failures.length > 0) {
+            // 全部推送失败：仍更新快照基线，使下次 diff 不再标记为修改
+            try {
+                const allPushedTsIds = new Set<string>();
+                if (Array.isArray(pushData)) {
+                    for (const rec of pushData) {
+                        const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
+                        if (id) allPushedTsIds.add(id);
+                    }
+                }
+                const parsed = await ctx.session.parser.parse(ctx.filePath);
+                await savePushSnapshot(ctx.filePath, parsed.tableData, allPushedTsIds);
+                ctx.session.cachedTableData = null;
+            } catch (err: any) {
+                console.error('[推送] 全部失败，快照更新失败:', err?.message || err);
+            }        } else if (failures.length > 0) {
+                         // 全部推送失败：仍更新快照基线，使下次 diff 不再标记为修改
+                         try {
+                             const allPushedTsIds = new Set<string>();
+                             if (Array.isArray(pushData)) {
+                                 for (const rec of pushData) {
+                                     const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
+                                     if (id) allPushedTsIds.add(id);
+                                 }
+                             }
+                             const parsed = await ctx.session.parser.parse(ctx.filePath);
+                             await savePushSnapshot(ctx.filePath, parsed.tableData, allPushedTsIds);
+                             ctx.session.cachedTableData = null;
+                         } catch (err: any) {
+                             console.error('[推送] 全部失败，快照更新失败:', err?.message || err);
+                         }
         }
 
         // 失败项按 testcase_id 反查行号，统一通过 webview 弹窗展示（与右键文件推送一致）
@@ -616,7 +652,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         // 未绑定（或未命中）时三项为空串，由 buildEditorHtml 渲染为 "-"
         const currentTask = this.context
             ? await getCurrentTaskInfo(filePath)
-            : { bind: false, testTaskNo: '', testTaskName: '', subTestTaskName: '' };
+            : { bind: false, taskInfo: {} };
 
         webviewPanel.webview.html = await this.buildEditorHtml(nonce, webviewPanel, session.type, currentTask);
         log('✅ html ready');
@@ -629,7 +665,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         nonce: string,
         webviewPanel: vscode.WebviewPanel,
         dataType: FileType,
-        taskInfo: { bind: boolean; testTaskNo: string; subTestTaskName: string; testTaskName: string }
+        taskInfo: GetCurrentTaskInfoResult
     ): Promise<string> {
         const msgType = `${dataType}Data`;
 
@@ -672,9 +708,10 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
 
         // 未命中绑定时，表头三项统一展示占位符 "-"
         const PLACEHOLDER = '-';
-        const safeTestTaskNo = escapeHtml(taskInfo?.testTaskNo || PLACEHOLDER);
-        const safeSubTestTaskName = escapeHtml(taskInfo?.subTestTaskName || PLACEHOLDER);
-        const safeTestTaskName = escapeHtml(taskInfo?.testTaskName || PLACEHOLDER);
+        const innerTask = taskInfo?.taskInfo;
+        const safeTestTaskNo = escapeHtml((innerTask && innerTask.testTaskNo) || PLACEHOLDER);
+        const safeSubTestTaskName = escapeHtml((innerTask && innerTask.subTestTaskName) || PLACEHOLDER);
+        const safeTestTaskName = escapeHtml((innerTask && innerTask.testTaskName) || PLACEHOLDER);
 
         // 绑定状态标签：首行最左侧展示"已绑定任务 / 未绑定任务"
         const isBound = !!taskInfo?.bind;

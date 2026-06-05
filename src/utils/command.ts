@@ -119,16 +119,22 @@ export async function getTaskInfoByFilePath(
 // 公共：获取当前文件所属的测试任务信息
 // ============================================
 
-/** 表头三项展示信息：均为字符串，未命中时为空串。 */
-export interface HeaderTaskInfo {
+/** 表头展示用任务信息（与 getCurrentTaskInfo 返回的 taskInfo 对应）。 */
+export interface CurrentTaskInfo {
+    testTaskNo: string;
+    testTaskName: string;
+    subTestTaskName: string;
+}
+
+/** getCurrentTaskInfo 返回格式：bind 标记 + taskInfo 对象（未绑定时 taskInfo 为空）。 */
+export interface GetCurrentTaskInfoResult {
     /** 是否在 task-bindings.json 中命中绑定（用于第一行最左侧的状态标签） */
     bind: boolean;
-    /** 测试任务编号（来自 task-bindings.json，命中绑定时为后端真实值） */
-    testTaskNo: string;
-    /** 测试任务名称（来自 task-bindings.json） */
-    testTaskName: string;
-    /** 子测试任务名称（来自 task-bindings.json） */
-    subTestTaskName: string;
+    /**
+     * 命中绑定时为 { testTaskNo, testTaskName, subTestTaskName }；
+     * 未命中时为空对象 {}。
+     */
+    taskInfo: CurrentTaskInfo | Record<string, never>;
 }
 
 /**
@@ -137,10 +143,10 @@ export interface HeaderTaskInfo {
  * 命中规则：
  *   - findBindingByPath(fullPath) 找到绑定点
  *   - 命中 → 返回绑定文件中的 testTaskNo / testTaskName / subTestTaskName
- *   - 未命中 → 三项均返回空串（UI 层会渲染为占位符 "-"）
+ *   - 未命中 → taskInfo 为空对象 {}（UI 层会渲染为占位符 "-"）
  */
-export async function getCurrentTaskInfo(fullPath: string): Promise<HeaderTaskInfo> {
-    const empty: HeaderTaskInfo = { bind: false, testTaskNo: '', testTaskName: '', subTestTaskName: '' };
+export async function getCurrentTaskInfo(fullPath: string): Promise<GetCurrentTaskInfoResult> {
+    const empty: GetCurrentTaskInfoResult = { bind: false, taskInfo: {} };
     if (!fullPath) return empty;
 
     const entry = findBindingByPath(fullPath);
@@ -148,11 +154,16 @@ export async function getCurrentTaskInfo(fullPath: string): Promise<HeaderTaskIn
 
     return {
         bind: true,
-        testTaskNo: entry.taskInfo.testTaskNo || '',
-        testTaskName: entry.taskInfo.testTaskName || '',
-        subTestTaskName: entry.taskInfo.subTestTaskName || '',
+        taskInfo: {
+            testTaskNo: entry.taskInfo.testTaskNo || '',
+            testTaskName: entry.taskInfo.testTaskName || '',
+            subTestTaskName: entry.taskInfo.subTestTaskName || '',
+        },
     };
 }
+
+/** @deprecated 使用 GetCurrentTaskInfoResult 替代 */
+export type HeaderTaskInfo = GetCurrentTaskInfoResult;
 
 // ============================================
 // 公共：从文件内容提取 testPhaseName

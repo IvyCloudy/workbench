@@ -189,6 +189,8 @@ function restoreSnapshot(snap) {
     if (S._failedOnly) S._failedOnly = false;
     if (S._modifiedOnly) S._modifiedOnly = false;
     S._deletedInfos = [];
+    // 撤销时清除新增行集合：快照不含该字段，留旧数据会导致高亮残留
+    if (S._addedRowSet) S._addedRowSet = S._addedInfos ? new Set(S._addedInfos.map(function (a) { return a.rowIndex; })) : new Set();
     renderTable();
     saveFile();
 }
@@ -365,7 +367,7 @@ window.addEventListener('message', function (e) {
         // 例外：当扩展端带 force=true（如外部 TextEditor 修改了文件），强制覆盖以同步最新内容。
         if (hasUserChanges && alreadyRendered && !m.force) {
             dbg('⏭ skip repush (user changes)');
-            // saveHighlight 等 reason 带高亮信息时，仍更新 highlightedCells 避免高亮丢失
+            // saveHighlight 等 reason 带高亮信息时，仍更新 highlightedCells / addedInfos 避免丢失
             if ('highlightedCells' in m) {
                 if (m.highlightedCells && m.highlightedCells.colIdx != null && Array.isArray(m.highlightedCells.rowIndices)) {
                     var hl = {
@@ -383,6 +385,22 @@ window.addEventListener('message', function (e) {
                     S._highlightedCells = hl;
                 } else {
                     S._highlightedCells = null;
+                }
+            }
+            // 合并后端下发的新增行信息，保护前端本地 _addedRowSet 不被覆盖丢失
+            if ('addedInfos' in m) {
+                if (!S._addedRowSet) S._addedRowSet = new Set();
+                if (m.addedInfos && Array.isArray(m.addedInfos) && m.addedInfos.length > 0) {
+                    S._addedInfos = m.addedInfos;
+                    for (var _ai = 0; _ai < m.addedInfos.length; _ai++) {
+                        S._addedRowSet.add(m.addedInfos[_ai].rowIndex);
+                    }
+                } else {
+                    S._addedInfos = [];
+                }
+                // 没有新增行数据时自动关闭"仅看新增行"筛选
+                if (!S._addedRowSet || S._addedRowSet.size === 0) {
+                    if (S._addedOnly) S._addedOnly = false;
                 }
             }
             renderTable();
@@ -453,18 +471,21 @@ window.addEventListener('message', function (e) {
             }
         }
         // 新增行信息（快照中不存在但当前数据中出现的行）
+        // 采用合并策略：将后端下发的新增行合并进已有 _addedRowSet，避免覆盖前端本地标记
         if ('addedInfos' in m) {
             if (m.addedInfos && Array.isArray(m.addedInfos) && m.addedInfos.length > 0) {
                 S._addedInfos = m.addedInfos;
-                S._addedRowSet = new Set();
+                if (!S._addedRowSet) S._addedRowSet = new Set();
                 for (var ai = 0; ai < m.addedInfos.length; ai++) {
                     S._addedRowSet.add(m.addedInfos[ai].rowIndex);
                 }
             } else {
                 S._addedInfos = [];
-                S._addedRowSet = new Set();
-                // 如果没有新增行，自动关闭"仅看新增行"筛选
-                if (S._addedOnly) S._addedOnly = false;
+                // 不主动清空 _addedRowSet：前端本地可能仍有未同步到后端的新增行
+                // 仅在集合确实为空时自动关闭"仅看新增行"筛选
+                if (!S._addedRowSet || S._addedRowSet.size === 0) {
+                    if (S._addedOnly) S._addedOnly = false;
+                }
             }
         }
         clearHistory();
@@ -484,16 +505,114 @@ window.addEventListener('message', function (e) {
         dbg('📨 recv saveError: ' + (m.message || ''));
         showToast('保存失败: ' + (m.message || ''), 'error');
     } else if (m.type === 'pushDone') {
-        // 推送流程结束钩子（隐藏 loading 等）；具体结果由 pushResult 消息驱动弹窗。
+        // 推送流程结束钩子（隐藏 loading 等）。
         S._pushing = false;
         if (typeof updatePushBtn === 'function') updatePushBtn();
+        // 安全网：pushDone 到达时主动清理本批修改高亮。
+        // pushResult 中也有相同逻辑，此处作为兜底确保所有推送完成路径都清理。
+        // 不置空 _lastPushBatchRowIndices / _lastPushBatchTsIds，留给 pushResult 完整消费。
+        var pdRowIndices = S._lastPushBatchRowIndices;
+        if ((!pdRowIndices || pdRowIndices.length === 0) && S._lastPushBatchTsIds && S._lastPushBatchTsIds.size > 0) {
+            var pdTsCol = (S.data && S.data.headers ? S.data.headers.indexOf('testcase_id') : -1);
+            if (pdTsCol >= 0) {
+                pdRowIndices = [];
+                for (var pdRi = 0; pdRi < (S.data.rows && S.data.rows.length || 0); pdRi++) {
+                    var pdTid = (S.data.rows[pdRi] || [])[pdTsCol];
+                    if (pdTid !== undefined && pdTid !== null && pdTid !== '' && S._lastPushBatchTsIds.has(String(pdTid))) {
+                        pdRowIndices.push(pdRi);
+                    }
+                }
+            }
+        }
+        if (pdRowIndices && pdRowIndices.length > 0) {
+            var pdModsToDelete = [];
+            S.mods.forEach(function (key) {
+                var commaIdx = key.indexOf(',');
+                if (commaIdx > -1 && pdRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
+                    pdModsToDelete.push(key);
+                }
+            });
+            pdModsToDelete.forEach(function (k) { S.mods.delete(k); });
+            if (S._detailModCellKeys && S._detailModCellKeys.size > 0) {
+                var pdDetailToDelete = [];
+                S._detailModCellKeys.forEach(function (key) {
+                    var commaIdx = key.indexOf(',');
+                    if (commaIdx > -1 && pdRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
+                        pdDetailToDelete.push(key);
+                    }
+                });
+                pdDetailToDelete.forEach(function (k) { S._detailModCellKeys.delete(k); });
+            }
+            // 清除已推送行的新增高亮（推送后不再是"新"增行）
+            if (S._addedRowSet && S._addedRowSet.size > 0) {
+                pdRowIndices.forEach(function (ri) { S._addedRowSet.delete(ri); });
+            }
+            try { renderTable(); } catch (_) {}
+        }
     } else if (m.type === 'pushResult') {
         S._pushing = false;
         if (typeof updatePushBtn === 'function') updatePushBtn();
+        // 保险：若 _lastPushBatchRowIndices 意外丢失，用 _lastPushBatchTsIds 反推，确保 showPushResultModal 能正确清理
+        if ((!S._lastPushBatchRowIndices || S._lastPushBatchRowIndices.length === 0)
+            && S._lastPushBatchTsIds && S._lastPushBatchTsIds.size > 0) {
+            var _tsColFix = (S.data && S.data.headers ? S.data.headers.indexOf('testcase_id') : -1);
+            if (_tsColFix >= 0) {
+                var _rebuilt = [];
+                for (var _ri = 0; _ri < (S.data.rows && S.data.rows.length || 0); _ri++) {
+                    var _tid = (S.data.rows[_ri] || [])[_tsColFix];
+                    if (_tid !== undefined && _tid !== null && _tid !== '' && S._lastPushBatchTsIds.has(String(_tid))) {
+                        _rebuilt.push(_ri);
+                    }
+                }
+                if (_rebuilt.length > 0) S._lastPushBatchRowIndices = _rebuilt;
+            }
+        }
         showPushResultModal(m);
     } else if (m.type === 'pushError') {
         S._pushing = false;
         if (typeof updatePushBtn === 'function') updatePushBtn();
+        // pushError 同样属于推送完成，清理本批修改高亮
+        var peRowIndices = S._lastPushBatchRowIndices;
+        // 兜底：行索引丢失时从 _lastPushBatchTsIds 反推
+        if ((!peRowIndices || peRowIndices.length === 0) && S._lastPushBatchTsIds && S._lastPushBatchTsIds.size > 0) {
+            var peTsCol = (S.data && S.data.headers ? S.data.headers.indexOf('testcase_id') : -1);
+            if (peTsCol >= 0) {
+                peRowIndices = [];
+                for (var peRi = 0; peRi < (S.data.rows && S.data.rows.length || 0); peRi++) {
+                    var peTid = (S.data.rows[peRi] || [])[peTsCol];
+                    if (peTid !== undefined && peTid !== null && peTid !== '' && S._lastPushBatchTsIds.has(String(peTid))) {
+                        peRowIndices.push(peRi);
+                    }
+                }
+            }
+        }
+        if (peRowIndices && peRowIndices.length > 0) {
+            var peModsToDelete = [];
+            S.mods.forEach(function (key) {
+                var commaIdx = key.indexOf(',');
+                if (commaIdx > -1 && peRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
+                    peModsToDelete.push(key);
+                }
+            });
+            peModsToDelete.forEach(function (k) { S.mods.delete(k); });
+            if (S._detailModCellKeys && S._detailModCellKeys.size > 0) {
+                var peDetailToDelete = [];
+                S._detailModCellKeys.forEach(function (key) {
+                    var commaIdx = key.indexOf(',');
+                    if (commaIdx > -1 && peRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
+                        peDetailToDelete.push(key);
+                    }
+                });
+                peDetailToDelete.forEach(function (k) { S._detailModCellKeys.delete(k); });
+            }
+            // 清除已推送行的新增高亮
+            if (S._addedRowSet && S._addedRowSet.size > 0) {
+                peRowIndices.forEach(function (ri) { S._addedRowSet.delete(ri); });
+            }
+            S._lastPushBatchRowIndices = null;
+        }
+        S._lastPushBatchTsIds = null;
+        try { renderTable(); } catch (_) {}
         showToast('推送失败: ' + (m.message || ''), 'error');
     } else if (m.type === 'showModal') {
         showXsInfoModal(m.modalType || 'info', m.title || '', m.message || '');

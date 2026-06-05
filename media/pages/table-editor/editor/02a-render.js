@@ -87,8 +87,9 @@ function _computeViewRows() {
         // 没有 tsId 列就无法定位失败行，自动失效该筛选
         failedOnly = false;
     }
-    // 仅看已修改行：基于快照差异高亮信息（rowSet 包含所有变更行）
-    var modifiedOnly = !!(S._modifiedOnly && S._highlightedCells && S._highlightedCells.rowSet && S._highlightedCells.rowSet.size > 0);
+    // 仅看已修改行：基于 S.mods / _detailModCellKeys（未提交的本地修改）
+    var _modRowSet = (typeof _getModifiedRowSet === 'function') ? _getModifiedRowSet() : new Set();
+    var modifiedOnly = !!(S._modifiedOnly && _modRowSet && _modRowSet.size > 0);
     // 仅看新增行：基于新增行索引集合
     var addedOnly = !!(S._addedOnly && S._addedRowSet && S._addedRowSet.size > 0);
     // 仅看已删除行：展示 ghost 行，隐藏所有常规行
@@ -138,7 +139,7 @@ function _computeViewRows() {
             if (!S._pushFailedTsIds.has(String(_tsv))) continue;
         }
         if (modifiedOnly) {
-            if (!S._highlightedCells.rowSet.has(ri)) continue;
+            if (!_modRowSet.has(ri)) continue;
         }
         if (addedOnly) {
             if (!S._addedRowSet.has(ri)) continue;
@@ -485,6 +486,28 @@ function patchCell(ri, ci) {
     if (isArrCol) td.classList.add('xs-arr-cell'); else td.classList.remove('xs-arr-cell');
     var frozen = (String(headers[ci]) === 'testcase_id');
     if (frozen) td.classList.add('xs-td-frozen'); else td.classList.remove('xs-td-frozen');
+    // 新增行高亮（绿底）
+    if (S._addedRowSet && S._addedRowSet.has(ri)) {
+        td.classList.add('xs-td-push-added');
+    } else {
+        td.classList.remove('xs-td-push-added');
+    }
+    // 推送变更高亮
+    if (S._highlightedCells) {
+        if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
+            td.classList.add('xs-td-push-updated');
+        } else {
+            td.classList.remove('xs-td-push-updated');
+        }
+        if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)
+            && (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci)) {
+            td.classList.add('xs-td-push-updated-row');
+        } else {
+            td.classList.remove('xs-td-push-updated-row');
+        }
+    } else {
+        td.classList.remove('xs-td-push-updated', 'xs-td-push-updated-row');
+    }
     // tooltip 同步
     if (rawText) td.setAttribute('title', rawText); else td.removeAttribute('title');
     // 注：detail-link click 已在 #tableContainer 上委托，无需在此重新绑定

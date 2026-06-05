@@ -132,8 +132,8 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
         return;
     }
     const taskInfo = {
-        testTaskNo: currentTask.testTaskNo,
-        subTestTaskName: currentTask.subTestTaskName,
+        testTaskNo: currentTask.taskInfo.testTaskNo || '',
+        subTestTaskName: currentTask.taskInfo.subTestTaskName || '',
     };
 
     const rows = await parseFileToRows(filePath);
@@ -180,8 +180,6 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
                 ensureTrackingColumns(parsed.tableData, parsed.sourceData);
                 applyTestCaseNos(parsed.tableData, parsed.sourceData, successMappings);
                 await parser.save(filePath, parsed.tableData, parsed.sourceData);
-                // 推送成功后仅更新已推送行的快照基线，未推送行保持旧快照不变
-                // 确保之后把未推送行改回旧值时 diff 无变化 → 高亮正确清除
                 const pushedTsIds = new Set(successMappings.map(m => m.tsId));
                 await savePushSnapshot(filePath, parsed.tableData, pushedTsIds);
             }

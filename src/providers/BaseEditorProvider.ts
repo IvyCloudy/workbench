@@ -27,6 +27,7 @@ import { savePushSnapshot, diffPushSnapshot, type RowDiff, type DiffResult, type
 import { markDeletedRows } from '../utils/deletedRowsStore';
 import { pushTestCase } from '../services/http';
 import { createParser, ensureTrackingColumns, applyTestCaseNos, type FileParser, type FileType } from '../parsers';
+import { trackEvent, trackError, trackException, handleWebviewTelemetry } from '../services/telemetry';
 
 // 重新导出工具，便于子类使用
 export { isInQualifiedDir, FILE_PATTERNS };
@@ -71,6 +72,10 @@ export class PushViaHttpClient implements PushStrategy {
         extensionContext?: vscode.ExtensionContext
     ): Promise<void> {
         if (!extensionContext) throw new Error('ExtensionContext 不可用，无法推送');
+        const _pushStart = Date.now();
+        const _ext = path.extname(ctx.filePath).toLowerCase();
+        const _rowCount = Array.isArray(data) ? data.length : 0;
+        trackEvent('editorPush.start', { ext: _ext }, { rowCount: _rowCount });
 
         // 任务信息统一由 getCurrentTaskInfo 提供：未绑定一律拒绝推送
         const currentTask = await getCurrentTaskInfo(ctx.filePath);
@@ -78,6 +83,13 @@ export class PushViaHttpClient implements PushStrategy {
             showPushErrorModal(webviewPanel, path.basename(ctx.filePath),
                 '未绑定任务，无法推送。请先在 task-bindings.json 中完成绑定。');
             return;
+        // 任务信息统一由 getHeaderTaskInfoByFilePath 提供：未绑定一律拒绝推送
+        const header = getHeaderTaskInfoByFilePath(extensionContext, ctx.filePath);
+        if (!header.bind) {
+            const message = '未绑定任务，无法推送。请先在 task-bindings.json 中完成绑定。';
+            webviewPanel.webview.postMessage({ type: 'pushError', message });
+            trackError('editorPush.rejected', { reason: 'unbound', ext: _ext });
+            throw new Error(message);
         }
         const taskInfo = {
             testTaskNo: currentTask.taskInfo.testTaskNo || '',
@@ -118,6 +130,11 @@ export class PushViaHttpClient implements PushStrategy {
         const result = await pushTestCase(extensionContext, pushData, taskInfo, path.basename(ctx.filePath));
         if (result.returnCode !== 'SUC0000') {
             showPushErrorModal(webviewPanel, path.basename(ctx.filePath), result.errorMsg || '推送失败');
+            webviewPanel.webview.postMessage({ type: 'pushError', message: result.errorMsg || '推送失败' });
+            trackError('editorPush.failed', {
+                ext: _ext,
+                returnCode: result.returnCode || '',
+            }, { rowCount: _rowCount, durationMs: Date.now() - _pushStart });
             return;
         }
 
@@ -235,6 +252,28 @@ export class PushViaHttpClient implements PushStrategy {
 
         showPushResult(webviewPanel, path.basename(ctx.filePath), successMappings.length, failureItems, total);
         showPushDone(webviewPanel);
+        // 编辑器内推送：直接复用前端 webview 弹窗（同一个 panel 内嵌），不再调用 showPushResult 走独立 webview
+        webviewPanel.webview.postMessage({
+            type: 'pushResult',
+            fileName: path.basename(ctx.filePath),
+            successCount: successMappings.length,
+            failures: failureItems,
+            total,
+        });
+
+        // 埋点：推送结果汇总
+        trackEvent('editorPush.complete', {
+            ext: _ext,
+            outcome: failures.length === 0 ? 'allSuccess' : (successMappings.length === 0 ? 'allFail' : 'partial'),
+        }, {
+            rowCount: total,
+            successCount: successMappings.length,
+            failedCount: failures.length,
+            durationMs: Date.now() - _pushStart,
+        });
+
+        // 通知前端推送流程已完成（用于隐藏 loading 之类的状态）
+        webviewPanel.webview.postMessage({ type: 'pushDone' });
     }
 }
 
@@ -550,6 +589,8 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
 
         // ⚠ 关键：必须先绑定 onDidReceiveMessage 再设置 webview.html
         webviewPanel.webview.onDidReceiveMessage(async (msg: any) => {
+            // webview 来的埋点消息优先转发，不走后续业务分支
+            if (handleWebviewTelemetry(msg)) return;
             try {
                 if (msg?.type === 'init') {
                     log('📨 init from webview');
@@ -557,6 +598,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     await pushDataToWebview(true, 'init');
                     // 通知等待方：webview 已就绪，可以接收推送结果消息
                     try { markReady(); } catch (_) { /* ignore */ }
+                    trackEvent('editor.opened', { fileType: session.type });
                 } else if (msg?.type === 'save' && msg?.data) {
                     const _saveStart = Date.now();
                     const _inRows = (msg.data?.rows || []).length;
@@ -600,6 +642,11 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                             log(`➕ Webview 保存快照差异比对检测到 ${addedInfos.length} 行新增`);
                         }
                     }
+                    trackEvent('editor.saved', { fileType: session.type }, {
+                        rows: _inRows,
+                        cols: _inHeaders,
+                        durationMs: _saveDur,
+                    });
                     // 缓存与前端最新数据一致：直接复用 webview 提交上来的 data，
                     // 避免置 null 后被外部触发的 reparse 在 fs flush 中读到部分内容/空数据。
                     try { session.cachedTableData = msg.data; } catch (_) { session.cachedTableData = null; }
@@ -631,6 +678,26 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 const errMsg = err?.message || String(err) || '操作失败';
                 if (msg?.type === 'save') {                 } else if (msg?.type === 'pushTestCase') {
                     showPushErrorModal(webviewPanel, path.basename(filePath), errMsg);
+                trackException('editor.message.error', err, { msgType: msg?.type, fileType: session.type });
+                if (msg?.type === 'save') {
+                    webviewPanel.webview.postMessage({ type: 'saveError', message: errMsg });
+                } else if (msg?.type === 'pushTestCase') {
+                    webviewPanel.webview.postMessage({ type: 'pushError', message: errMsg });
+                }
+                if (msg?.type === 'pushTestCase' && /无法连接后端服务|连接.*超时|连接被重置/.test(errMsg)) {
+                    const pick = await vscode.window.showErrorMessage(
+                        `[${this.formatTypeName(session.type)}] ${errMsg}`,
+                        '打开配置', '查看帮助'
+                    );
+                    if (pick === '打开配置') {
+                        vscode.commands.executeCommand('workbench.action.openSettings', 'testcaseViewer.apiUrl');
+                    } else if (pick === '查看帮助') {
+                        vscode.window.showInformationMessage(
+                            '本地调试请先启动 Mock 服务：在终端执行 `node mock-server.js`，默认监听 127.0.0.1:8081。'
+                        );
+                    }
+                } else {
+                    vscode.window.showErrorMessage(`[${this.formatTypeName(session.type)}] ${errMsg}`);
                 }
             }
         });

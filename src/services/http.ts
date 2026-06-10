@@ -18,6 +18,7 @@ import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
 import { readConfig } from './storage';
+import { trackEvent, trackError, trackException } from './telemetry';
 import type { AppConfig, ApiResponse, QueryOptions } from '../types';
 
 // ============================================
@@ -239,12 +240,38 @@ export async function pushTestCase(
     console.log('[推送][请求] body  :', JSON.stringify(body, null, 2));
     console.log(`[推送][请求] 数据行数=${data.length}, body 字节=${Buffer.byteLength(bodyStr, 'utf8')}`);
 
-    const response = await makeRequest<ApiResponse>('POST', url, headers, bodyStr);
-    console.log('[推送][响应] status=', response.status,
-        'returnCode=', (response.data as any)?.returnCode,
-        'errorMsg=', (response.data as any)?.errorMsg || '');
-    console.log('[推送][响应] body  :', JSON.stringify(response.data, null, 2));
-    return response.data;
+    const _apiStart = Date.now();
+    try {
+        const response = await makeRequest<ApiResponse>('POST', url, headers, bodyStr);
+        console.log('[推送][响应] status=', response.status,
+            'returnCode=', (response.data as any)?.returnCode,
+            'errorMsg=', (response.data as any)?.errorMsg || '');
+        console.log('[推送][响应] body  :', JSON.stringify(response.data, null, 2));
+
+        const _rc = (response.data as any)?.returnCode || '';
+        const _success = _rc === 'SUC0000';
+        if (_success) {
+            trackEvent('api.pushTestCase.ok', { httpStatus: String(response.status) }, {
+                rowCount: data.length,
+                bytes: Buffer.byteLength(bodyStr, 'utf8'),
+                durationMs: Date.now() - _apiStart,
+            });
+        } else {
+            trackError('api.pushTestCase.fail', {
+                httpStatus: String(response.status),
+                returnCode: _rc,
+            }, {
+                rowCount: data.length,
+                durationMs: Date.now() - _apiStart,
+            });
+        }
+        return response.data;
+    } catch (err: any) {
+        trackException('api.pushTestCase.exception', err, {
+            rowCount: String(data.length),
+        });
+        throw err;
+    }
 }
 
 /** 对日志输出的请求头做脱敏，避免泄漏 token / 签名 */

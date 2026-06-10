@@ -29,7 +29,9 @@ const DEFAULT_CONFIG: AppConfig = {
     authToken: '',
     userId: '',
     userName: '',
-    sm2PublicKey: ''
+    sm2PublicKey: '',
+    telemetryUrl: '',
+    telemetryToken: ''
 };
 
 const DEFAULT_QUERY_PARAMS: QueryParams = {
@@ -83,6 +85,35 @@ async function writeJsonFile<T>(filePath: string, data: T): Promise<void> {
  */
 export async function readConfig(context: vscode.ExtensionContext): Promise<AppConfig> {
     return await readJsonFile(getConfigPath(context), DEFAULT_CONFIG);
+}
+
+/**
+ * 全量写入应用配置（覆盖式）。
+ * 失败仅记录日志，不向上抛出，避免阻塞业务主流程。
+ */
+export async function writeConfig(
+    context: vscode.ExtensionContext,
+    config: AppConfig
+): Promise<void> {
+    try {
+        await writeJsonFile(getConfigPath(context), config);
+    } catch (error) {
+        console.error('[storage] 写入配置失败:', error);
+    }
+}
+
+/**
+ * 增量更新应用配置：仅覆盖传入的字段，其他字段保持不变。
+ * 适用于登录成功后由后端下发 telemetryToken / telemetryUrl 等场景。
+ */
+export async function patchConfig(
+    context: vscode.ExtensionContext,
+    patch: Partial<AppConfig>
+): Promise<AppConfig> {
+    const current = await readConfig(context);
+    const next: AppConfig = { ...current, ...patch };
+    await writeConfig(context, next);
+    return next;
 }
 
 /**

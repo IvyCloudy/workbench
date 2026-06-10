@@ -31,8 +31,8 @@ function pushChanges() {
         : (S.sel.size > 0 ? Array.from(S.sel).sort(function (a, b) { return a - b; }) : []);
     if (picked.length === 0) { showToast('请先选择需要推送的行', 'error'); return; }
     var headers = S.data.headers || [];
-    var tsCol = headers.indexOf('tsId');
-    // 收集 tsId -> 真实表格行号 (1-based)，用于失败弹窗显示"第 X 行"，避免后端按数组下标导致行号错位
+    var tsCol = headers.indexOf('testcase_id');
+    // 收集 testcase_id -> 真实表格行号 (1-based)，用于失败弹窗显示"第 X 行"，避免后端按数组下标导致行号错位
     var rowIndexMap = {};
     var payload = picked.map(function (ri) {
         var record = {};
@@ -46,6 +46,8 @@ function pushChanges() {
         }
         return record;
     });
+    // 缓存本批参与推送的行索引，供 pushResult 回来后清除对应的 S.mods 修改高亮。
+    S._lastPushBatchRowIndices = picked.slice();
     // 缓存本批参与推送的 tsId，供 pushResult 回来后做"本批成功 = 本批 - 本批失败"差集计算，
     // 进而仅清除本批中已成功的失败标记，未参与本批的历史失败行保持高亮不变。
     S._lastPushBatchTsIds = new Set();
@@ -167,7 +169,14 @@ function rebuildFindMatches(kw) {
     var needle = caseSensitive ? S._findKw : S._findKw.toLowerCase();
     var rows = (S.data && S.data.rows) || [];
     var headers = (S.data && S.data.headers) || [];
+    // 当 toggle 过滤（仅看失败/修改/新增/删除）激活时，find 只搜索可见行
+    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly;
+    var visibleRows = null;
+    if (hasToggle && S._viewRows && S._viewRows.length >= 0) {
+        visibleRows = new Set(S._viewRows);
+    }
     rows.forEach(function (row, ri) {
+        if (visibleRows && !visibleRows.has(ri)) return;
         headers.forEach(function (_, ci) {
             var v = row[ci];
             if (v === null || v === undefined) return;
@@ -280,7 +289,7 @@ function replaceCurrent() {
     var newVal = rep ? rep.value : '';
     var m = S._matches[S._matchIdx];
     if (isFrozenCol(m.c)) {
-        showToast('tsId 列为系统列，跳过替换', 'error');
+        showToast('testcase_id 列为系统列，跳过替换', 'error');
         stepFind(1);
         return;
     }
@@ -326,7 +335,13 @@ function replaceAll() {
     var needle = caseSensitive ? S._findKw : S._findKw.toLowerCase();
     var count = 0;
     pushHistory();
+    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly;
+    var visibleRows = null;
+    if (hasToggle && S._viewRows && S._viewRows.length >= 0) {
+        visibleRows = new Set(S._viewRows);
+    }
     (S.data.rows || []).forEach(function (row, ri) {
+        if (visibleRows && !visibleRows.has(ri)) return;
         (S.data.headers || []).forEach(function (_, ci) {
             if (isFrozenCol(ci)) return; // tsId 列跳过
             // 标量数组列跳过全量替换，避免语义窜乱

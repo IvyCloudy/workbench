@@ -18,9 +18,8 @@
  */
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import * as path from 'path';
-import { resolveTaskInfo, FILE_PATTERNS } from '../services/utils';
-import { lookupBinding } from './taskInfoStore';
+import { FILE_PATTERNS } from '../services/utils';
+import { findBindingByPath } from './taskInfoStore';
 
 // ============================================
 // 类型定义
@@ -60,12 +59,10 @@ export interface GetTaskInfoResult {
  * 根据文件全路径获取完整的测试任务信息。
  *
  * 流程：
- *   1. 用 resolveTaskInfo 解析路径（拿到 testTaskNo + subTestTaskName）
- *   2. 拼出绑定 key：<项目目录名>/测试任务/<testTaskNo>_<subTestTaskName>
- *   3. 在 task-bindings.json 中查找对应记录
- *   4. 从文件内容提取 testPhaseName
- *   5. 在 binding.phaseBindings[testPhaseName] 中查 phaseId
- *   6. 全部齐备返回 bind=true，否则 bind=false
+ *   1. 通过 findBindingByPath(filePath) 查找绑定点
+ *   2. 从文件内容提取 testPhaseName
+ *   3. 在 binding.testPhaseList 中查 phaseId
+ *   4. 全部齐备返回 bind=true，否则 bind=false
  */
 export async function getTaskInfoByFilePath(
     context: vscode.ExtensionContext,
@@ -73,117 +70,100 @@ export async function getTaskInfoByFilePath(
 ): Promise<GetTaskInfoResult> {
     if (!filePath) return { bind: false, taskInfo: {} };
 
-    // Step1: 路径解析
-    const r = resolveTaskInfo(filePath);
-    if (!r.ok) return { bind: false, taskInfo: {} };
+    // Step1: 查找绑定
+    const entry = findBindingByPath(filePath);
+    if (!entry || !entry.bind || !entry.taskInfo) return { bind: false, taskInfo: {} };
 
-    // Step2: 拼 key
-    const key = buildBindingKey(filePath, r.info.testTaskNo, r.info.subTestTaskName);
-    if (!key) return { bind: false, taskInfo: {} };
+    const info = entry.taskInfo!;
 
-    // Step3: 查找绑定
-    const entry = lookupBinding(context, key);
-    if (!entry) return { bind: false, taskInfo: {} };
-
-    // Step4: 提取 testPhaseName
+    // Step2: 提取 testPhaseName
     const testPhaseName = await extractTestPhaseName(filePath);
     if (!testPhaseName) return { bind: false, taskInfo: {} };
 
-    // Step5: 阶段绑定
-    const phaseBinding = entry.phaseBindings && entry.phaseBindings[testPhaseName];
-    if (!phaseBinding || phaseBinding.phaseId == null) {
+    // Step3: 在 testPhaseList 中查找匹配的阶段 ID
+    let phaseId = 0;
+    if (info.testPhaseList && Array.isArray(info.testPhaseList)) {
+        const matched = info.testPhaseList.find(p => p.testPhaseName === testPhaseName);
+        if (matched && matched.testPhaseId != null) {
+            phaseId = matched.testPhaseId;
+        }
+    }
+    // 向后兼容：如果当前阶段的名称等于文件中的阶段名，直接取 testPhaseId
+    if (phaseId === 0 && info.testPhaseName === testPhaseName && info.testPhaseId != null) {
+        phaseId = info.testPhaseId;
+    }
+    if (phaseId === 0) {
         return { bind: false, taskInfo: {} };
     }
 
-    // Step6: 各字段齐备校验
-    if (!entry.testTaskNo || !entry.testTaskName ||
-        entry.subTestTaskId == null || !entry.subTestTaskName) {
+    // Step4: 各字段齐备校验
+    if (!info.testTaskNo || !info.testTaskName ||
+        info.subTestTaskId == null || !info.subTestTaskName) {
         return { bind: false, taskInfo: {} };
     }
 
     return {
         bind: true,
         taskInfo: {
-            testTaskNo: entry.testTaskNo,
-            testTaskName: entry.testTaskName,
-            subTestTaskId: entry.subTestTaskId,
-            subTestTaskName: entry.subTestTaskName,
+            testTaskNo: info.testTaskNo,
+            testTaskName: info.testTaskName,
+            subTestTaskId: Number(info.subTestTaskId),
+            subTestTaskName: info.subTestTaskName,
             testPhaseName,
-            phaseId: phaseBinding.phaseId,
+            phaseId,
         },
     };
 }
 
 // ============================================
-// 公共：根据文件路径获取「表头展示」用任务信息
+// 公共：获取当前文件所属的测试任务信息
 // ============================================
 
-/** 表头三项展示信息：均为字符串，未命中时为空串。 */
-export interface HeaderTaskInfo {
-    /** 是否在 task-bindings.json 中命中绑定（用于第一行最左侧的状态标签） */
-    bind: boolean;
-    /** 测试任务编号（来自 task-bindings.json，命中绑定时为后端真实值） */
+/** 表头展示用任务信息（与 getCurrentTaskInfo 返回的 taskInfo 对应）。 */
+export interface CurrentTaskInfo {
     testTaskNo: string;
-    /** 测试任务名称（来自 task-bindings.json） */
     testTaskName: string;
-    /** 子测试任务名称（来自 task-bindings.json） */
     subTestTaskName: string;
 }
 
+/** getCurrentTaskInfo 返回格式：bind 标记 + taskInfo 对象（未绑定时 taskInfo 为空）。 */
+export interface GetCurrentTaskInfoResult {
+    /** 是否在 task-bindings.json 中命中绑定（用于第一行最左侧的状态标签） */
+    bind: boolean;
+    /**
+     * 命中绑定时为 { testTaskNo, testTaskName, subTestTaskName }；
+     * 未命中时为空对象 {}。
+     */
+    taskInfo: CurrentTaskInfo | Record<string, never>;
+}
+
 /**
- * 仅供 webview 表头使用：只关心「任务身份」，不要求 testPhaseName/phaseId。
+ * 根据文件全路径获取当前所属的测试任务信息（表头 + 推送用）。
  *
  * 命中规则：
- *   - 路径解析出 testTaskNo + subTestTaskName，并能拼出绑定 key
- *   - task-bindings.json 中存在该 key
- *   命中 → 返回绑定文件中的 testTaskNo / testTaskName / subTestTaskName
- *   未命中 → 三项均返回空串（UI 层会渲染为占位符 "-"）
- *
- * 与 getTaskInfoByFilePath 的区别：
- *   - getTaskInfoByFilePath：业务用，必须 6 字段 + phaseId 全齐才算 bind=true
- *   - getHeaderTaskInfoByFilePath：仅用于表头展示，绑定命中即可
+ *   - findBindingByPath(fullPath) 找到绑定点
+ *   - 命中 → 返回绑定文件中的 testTaskNo / testTaskName / subTestTaskName
+ *   - 未命中 → taskInfo 为空对象 {}（UI 层会渲染为占位符 "-"）
  */
-export function getHeaderTaskInfoByFilePath(
-    context: vscode.ExtensionContext,
-    filePath: string
-): HeaderTaskInfo {
-    const empty: HeaderTaskInfo = { bind: false, testTaskNo: '', testTaskName: '', subTestTaskName: '' };
-    if (!filePath) return empty;
+export async function getCurrentTaskInfo(fullPath: string): Promise<GetCurrentTaskInfoResult> {
+    const empty: GetCurrentTaskInfoResult = { bind: false, taskInfo: {} };
+    if (!fullPath) return empty;
 
-    const r = resolveTaskInfo(filePath);
-    if (!r.ok) return empty;
-
-    const key = buildBindingKey(filePath, r.info.testTaskNo, r.info.subTestTaskName);
-    if (!key) return empty;
-
-    const entry = lookupBinding(context, key);
-    if (!entry) return empty;
+    const entry = findBindingByPath(fullPath);
+    if (!entry || !entry.bind || !entry.taskInfo) return empty;
 
     return {
         bind: true,
-        testTaskNo: entry.testTaskNo || '',
-        testTaskName: entry.testTaskName || '',
-        subTestTaskName: entry.subTestTaskName || '',
+        taskInfo: {
+            testTaskNo: entry.taskInfo.testTaskNo || '',
+            testTaskName: entry.taskInfo.testTaskName || '',
+            subTestTaskName: entry.taskInfo.subTestTaskName || '',
+        },
     };
 }
 
-// ============================================
-// 内部：构造绑定 key
-// ============================================
-
-/**
- * 从文件路径提取「项目目录名/测试任务/<TTxxx_子任务名>」作为绑定 key。
- * 项目目录名 = "测试任务" 父级目录名。
- */
-function buildBindingKey(filePath: string, testTaskNo: string, subTestTaskName: string): string {
-    if (!testTaskNo || !subTestTaskName) return '';
-    const parts = filePath.split(path.sep);
-    const idx = parts.indexOf('测试任务');
-    if (idx <= 0) return '';
-    const projectDir = parts[idx - 1];
-    if (!projectDir) return '';
-    return `${projectDir}/测试任务/${testTaskNo}_${subTestTaskName}`;
-}
+/** @deprecated 使用 GetCurrentTaskInfoResult 替代 */
+export type HeaderTaskInfo = GetCurrentTaskInfoResult;
 
 // ============================================
 // 公共：从文件内容提取 testPhaseName

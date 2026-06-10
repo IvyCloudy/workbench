@@ -1,4 +1,4 @@
-- tsId: 9552bef2-8534-46b6-a9af-1d8ce523a8a2
+- testcase_id: 9552bef2-8534-46b6-a9af-1d8ce523a8a2
   testCaseId: "1"
   testTaskNo: TASK001
   testTaskName: 复杂嵌套测试
@@ -70,7 +70,7 @@
   testCaseDes: 手工
   cmbtId: 流程类
   designer: 张三/123454
-- tsId: e5dd1418-91b0-4491-a853-43013cb4c2e5
+- testcase_id: e5dd1418-91b0-4491-a853-43013cb4c2e5
   testCaseId: "2"
   testTaskNo: TASK001
   testTaskName: 复杂嵌套测试
@@ -101,7 +101,7 @@
   testCaseDes: 自动化
   cmbtId: 接口类
   designer: 李四/123457
-- tsId: e0a6bcaa-caac-49f5-a163-75dd7d1db568
+- testcase_id: e0a6bcaa-caac-49f5-a163-75dd7d1db568
   testCaseId: "3"
   testTaskNo: TASK002
   testTaskName: 边界值测试

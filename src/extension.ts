@@ -11,7 +11,7 @@
  *    - 自定义编辑器使用 retainContextWhenHidden=true，避免切 Tab 时 webview 被销毁。
  *    - 推送结果统一复用 testcase 编辑器 webview 内的弹窗：右键推送时先确保文件以 testcase 编辑器打开，
  *      推送完成后直接向对应 webview postMessage('pushResult')，与编辑器内推送行为一致。
- *    - testTaskNo / subTestTaskName 一律通过 utils/taskInfo.getHeaderTaskInfoByFilePath()
+ *    - testTaskNo / subTestTaskName 一律通过 utils/taskInfo.getCurrentTaskInfo()
  *      获取（绑定文件中的真实后端值），未绑定一律拒绝推送。
  * ============================================================================
  */
@@ -21,9 +21,16 @@ import { TableBrowserProvider } from './providers/TableBrowserProvider';
 import { TestCaseProvider } from './providers/TestCaseProvider';
 import { UnifiedEditorProvider, FileTypeChecker } from './providers/UnifiedEditorProvider';
 import { BaseEditorProvider } from './providers/BaseEditorProvider';
+import { registerBindTaskFeatures } from './providers/BindTaskProvider';
 import { pushTestCase } from './services/http';
 import { applyTestCaseNos, createParser, detectFileType, ensureTrackingColumns, parseFileToRows } from './parsers';
 import { ensureBindingsFile } from './utils/taskInfoStore';
+import { getCurrentTaskInfo } from './utils/command';
+import { showPushErrorModal, showPushResult, showModal } from './utils/message';
+import { ensureHighlightFile } from './utils/highlightStore';
+import { ensureSnapshotFile, savePushSnapshot, getDeletedSnapshotIds } from './utils/pushSnapshotStore';
+import { TS_ID_COLUMN } from './services/utils';
+import { ensureDeletedRowsFile, syncDeletedRows, refreshAndGetDeletedRows, getPendingDeletedRows, markDeletedRows } from './utils/deletedRowsStore';
 import { getHeaderTaskInfoByFilePath } from './utils/taskInfo';
 import { initTelemetry, trackEvent, trackError, trackException } from './services/telemetry';
 
@@ -85,22 +92,45 @@ async function ensureOpenedInTestcaseEditor(uri: vscode.Uri): Promise<vscode.Web
  *
  * 流程：
  *   1. 校验文件是否在合规目录下（测试任务/<task>/测试案例/...）。
- *   2. getHeaderTaskInfoByFilePath 解析任务身份并校验是否已绑定。
+ *   2. getCurrentTaskInfo 解析任务身份并校验是否已绑定。
  *   3. parseFileToRows 解析为推送用二维数组（CSV/YAML/JSON 透明）。
  *   4. 确保文件以 testcase 编辑器打开（未开则 openWith，已开则 reveal）。
  *   5. pushTestCase 调后端，按返回逐条分类（成功/失败）。
- *   6. 成功项按 tsId 回写 testCaseNo 到原文件。
+ *   6. 成功项按 testcase_id 回写 testCaseNo 到原文件。
  *   7. 向该 webview postMessage('pushResult')，由前端弹窗展示结果。
  *
  * 多文件场景暂不支持，后续再设计。
  */
 async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionContext): Promise<void> {
     if (!targets || targets.length === 0) return;
-    if (targets.length > 1) {
-        vscode.window.showInformationMessage('暂不支持多文件推送，请逐个推送。将仅处理首个文件。');
-    }
+    const multiFile = targets.length > 1;
     const target = targets[0];
     const filePath = target.fsPath;
+    const baseName = path.basename(filePath);
+
+    // 先确保 webview 已打开，以便校验错误也能在页面居中弹窗展示
+    let panel: vscode.WebviewPanel | undefined;
+    try {
+        panel = await ensureOpenedInTestcaseEditor(target);
+    } catch (_) {
+        // webview 打开失败，继续走校验兜底
+    }
+
+    // 多文件警告复用已有 webview，避免创建独立标签页
+    if (multiFile) {
+        showModal(panel, 'warning', '多文件推送', '暂不支持多文件推送，请逐个推送。将仅处理首个文件。');
+    }
+
+    const fileCheck = FileTypeChecker.isQualifiedFile(target);
+    if (!fileCheck.qualified) {
+        showPushErrorModal(panel, baseName, `文件不在合规目录下\n\n请将文件放入 测试任务/任务编号/测试案例/ 目录结构中。\n当前文件：${baseName}`);
+        return;
+    }
+
+    // 任务信息统一由 getCurrentTaskInfo 提供：未绑定一律拒绝推送
+    const currentTask = await getCurrentTaskInfo(filePath);
+    if (!currentTask.bind) {
+        showPushErrorModal(panel, baseName, `未绑定任务，无法推送\n\n文件 ${baseName} 所在的任务尚未在系统中完成绑定，请联系项目管理员配置。`);
     const fileExt = path.extname(filePath).toLowerCase();
     const pushStart = Date.now();
 
@@ -119,24 +149,31 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
         return;
     }
     const taskInfo = {
-        testTaskNo: header.testTaskNo,
-        subTestTaskName: header.subTestTaskName,
+        testTaskNo: currentTask.taskInfo.testTaskNo || '',
+        subTestTaskName: currentTask.taskInfo.subTestTaskName || '',
     };
 
     const rows = await parseFileToRows(filePath);
     if (!rows || rows.length === 0) {
+        showPushErrorModal(panel, baseName, `文件无数据\n\n${baseName} 中未检测到有效的测试案例数据，请检查文件内容。`);
         vscode.window.showWarningMessage(`文件无数据: ${path.basename(filePath)}`);
         trackError('explorerPush.rejected', { reason: 'empty', ext: fileExt });
         return;
     }
 
-    // 先确保文件已以 testcase 编辑器打开（未打开则拉起，已打开则切到对应 tab）
-    const panel = await ensureOpenedInTestcaseEditor(target);
+    // 若之前 ensureOpenedInTestcaseEditor 失败，此处再次尝试打开
+    if (!panel) {
+        try {
+            panel = await ensureOpenedInTestcaseEditor(target);
+        } catch (_) { /* ignore */ }
+    }
+
 
     console.log(`[推送] 文件: ${filePath}, ${rows.length} 行`);
     trackEvent('explorerPush.start', { ext: fileExt }, { rowCount: rows.length });
     const pushResult = await pushTestCase(context, rows, taskInfo, path.basename(filePath));
     if (pushResult.returnCode !== 'SUC0000') {
+        showPushErrorModal(panel, baseName, `后端返回失败: ${pushResult.errorMsg || '未知错误'}`);
         vscode.window.showErrorMessage(`推送失败: ${pushResult.errorMsg || '未知错误'}`);
         trackError('explorerPush.failed', {
             ext: fileExt,
@@ -158,7 +195,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
         else if (t === '2') failures.push({ tsId: sid, reason: dataField });
     });
 
-    // 把成功项的 testCaseNo 回写到原文件（按 tsId 匹配）
+    // 把成功项的 testCaseNo 回写到原文件（按 testcase_id 匹配）
     if (successMappings.length > 0) {
         try {
             const fileType = detectFileType(filePath);
@@ -168,18 +205,18 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
                 ensureTrackingColumns(parsed.tableData, parsed.sourceData);
                 applyTestCaseNos(parsed.tableData, parsed.sourceData, successMappings);
                 await parser.save(filePath, parsed.tableData, parsed.sourceData);
+                const pushedTsIds = new Set(successMappings.map(m => m.tsId));
+                await savePushSnapshot(filePath, parsed.tableData, pushedTsIds);
             }
         } catch (err: any) {
             console.error(`[推送] 回写 testCaseNo 失败: ${err?.message || err}`);
         }
     }
 
-    const baseName = path.basename(filePath);
-
-    // 失败明细按 tsId 反查为 "第 N 行"
+    // 失败明细按 testcase_id 反查为 "第 N 行"
     const tsIdToIndex = new Map<string, number>();
     rows.forEach((rec: any, i) => {
-        const id = rec && rec.tsId != null ? String(rec.tsId) : '';
+        const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
         if (id) tsIdToIndex.set(id, i);
     });
     const failureItems = failures.map(f => {
@@ -191,6 +228,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
         };
     });
 
+    showPushResult(panel, baseName, successMappings.length, failureItems, rows.length);
     // 埋点：推送结果汇总
     trackEvent('explorerPush.complete', {
         ext: fileExt,
@@ -253,7 +291,7 @@ function registerEditorCommands(
 // 激活
 // ============================================
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
     const _activateStart = Date.now();
     console.log('[Extension] 插件激活中...');
 
@@ -268,19 +306,38 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     // 初始化测试任务绑定文件（不存在则创建空模板，并打印路径便于用户定位）
-    ensureBindingsFile(context).catch(err => {
+    await ensureBindingsFile(context).catch(err => {
         console.error('[Extension] 初始化绑定文件失败:', err?.message || err);
         trackException('bindings.initFailed', err);
     });
+
+    // 初始化高亮存储文件（用于持久化推送后 testCaseNo 单元格的高亮标识）
+    await ensureHighlightFile(context).catch(err => {
+        console.error('[Extension] 初始化高亮存储文件失败:', err?.message || err);
+    });
+
+    // 初始化推送快照存储文件（每次推送后记录基线，后续差异比对用）
+    await ensureSnapshotFile(context).catch(err => {
+        console.error('[Extension] 初始化快照存储文件失败:', err?.message || err);
+    });
+
+    // 初始化已删除行追踪存储文件（管理待同步的删除行记录）
+    await ensureDeletedRowsFile(context).catch(err => {
+        console.error('[Extension] 初始化删除行存储文件失败:', err?.message || err);
+    });
+
+    // 注册绑定任务相关功能（装饰器 + TreeView + revealBoundTask 命令 + 监听）
+    const bindTaskDisposables = registerBindTaskFeatures(context);
 
     const tableBrowserProvider = new TableBrowserProvider(context.extensionUri, context);
     const testCaseProvider = new TestCaseProvider(context.extensionUri, context);
     const unifiedEditorProvider = new UnifiedEditorProvider(context.extensionUri, context);
 
     context.subscriptions.push(
+        ...bindTaskDisposables,
+
         // 自定义编辑器
-        // 关键参数：
-        //  1. retainContextWhenHidden=true：切换 Tab 时不销毁 webview，避免 webview 频繁销毁/重建造成 "页面互相覆盖" 视觉错觉
+        //  1. retainContextWhenHidden=true：切换 Tab 时不销毁 webview
         //  2. supportsMultipleEditorsPerDocument=true：允许同一文档在多个 tab group 中独立打开
         vscode.window.registerCustomEditorProvider(
             TESTCASE_EDITOR_VIEWTYPE,
@@ -311,11 +368,53 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand(
             'testcaseViewer.pushTestCaseFromExplorer',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
+                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
                 trackEvent('command.executed', { command: 'testcaseViewer.pushTestCaseFromExplorer' });
                 try {
-                    const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
                     await handleFilePush(targets, context);
                 } catch (err: any) {
+                    const baseName = targets[0] ? path.basename(targets[0].fsPath) : '';
+                    const panel = targets[0] ? BaseEditorProvider.getPanel(targets[0].fsPath) : undefined;
+                    showPushErrorModal(panel, baseName, `推送失败: ${err.message || err}`);
+                }
+            }
+        ),
+
+        // 已删除行同步命令（将已删除行同步到线上并清除本地快照）
+        vscode.commands.registerCommand(
+            'workbench.syncDeletedRows',
+            async () => {
+                const uri = getActiveFileUri();
+                if (!uri || !isTestCaseFile(uri)) {
+                    vscode.window.showInformationMessage('请先打开测试案例文件再执行同步');
+                    return;
+                }
+                try {
+                    const fileType = detectFileType(uri.fsPath);
+                    if (!fileType) {
+                        vscode.window.showErrorMessage('不支持的文件类型');
+                        return;
+                    }
+                    const parser = createParser(fileType);
+                    const parsed = await parser.parse(uri.fsPath);
+                    const deletedRows = refreshAndGetDeletedRows(uri.fsPath, parsed.tableData);
+                    if (deletedRows.length === 0) {
+                        vscode.window.showInformationMessage('当前文件无待同步的已删除行');
+                        return;
+                    }
+                    const result = await syncDeletedRows(uri.fsPath);
+                    if (result.failed.length > 0) {
+                        vscode.window.showInformationMessage(
+                            `删除行同步提示\n\n${result.failed.map(f => `${f.tsId}: ${f.reason}`).join('\n')}`,
+                            { modal: true }
+                        );
+                    }
+                    if (result.synced.length > 0) {
+                        vscode.window.showInformationMessage(`已同步 ${result.synced.length} 行删除记录`);
+                    }
+                } catch (err: any) {
+                    console.error('[syncDeletedRows] 失败:', err?.message || err);
+                    vscode.window.showErrorMessage(`删除行同步失败: ${err?.message || err}`);
                     vscode.window.showErrorMessage(`推送失败: ${err.message || err}`);
                     trackException('explorerPush.uncaught', err);
                 }
@@ -323,7 +422,7 @@ export function activate(context: vscode.ExtensionContext) {
         ),
 
         // 监听标签页激活变化，更新图标显示
-        vscode.window.tabGroups.onDidChangeTabs(() => updateShowIcon())
+        vscode.window.tabGroups.onDidChangeTabs(() => updateShowIcon()),
     );
 
     updateShowIcon();

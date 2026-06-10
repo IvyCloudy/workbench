@@ -3,7 +3,7 @@
  * -----------------------------------------------------------------------------
  * 由原 03-cell-ops.js 拆分而来，集中处理用户对表格内容的所有交互式编辑动作：
  *   1. 单元格编辑：selectCell / onCellDblClick / startEdit
- *      （进入编辑、提交修改、Esc 取消、tsId 等冻结列禁止编辑、批量写入选区）
+ *      （进入编辑、提交修改、Esc 取消、testcase_id 等冻结列禁止编辑、批量写入选区）
  *   2. 右键菜单：showContextMenu / hideContextMenu
  *      （根据点击位置动态构造菜单项：插入 / 删除 / 复制 / 粘贴 / 清空 / 推送 等）
  *   3. 行/列数据操作：insertRow / deleteRow / deleteSelectedRows /
@@ -28,10 +28,10 @@ function onCellDblClick(e) {
     var td = e.currentTarget;
     var ri = parseInt(td.getAttribute('data-row'), 10);
     var ci = parseInt(td.getAttribute('data-col'), 10);
-    // tsId 列冻结：不允许双击进入编辑
+    // testcase_id 列冻结：不允许双击进入编辑
     if (isFrozenCol(ci)) {
         e.preventDefault();
-        showToast('tsId 列为系统列，不允许编辑', 'error');
+        showToast('testcase_id 列为系统列，不允许编辑', 'error');
         return;
     }
     // 明细列：双击也打开弹窗，不进入编辑
@@ -58,9 +58,9 @@ function startEdit(e) {
     var td = e.currentTarget;
     var ri = parseInt(td.getAttribute('data-row'), 10);
     var ci = parseInt(td.getAttribute('data-col'), 10);
-    // tsId 列冻结：不允许进入编辑
+    // testcase_id 列冻结：不允许进入编辑
     if (isFrozenCol(ci)) {
-        showToast('tsId 列为系统列，不允许编辑', 'error');
+        showToast('testcase_id 列为系统列，不允许编辑', 'error');
         return;
     }
     // 防御：行/列下标不合法时直接放弃编辑（如表格已被刷新/删除行列）
@@ -144,7 +144,7 @@ function startEdit(e) {
                     td.classList.remove('xs-editing');
                     renderTable();
                     var msg = '已批量填充 ' + changed + ' 个单元格';
-                    if (skippedTsId) msg += '（tsId 列已跳过）';
+                    if (skippedTsId) msg += '（testcase_id 列已跳过）';
                     if (typeof showToast === 'function') showToast(msg, 'success');
                     return;
                 }
@@ -153,13 +153,8 @@ function startEdit(e) {
                 saveFile();
             }
         }
-        var curVal = row[ci];
         td.classList.remove('xs-editing');
-        td.innerHTML = '<div class="xs-cell-wrap">' + escapeHtml(formatCellValue(curVal)) + '</div>';
-        if (S.mods.has(ri + ',' + ci)) td.classList.add('modified');
-        // 同步刷新 tooltip
-        var ftxt = formatCellValue(curVal);
-        if (ftxt) td.setAttribute('title', ftxt); else td.removeAttribute('title');
+        patchCell(ri, ci);
     }
     input.addEventListener('blur', function () { commit(true); });
     input.addEventListener('keydown', function (ev) {
@@ -206,7 +201,7 @@ function showContextMenu(e) {
         items.push({ label: '删除该列', action: function () { deleteCol(S._ctxCol); }, disabled: S._ctxCol < 0 || isFrozenCol(S._ctxCol) });
         items.push({ label: '重命名列', action: function () { renameCol(S._ctxCol); }, disabled: S._ctxCol < 0 || isFrozenCol(S._ctxCol) });
         if (S.colSel.size > 0) {
-            // 冻结列（tsId）不参与清空 / 批量填充：只统计可操作列数；全为冻结列时灰显
+            // 冻结列（testcase_id）不参与清空 / 批量填充：只统计可操作列数；全为冻结列时灰显
             var _opCntH = 0;
             S.colSel.forEach(function (ci) { if (!isFrozenCol(ci)) _opCntH++; });
             items.push({ divider: true });
@@ -262,6 +257,16 @@ function showContextMenu(e) {
             label: _hasArea ? ('清空选区 (' + _areaSize + ')') : '清空单元格',
             action: clearCell, disabled: S._ctxCol < 0
         });
+        // 单元格矩形选区：批量填充功能（跳过冻结列，全为冻结列时灰显）
+        if (_hasArea) {
+            var _fillOpCnt = 0;
+            for (var _fc = _rc2.c1; _fc <= _rc2.c2; _fc++) { if (!isFrozenCol(_fc)) _fillOpCnt++; }
+            items.push({
+                label: '批量填充选区 (' + _areaSize + ')…',
+                action: fillSelectedCells,
+                disabled: _fillOpCnt === 0
+            });
+        }
         items.push({ divider: true });
         items.push({ label: '在下方复制此行', action: copyRowInline, disabled: S._ctxRow < 0 });
         items.push({ label: '在上方插入行', action: function () { insertRow(S._ctxRow); }, disabled: S._ctxRow < 0 });
@@ -277,7 +282,7 @@ function showContextMenu(e) {
             items.push({ label: '删除选中行 (' + S.sel.size + ')', action: deleteSelectedRows });
         }
         if (S.colSel.size > 0) {
-            // 冻结列（tsId）不参与清空 / 批量填充：只统计可操作列数；全为冻结列时灰显
+            // 冻结列（testcase_id）不参与清空 / 批量填充：只统计可操作列数；全为冻结列时灰显
             var _opCntC = 0;
             S.colSel.forEach(function (ci) { if (!isFrozenCol(ci)) _opCntC++; });
             items.push({ divider: true });
@@ -336,13 +341,30 @@ function insertRow(at) {
     headers.forEach(function (_, ci) {
         if (typeof isArrayCol === 'function' && isArrayCol(ci)) newRow[ci] = [];
     });
-    // 新行自动生成 tsId；testCaseNo 保留为空（由推送响应回写）
-    var tsCol = headers.indexOf('tsId');
+    // 新行自动生成 testcase_id；testCaseNo 保留为空（由推送响应回写）
+    var tsCol = headers.indexOf('testcase_id');
     if (tsCol >= 0) newRow[tsCol] = genUuidV4();
     if (at < 0) at = 0;
     if (at > S.data.rows.length) at = S.data.rows.length;
     pushHistory();
     S.data.rows.splice(at, 0, newRow);
+    // 同步所有明细表：在插入位置插入空条目，确保 rowGroups/rawRowGroups/rawRowTypes
+    // 与主表 rows 长度一致，避免后续 buildRowDetailSignature 按行索引误读其他行的明细数据
+    var idts = getDetailTables();
+    idts.forEach(function (dt) {
+        if (!dt) return;
+        if (dt.rowGroups) dt.rowGroups.splice(at, 0, []);
+        if (dt.rawRowGroups) dt.rawRowGroups.splice(at, 0, []);
+        if (dt.rawRowTypes) dt.rawRowTypes.splice(at, 0, 'none');
+    });
+    if (!S._addedRowSet) S._addedRowSet = new Set();
+    // 插入位置之后已有的新增行索引整体+1
+    if (S._addedRowSet.size > 0) {
+        var toShift = [];
+        S._addedRowSet.forEach(function (ri) { if (ri >= at) toShift.push(ri); });
+        toShift.forEach(function (ri) { S._addedRowSet.delete(ri); S._addedRowSet.add(ri + 1); });
+    }
+    S._addedRowSet.add(at);
     // 更新选中集合（被插入位置之后的索引整体+1）
     var ns = new Set();
     S.sel.forEach(function (i) { ns.add(i >= at ? i + 1 : i); });
@@ -367,7 +389,38 @@ function insertRow(at) {
 function deleteRow(ri) {
     if (ri < 0 || ri >= S.data.rows.length) return;
     pushHistory();
+    // 立即记录删除行信息，实现实时 ghost 行展示（不等扩展端异步回包）
+    var headers = (S.data && S.data.headers) || [];
+    var tsIdIdx = headers.indexOf('testcase_id');
+    var rowToDelete = S.data.rows[ri];
+    if (tsIdIdx >= 0) {
+        var tsId = rowToDelete[tsIdIdx] != null ? String(rowToDelete[tsIdIdx]) : '';
+        if (tsId) {
+            var delCells = [];
+            for (var hi = 0; hi < headers.length; hi++) {
+                var v = hi < rowToDelete.length ? rowToDelete[hi] : undefined;
+                delCells.push(v == null ? '' : String(v));
+            }
+            S._deletedInfos = (S._deletedInfos || []).concat([{ tsId: tsId, cells: delCells }]);
+        }
+    }
     S.data.rows.splice(ri, 1);
+    // 同步所有明细表：删除被删行对应的条目，确保 rowGroups/rawRowGroups/rawRowTypes
+    // 与主表 rows 长度一致，避免后续 buildRowDetailSignature 按行索引误读其他行的明细数据
+    var ddts = getDetailTables();
+    ddts.forEach(function (dt) {
+        if (!dt) return;
+        if (dt.rowGroups) dt.rowGroups.splice(ri, 1);
+        if (dt.rawRowGroups) dt.rawRowGroups.splice(ri, 1);
+        if (dt.rawRowTypes) dt.rawRowTypes.splice(ri, 1);
+    });
+    // 同步新增行集合：被删行移除，后续行 -1
+    if (S._addedRowSet && S._addedRowSet.size > 0) {
+        S._addedRowSet.delete(ri);
+        var toShiftBack = [];
+        S._addedRowSet.forEach(function (i) { if (i > ri) toShiftBack.push(i); });
+        toShiftBack.forEach(function (i) { S._addedRowSet.delete(i); S._addedRowSet.add(i - 1); });
+    }
     var ns = new Set();
     S.sel.forEach(function (i) { if (i !== ri) ns.add(i > ri ? i - 1 : i); });
     S.sel = ns;
@@ -392,7 +445,45 @@ function deleteSelectedRows() {
     if (S.sel.size === 0) return;
     pushHistory();
     var sorted = Array.from(S.sel).sort(function (a, b) { return b - a; });
+    // 立即记录所有被删除行的信息，实现实时 ghost 行展示
+    var headers = (S.data && S.data.headers) || [];
+    var tsIdIdx = headers.indexOf('testcase_id');
+    if (tsIdIdx >= 0) {
+        for (var di = 0; di < sorted.length; di++) {
+            var rowToDelete = S.data.rows[sorted[di]];
+            var tsId = rowToDelete[tsIdIdx] != null ? String(rowToDelete[tsIdIdx]) : '';
+            if (tsId) {
+                var delCells = [];
+                for (var hi = 0; hi < headers.length; hi++) {
+                    var v = hi < rowToDelete.length ? rowToDelete[hi] : undefined;
+                    delCells.push(v == null ? '' : String(v));
+                }
+                S._deletedInfos = (S._deletedInfos || []).concat([{ tsId: tsId, cells: delCells }]);
+            }
+        }
+    }
     sorted.forEach(function (i) { S.data.rows.splice(i, 1); });
+    // 同步所有明细表：删除被删行对应的条目（sorted 已按降序排列，逐个 splice 安全）
+    var sdts = getDetailTables();
+    sdts.forEach(function (dt) {
+        if (!dt) return;
+        sorted.forEach(function (i) {
+            if (dt.rowGroups) dt.rowGroups.splice(i, 1);
+            if (dt.rawRowGroups) dt.rawRowGroups.splice(i, 1);
+            if (dt.rawRowTypes) dt.rawRowTypes.splice(i, 1);
+        });
+    });
+    // 同步新增行集合：被删行移除，后续行按删除数量整体左移
+    if (S._addedRowSet && S._addedRowSet.size > 0) {
+        var newAdded = new Set();
+        S._addedRowSet.forEach(function (ri) {
+            if (sorted.indexOf(ri) >= 0) return; // 被删行，移除
+            var shift = 0;
+            for (var si = 0; si < sorted.length; si++) { if (sorted[si] < ri) shift++; }
+            newAdded.add(ri - shift);
+        });
+        S._addedRowSet = newAdded;
+    }
     // 同步行高索引：依次处理所有被删行（已按降序，逐个 -1 调整后续索引）
     if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
         var rhArr = Object.keys(S.rowHeights).map(function (k) { return { i: parseInt(k, 10), v: S.rowHeights[k] }; });
@@ -453,9 +544,9 @@ function insertCol(at) {
 
 function deleteCol(ci) {
     if (ci < 0 || ci >= S.data.headers.length) return;
-    // 冻结列（tsId）禁止删除：tsId 是行的稳定标识，删除会破坏推送语义与失败标记联动
+    // 冻结列（testcase_id）禁止删除：testcase_id 是行的稳定标识，删除会破坏推送语义与失败标记联动
     if (isFrozenCol(ci)) {
-        showToast('tsId 列为冻结列，不允许删除', 'error');
+        showToast('testcase_id 列为冻结列，不允许删除', 'error');
         return;
     }
     xsConfirm('确定删除该列？', function () {
@@ -497,9 +588,9 @@ function deleteCol(ci) {
 
 function renameCol(ci) {
     if (ci < 0 || ci >= S.data.headers.length) return;
-    // 冻结列（tsId）禁止重命名：很多依赖 headers.indexOf('tsId') 的逻辑（推送、失败映射、行高/列宽索引等）会失效
+    // 冻结列（testcase_id）禁止重命名：很多依赖 headers.indexOf('testcase_id') 的逻辑（推送、失败映射、行高/列宽索引等）会失效
     if (isFrozenCol(ci)) {
-        showToast('tsId 列为冻结列，不允许重命名', 'error');
+        showToast('testcase_id 列为冻结列，不允许重命名', 'error');
         return;
     }
     xsPrompt('重命名列', S.data.headers[ci], function (name) {
@@ -607,12 +698,12 @@ function pasteCell() {
         saveFile();
         renderTable();
         var msg = '已粘贴 ' + changed + ' 个单元格';
-        if (skippedTsId) msg += '（tsId 列已跳过）';
+        if (skippedTsId) msg += '（testcase_id 列已跳过）';
         showToast(msg, 'success');
         return;
     }
     // 单值粘贴：原逻辑
-    if (isFrozenCol(S._ctxCol)) { showToast('tsId 列不允许粘贴', 'error'); return; }
+    if (isFrozenCol(S._ctxCol)) { showToast('testcase_id 列不允许粘贴', 'error'); return; }
     pushHistory();
     var target = S.clip;
     var isArr = typeof isArrayCol === 'function' && isArrayCol(S._ctxCol);
@@ -663,12 +754,12 @@ function clearCell() {
         saveFile();
         renderTable();
         var msg = '已清空 ' + changed + ' 个单元格';
-        if (skippedTsId) msg += '（tsId 列已跳过）';
+        if (skippedTsId) msg += '（testcase_id 列已跳过）';
         showToast(msg, 'success');
         return;
     }
     if (S._ctxRow < 0 || S._ctxCol < 0) return;
-    if (isFrozenCol(S._ctxCol)) { showToast('tsId 列不允许清空', 'error'); return; }
+    if (isFrozenCol(S._ctxCol)) { showToast('testcase_id 列不允许清空', 'error'); return; }
     pushHistory();
     // 标量数组列清空 → 空数组，保持列类型不变
     if (typeof isArrayCol === 'function' && isArrayCol(S._ctxCol)) {
@@ -679,6 +770,53 @@ function clearCell() {
     S.mods.add(S._ctxRow + ',' + S._ctxCol);
     saveFile();
     patchCell(S._ctxRow, S._ctxCol);
+}
+
+// 批量填充单元格矩形选区：弹出输入框，输入值后填充整个选区（跳过冻结列）
+function fillSelectedCells() {
+    var rc = (typeof getCellSelRect === 'function') ? getCellSelRect() : null;
+    if (!rc || (rc.r1 === rc.r2 && rc.c1 === rc.c2)) {
+        showToast('请先拖选一个单元格区域', 'error');
+        return;
+    }
+    xsPrompt('填充选中区域的值（作用于 ' + (rc.r2 - rc.r1 + 1) + '\u00d7' + (rc.c2 - rc.c1 + 1) + ' 格）', '', function (val) {
+        if (val === null) return; // 取消
+        var rows = (S.data && S.data.rows) || [];
+        var rowList = (typeof getSelRectRows === 'function') ? getSelRectRows() : null;
+        if (!rowList || rowList.length === 0) {
+            rowList = [];
+            for (var rr = rc.r1; rr <= rc.r2; rr++) rowList.push(rr);
+        }
+        var changed = 0, skippedTsId = false;
+        pushHistory();
+        for (var i = 0; i < rowList.length; i++) {
+            var r = rowList[i];
+            for (var c = rc.c1; c <= rc.c2; c++) {
+                if (isFrozenCol(c)) { skippedTsId = true; continue; }
+                var row = rows[r]; if (!row) continue;
+                var isArr = typeof isArrayCol === 'function' && isArrayCol(c);
+                var nv;
+                if (isArr) {
+                    nv = (val === '') ? [] : val.split(/;\s*|\n+/).map(function (x) { return x.trim(); }).filter(function (x) { return x !== ''; });
+                } else {
+                    nv = val;
+                }
+                var ov = row[c];
+                var oldStr = Array.isArray(ov) ? formatCellValue(ov) : (ov == null ? '' : String(ov));
+                var newStr = Array.isArray(nv) ? formatCellValue(nv) : String(nv);
+                if (oldStr !== newStr) {
+                    row[c] = nv;
+                    S.mods.add(r + ',' + c);
+                    changed++;
+                }
+            }
+        }
+        saveFile();
+        renderTable();
+        var msg = '已批量填充 ' + changed + ' 个单元格';
+        if (skippedTsId) msg += '（testcase_id 列已跳过）';
+        showToast(msg, 'success');
+    });
 }
 
 function copyRow() {
@@ -705,9 +843,9 @@ function copyRowInline() {
     var at = S._ctxRow + 1;
     // 深拷贝：避免数组单元格被多行引用共享
     var newRow = src.map(function (v) { return Array.isArray(v) ? v.slice() : v; });
-    // 复制行需要重新生成 tsId（避免两行同 id），并清空已回写的 testCaseNo
+    // 复制行需要重新生成 testcase_id（避免两行同 id），并清空已回写的 testCaseNo
     var headers0 = S.data.headers || [];
-    var tsCol0 = headers0.indexOf('tsId');
+    var tsCol0 = headers0.indexOf('testcase_id');
     var tcCol0 = headers0.indexOf('testCaseNo');
     if (tsCol0 >= 0) newRow[tsCol0] = genUuidV4();
     if (tcCol0 >= 0) newRow[tcCol0] = '';
@@ -737,6 +875,11 @@ function copyRowInline() {
 }
 
 function pushFromContextMenu() {
+    // 防重复点击（与 pushChanges 行为一致）
+    if (S._pushing) {
+        if (typeof showToast === 'function') showToast('推送中，请稍候…', 'info');
+        return;
+    }
     var headers = S.data.headers || [];
     // 优先推送选中行（行选 + 单元格矩形选区均算）；如未选中，则推送右键所在行
     var indices = (typeof getPushTargetRows === 'function') ? getPushTargetRows() : [];
@@ -747,7 +890,7 @@ function pushFromContextMenu() {
             return;
         }
     }
-    var tsCol = headers.indexOf('tsId');
+    var tsCol = headers.indexOf('testcase_id');
     var rowIndexMap = {};
     var payload = indices.map(function (ri) {
         var record = {};
@@ -761,6 +904,8 @@ function pushFromContextMenu() {
         }
         return record;
     });
+    // 缓存本批参与推送的行索引，供 pushResult 回来后清除对应的 S.mods 修改高亮。
+    S._lastPushBatchRowIndices = indices.slice();
     // 缓存本批参与推送的 tsId（与 pushChanges 行为一致），供 pushResult 回来后做差集清理：
     // 本批中本次成功的 tsId 会从失败集合中移除，从而在"仅看推送失败"模式下被正确隐藏。
     S._lastPushBatchTsIds = new Set();
@@ -772,5 +917,17 @@ function pushFromContextMenu() {
             }
         });
     }
+    // 置忙（与 pushChanges 行为一致）
+    S._pushing = true;
+    if (typeof updatePushBtn === 'function') updatePushBtn();
+    if (S._pushTimeoutTimer) { try { clearTimeout(S._pushTimeoutTimer); } catch (_) {} }
+    S._pushTimeoutTimer = setTimeout(function () {
+        S._pushTimeoutTimer = null;
+        if (S._pushing) {
+            S._pushing = false;
+            if (typeof updatePushBtn === 'function') updatePushBtn();
+            if (typeof showToast === 'function') showToast('推送超时未响应，已解除按钮锁定', 'error');
+        }
+    }, 30000);
     S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap });
 }

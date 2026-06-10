@@ -110,11 +110,11 @@ function autoFitColumn(e) {
 }
 
 // ==================== 列选择（Excel 风格）====================
-// 列冻结：tsId 列为系统列，禁止任何编辑/覆写
+// 列冻结：testcase_id 列为系统列，禁止任何编辑/覆写
 function isFrozenCol(ci) {
     if (typeof ci !== 'number' || ci < 0) return false;
     var headers = (S.data && S.data.headers) || [];
-    return headers[ci] === 'tsId';
+    return headers[ci] === 'testcase_id';
 }
 
 // 列头按下 -> 进入「横扫选列」模式；mousemove 阶段实时把锚点列与悬停列形成区间；
@@ -238,7 +238,7 @@ function applyColumnsBulk(fillVal) {
         targets.push(ci);
     });
     if (targets.length === 0) {
-        showToast('tsId 列不允许清空/填充，已跳过', 'error');
+        showToast('testcase_id 列不允许清空/填充，已跳过', 'error');
         return;
     }
     pushHistory();
@@ -291,7 +291,7 @@ function applyColumnsBulk(fillVal) {
     renderTable();
     var verb = (fillVal === undefined) ? '清空' : '填充';
     var msg = '已' + verb + ' ' + targets.length + ' 列、' + changed + ' 个单元格';
-    if (skippedTsId) msg += '（tsId 已自动跳过）';
+    if (skippedTsId) msg += '（testcase_id 已自动跳过）';
     showToast(msg, 'success');
 }
 

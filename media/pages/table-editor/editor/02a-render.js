@@ -54,6 +54,9 @@ function renderTable() {
     updateSelectionInfo();
     updatePushBtn();
     if (typeof updateFailedFilterBtn === 'function') updateFailedFilterBtn();
+    if (typeof updateModifiedFilterBtn === 'function') updateModifiedFilterBtn();
+    if (typeof updateAddedFilterBtn === 'function') updateAddedFilterBtn();
+    if (typeof updateDeletedFilterBtn === 'function') updateDeletedFilterBtn();
     updateSearchClear();
     if (typeof updateColSelClasses === 'function') updateColSelClasses();
     if (typeof updateCellSelClasses === 'function') updateCellSelClasses();
@@ -79,12 +82,23 @@ function _computeViewRows() {
     var hasColFilters = S._colFilters && Object.keys(S._colFilters).length > 0;
     // 仅看推送失败：当 _failedOnly=true 且 _pushFailedTsIds 非空时启用
     var failedOnly = !!(S._failedOnly && S._pushFailedTsIds && S._pushFailedTsIds.size > 0);
-    var failedTsCol = failedOnly ? headers.indexOf('tsId') : -1;
+    var failedTsCol = failedOnly ? headers.indexOf('testcase_id') : -1;
     if (failedOnly && failedTsCol < 0) {
         // 没有 tsId 列就无法定位失败行，自动失效该筛选
         failedOnly = false;
     }
-    if (!skw && !hasColFilters && !failedOnly) {
+    // 仅看已修改行：基于 S.mods / _detailModCellKeys（未提交的本地修改）
+    var _modRowSet = (typeof _getModifiedRowSet === 'function') ? _getModifiedRowSet() : new Set();
+    var modifiedOnly = !!(S._modifiedOnly && _modRowSet && _modRowSet.size > 0);
+    // 仅看新增行：基于新增行索引集合
+    var addedOnly = !!(S._addedOnly && S._addedRowSet && S._addedRowSet.size > 0);
+    // 仅看已删除行：展示 ghost 行，隐藏所有常规行
+    var deletedOnly = !!(S._deletedOnly && S._deletedInfos && S._deletedInfos.length > 0);
+    if (deletedOnly) {
+        // 仅看已删除行时，常规行全部隐藏，只展示 ghost 区域
+        return [];
+    }
+    if (!skw && !hasColFilters && !failedOnly && !modifiedOnly && !addedOnly) {
         // 直接整段：避免大数组 push 开销
         var arr = new Array(rows.length);
         for (var i = 0; i < rows.length; i++) arr[i] = i;
@@ -124,9 +138,45 @@ function _computeViewRows() {
             if (_tsv === undefined || _tsv === null || _tsv === '') continue;
             if (!S._pushFailedTsIds.has(String(_tsv))) continue;
         }
+        if (modifiedOnly) {
+            if (!_modRowSet.has(ri)) continue;
+        }
+        if (addedOnly) {
+            if (!S._addedRowSet.has(ri)) continue;
+        }
         out.push(ri);
     }
     return out;
+}
+
+// 构建 ghost 行 HTML（快照中有但当前数据中已删除的行，显示在表格底部）
+function _buildGhostRowsHtml(headers) {
+    var infos = S._deletedInfos;
+    if (!infos || infos.length === 0) return '';
+    var tsIdIdx = headers.indexOf('testcase_id');
+    var tcIdx = headers.indexOf('testCaseNo');
+    if (tsIdIdx < 0) return '';
+    var totalCols = headers.length + 1; // +1 是复选框列
+    var html = '<tr class="xs-ghost-sep"><td colspan="' + totalCols + '">已删除 ' + infos.length + ' 行</td></tr>';
+    for (var i = 0; i < infos.length; i++) {
+        var info = infos[i];
+        var cells = info.cells || [];
+        html += '<tr class="xs-ghost-row">';
+        html += '<td class="xs-td xs-td-cb xs-ghost-cb">🗑</td>';
+        for (var ci = 0; ci < headers.length; ci++) {
+            var val = '';
+            if (String(headers[ci]) === 'testcase_id') {
+                // testcase_id 直接取 info.tsId，避免依赖 cells 中可能过期的值
+                val = info.tsId || '';
+            } else {
+                // cells 长度与 headers 一致（testCaseNo 位置为空字符串），直接用 ci 索引
+                val = (ci < cells.length && cells[ci] !== undefined && cells[ci] !== '') ? cells[ci] : '';
+            }
+            html += '<td class="xs-td xs-td-ghost"><del>' + escapeHtml(val) + '</del></td>';
+        }
+        html += '</tr>';
+    }
+    return html;
 }
 
 // 构建表格骨架（colgroup + thead + 空 tbody），不含具体 tr
@@ -146,7 +196,7 @@ html += '<th class="xs-th xs-th-cb xs-th-rownum" title="点击全选整表">#</t
         var filterCls = hasFilter ? ' active' : '';
         var filterTitle = hasFilter ? '已应用筛选 (点击修改)' : '筛选';
         var colSelCls = S.colSel.has(j) ? ' xs-col-selected' : '';
-        var frozenCls = (String(hdr) === 'tsId') ? ' xs-th-frozen' : '';
+        var frozenCls = (String(hdr) === 'testcase_id') ? ' xs-th-frozen' : '';
         html += '<th class="xs-th' + colSelCls + frozenCls + '" data-col="' + j + '">'
             + '<span class="xs-th-text">' + escapeHtml(String(hdr)) + '</span>'
             + '<span class="xs-th-filter' + filterCls + '" data-filter-col="' + j + '" title="' + filterTitle + '">'
@@ -209,9 +259,27 @@ function _buildRowHtml(ri, tsIdColIdx) {
         + '</td>';
     for (var ci = 0; ci < headers.length; ci++) {
         var v = row[ci];
-        var modCls = S.mods.has(ri + ',' + ci) ? ' modified' : '';
+        var modCls = (S.mods.has(ri + ',' + ci) || (S._detailModCellKeys && S._detailModCellKeys.has(ri + ',' + ci))) ? ' modified' : '';
+        var hiliCls = '';
+        if (S._highlightedCells) {
+            // 精确逐格高亮优先（编辑保存场景）→ 绿色
+            if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
+                hiliCls = ' xs-td-push-updated';
+            } else if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)) {
+                // colIdx === -1 表示整行任意列变化，高亮该行所有单元格 → 橙色
+                if (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci) {
+                    hiliCls = ' xs-td-push-updated-row';
+                }
+            }
+        }
+        // 新增行高亮 → 绿色，优先级高于修改高亮（同时是新增+修改时以新增为准）
+        if (S._addedRowSet && S._addedRowSet.has(ri)) {
+            hiliCls = ' xs-td-push-added';
+            // 新增行的 modCls 应移除，避免与前端的 modified 标记混淆
+            modCls = '';
+        }
         var colSelCls2 = S.colSel.has(ci) ? ' xs-col-selected' : '';
-        var frozenCls2 = (String(headers[ci]) === 'tsId') ? ' xs-td-frozen' : '';
+        var frozenCls2 = (String(headers[ci]) === 'testcase_id') ? ' xs-td-frozen' : '';
         var isDetail = hasDetailRowsAtCol(ri, ci);
         var isArrCol = (typeof isArrayCol === 'function') && isArrayCol(ci);
         var rawText = formatCellValue(v);
@@ -230,7 +298,7 @@ function _buildRowHtml(ri, tsIdColIdx) {
             inner = escapeHtml(rawText);
             titleAttr = rawText ? ' title="' + escapeHtml(rawText) + '"' : '';
         }
-        html += '<td class="xs-td xs-editable' + modCls + colSelCls2 + frozenCls2 + (isDetail ? ' xs-detail-cell' : '') + arrCellCls + '" data-row="' + ri + '" data-col="' + ci + '"' + titleAttr + '>'
+        html += '<td class="xs-td xs-editable' + modCls + colSelCls2 + frozenCls2 + hiliCls + (isDetail ? ' xs-detail-cell' : '') + arrCellCls + '" data-row="' + ri + '" data-col="' + ci + '"' + titleAttr + '>'
             + '<div class="xs-cell-wrap">' + inner + '</div></td>';
     }
     html += '</tr>';
@@ -242,11 +310,11 @@ function _renderAllBody() {
     var tbody = document.getElementById('xsTbody');
     if (!tbody) return;
     var headers = (S.data && S.data.headers) || [];
-    var tsIdColIdx = headers.indexOf('tsId');
+    var tsIdColIdx = headers.indexOf('testcase_id');
     var view = S._viewRows || [];
     var parts = new Array(view.length);
     for (var i = 0; i < view.length; i++) parts[i] = _buildRowHtml(view[i], tsIdColIdx);
-    tbody.innerHTML = parts.join('');
+    tbody.innerHTML = parts.join('') + _buildGhostRowsHtml(headers);
 }
 
 // 计算每个 view 行的累积偏移表 _rowOffsets[i] = 第 i 行的 top 像素
@@ -315,13 +383,13 @@ function _renderVirtualBody() {
 
     var topH = offs[from] || 0;
     var bottomH = (offs[view.length] || 0) - (offs[to] || 0);
-    var tsIdColIdx = headers.indexOf('tsId');
+    var tsIdColIdx = headers.indexOf('testcase_id');
     var parts = [];
     // 顶部 spacer（用一行 td colspan 撑高）
     parts.push('<tr class="xs-vspacer" aria-hidden="true" style="height:' + topH + 'px"><td colspan="' + totalCols + '" style="padding:0;border:0"></td></tr>');
     for (var i = from; i < to; i++) parts.push(_buildRowHtml(view[i], tsIdColIdx));
     parts.push('<tr class="xs-vspacer" aria-hidden="true" style="height:' + bottomH + 'px"><td colspan="' + totalCols + '" style="padding:0;border:0"></td></tr>');
-    tbody.innerHTML = parts.join('');
+    tbody.innerHTML = parts.join('') + _buildGhostRowsHtml(headers);
     // 重渲后恢复查找高亮（仅对当前可见行有效）
     if (S._findKw) paintFindHighlight();
     if (typeof updateColSelClasses === 'function') updateColSelClasses();
@@ -416,8 +484,30 @@ function patchCell(ri, ci) {
     if (S.mods.has(ri + ',' + ci)) td.classList.add('modified'); else td.classList.remove('modified');
     if (isDetail) td.classList.add('xs-detail-cell'); else td.classList.remove('xs-detail-cell');
     if (isArrCol) td.classList.add('xs-arr-cell'); else td.classList.remove('xs-arr-cell');
-    var frozen = (String(headers[ci]) === 'tsId');
+    var frozen = (String(headers[ci]) === 'testcase_id');
     if (frozen) td.classList.add('xs-td-frozen'); else td.classList.remove('xs-td-frozen');
+    // 新增行高亮（绿底）
+    if (S._addedRowSet && S._addedRowSet.has(ri)) {
+        td.classList.add('xs-td-push-added');
+    } else {
+        td.classList.remove('xs-td-push-added');
+    }
+    // 推送变更高亮
+    if (S._highlightedCells) {
+        if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
+            td.classList.add('xs-td-push-updated');
+        } else {
+            td.classList.remove('xs-td-push-updated');
+        }
+        if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)
+            && (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci)) {
+            td.classList.add('xs-td-push-updated-row');
+        } else {
+            td.classList.remove('xs-td-push-updated-row');
+        }
+    } else {
+        td.classList.remove('xs-td-push-updated', 'xs-td-push-updated-row');
+    }
     // tooltip 同步
     if (rawText) td.setAttribute('title', rawText); else td.removeAttribute('title');
     // 注：detail-link click 已在 #tableContainer 上委托，无需在此重新绑定

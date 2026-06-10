@@ -1,4 +1,4 @@
-- tsId: TC-INPUT-0032
+- testcase_id: TC-INPUT-0032
   testCaseNo: TT17800758397761000
   path: PC端界面设计/云订单查询/订单详情
   name: 边界值测试_003
@@ -31,7 +31,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-001
+- testcase_id: TC-INPUT-001
   testCaseNo: ""
   path: PC端界面设计/云订单查询/未完结订单列表
   name: 正常流程展示_001
@@ -75,7 +75,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-004
+- testcase_id: TC-INPUT-004
   testCaseNo: TT17800758397761002
   path: PC端界面设计/账户管理/用户列表
   name: 权限不足时拦截_004
@@ -130,7 +130,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-005
+- testcase_id: TC-INPUT-005
   testCaseNo: TT17800745375751000
   path: PC端界面设计/账户管理/角色管理
   name: 网络异常时提示_005
@@ -161,7 +161,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-006
+- testcase_id: TC-INPUT-006
   testCaseNo: TT17800758397761004
   path: PC端界面设计/账户管理/权限配置
   name: 数据为空时占位_006
@@ -206,7 +206,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-007
+- testcase_id: TC-INPUT-007
   testCaseNo: ""
   path: PC端界面设计/资源管理/主机列表
   name: 并发提交防重_007
@@ -262,7 +262,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-009
+- testcase_id: TC-INPUT-009
   testCaseNo: TT17800758397761006
   path: PC端界面设计/资源管理/存储管理
   name: 排序功能正确_009
@@ -295,7 +295,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-008
+- testcase_id: TC-INPUT-008
   testCaseNo: ""
   path: PC端界面设计/资源管理/网络配置
   name: 分页查询正确_008
@@ -338,7 +338,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-011
+- testcase_id: TC-INPUT-011
   testCaseNo: TT17800758397761008
   path: 移动端/首页/搜索框
   name: 搜索关键字高亮_011
@@ -394,7 +394,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-012
+- testcase_id: TC-INPUT-012
   testCaseNo: TT17800750075601000
   path: 移动端/个人中心/我的订单
   name: 导出文件成功_012
@@ -426,7 +426,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-013
+- testcase_id: TC-INPUT-013
   testCaseNo: TT17800758397761010
   path: API/订单服务/创建订单
   name: 导入文件校验_013
@@ -471,7 +471,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-002
+- testcase_id: TC-INPUT-002
   testCaseNo: ""
   path: PC端界面设计/云订单查询/已完结订单列表
   name: 异常输入校验_002
@@ -527,7 +527,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-010
+- testcase_id: TC-INPUT-010
   testCaseNo: TT17800758397761012
   path: 移动端/首页/资讯流
   name: 筛选条件生效_010
@@ -558,7 +558,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-014
+- testcase_id: TC-INPUT-014
   testCaseNo: ""
   path: API/订单服务/取消订单
   name: 字段必填校验_014
@@ -601,7 +601,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-015
+- testcase_id: TC-INPUT-015
   testCaseNo: TT17800758397761014
   path: API/支付服务/支付回调
   name: 字段长度校验_015
@@ -658,7 +658,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-016
+- testcase_id: TC-INPUT-016
   testCaseNo: ""
   path: API/用户服务/登录鉴权
   name: 字段格式校验_016
@@ -691,7 +691,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-017
+- testcase_id: TC-INPUT-017
   testCaseNo: TT17800758397761016
   path: API/用户服务/注册
   name: 弹窗交互正确_017
@@ -735,7 +735,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-018
+- testcase_id: TC-INPUT-018
   testCaseNo: TT17800758764401000
   path: 管理后台/数据看板/总览
   name: Tab 切换刷新_018
@@ -790,7 +790,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-019
+- testcase_id: TC-INPUT-019
   testCaseNo: TT17800758397761018
   path: 管理后台/数据看板/明细
   name: 下拉选项联动_019
@@ -821,7 +821,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-020
+- testcase_id: TC-INPUT-020
   testCaseNo: ""
   path: 管理后台/系统设置/参数配置
   name: 默认值填充_020
@@ -866,7 +866,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-021
+- testcase_id: TC-INPUT-021
   testCaseNo: TT17800758397761020
   path: PC端界面设计/云订单查询/未完结订单列表
   name: 正常流程展示_021
@@ -922,7 +922,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-022
+- testcase_id: TC-INPUT-022
   testCaseNo: ""
   path: PC端界面设计/云订单查询/已完结订单列表
   name: 异常输入校验_022
@@ -955,7 +955,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-023
+- testcase_id: TC-INPUT-023
   testCaseNo: TT17800758397761022
   path: PC端界面设计/云订单查询/订单详情
   name: 边界值测试_023
@@ -998,7 +998,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-024
+- testcase_id: TC-INPUT-024
   testCaseNo: ""
   path: PC端界面设计/账户管理/用户列表
   name: 权限不足时拦截_024
@@ -1054,7 +1054,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-025
+- testcase_id: TC-INPUT-025
   testCaseNo: TT17800758397761024
   path: PC端界面设计/账户管理/角色管理
   name: 网络异常时提示_025
@@ -1086,7 +1086,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-026
+- testcase_id: TC-INPUT-026
   testCaseNo: ""
   path: PC端界面设计/账户管理/权限配置
   name: 数据为空时占位_026
@@ -1131,7 +1131,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-027
+- testcase_id: TC-INPUT-027
   testCaseNo: TT17800758397761026
   path: PC端界面设计/资源管理/主机列表
   name: 并发提交防重_027
@@ -1187,7 +1187,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-028
+- testcase_id: TC-INPUT-028
   testCaseNo: ""
   path: PC端界面设计/资源管理/网络配置
   name: 分页查询正确_028
@@ -1218,7 +1218,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-029
+- testcase_id: TC-INPUT-029
   testCaseNo: TT17800758397761028
   path: PC端界面设计/资源管理/存储管理
   name: 排序功能正确_029
@@ -1261,7 +1261,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-030
+- testcase_id: TC-INPUT-030
   testCaseNo: ""
   path: 移动端/首页/资讯流
   name: 筛选条件生效_030
@@ -1318,7 +1318,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-031
+- testcase_id: TC-INPUT-031
   testCaseNo: TT17800758397761030
   path: 移动端/首页/搜索框
   name: 搜索关键字高亮_031
@@ -1351,7 +1351,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-032
+- testcase_id: TC-INPUT-032
   testCaseNo: ""
   path: 移动端/个人中心/我的订单
   name: 导出文件成功_032
@@ -1395,7 +1395,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-033
+- testcase_id: TC-INPUT-033
   testCaseNo: TT17800758397761032
   path: API/订单服务/创建订单
   name: 导入文件校验_033
@@ -1450,7 +1450,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-034
+- testcase_id: TC-INPUT-034
   testCaseNo: ""
   path: API/订单服务/取消订单
   name: 字段必填校验_034
@@ -1481,7 +1481,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-035
+- testcase_id: TC-INPUT-035
   testCaseNo: TT17800758397761034
   path: API/支付服务/支付回调
   name: 字段长度校验_035
@@ -1526,7 +1526,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-036
+- testcase_id: TC-INPUT-036
   testCaseNo: ""
   path: API/用户服务/登录鉴权
   name: 字段格式校验_036
@@ -1582,7 +1582,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-037
+- testcase_id: TC-INPUT-037
   testCaseNo: TT17800758397761036
   path: API/用户服务/注册
   name: 弹窗交互正确_037
@@ -1615,7 +1615,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-038
+- testcase_id: TC-INPUT-038
   testCaseNo: ""
   path: 管理后台/数据看板/总览
   name: Tab 切换刷新_038
@@ -1658,7 +1658,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-039
+- testcase_id: TC-INPUT-039
   testCaseNo: TT17800758397761038
   path: 管理后台/数据看板/明细
   name: 下拉选项联动_039
@@ -1714,7 +1714,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-040
+- testcase_id: TC-INPUT-040
   testCaseNo: ""
   path: 管理后台/系统设置/参数配置
   name: 默认值填充_040
@@ -1746,7 +1746,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-041
+- testcase_id: TC-INPUT-041
   testCaseNo: TT17800758397761040
   path: PC端界面设计/云订单查询/未完结订单列表
   name: 正常流程展示_041
@@ -1791,7 +1791,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-042
+- testcase_id: TC-INPUT-042
   testCaseNo: ""
   path: PC端界面设计/云订单查询/已完结订单列表
   name: 异常输入校验_042
@@ -1847,7 +1847,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-043
+- testcase_id: TC-INPUT-043
   testCaseNo: TT17800758397761042
   path: PC端界面设计/云订单查询/订单详情
   name: 边界值测试_043
@@ -1878,7 +1878,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-044
+- testcase_id: TC-INPUT-044
   testCaseNo: TT17800758764401002
   path: PC端界面设计/账户管理/用户列表
   name: 权限不足时拦截_044
@@ -1921,7 +1921,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-045
+- testcase_id: TC-INPUT-045
   testCaseNo: TT17800758397761044
   path: PC端界面设计/账户管理/角色管理
   name: 网络异常时提示_045
@@ -1978,7 +1978,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-046
+- testcase_id: TC-INPUT-046
   testCaseNo: ""
   path: PC端界面设计/账户管理/权限配置
   name: 数据为空时占位_046
@@ -2011,7 +2011,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-047
+- testcase_id: TC-INPUT-047
   testCaseNo: TT17800758764401004
   path: PC端界面设计/资源管理/主机列表
   name: 并发提交防重_047
@@ -2055,7 +2055,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-048
+- testcase_id: TC-INPUT-048
   testCaseNo: ""
   path: PC端界面设计/资源管理/网络配置
   name: 分页查询正确_048
@@ -2110,7 +2110,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-049
+- testcase_id: TC-INPUT-049
   testCaseNo: TT17800758397761048
   path: PC端界面设计/资源管理/存储管理
   name: 排序功能正确_049
@@ -2141,7 +2141,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-050
+- testcase_id: TC-INPUT-050
   testCaseNo: ""
   path: 移动端/首页/资讯流
   name: 筛选条件生效_050
@@ -2186,7 +2186,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-051
+- testcase_id: TC-INPUT-051
   testCaseNo: TT17800758397761050
   path: 移动端/首页/搜索框
   name: 搜索关键字高亮_051
@@ -2242,7 +2242,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-052
+- testcase_id: TC-INPUT-052
   testCaseNo: ""
   path: 移动端/个人中心/我的订单
   name: 导出文件成功_052
@@ -2275,7 +2275,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-053
+- testcase_id: TC-INPUT-053
   testCaseNo: TT17800758397761052
   path: API/订单服务/创建订单
   name: 导入文件校验_053
@@ -2318,7 +2318,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-054
+- testcase_id: TC-INPUT-054
   testCaseNo: ""
   path: API/订单服务/取消订单
   name: 字段必填校验_054
@@ -2374,7 +2374,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-055
+- testcase_id: TC-INPUT-055
   testCaseNo: TT17800758397761054
   path: API/支付服务/支付回调
   name: 字段长度校验_055
@@ -2406,7 +2406,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-056
+- testcase_id: TC-INPUT-056
   testCaseNo: ""
   path: API/用户服务/登录鉴权
   name: 字段格式校验_056
@@ -2451,7 +2451,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-057
+- testcase_id: TC-INPUT-057
   testCaseNo: TT17800758397761056
   path: API/用户服务/注册
   name: 弹窗交互正确_057
@@ -2507,7 +2507,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-058
+- testcase_id: TC-INPUT-058
   testCaseNo: ""
   path: 管理后台/数据看板/总览
   name: Tab 切换刷新_058
@@ -2538,7 +2538,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-059
+- testcase_id: TC-INPUT-059
   testCaseNo: TT17800758397761058
   path: 管理后台/数据看板/明细
   name: 下拉选项联动_059
@@ -2581,7 +2581,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-060
+- testcase_id: TC-INPUT-060
   testCaseNo: ""
   path: 管理后台/系统设置/参数配置
   name: 默认值填充_060
@@ -2638,7 +2638,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-061
+- testcase_id: TC-INPUT-061
   testCaseNo: TT17800758397761060
   path: PC端界面设计/云订单查询/未完结订单列表
   name: 正常流程展示_061
@@ -2671,7 +2671,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-062
+- testcase_id: TC-INPUT-062
   testCaseNo: ""
   path: PC端界面设计/云订单查询/已完结订单列表
   name: 异常输入校验_062
@@ -2715,7 +2715,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-063
+- testcase_id: TC-INPUT-063
   testCaseNo: TT17800758397761062
   path: PC端界面设计/云订单查询/订单详情
   name: 边界值测试_063
@@ -2770,7 +2770,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-064
+- testcase_id: TC-INPUT-064
   testCaseNo: ""
   path: PC端界面设计/账户管理/用户列表
   name: 权限不足时拦截_064
@@ -2801,7 +2801,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-065
+- testcase_id: TC-INPUT-065
   testCaseNo: TT17800758397761064
   path: PC端界面设计/账户管理/角色管理
   name: 网络异常时提示_065
@@ -2846,7 +2846,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-066
+- testcase_id: TC-INPUT-066
   testCaseNo: ""
   path: PC端界面设计/账户管理/权限配置
   name: 数据为空时占位_066
@@ -2902,7 +2902,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-067
+- testcase_id: TC-INPUT-067
   testCaseNo: TT17800758397761066
   path: PC端界面设计/资源管理/主机列表
   name: 并发提交防重_067
@@ -2935,7 +2935,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-068
+- testcase_id: TC-INPUT-068
   testCaseNo: ""
   path: PC端界面设计/资源管理/网络配置
   name: 分页查询正确_068
@@ -2978,7 +2978,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-069
+- testcase_id: TC-INPUT-069
   testCaseNo: TT17800758397761068
   path: PC端界面设计/资源管理/存储管理
   name: 排序功能正确_069
@@ -3034,7 +3034,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-070
+- testcase_id: TC-INPUT-070
   testCaseNo: ""
   path: 移动端/首页/资讯流
   name: 筛选条件生效_070
@@ -3066,7 +3066,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-071
+- testcase_id: TC-INPUT-071
   testCaseNo: TT17800758397761070
   path: 移动端/首页/搜索框
   name: 搜索关键字高亮_071
@@ -3111,7 +3111,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-072
+- testcase_id: TC-INPUT-072
   testCaseNo: ""
   path: 移动端/个人中心/我的订单
   name: 导出文件成功_072
@@ -3167,7 +3167,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-073
+- testcase_id: TC-INPUT-073
   testCaseNo: TT17800758397761072
   path: API/订单服务/创建订单
   name: 导入文件校验_073
@@ -3198,7 +3198,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-074
+- testcase_id: TC-INPUT-074
   testCaseNo: ""
   path: API/订单服务/取消订单
   name: 字段必填校验_074
@@ -3241,7 +3241,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-075
+- testcase_id: TC-INPUT-075
   testCaseNo: TT17800758397761074
   path: API/支付服务/支付回调
   name: 字段长度校验_075
@@ -3298,7 +3298,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-076
+- testcase_id: TC-INPUT-076
   testCaseNo: ""
   path: API/用户服务/登录鉴权
   name: 字段格式校验_076
@@ -3331,7 +3331,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-077
+- testcase_id: TC-INPUT-077
   testCaseNo: TT17800758397761076
   path: API/用户服务/注册
   name: 弹窗交互正确_077
@@ -3375,7 +3375,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-078
+- testcase_id: TC-INPUT-078
   testCaseNo: ""
   path: 管理后台/数据看板/总览
   name: Tab 切换刷新_078
@@ -3430,7 +3430,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-079
+- testcase_id: TC-INPUT-079
   testCaseNo: TT17800758397761078
   path: 管理后台/数据看板/明细
   name: 下拉选项联动_079
@@ -3461,7 +3461,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-080
+- testcase_id: TC-INPUT-080
   testCaseNo: ""
   path: 管理后台/系统设置/参数配置
   name: 默认值填充_080
@@ -3506,7 +3506,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-081
+- testcase_id: TC-INPUT-081
   testCaseNo: TT17800758397761080
   path: PC端界面设计/云订单查询/未完结订单列表
   name: 正常流程展示_081
@@ -3562,7 +3562,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-082
+- testcase_id: TC-INPUT-082
   testCaseNo: ""
   path: PC端界面设计/云订单查询/已完结订单列表
   name: 异常输入校验_082
@@ -3595,7 +3595,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-083
+- testcase_id: TC-INPUT-083
   testCaseNo: TT17800758397761082
   path: PC端界面设计/云订单查询/订单详情
   name: 边界值测试_083
@@ -3638,7 +3638,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-084
+- testcase_id: TC-INPUT-084
   testCaseNo: ""
   path: PC端界面设计/账户管理/用户列表
   name: 权限不足时拦截_084
@@ -3694,7 +3694,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-085
+- testcase_id: TC-INPUT-085
   testCaseNo: TT17800758397761084
   path: PC端界面设计/账户管理/角色管理
   name: 网络异常时提示_085
@@ -3726,7 +3726,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-086
+- testcase_id: TC-INPUT-086
   testCaseNo: ""
   path: PC端界面设计/账户管理/权限配置
   name: 数据为空时占位_086
@@ -3771,7 +3771,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-087
+- testcase_id: TC-INPUT-087
   testCaseNo: TT17800758397761086
   path: PC端界面设计/资源管理/主机列表
   name: 并发提交防重_087
@@ -3827,7 +3827,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-088
+- testcase_id: TC-INPUT-088
   testCaseNo: ""
   path: PC端界面设计/资源管理/网络配置
   name: 分页查询正确_088
@@ -3858,7 +3858,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-089
+- testcase_id: TC-INPUT-089
   testCaseNo: TT17800758397761088
   path: PC端界面设计/资源管理/存储管理
   name: 排序功能正确_089
@@ -3901,7 +3901,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-090
+- testcase_id: TC-INPUT-090
   testCaseNo: ""
   path: 移动端/首页/资讯流
   name: 筛选条件生效_090
@@ -3958,7 +3958,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-091
+- testcase_id: TC-INPUT-091
   testCaseNo: TT17800758397761090
   path: 移动端/首页/搜索框
   name: 搜索关键字高亮_091
@@ -3991,7 +3991,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-092
+- testcase_id: TC-INPUT-092
   testCaseNo: ""
   path: 移动端/个人中心/我的订单
   name: 导出文件成功_092
@@ -4035,7 +4035,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-093
+- testcase_id: TC-INPUT-093
   testCaseNo: TT17800758397761092
   path: API/订单服务/创建订单
   name: 导入文件校验_093
@@ -4090,7 +4090,7 @@
       api-expected: ""
       db-expected:
         - 软删除标记被正确设置
-- tsId: TC-INPUT-094
+- testcase_id: TC-INPUT-094
   testCaseNo: ""
   path: API/订单服务/取消订单
   name: 字段必填校验_094
@@ -4121,7 +4121,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-095
+- testcase_id: TC-INPUT-095
   testCaseNo: TT17800758397761094
   path: API/支付服务/支付回调
   name: 字段长度校验_095
@@ -4166,7 +4166,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-096
+- testcase_id: TC-INPUT-096
   testCaseNo: ""
   path: API/用户服务/登录鉴权
   name: 字段格式校验_096
@@ -4222,7 +4222,7 @@
       api-expected:
         - 接口耗时小于 500ms
       db-expected: ""
-- tsId: TC-INPUT-097
+- testcase_id: TC-INPUT-097
   testCaseNo: TT17800758397761096
   path: API/用户服务/注册
   name: 弹窗交互正确_097
@@ -4255,7 +4255,7 @@
         - 响应字段齐全且类型正确
       db-expected:
         - 数据状态字段被更新为预期值
-- tsId: TC-INPUT-098
+- testcase_id: TC-INPUT-098
   testCaseNo: ""
   path: 管理后台/数据看板/总览
   name: Tab 切换刷新_098
@@ -4298,7 +4298,7 @@
         - 异常时返回正确的错误码与提示
       db-expected:
         - 关联表数据未被误更新
-- tsId: TC-INPUT-099
+- testcase_id: TC-INPUT-099
   testCaseNo: TT17800758397761098
   path: 管理后台/数据看板/明细
   name: 下拉选项联动_099
@@ -4354,7 +4354,7 @@
       db-expected:
         - 相关表新增一条记录
         - 字段值与提交一致
-- tsId: TC-INPUT-100
+- testcase_id: TC-INPUT-100
   testCaseNo: ""
   path: 管理后台/系统设置/参数配置
   name: 默认值填充_100

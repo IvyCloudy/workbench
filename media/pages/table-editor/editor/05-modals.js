@@ -34,13 +34,10 @@ function showPushResultModal(payload) {
     if (!modal) return;
     var p = payload || {};
     var fileName = p.fileName || '';
+    var errorMsg = p.error || '';   // 纯错误消息（前置校验失败等场景，无 failures）
     var successCount = p.successCount || 0;
     var failures = Array.isArray(p.failures) ? p.failures : [];
     var total = (p.total != null) ? p.total : (successCount + failures.length);
-
-    var allFailed = (failures.length > 0 && successCount === 0);
-    var allSuccess = (failures.length === 0);
-    var status = allSuccess ? 'success' : (allFailed ? 'error' : 'warning');
 
     var header = document.getElementById('pushResultHeader');
     var iconEl = document.getElementById('pushResultIcon');
@@ -49,6 +46,48 @@ function showPushResultModal(payload) {
     var listEl = document.getElementById('pushResultList');
     var hintEl = document.getElementById('pushResultHint');
     var copyBtn = document.getElementById('pushResultCopyBtn');
+
+    // 纯错误消息分支（前置校验失败，无推送数据）
+    if (errorMsg) {
+        if (header) header.className = 'xs-modal-header xs-pr-header is-error';
+        if (iconEl) iconEl.textContent = '✕';
+        if (titleEl) titleEl.textContent = '推送失败' + (fileName ? ('：' + fileName) : '');
+        if (summaryEl) summaryEl.innerHTML = '';
+        if (listEl) listEl.innerHTML = '<div class="xs-pr-empty">' + escapeHtml(errorMsg) + '</div>';
+        if (hintEl) hintEl.textContent = '';
+        if (copyBtn) copyBtn.style.display = 'none';
+        // 前置校验失败也属于"推送完成"，清理本批修改高亮避免残留
+        if (S._lastPushBatchRowIndices && S._lastPushBatchRowIndices.length > 0) {
+            var errModsToDelete = [];
+            S.mods.forEach(function (key) {
+                var commaIdx = key.indexOf(',');
+                if (commaIdx > -1 && S._lastPushBatchRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
+                    errModsToDelete.push(key);
+                }
+            });
+            errModsToDelete.forEach(function (k) { S.mods.delete(k); });
+            if (S._detailModCellKeys && S._detailModCellKeys.size > 0) {
+                var errDetailToDelete = [];
+                S._detailModCellKeys.forEach(function (key) {
+                    var commaIdx = key.indexOf(',');
+                    if (commaIdx > -1 && S._lastPushBatchRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
+                        errDetailToDelete.push(key);
+                    }
+                });
+                errDetailToDelete.forEach(function (k) { S._detailModCellKeys.delete(k); });
+            }
+            S._lastPushBatchRowIndices = null;
+        }
+        S._lastPushBatchTsIds = null;
+        try { renderTable(); } catch (_) {}
+        bindPushResultModal();
+        modal.classList.add('show');
+        return;
+    }
+
+    var allFailed = (failures.length > 0 && successCount === 0);
+    var allSuccess = (failures.length === 0);
+    var status = allSuccess ? 'success' : (allFailed ? 'error' : 'warning');
 
     // 头部状态
     if (header) header.className = 'xs-modal-header xs-pr-header is-' + status;
@@ -76,7 +115,7 @@ function showPushResultModal(payload) {
             for (var i = 0; i < renderCount; i++) {
                 var f = failures[i] || {};
                 var hasRow = (f.rowIndex != null && f.rowIndex > 0);
-                var rowText = hasRow ? ('第 ' + f.rowIndex + ' 行') : ('tsId ' + (f.tsId ? String(f.tsId).slice(0, 8) + '…' : '(无)'));
+                var rowText = hasRow ? ('第 ' + f.rowIndex + ' 行') : ('testcase_id ' + (f.tsId ? String(f.tsId).slice(0, 8) + '…' : '(无)'));
                 var rowCls = 'xs-pr-row' + (hasRow ? ' is-link' : '');
                 var rowAttr = hasRow ? (' data-row="' + f.rowIndex + '" title="点击定位到该行"') : '';
                 html += '<div class="xs-pr-item">'
@@ -164,11 +203,104 @@ function showPushResultModal(payload) {
     // 一次推送结果消费完毕，清空本批缓存
     S._lastPushBatchTsIds = null;
 
+    // 清除本批推送行的 S.mods 修改高亮（推送完成 = 修改已提交）
+    // 失败行由 S._pushFailedTsIds 提供红色高亮，不再需要黄色 modified 标记
+    // 兜底 1：_lastPushBatchRowIndices（pushChanges / pushFromContextMenu 缓存）
+    var pushRowIndices = S._lastPushBatchRowIndices;
+    // 兜底 2：若行索引缺失，从 _lastPushBatchTsIds 反推
+    if ((!pushRowIndices || pushRowIndices.length === 0) && batchSet && batchSet.size > 0) {
+        var tsColFallback = (S.data && S.data.headers ? S.data.headers.indexOf('testcase_id') : -1);
+        if (tsColFallback >= 0) {
+            pushRowIndices = [];
+            for (var ri2 = 0; ri2 < (S.data.rows && S.data.rows.length || 0); ri2++) {
+                var tid2 = (S.data.rows[ri2] || [])[tsColFallback];
+                if (tid2 !== undefined && tid2 !== null && tid2 !== '' && batchSet.has(String(tid2))) {
+                    pushRowIndices.push(ri2);
+                }
+            }
+        }
+    }
+    // 兜底 3：若仍无行索引，从 failures 中的 rowIndex（1-based）转换
+    if (!pushRowIndices || pushRowIndices.length === 0) {
+        pushRowIndices = [];
+        failures.forEach(function (f) {
+            if (f && f.rowIndex != null && f.rowIndex > 0) {
+                pushRowIndices.push(f.rowIndex - 1);
+            }
+        });
+        // 去重
+        var uniq = {};
+        pushRowIndices = pushRowIndices.filter(function (v) {
+            var s = String(v);
+            if (uniq[s]) return false;
+            uniq[s] = true;
+            return true;
+        });
+    }
+    // 兜底 4：若仍无行索引，用失败项 tsId 逐行匹配 testcase_id 列
+    if ((!pushRowIndices || pushRowIndices.length === 0) && failures.length > 0) {
+        var tsCol4 = S.data && S.data.headers ? S.data.headers.indexOf('testcase_id') : -1;
+        if (tsCol4 >= 0) {
+            var failedTsSet = {};
+            failures.forEach(function (f) {
+                if (f && f.tsId != null && f.tsId !== '') failedTsSet[String(f.tsId)] = true;
+            });
+            if (Object.keys(failedTsSet).length > 0) {
+                pushRowIndices = [];
+                for (var ri4 = 0; ri4 < (S.data.rows && S.data.rows.length || 0); ri4++) {
+                    var tid4 = String((S.data.rows[ri4] || [])[tsCol4] ?? '');
+                    if (tid4 && failedTsSet[tid4]) pushRowIndices.push(ri4);
+                }
+            }
+        }
+    }
+    if (pushRowIndices && pushRowIndices.length > 0) {
+        var modsToDelete = [];
+        S.mods.forEach(function (key) {
+            var commaIdx = key.indexOf(',');
+            if (commaIdx > -1 && pushRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
+                modsToDelete.push(key);
+            }
+        });
+        modsToDelete.forEach(function (k) { S.mods.delete(k); });
+        // 同步清除 _detailModCellKeys 中对应批次行的条目，否则明细弹窗修改的高亮仍会残留
+        if (S._detailModCellKeys && S._detailModCellKeys.size > 0) {
+            var detailToDelete = [];
+            S._detailModCellKeys.forEach(function (key) {
+                var commaIdx = key.indexOf(',');
+                if (commaIdx > -1 && pushRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
+                    detailToDelete.push(key);
+                }
+            });
+            detailToDelete.forEach(function (k) { S._detailModCellKeys.delete(k); });
+        }
+        // 清除已推送行的新增高亮（推送成功后不再是"新增行"）
+        if (S._addedRowSet && S._addedRowSet.size > 0) {
+            pushRowIndices.forEach(function (ri) { S._addedRowSet.delete(ri); });
+        }
+        S._lastPushBatchRowIndices = null;
+    }
+
+    // 推送后回写的 testCaseNo 单元格高亮信息（同时清除旧高亮，确保弹窗显示最新结果）
+    if (p.highlightedCells && p.highlightedCells.colIdx != null && Array.isArray(p.highlightedCells.rowIndices)) {
+        var hl = {
+            colIdx: p.highlightedCells.colIdx,
+            rowSet: new Set(p.highlightedCells.rowIndices)
+        };
+        if (p.highlightedCells.cells && Array.isArray(p.highlightedCells.cells)) {
+            hl.cells = new Set(p.highlightedCells.cells);
+        }
+        S._highlightedCells = hl;
+    } else if ('highlightedCells' in p) {
+        // 扩展端明确传了空的 highlightedCells，表示无高亮
+        S._highlightedCells = null;
+    }
+
     try { renderTable(); } catch (_) { /* ignore */ }
 
     // 缓存全量明细文本，便于复制
     S._pushResultDetailText = failures.map(function (f, i) {
-        var rowPart = (f.rowIndex != null && f.rowIndex > 0) ? ('第 ' + f.rowIndex + ' 行') : ('tsId ' + (f.tsId || '(无)'));
+        var rowPart = (f.rowIndex != null && f.rowIndex > 0) ? ('第 ' + f.rowIndex + ' 行') : ('testcase_id ' + (f.tsId || '(无)'));
         return (i + 1) + '. ' + rowPart + '：' + (f.reason || '');
     }).join('\n');
 
@@ -179,6 +311,10 @@ function showPushResultModal(payload) {
 function closePushResultModal() {
     var modal = document.getElementById('pushResultModal');
     if (modal) modal.classList.remove('show');
+    // 弹窗关闭后请求扩展端重新推送最新高亮结果（含服务器回写的 testCaseNo 等字段）
+    if (S.vscode) {
+        S.vscode.postMessage({ type: 'reload' });
+    }
 }
 
 function bindPushResultModal() {
@@ -925,10 +1061,30 @@ function saveDetailModal() {
     var dt = getCurrentDetailTable();
     var ri = S._detailRowIdx;
     if (!dt || ri < 0) { closeDetailModal(false); return; }
+
+    // 0) 检测是否有实际内容变更，避免"未修改但被标记为已修改"的假阳性
+    var rawRows = (dt.rawRowGroups && dt.rawRowGroups[ri]) || [];
+    var backupRaws = (S._detailBackup && S._detailBackup.raws) || null;
+    if (backupRaws) {
+        // 快检：_dv2StepMods 通过 textarea change 事件记录用户编辑过哪些步骤；
+        //       若 size===0 说明弹窗内完全未操作 → 无变更
+        if (S._dv2StepMods && S._dv2StepMods.size === 0) {
+            closeDetailModal(false);
+            return;
+        }
+        // 深度比对：即使 change 事件触发过（用户输入后又删回原值），
+        //           JSON 序列化比对能准确判断 rawRows 是否真的变了
+        try {
+            if (JSON.stringify(rawRows) === JSON.stringify(backupRaws)) {
+                closeDetailModal(false);
+                return;
+            }
+        } catch (_) { /* 序列化异常时保守处理，继续执行保存 */ }
+    }
     pushHistory();
 
     // 1) 从 rawRowGroups 反向同步 rowGroups（字符串二维结构，兼容主表显示路径）
-    var rawRows = (dt.rawRowGroups && dt.rawRowGroups[ri]) || [];
+    rawRows = (dt.rawRowGroups && dt.rawRowGroups[ri]) || [];
     var headers = dt.headers || [];
     var newRowGroup = rawRows.map(function (raw) {
         return headers.map(function (h) {
@@ -953,9 +1109,9 @@ function saveDetailModal() {
     // 2) 同步主表显示：当前明细字段对应列展示项数/字段数
     var mainHeaders = (S.data && S.data.headers) || [];
     var colIdx = mainHeaders.indexOf(dt.field);
+    var displayText = '';
     if (colIdx >= 0) {
         var rawType = (dt.rawRowTypes && dt.rawRowTypes[ri]) || 'array';
-        var displayText;
         if (rawRows.length === 0) {
             displayText = rawType === 'object' ? '{}' : '[]';
         } else if (rawType === 'object') {
@@ -970,11 +1126,13 @@ function saveDetailModal() {
         } else {
             displayText = '[' + rawRows.length + ' 项]';
         }
-        S.data.rows[ri][colIdx] = displayText;
         S.mods.add(ri + ',' + colIdx);
+        S._detailModCellKeys.add(ri + ',' + colIdx);
     }
 
-    // 3) 落盘 + 主表重渲
+    // 3) 落盘：diffPushSnapshot 已通过 detailTables.rawRowGroups 签名比对明细变更，
+    //    不再需要临时替换单元格值为 JSON。直接发送 displayText（如 "[2 项]"），
+    //    避免 JSON 串回流污染前端 S.data 的语义一致性。
     saveFile();
     renderTable();
     closeDetailModal(false);

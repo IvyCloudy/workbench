@@ -31,7 +31,6 @@ import { ensureHighlightFile } from './utils/highlightStore';
 import { ensureSnapshotFile, savePushSnapshot, getDeletedSnapshotIds } from './utils/pushSnapshotStore';
 import { TS_ID_COLUMN } from './services/utils';
 import { ensureDeletedRowsFile, syncDeletedRows, refreshAndGetDeletedRows, getPendingDeletedRows, markDeletedRows } from './utils/deletedRowsStore';
-import { getHeaderTaskInfoByFilePath } from './utils/taskInfo';
 import { initTelemetry, trackEvent, trackError, trackException } from './services/telemetry';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
@@ -131,23 +130,11 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     const currentTask = await getCurrentTaskInfo(filePath);
     if (!currentTask.bind) {
         showPushErrorModal(panel, baseName, `未绑定任务，无法推送\n\n文件 ${baseName} 所在的任务尚未在系统中完成绑定，请联系项目管理员配置。`);
+        return;
+    }
     const fileExt = path.extname(filePath).toLowerCase();
     const pushStart = Date.now();
 
-    const fileCheck = FileTypeChecker.isQualifiedFile(target);
-    if (!fileCheck.qualified) {
-        vscode.window.showWarningMessage(`文件不在允许的目录下: ${path.basename(filePath)}`);
-        trackError('explorerPush.rejected', { reason: 'unqualified', ext: fileExt });
-        return;
-    }
-
-    // 任务信息统一由 getHeaderTaskInfoByFilePath 提供：未绑定一律拒绝推送
-    const header = getHeaderTaskInfoByFilePath(context, filePath);
-    if (!header.bind) {
-        vscode.window.showWarningMessage(`未绑定任务，无法推送：${path.basename(filePath)}`);
-        trackError('explorerPush.rejected', { reason: 'unbound', ext: fileExt });
-        return;
-    }
     const taskInfo = {
         testTaskNo: currentTask.taskInfo.testTaskNo || '',
         subTestTaskName: currentTask.taskInfo.subTestTaskName || '',
@@ -156,8 +143,6 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     const rows = await parseFileToRows(filePath);
     if (!rows || rows.length === 0) {
         showPushErrorModal(panel, baseName, `文件无数据\n\n${baseName} 中未检测到有效的测试案例数据，请检查文件内容。`);
-        vscode.window.showWarningMessage(`文件无数据: ${path.basename(filePath)}`);
-        trackError('explorerPush.rejected', { reason: 'empty', ext: fileExt });
         return;
     }
 
@@ -415,8 +400,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 } catch (err: any) {
                     console.error('[syncDeletedRows] 失败:', err?.message || err);
                     vscode.window.showErrorMessage(`删除行同步失败: ${err?.message || err}`);
-                    vscode.window.showErrorMessage(`推送失败: ${err.message || err}`);
-                    trackException('explorerPush.uncaught', err);
+                    trackException('syncDeletedRows.error', err);
                 }
             }
         ),

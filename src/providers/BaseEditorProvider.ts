@@ -83,13 +83,6 @@ export class PushViaHttpClient implements PushStrategy {
             showPushErrorModal(webviewPanel, path.basename(ctx.filePath),
                 '未绑定任务，无法推送。请先在 task-bindings.json 中完成绑定。');
             return;
-        // 任务信息统一由 getHeaderTaskInfoByFilePath 提供：未绑定一律拒绝推送
-        const header = getHeaderTaskInfoByFilePath(extensionContext, ctx.filePath);
-        if (!header.bind) {
-            const message = '未绑定任务，无法推送。请先在 task-bindings.json 中完成绑定。';
-            webviewPanel.webview.postMessage({ type: 'pushError', message });
-            trackError('editorPush.rejected', { reason: 'unbound', ext: _ext });
-            throw new Error(message);
         }
         const taskInfo = {
             testTaskNo: currentTask.taskInfo.testTaskNo || '',
@@ -676,12 +669,11 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 }
             } catch (err: any) {
                 const errMsg = err?.message || String(err) || '操作失败';
-                if (msg?.type === 'save') {                 } else if (msg?.type === 'pushTestCase') {
-                    showPushErrorModal(webviewPanel, path.basename(filePath), errMsg);
                 trackException('editor.message.error', err, { msgType: msg?.type, fileType: session.type });
                 if (msg?.type === 'save') {
                     webviewPanel.webview.postMessage({ type: 'saveError', message: errMsg });
                 } else if (msg?.type === 'pushTestCase') {
+                    showPushErrorModal(webviewPanel, path.basename(filePath), errMsg);
                     webviewPanel.webview.postMessage({ type: 'pushError', message: errMsg });
                 }
                 if (msg?.type === 'pushTestCase' && /无法连接后端服务|连接.*超时|连接被重置/.test(errMsg)) {

@@ -348,6 +348,15 @@ function insertRow(at) {
     if (at > S.data.rows.length) at = S.data.rows.length;
     pushHistory();
     S.data.rows.splice(at, 0, newRow);
+    // 同步所有明细表：在插入位置插入空条目，确保 rowGroups/rawRowGroups/rawRowTypes
+    // 与主表 rows 长度一致，避免后续 buildRowDetailSignature 按行索引误读其他行的明细数据
+    var idts = getDetailTables();
+    idts.forEach(function (dt) {
+        if (!dt) return;
+        if (dt.rowGroups) dt.rowGroups.splice(at, 0, []);
+        if (dt.rawRowGroups) dt.rawRowGroups.splice(at, 0, []);
+        if (dt.rawRowTypes) dt.rawRowTypes.splice(at, 0, 'none');
+    });
     if (!S._addedRowSet) S._addedRowSet = new Set();
     // 插入位置之后已有的新增行索引整体+1
     if (S._addedRowSet.size > 0) {
@@ -396,6 +405,15 @@ function deleteRow(ri) {
         }
     }
     S.data.rows.splice(ri, 1);
+    // 同步所有明细表：删除被删行对应的条目，确保 rowGroups/rawRowGroups/rawRowTypes
+    // 与主表 rows 长度一致，避免后续 buildRowDetailSignature 按行索引误读其他行的明细数据
+    var ddts = getDetailTables();
+    ddts.forEach(function (dt) {
+        if (!dt) return;
+        if (dt.rowGroups) dt.rowGroups.splice(ri, 1);
+        if (dt.rawRowGroups) dt.rawRowGroups.splice(ri, 1);
+        if (dt.rawRowTypes) dt.rawRowTypes.splice(ri, 1);
+    });
     // 同步新增行集合：被删行移除，后续行 -1
     if (S._addedRowSet && S._addedRowSet.size > 0) {
         S._addedRowSet.delete(ri);
@@ -445,6 +463,16 @@ function deleteSelectedRows() {
         }
     }
     sorted.forEach(function (i) { S.data.rows.splice(i, 1); });
+    // 同步所有明细表：删除被删行对应的条目（sorted 已按降序排列，逐个 splice 安全）
+    var sdts = getDetailTables();
+    sdts.forEach(function (dt) {
+        if (!dt) return;
+        sorted.forEach(function (i) {
+            if (dt.rowGroups) dt.rowGroups.splice(i, 1);
+            if (dt.rawRowGroups) dt.rawRowGroups.splice(i, 1);
+            if (dt.rawRowTypes) dt.rawRowTypes.splice(i, 1);
+        });
+    });
     // 同步新增行集合：被删行移除，后续行按删除数量整体左移
     if (S._addedRowSet && S._addedRowSet.size > 0) {
         var newAdded = new Set();

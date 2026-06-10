@@ -49,15 +49,16 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 .xs-icon-btn-failed.active:hover{background:#fbd9d9}
 .xs-icon-btn-failed.is-disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
 
-/* "仅看已修改行"筛选按钮（铅笔图标，黄色系高亮态与修改色一致） */
-.xs-icon-btn-modified{width:24px;min-width:24px;height:24px;padding:0;box-sizing:border-box}
+/* "仅看已修改行"筛选按钮（铅笔图标 + 橙色角标，黄色系高亮态与修改色一致） */
+.xs-icon-btn-modified{width:24px;min-width:24px;height:24px;padding:0;box-sizing:border-box;border-color:#ffe0b2}
 .xs-icon-btn-modified svg{width:16px;height:16px}
-.xs-icon-btn-modified svg path{fill:var(--tl)}
-.xs-icon-btn-modified:hover svg path{fill:var(--p)}
-.xs-icon-btn-modified.active{background:#fff9c4;border-color:#fbc02d}
-.xs-icon-btn-modified.active svg path{fill:#f9a825}
+.xs-icon-btn-modified .xs-ib-fg path{fill:var(--tl)}
+.xs-icon-btn-modified:hover{border-color:#ffb74d;background:#fff3e0}
+.xs-icon-btn-modified:hover .xs-ib-fg path{fill:#f9a825}
+.xs-icon-btn-modified.active{background:#fff9c4;border-color:#fbc02d;box-shadow:0 0 0 2px rgba(249,168,37,.3)}
+.xs-icon-btn-modified.active .xs-ib-fg path{fill:#f9a825}
 .xs-icon-btn-modified.active:hover{background:#fff176}
-.xs-icon-btn-modified.is-disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
+.xs-icon-btn-modified.is-disabled{opacity:.4;cursor:not-allowed;pointer-events:none;border-color:var(--bd)}
 
 /* "仅看新增行"筛选按钮（加号图标，绿色系高亮态与新行一致） */
 .xs-icon-btn-added{width:24px;min-width:24px;height:24px;padding:0;box-sizing:border-box;border-color:#c8e6c9}

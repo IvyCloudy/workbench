@@ -203,22 +203,7 @@ export class PushViaHttpClient implements PushStrategy {
                 ctx.session.cachedTableData = null;
             } catch (err: any) {
                 console.error('[推送] 全部失败，快照更新失败:', err?.message || err);
-            }        } else if (failures.length > 0) {
-                         // 全部推送失败：仍更新快照基线，使下次 diff 不再标记为修改
-                         try {
-                             const allPushedTsIds = new Set<string>();
-                             if (Array.isArray(pushData)) {
-                                 for (const rec of pushData) {
-                                     const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
-                                     if (id) allPushedTsIds.add(id);
-                                 }
-                             }
-                             const parsed = await ctx.session.parser.parse(ctx.filePath);
-                             await savePushSnapshot(ctx.filePath, parsed.tableData, allPushedTsIds);
-                             ctx.session.cachedTableData = null;
-                         } catch (err: any) {
-                             console.error('[推送] 全部失败，快照更新失败:', err?.message || err);
-                         }
+            }
         }
 
         // 失败项按 testcase_id 反查行号，统一通过 webview 弹窗展示（与右键文件推送一致）
@@ -599,7 +584,9 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                             await setHighlight(filePath, session.highlightedCells);
                             log(`🟢 Webview 保存快照差异比对检测到 ${changedRows.length} 行发生 ${flatCells.length} 格变化`);
                         } else {
-                            session.highlightedCells = undefined;
+                            // 使用 null 而非 undefined，确保 pushDataToWebview 将 highlightedCells=null
+                            // 显式发送给 webview，让前端清除旧高亮（关键：值恢复到快照基线时需清除残留高亮）
+                            session.highlightedCells = null;
                             await clearHighlight(filePath);
                         }
                         session.deletedInfos = deletedInfos;
@@ -616,10 +603,10 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     // 缓存与前端最新数据一致：直接复用 webview 提交上来的 data，
                     // 避免置 null 后被外部触发的 reparse 在 fs flush 中读到部分内容/空数据。
                     try { session.cachedTableData = msg.data; } catch (_) { session.cachedTableData = null; }
-                    // save 检测到数据变化/删除时，推送一次 Data 消息下发高亮和删除信息
-                    if (session.highlightedCells || (session.deletedInfos && session.deletedInfos.length > 0)) {
-                        pushDataToWebview(false, 'saveHighlight');
-                    }
+                    // save 后始终推送高亮状态到 webview：
+                    // - 有变化时下发新 highllight 格
+                    // - 无变化时下发 null 显式清除 webview 残留高亮（值恢复到快照基线的场景）
+                    pushDataToWebview(false, 'saveHighlight');
                     showSaveResult(webviewPanel, true);
                     log(`💾 saved msg posted`);
                 } else if (msg?.type === 'pushTestCase' && msg?.data) {

@@ -254,6 +254,7 @@ function countMatchedRows() {
 // 从 S.mods / S._detailModCellKeys 计算有未提交修改的行集合（用于"仅看修改"过滤）
 function _getModifiedRowSet() {
     var rows = new Set();
+    // 未保存的本地修改（S.mods / _detailModCellKeys）
     if (S.mods) {
         S.mods.forEach(function (key) {
             var commaIdx = key.indexOf(',');
@@ -265,6 +266,20 @@ function _getModifiedRowSet() {
             var commaIdx = key.indexOf(',');
             if (commaIdx > 0) rows.add(parseInt(key.substring(0, commaIdx), 10));
         });
+    }
+    // 已保存但未推送的差异（_highlightedCells：扩展端 diff 结果）
+    // 保存后 S.mods 被清空但 _highlightedCells 仍可能保留，需一并纳入，
+    // 否则"修改过滤"按钮会因 _getModifiedRowSet 为空而灰显
+    if (S._highlightedCells) {
+        if (S._highlightedCells.rowSet) {
+            S._highlightedCells.rowSet.forEach(function (ri) { rows.add(ri); });
+        }
+        if (S._highlightedCells.cells) {
+            S._highlightedCells.cells.forEach(function (key) {
+                var commaIdx = key.indexOf(':');
+                if (commaIdx > 0) rows.add(parseInt(key.substring(0, commaIdx), 10));
+            });
+        }
     }
     return rows;
 }

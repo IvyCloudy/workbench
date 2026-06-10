@@ -20,7 +20,6 @@ function bindToolbar() {
             if (!hasFailed) return;
             S._failedOnly = !S._failedOnly;
             if (S._failedOnly) { S._modifiedOnly = false; S._addedOnly = false; S._deletedOnly = false; }
-            S._highlightedCells = null;
             renderTable();
             if (S._failedOnly && S._viewRows && S._viewRows.length > 0) {
                 S.sel = new Set(S._viewRows);
@@ -39,7 +38,8 @@ function bindToolbar() {
             S._modifiedOnly = !S._modifiedOnly;
             // 互斥：切换仅看修改行时关闭其他筛选
             if (S._modifiedOnly) { S._failedOnly = false; S._addedOnly = false; S._deletedOnly = false; }
-            S._highlightedCells = null;
+            // 不要清空 _highlightedCells：_getModifiedRowSet() 依赖它判定修改行，
+            // 清空会导致 modifiedOnly 过滤条件失效，且失去单元格级差异高亮
             renderTable();
             if (S._modifiedOnly && S._viewRows && S._viewRows.length > 0) {
                 S.sel = new Set(S._viewRows);
@@ -57,7 +57,6 @@ function bindToolbar() {
             if (!hasAdded) return;
             S._addedOnly = !S._addedOnly;
             if (S._addedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._deletedOnly = false; }
-            S._highlightedCells = null;
             renderTable();
             if (S._addedOnly && S._viewRows && S._viewRows.length > 0) {
                 S.sel = new Set(S._viewRows);
@@ -75,7 +74,6 @@ function bindToolbar() {
             if (!hasDeleted) return;
             S._deletedOnly = !S._deletedOnly;
             if (S._deletedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._addedOnly = false; }
-            S._highlightedCells = null;
             renderTable();
         });
     }

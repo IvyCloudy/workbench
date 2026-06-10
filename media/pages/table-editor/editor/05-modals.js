@@ -1130,16 +1130,10 @@ function saveDetailModal() {
         S._detailModCellKeys.add(ri + ',' + colIdx);
     }
 
-    // 3) 落盘：saveFile 通过 postMessage 发送 S.data，结构化克隆在发信瞬间做快照。
-    //    先把真实 JSON 写入外层单元格，让后端 diff 能检测到结构化字段的内容变更；
-    //    发完立刻恢复摘要显示，保证主表展示不受影响。
-    if (colIdx >= 0) {
-        try { S.data.rows[ri][colIdx] = JSON.stringify(rawRows); } catch (_) { S.data.rows[ri][colIdx] = displayText || '[]'; }
-    }
+    // 3) 落盘：diffPushSnapshot 已通过 detailTables.rawRowGroups 签名比对明细变更，
+    //    不再需要临时替换单元格值为 JSON。直接发送 displayText（如 "[2 项]"），
+    //    避免 JSON 串回流污染前端 S.data 的语义一致性。
     saveFile();
-    if (colIdx >= 0) {
-        S.data.rows[ri][colIdx] = displayText;
-    }
     renderTable();
     closeDetailModal(false);
     showToast('明细已保存', 'success');

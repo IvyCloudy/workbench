@@ -160,7 +160,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
 
 
     console.log(`[推送] 文件: ${filePath}, ${rows.length} 行`);
-    sendTelemetryEvent('explorerPush.start', { ext: fileExt, rowCount: String(rows.length) });
+    sendTelemetryEvent('explorerPush.start', { ext: fileExt, totalRows: String(rows.length) });
     const pushResult = await pushTestCase(context, rows, taskInfo, path.basename(filePath));
     if (pushResult.returnCode !== 'SUC0000') {
         showPushErrorModal(panel, baseName, `后端返回失败: ${pushResult.errorMsg || '未知错误'}`);
@@ -168,8 +168,8 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
         sendTelemetryErrorEvent('explorerPush.failed', {
             ext: fileExt,
             returnCode: pushResult.returnCode || '',
-            rowCount: String(rows.length),
-            durationMs: String(Date.now() - pushStart),
+            totalRows: String(rows.length),
+            costMs: String(Date.now() - pushStart),
         });
         return;
     }
@@ -225,11 +225,11 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     // 埋点：推送结果汇总
     sendTelemetryEvent('explorerPush.complete', {
         ext: fileExt,
-        outcome: failures.length === 0 ? 'allSuccess' : (successMappings.length === 0 ? 'allFail' : 'partial'),
-        rowCount: String(rows.length),
-        successCount: String(successMappings.length),
-        failedCount: String(failures.length),
-        durationMs: String(Date.now() - pushStart),
+        pushResult: failures.length === 0 ? 'allSuccess' : (successMappings.length === 0 ? 'allFail' : 'partial'),
+        totalRows: String(rows.length),
+        successRows: String(successMappings.length),
+        failedRows: String(failures.length),
+        costMs: String(Date.now() - pushStart),
     });
 
     // 统一通过对应 webview 弹窗展示（与编辑器内推送一致）
@@ -415,8 +415,8 @@ export async function activate(context: vscode.ExtensionContext) {
                         vscode.window.showInformationMessage(`已同步 ${result.synced.length} 行删除记录`);
                     }
                     sendTelemetryEvent('syncDeletedRows.complete', {
-                        syncedCount: String(result.synced.length),
-                        failedCount: String(result.failed.length),
+                        syncedTotal: String(result.synced.length),
+                        failedRows: String(result.failed.length),
                     });
                 } catch (err: any) {
                     console.error('[syncDeletedRows] 失败:', err?.message || err);

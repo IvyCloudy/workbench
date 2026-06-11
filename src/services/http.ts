@@ -118,7 +118,7 @@ function makeRequest<T = any>(
         req.on('error', (err: NodeJS.ErrnoException) => {
             const target = `${urlObj.hostname}:${urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80)}`;
             const code = err.code || 'UNKNOWN';
-            sendTelemetryErrorEvent('http.request.error', { code, target });
+            sendTelemetryErrorEvent('http.request.error', { errCode: code, target });
             switch (err.code) {
                 case 'ECONNREFUSED':
                     reject(new Error(`无法连接后端服务（${target}），请确认服务已启动`));
@@ -214,7 +214,7 @@ export async function batchImportData(
     const url = `${await getApiBaseUrl(context)}/test-task/batch-import`;
     const body = { headers: opts.headers, rows: opts.selectedRows };
     const response = await post<ApiResponse>(context, url, body);
-    sendTelemetryEvent('api.batchImport.done', { returnCode: response.data.returnCode || '', rowCount: String(opts.selectedRows.length) });
+    sendTelemetryEvent('api.batchImport.done', { returnCode: response.data.returnCode || '', totalRows: String(opts.selectedRows.length) });
     return response.data;
 }
 
@@ -262,22 +262,22 @@ export async function pushTestCase(
         if (_success) {
             sendTelemetryEvent('api.pushTestCase.ok', {
                 httpStatus: String(response.status),
-                rowCount: String(data.length),
+                totalRows: String(data.length),
                 bytes: String(Buffer.byteLength(bodyStr, 'utf8')),
-                durationMs: String(Date.now() - _apiStart),
+                costMs: String(Date.now() - _apiStart),
             });
         } else {
             sendTelemetryErrorEvent('api.pushTestCase.fail', {
                 httpStatus: String(response.status),
                 returnCode: _rc,
-                rowCount: String(data.length),
-                durationMs: String(Date.now() - _apiStart),
+                totalRows: String(data.length),
+                costMs: String(Date.now() - _apiStart),
             });
         }
         return response.data;
     } catch (err: any) {
         sendTelemetryException('api.pushTestCase.exception', {
-            rowCount: String(data.length),
+            totalRows: String(data.length),
             errorMessage: String(err?.message || String(err)).slice(0, 500),
             stackHead: stackHead(err),
         });

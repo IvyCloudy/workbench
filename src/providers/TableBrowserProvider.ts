@@ -64,7 +64,7 @@ export class TableBrowserProvider extends BaseWebviewProvider {
 
         const rootPath = workspaceFolders[0].uri.fsPath;
         const fileTree = this.fileTreeService.buildWorkspaceFileTree(rootPath);
-        sendTelemetryEvent('tableBrowser.workspaceFiles.loaded', { nodeCount: String(fileTree.length) });
+        sendTelemetryEvent('tableBrowser.workspaceFiles.loaded', { nodeTotal: String(fileTree.length) });
         this.postMessage({ command: 'workspaceFiles', data: fileTree });
     }
 
@@ -114,7 +114,7 @@ export class TableBrowserProvider extends BaseWebviewProvider {
             const result = await batchImportData(this.context, { selectedRows, headers });
 
             if (result.returnCode === 'SUC0000') {
-                sendTelemetryEvent('tableBrowser.send.success', { rowCount: String(selectedRows.length) });
+                sendTelemetryEvent('tableBrowser.send.success', { totalRows: String(selectedRows.length) });
                 this.postMessage({ command: 'sendResult', success: true, message: '数据发送成功' });
                 showToast(this.panel, 'success', '数据发送成功');
             } else {

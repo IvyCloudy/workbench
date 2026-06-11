@@ -76,7 +76,7 @@ export class PushViaHttpClient implements PushStrategy {
         const _pushStart = Date.now();
         const _ext = path.extname(ctx.filePath).toLowerCase();
         const _rowCount = Array.isArray(data) ? data.length : 0;
-        sendTelemetryEvent('editorPush.start', { ext: _ext, rowCount: String(_rowCount) });
+        sendTelemetryEvent('editorPush.start', { ext: _ext, totalRows: String(_rowCount) });
 
         // 任务信息统一由 getCurrentTaskInfo 提供：未绑定一律拒绝推送
         const currentTask = await getCurrentTaskInfo(ctx.filePath);
@@ -84,8 +84,8 @@ export class PushViaHttpClient implements PushStrategy {
             sendTelemetryErrorEvent('editorPush.failed', {
                 ext: _ext,
                 returnCode: 'UNBOUND',
-                rowCount: String(_rowCount),
-                durationMs: String(Date.now() - _pushStart),
+                totalRows: String(_rowCount),
+                costMs: String(Date.now() - _pushStart),
             });
             showPushErrorModal(webviewPanel, path.basename(ctx.filePath),
                 '未绑定任务，无法推送。请先在 task-bindings.json 中完成绑定。');
@@ -135,8 +135,8 @@ export class PushViaHttpClient implements PushStrategy {
             sendTelemetryErrorEvent('editorPush.failed', {
                 ext: _ext,
                 returnCode: result.returnCode || '',
-                rowCount: String(_rowCount),
-                durationMs: String(Date.now() - _pushStart),
+                totalRows: String(_rowCount),
+                costMs: String(Date.now() - _pushStart),
             });
             return;
         }
@@ -269,11 +269,11 @@ export class PushViaHttpClient implements PushStrategy {
         // 埋点：推送结果汇总
         sendTelemetryEvent('editorPush.complete', {
             ext: _ext,
-            outcome: failures.length === 0 ? 'allSuccess' : (successMappings.length === 0 ? 'allFail' : 'partial'),
-            rowCount: String(total),
-            successCount: String(successMappings.length),
-            failedCount: String(failures.length),
-            durationMs: String(Date.now() - _pushStart),
+            pushResult: failures.length === 0 ? 'allSuccess' : (successMappings.length === 0 ? 'allFail' : 'partial'),
+            totalRows: String(total),
+            successRows: String(successMappings.length),
+            failedRows: String(failures.length),
+            costMs: String(Date.now() - _pushStart),
         });
 
         // 通知前端推送流程已完成（用于隐藏 loading 之类的状态）
@@ -321,7 +321,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             entry.ready,
             new Promise<void>((_, reject) =>
                 setTimeout(() => {
-                    sendTelemetryErrorEvent('editor.waitReady.timeout', { filePath });
+                    sendTelemetryErrorEvent('editor.waitReady.timeout', { targetFile: filePath });
                     reject(new Error('等待 webview 就绪超时'));
                 }, timeoutMs)
             ),
@@ -378,7 +378,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         webviewPanel.webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
 
         if (!resolved.qualified || !resolved.type) {
-            sendTelemetryEvent('editor.opened.unqualified', { filePath: fileName });
+            sendTelemetryEvent('editor.opened.unqualified', { targetFile: fileName });
             log('⚠ unqualified, render error page');
             webviewPanel.webview.html = buildErrorHtml(
                 this.getErrorMessage(resolved.type),
@@ -446,7 +446,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                             log('💾 testcase_id 已补全并落盘');
                         } catch (e: any) {
                             log('⚠ testcase_id 落盘失败:', e?.message || e);
-                            sendTelemetryException('editor.testcaseId.saveFailed', { fileType: resolved.type || '', errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
+                            sendTelemetryException('editor.testcaseId.saveFailed', { fileFormat: resolved.type || '', errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
                         }
                     }
                     // init / 外部变更 / 推送成功 / 重置刷新时，用当前数据与推送快照做差异比对（均排除 testCaseNo 列）
@@ -533,7 +533,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             try {
                 // 自身刚落盘 800ms 内的可见切换没必要重读，缓存即为最新
                 if (Date.now() - lastSelfSaveAt < SELF_SAVE_GUARD_MS) {
-                    sendTelemetryEvent('editor.visibleChange.skipped', { reason: 'selfSaveGuard', fileType: session.type });
+                    sendTelemetryEvent('editor.visibleChange.skipped', { reason: 'selfSaveGuard', fileFormat: session.type });
                     await pushDataToWebview(false, 'visible');
                     return;
                 }
@@ -542,7 +542,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 await pushDataToWebview(true, 'visible', true);
             } catch (err: any) {
                 log('❌ visible-reload failed:', err?.message || err);
-                sendTelemetryException('editor.visibleChange.failed', { fileType: session.type, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                sendTelemetryException('editor.visibleChange.failed', { fileFormat: session.type, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                 // 兜底：解析失败时仍按缓存推送一次，保证前端有数据
                 try { await pushDataToWebview(false, 'visible'); } catch (_) { /* ignore */ }
             }
@@ -557,7 +557,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             const sinceSelfSave = lastSelfSaveAt ? (now - lastSelfSaveAt) : -1;
             // 自己刚刚 save 完短时间内的回声忽略
             if (lastSelfSaveAt && sinceSelfSave < SELF_SAVE_GUARD_MS) {
-                sendTelemetryEvent('editor.externalChange.skipped', { origin, fileType: session.type });
+                sendTelemetryEvent('editor.externalChange.skipped', { origin, fileFormat: session.type });
                 log(`🔁 ignore self-save echo (${origin}) sinceSelfSave=${sinceSelfSave}ms < ${SELF_SAVE_GUARD_MS}ms`);
                 return;
             }
@@ -566,7 +566,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             // 去抖：合并短时间内的多次变更
             externalChangeTimer = setTimeout(() => {
                 externalChangeTimer = null;
-                sendTelemetryEvent('editor.externalChange.fired', { origin, fileType: session.type });
+                sendTelemetryEvent('editor.externalChange.fired', { origin, fileFormat: session.type });
                 log(`📥 external change fired (${origin}), reload`);
                 // 不提前置空缓存：pushDataToWebview 内部会比对旧缓存与重解析结果，
                 // 若 testCaseNo 列有变化则自动记录高亮并持久化。
@@ -611,7 +611,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     await pushDataToWebview(true, 'init');
                     // 通知等待方：webview 已就绪，可以接收推送结果消息
                     try { markReady(); } catch (_) { /* ignore */ }
-                    sendTelemetryEvent('editor.opened', { fileType: session.type });
+                    sendTelemetryEvent('editor.opened', { fileFormat: session.type });
                 } else if (msg?.type === 'save' && msg?.data) {
                     const _saveStart = Date.now();
                     const _inRows = (msg.data?.rows || []).length;
@@ -664,14 +664,14 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                         }
                     }
                     sendTelemetryEvent('editor.saved', {
-                        fileType: session.type,
+                        fileFormat: session.type,
                         rows: String(_inRows),
                         cols: String(_inHeaders),
-                        durationMs: String(_saveDur),
-                        addedRows: String(_addedRows),
-                        modifiedRows: String(_modifiedRows),
-                        deletedRows: String(_deletedRows),
-                        modifiedCells: String(_modifiedCells),
+                        costMs: String(_saveDur),
+                        appendRows: String(_addedRows),
+                        changeRows: String(_modifiedRows),
+                        removeRows: String(_deletedRows),
+                        changeCells: String(_modifiedCells),
                     });
                     // 缓存与前端最新数据一致：直接复用 webview 提交上来的 data，
                     // 避免置 null 后被外部触发的 reparse 在 fs flush 中读到部分内容/空数据。
@@ -692,7 +692,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     };
                     await this.pushStrategy.push(msg.data, pushCtx, webviewPanel, this.context);
                 } else if (msg?.type === 'openTextEditor') {
-                    sendTelemetryEvent('editor.switchedToText', { fileType: session.type });
+                    sendTelemetryEvent('editor.switchedToText', { fileFormat: session.type });
                     await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
                 } else if (msg?.type === 'reload') {
                     // 用户在前端工具栏点击 "刷新" / "重置并获取最新数据"：
@@ -700,21 +700,21 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     log('📨 reload from webview');
                     session.cachedTableData = null;
                     await pushDataToWebview(true, 'reload', true);
-                    sendTelemetryEvent('editor.reloaded', { fileType: session.type });
+                    sendTelemetryEvent('editor.reloaded', { fileFormat: session.type });
                 }
             } catch (err: any) {
                 const errMsg = err?.message || String(err) || '操作失败';
-                sendTelemetryException('editor.message.error', { msgType: msg?.type || '', fileType: session.type, errorMessage: errMsg.slice(0, 500), stackHead: stackHead(err) });
+                sendTelemetryException('editor.message.error', { messageKind: msg?.type || '', fileFormat: session.type, errorMessage: errMsg.slice(0, 500), stackHead: stackHead(err) });
                 if (msg?.type === 'save') {
-                    sendTelemetryErrorEvent('editor.save.error', { fileType: session.type, errorMessage: errMsg.slice(0, 500) });
+                    sendTelemetryErrorEvent('editor.save.error', { fileFormat: session.type, errorMessage: errMsg.slice(0, 500) });
                     webviewPanel.webview.postMessage({ type: 'saveError', message: errMsg });
                 } else if (msg?.type === 'pushTestCase') {
-                    sendTelemetryErrorEvent('editor.push.error', { fileType: session.type, errorMessage: errMsg.slice(0, 500) });
+                    sendTelemetryErrorEvent('editor.push.error', { fileFormat: session.type, errorMessage: errMsg.slice(0, 500) });
                     showPushErrorModal(webviewPanel, path.basename(filePath), errMsg);
                     webviewPanel.webview.postMessage({ type: 'pushError', message: errMsg });
                 }
                 if (msg?.type === 'pushTestCase' && /无法连接后端服务|连接.*超时|连接被重置/.test(errMsg)) {
-                    sendTelemetryErrorEvent('editor.network.error', { fileType: session.type });
+                    sendTelemetryErrorEvent('editor.network.error', { fileFormat: session.type });
                     const pick = await vscode.window.showErrorMessage(
                         `[${this.formatTypeName(session.type)}] ${errMsg}`,
                         '打开配置', '查看帮助'

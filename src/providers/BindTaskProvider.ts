@@ -148,7 +148,7 @@ function registerRevealBoundTaskCommand(): vscode.Disposable {
             let folderExists = false;
             try { folderExists = fs.existsSync(fullPath); } catch (_) { /* ignore */ }
             if (!folderExists) {
-                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.revealBoundTask', result: 'folderNotExist' });
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.revealBoundTask', execResult: 'folderNotExist' });
                 vscode.window.showWarningMessage(
                     `文件夹不存在，请检查 task-bindings.json 中的路径配置:\n${fullPath}`
                 );

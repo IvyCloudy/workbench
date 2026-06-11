@@ -335,7 +335,7 @@ export function sendTelemetryException(eventName: string, props?: StringGenerate
 /**
  * 包裹一段异步逻辑，自动上报耗时与成功/失败结果。
  * 用法：
- *   await trackTiming('push.flow', async () => { ... }, { rowCount: 100 });
+ *   await trackTiming('push.flow', async () => { ... }, { totalRows: 100 });
  */
 export async function trackTiming<T>(
     eventName: string,
@@ -345,10 +345,10 @@ export async function trackTiming<T>(
     const start = Date.now();
     try {
         const ret = await fn();
-        _sendTelemetryEvent(eventName, { ...properties, result: 'success' }, { durationMs: Date.now() - start });
+        _sendTelemetryEvent(eventName, { ...properties, execResult: 'success' }, { costMs: Date.now() - start });
         return ret;
     } catch (err: any) {
-        sendTelemetryException(eventName, { ...properties, result: 'error', errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+        sendTelemetryException(eventName, { ...properties, execResult: 'error', errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
         // 仍然抛出，由调用方决定如何处理
         throw err;
     }

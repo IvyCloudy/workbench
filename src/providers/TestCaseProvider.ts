@@ -213,7 +213,7 @@ export class TestCaseProvider extends BaseWebviewProvider {
                 });
 
                 if (!result.success) {
-                    sendTelemetryErrorEvent('testCase.query.error', { error: result.error || '查询失败' });
+                    sendTelemetryErrorEvent('testCase.query.error', { queryError: result.error || '查询失败' });
                     this.postMessage({ command: 'showError', message: result.error || '查询失败' });
                 } else if (result.endOfData) {
                     sendTelemetryEvent('testCase.query.endOfData', {});

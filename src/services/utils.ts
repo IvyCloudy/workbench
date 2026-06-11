@@ -284,3 +284,15 @@ export function genUuid(): string {
         return v.toString(16);
     });
 }
+
+// ============================================
+// 错误工具
+// ============================================
+
+/**
+ * 提取错误堆栈头几行用于上报，避免信息泄漏
+ */
+export function stackHead(err: any, lines = 5): string {
+    const stack = err && err.stack ? String(err.stack) : '';
+    return stack.split('\n').slice(0, lines).join(' | ').slice(0, 1000);
+}

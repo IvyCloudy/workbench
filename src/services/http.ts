@@ -18,7 +18,8 @@ import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
 import { readConfig } from './storage';
-import { trackEvent, trackError, trackException } from './telemetry';
+import { sendTelemetryEvent, sendTelemetryErrorEvent, sendTelemetryException } from './telemetry';
+import { stackHead } from './utils';
 import type { AppConfig, ApiResponse, QueryOptions } from '../types';
 
 // ============================================
@@ -73,6 +74,7 @@ function addSm2Signature(headers: Record<string, string>, appConfig: AppConfig):
         headers['X-Signature'] = sm2.doEncrypt(String(timestamp), publicKey);
     } catch (error) {
         console.error('[http] SM2 签名失败:', error);
+        sendTelemetryException('http.sm2.signFailed', { errorMessage: String((error as any)?.message || String(error)).slice(0, 500), stackHead: stackHead(error) });
     }
 }
 
@@ -115,6 +117,8 @@ function makeRequest<T = any>(
 
         req.on('error', (err: NodeJS.ErrnoException) => {
             const target = `${urlObj.hostname}:${urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80)}`;
+            const code = err.code || 'UNKNOWN';
+            sendTelemetryErrorEvent('http.request.error', { code, target });
             switch (err.code) {
                 case 'ECONNREFUSED':
                     reject(new Error(`无法连接后端服务（${target}），请确认服务已启动`));
@@ -162,10 +166,13 @@ async function post<T = any>(
  */
 export async function fetchTaskTree(context: vscode.ExtensionContext): Promise<any[]> {
     const url = `${await getApiBaseUrl(context)}/test-task/task-tree`;
+    sendTelemetryEvent('api.fetchTaskTree.start', {});
     const response = await post<ApiResponse<any[]>>(context, url, {});
     if (response.data.returnCode === 'SUC0000') {
+        sendTelemetryEvent('api.fetchTaskTree.ok', { returnCode: response.data.returnCode });
         return response.data.body || [];
     }
+    sendTelemetryErrorEvent('api.fetchTaskTree.fail', { returnCode: response.data.returnCode || '' });
     throw new Error(response.data.errorMsg || '获取任务树失败');
 }
 
@@ -193,6 +200,7 @@ export async function queryTestCases(
     if (opts.type) body.type = opts.type;
 
     const response = await post<ApiResponse>(context, url, body);
+    sendTelemetryEvent('api.queryTestCases.done', { returnCode: response.data.returnCode || '', currentPage: String(opts.currentPage || 1) });
     return response.data;
 }
 
@@ -206,6 +214,7 @@ export async function batchImportData(
     const url = `${await getApiBaseUrl(context)}/test-task/batch-import`;
     const body = { headers: opts.headers, rows: opts.selectedRows };
     const response = await post<ApiResponse>(context, url, body);
+    sendTelemetryEvent('api.batchImport.done', { returnCode: response.data.returnCode || '', rowCount: String(opts.selectedRows.length) });
     return response.data;
 }
 
@@ -251,24 +260,26 @@ export async function pushTestCase(
         const _rc = (response.data as any)?.returnCode || '';
         const _success = _rc === 'SUC0000';
         if (_success) {
-            trackEvent('api.pushTestCase.ok', { httpStatus: String(response.status) }, {
-                rowCount: data.length,
-                bytes: Buffer.byteLength(bodyStr, 'utf8'),
-                durationMs: Date.now() - _apiStart,
+            sendTelemetryEvent('api.pushTestCase.ok', {
+                httpStatus: String(response.status),
+                rowCount: String(data.length),
+                bytes: String(Buffer.byteLength(bodyStr, 'utf8')),
+                durationMs: String(Date.now() - _apiStart),
             });
         } else {
-            trackError('api.pushTestCase.fail', {
+            sendTelemetryErrorEvent('api.pushTestCase.fail', {
                 httpStatus: String(response.status),
                 returnCode: _rc,
-            }, {
-                rowCount: data.length,
-                durationMs: Date.now() - _apiStart,
+                rowCount: String(data.length),
+                durationMs: String(Date.now() - _apiStart),
             });
         }
         return response.data;
     } catch (err: any) {
-        trackException('api.pushTestCase.exception', err, {
+        sendTelemetryException('api.pushTestCase.exception', {
             rowCount: String(data.length),
+            errorMessage: String(err?.message || String(err)).slice(0, 500),
+            stackHead: stackHead(err),
         });
         throw err;
     }

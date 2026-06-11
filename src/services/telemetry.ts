@@ -23,6 +23,7 @@ import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import * as os from 'os';
 import { readConfig } from './storage';
+import { stackHead } from './utils';
 
 // ============================================
 // 内置兜底 Token
@@ -39,18 +40,22 @@ const BUILTIN_TELEMETRY_TOKEN = 'wb-telemetry-2026-221ae433c3920433044f65e0ee0bd
 // 类型
 // ============================================
 
-/** 字符串属性（维度，便于聚合） */
-export type TelemetryProps = Record<string, string | number | boolean | undefined>;
-/** 数值度量（用于求和/平均） */
-export type TelemetryMeasures = Record<string, number>;
+/** 事件属性（维度，便于聚合），所有 value 必须为 string */
+export type TelemetryEventProperties = Record<string, string | undefined>;
+/** 事件度量（用于求和/平均），所有 value 必须为 number */
+export type TelemetryEventMeasurements = Record<string, number | undefined>;
+
+export interface StringGenerateProperties {
+    [key: string]:string;
+}
 
 interface TelemetryEvent {
     /** 事件名，建议 namespace.action 形式，如 push.success */
     name: string;
     /** 维度属性 */
-    props?: TelemetryProps;
+    properties?: TelemetryEventProperties;
     /** 数值度量 */
-    measures?: TelemetryMeasures;
+    measurements?: TelemetryEventMeasurements;
     /** 事件级别 */
     level?: 'info' | 'warn' | 'error';
     /** 事件发生的客户端时间戳（毫秒） */
@@ -63,7 +68,7 @@ interface TelemetryEvent {
 
 let _context: vscode.ExtensionContext | undefined;
 let _sessionId = '';
-let _commonProps: TelemetryProps = {};
+let _commonProps: TelemetryEventProperties = {};
 let _queue: TelemetryEvent[] = [];
 let _flushTimer: NodeJS.Timeout | undefined;
 /** 上一次连续失败次数，用于退避 */
@@ -119,12 +124,6 @@ function safeStringify(obj: any): string {
 
 function genSessionId(): string {
     return crypto.randomBytes(8).toString('hex');
-}
-
-/** 提取错误堆栈头几行用于上报，避免信息泄漏 */
-function stackHead(err: any, lines = 5): string {
-    const stack = err && err.stack ? String(err.stack) : '';
-    return stack.split('\n').slice(0, lines).join(' | ').slice(0, 1000);
 }
 
 // ============================================
@@ -269,10 +268,10 @@ export async function initTelemetry(context: vscode.ExtensionContext): Promise<v
     }
 
     // 注册激活事件 + 注销 hook
-    trackEvent('extension.activated');
+    sendTelemetryEvent('extension.activated');
     context.subscriptions.push({
         dispose: () => {
-            trackEvent('extension.deactivated');
+            sendTelemetryEvent('extension.deactivated');
             // 尽力一次性 flush
             const remaining = _queue.splice(0, _queue.length);
             if (remaining.length) postBatch(remaining).catch(() => { /* ignore */ });
@@ -280,40 +279,57 @@ export async function initTelemetry(context: vscode.ExtensionContext): Promise<v
     });
 }
 
-/** 上报一个普通事件 */
-export function trackEvent(name: string, props?: TelemetryProps, measures?: TelemetryMeasures): void {
+// ============================================
+// 内部实现（保留 properties / measurements 分离，供内部精细控制）
+// ============================================
+
+function _sendTelemetryEvent(
+    eventName: string,
+    properties?: TelemetryEventProperties,
+    measurements?: TelemetryEventMeasurements,
+): void {
     if (!isEnabled()) return;
     enqueue({
-        name,
-        props: props,
-        measures: measures,
+        name: eventName,
+        properties,
+        measurements,
         level: 'info',
         ts: Date.now(),
     });
 }
 
-/** 上报一个错误事件（业务可预期错误，例如接口返回失败） */
-export function trackError(name: string, props?: TelemetryProps, measures?: TelemetryMeasures): void {
+function _sendTelemetryErrorEvent(
+    eventName: string,
+    properties?: TelemetryEventProperties,
+    measurements?: TelemetryEventMeasurements,
+): void {
     if (!isEnabled()) return;
     enqueue({
-        name,
-        props: props,
-        measures: measures,
+        name: eventName,
+        properties,
+        measurements,
         level: 'error',
         ts: Date.now(),
     });
 }
 
-/** 上报一个未捕获异常 */
-export function trackException(name: string, err: any, props?: TelemetryProps): void {
-    if (!isEnabled()) return;
-    const message = (err && err.message) ? String(err.message).slice(0, 500) : String(err).slice(0, 500);
-    enqueue({
-        name,
-        props: { ...props, errorMessage: message, stackHead: stackHead(err) },
-        level: 'error',
-        ts: Date.now(),
-    });
+// ============================================
+// 对外公开 API（对齐 sendTelemetryEvent / sendTelemetryErrorEvent 标准签名）
+// ============================================
+
+/** 上报一个普通事件 */
+export function sendTelemetryEvent(eventName: string, props?: StringGenerateProperties): void {
+    _sendTelemetryEvent(eventName, props);
+}
+
+/** 上报一个错误事件（业务可预期错误，例如接口返回失败） */
+export function sendTelemetryErrorEvent(eventName: string, props?: StringGenerateProperties): void {
+    _sendTelemetryErrorEvent(eventName, props);
+}
+
+/** 上报一个异常事件（内部自动提取 errorMessage + stackHead 到 properties） */
+export function sendTelemetryException(eventName: string, props?: StringGenerateProperties): void {
+    _sendTelemetryErrorEvent(eventName, props);
 }
 
 /**
@@ -322,37 +338,20 @@ export function trackException(name: string, err: any, props?: TelemetryProps): 
  *   await trackTiming('push.flow', async () => { ... }, { rowCount: 100 });
  */
 export async function trackTiming<T>(
-    name: string,
+    eventName: string,
     fn: () => Promise<T>,
-    props?: TelemetryProps,
+    properties?: TelemetryEventProperties,
 ): Promise<T> {
     const start = Date.now();
     try {
         const ret = await fn();
-        trackEvent(name, { ...props, result: 'success' }, { durationMs: Date.now() - start });
+        _sendTelemetryEvent(eventName, { ...properties, result: 'success' }, { durationMs: Date.now() - start });
         return ret;
     } catch (err: any) {
-        trackException(name, err, { ...props, result: 'error' });
+        sendTelemetryException(eventName, { ...properties, result: 'error', errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
         // 仍然抛出，由调用方决定如何处理
         throw err;
     }
-}
-
-/**
- * 接收来自 webview 的埋点消息，转发到上报队列。
- * 在 BaseEditorProvider / TestCaseProvider 的 onDidReceiveMessage 中调用即可。
- *
- * webview 端约定消息格式：
- *   { type: 'telemetry', name: 'xxx', level?: 'info'|'error', props?: {...}, measures?: {...} }
- */
-export function handleWebviewTelemetry(msg: any): boolean {
-    if (!msg || msg.type !== 'telemetry' || typeof msg.name !== 'string') return false;
-    const level = msg.level === 'error' ? 'error' : 'info';
-    const props: TelemetryProps = { ...(msg.props || {}), source: 'webview' };
-    const measures: TelemetryMeasures = (msg.measures && typeof msg.measures === 'object') ? msg.measures : {};
-    if (level === 'error') trackError(msg.name, props, measures);
-    else trackEvent(msg.name, props, measures);
-    return true;
 }
 
 /** 仅供测试/特殊场景：立即清空队列上报 */

@@ -15,6 +15,8 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getAllBoundItems, getAllBoundFolderPaths } from '../utils/taskInfoStore';
+import { sendTelemetryEvent, sendTelemetryException } from '../services/telemetry';
+import { stackHead } from '../services/utils';
 
 // ============================================
 // 全局上下文引用
@@ -146,6 +148,7 @@ function registerRevealBoundTaskCommand(): vscode.Disposable {
             let folderExists = false;
             try { folderExists = fs.existsSync(fullPath); } catch (_) { /* ignore */ }
             if (!folderExists) {
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.revealBoundTask', result: 'folderNotExist' });
                 vscode.window.showWarningMessage(
                     `文件夹不存在，请检查 task-bindings.json 中的路径配置:\n${fullPath}`
                 );
@@ -167,6 +170,7 @@ function registerRevealBoundTaskCommand(): vscode.Disposable {
                     return;
                 } catch (e) {
                     console.log('[revealBoundTask] file open failed:', e);
+                    sendTelemetryException('revealBoundTask.fileOpenFailed', { errorMessage: String((e as any)?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
                 }
             }
 
@@ -192,6 +196,7 @@ function registerRevealBoundTaskCommand(): vscode.Disposable {
             await new Promise(r => setTimeout(r, 500));
 
             console.log('[revealBoundTask] done');
+            sendTelemetryEvent('command.executed', { command: 'testcaseViewer.revealBoundTask' });
         }
     );
 }
@@ -238,6 +243,7 @@ export function registerBindTaskFeatures(context: vscode.ExtensionContext): vsco
     disposables.push(
         vscode.workspace.onDidSaveTextDocument(doc => {
             if (doc.uri.fsPath.includes('task-bindings.json')) {
+                sendTelemetryEvent('bindings.fileChanged', {});
                 taskFolderDecorationProvider.refresh();
                 bindTasksTreeProvider.refresh();
             }

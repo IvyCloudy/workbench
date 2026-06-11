@@ -7,12 +7,11 @@
  *    1. FILE_PATTERNS：CSV/YAML/JSON 后缀正则
  *    2. CSP nonce / HTML escape / 错误页 HTML 模板（buildErrorHtml）
  *    3. 路径合规校验（isInQualifiedDir）
- *    4. ⭐ 任务信息解析（parseTaskInfoFromPath / resolveTaskInfo）
- *       - testTaskNo / subTestTaskName 的唯一来源；后续若调整规则只改这里
- *    5. 推送追踪相关常量与 UUID 生成
+ *    4. 推送追踪相关常量与 UUID 生成
  *  设计要点：
  *    - 本文件不依赖 vscode.workspace 等运行时上下文，纯工具函数，便于单测。
- *    - resolveTaskInfo 始终返回 info（失败时为兜底空值），调用方可安全访问字段。
+ *    - 任务信息（testTaskNo / subTestTaskName）统一由 getCurrentTaskInfo /
+ *      getTaskInfoByFilePath 基于 task-bindings.json 提供。
  * ============================================================================
  */
 import * as path from 'path';
@@ -136,7 +135,8 @@ document.querySelectorAll('button[data-act]').forEach(b => {
 
 /**
  * 检查文件是否在合格目录下：
- *   .../测试任务/<testTaskNo>_<name>/测试案例/[...]/<file>
+ *   .../测试任务/<任务目录>/测试案例/[...]/<file>
+ * 任务目录只要是文件夹即可，不强制要求 <编号>_<名称> 格式。
  * 文件可直接放在 测试案例/ 目录下，也可放在其子目录中。
  */
 export function isInQualifiedDir(filePath: string, filePattern: RegExp): boolean {
@@ -158,11 +158,9 @@ export function isInQualifiedDir(filePath: string, filePattern: RegExp): boolean
     }
     if (rootIdx === -1) return false;
 
-    // rootIdx + 1 必须是任务目录，格式：<testTaskNo>_<subTestTaskName>
+    // rootIdx + 1 必须是任务目录（任意文件夹名）
     const taskDir = parts[rootIdx + 1];
     if (!taskDir) return false;
-    const idx = taskDir.indexOf('_');
-    if (idx <= 0 || idx === taskDir.length - 1) return false;
 
     // rootIdx + 2 必须是 "测试案例"
     const caseDir = parts[rootIdx + 2];
@@ -171,98 +169,6 @@ export function isInQualifiedDir(filePath: string, filePattern: RegExp): boolean
     // 文件名匹配（文件可在 测试案例/ 目录或其子目录下）
     const lastPart = parts[len - 1];
     return filePattern.test(lastPart);
-}
-
-// ============================================
-// 任务信息解析
-// ============================================
-
-export interface TaskInfo {
-    /** 测试任务编号，例如 TT001 */
-    testTaskNo: string;
-    /** 测试子任务名称，例如 登录模块 */
-    subTestTaskName: string;
-}
-
-/**
- * ⭐ testTaskNo / subTestTaskName 的唯一来源（内部实现）
- * ----------------------------------------------------------------
- * 后续如需调整两字段的取值方式（例如改为读 .meta 文件、改分隔符、
- * 从配置注入等），仅需修改本函数；所有调用方均经由 resolveTaskInfo
- * 间接使用，不应再单独解析路径。
- *
- * 目录约定：
- *   .../测试任务/<testTaskNo>_<subTestTaskName>/测试案例/[...]/<file>
- */
-function parseTaskInfoFromPath(filePath: string): TaskInfo | null {
-    if (!filePath) return null;
-    const parts = filePath.split(path.sep);
-    const len = parts.length;
-    if (len < 4) return null;
-
-    // 动态查找 "测试任务" 的位置
-    let rootIdx = -1;
-    for (let i = 0; i < len - 3; i++) {
-        if (parts[i] === '测试任务') {
-            rootIdx = i;
-            break;
-        }
-    }
-    if (rootIdx === -1) return null;
-
-    const taskDir = parts[rootIdx + 1];
-    const caseDir = parts[rootIdx + 2];
-
-    const rootOk = parts[rootIdx] === '测试任务';
-    const caseOk = caseDir === '测试案例';
-    if (!rootOk || !caseOk || !taskDir) return null;
-
-    const idx = taskDir.indexOf('_');
-    if (idx <= 0 || idx === taskDir.length - 1) return null;
-
-    return {
-        testTaskNo: taskDir.slice(0, idx),
-        subTestTaskName: taskDir.slice(idx + 1),
-    };
-}
-
-/** 路径不合规时使用的统一提示语（仅本文件内部使用） */
-const TASK_INFO_PARSE_ERROR =
-    '无法从路径解析测试任务信息，请确认目录形如：测试任务/<编号>_<子任务名>/测试案例/<文件>';
-
-interface ResolveTaskInfoOk {
-    ok: true;
-    info: TaskInfo;
-}
-interface ResolveTaskInfoFail {
-    ok: false;
-    info: TaskInfo;   // 兜底空值，便于调用方安全访问字段
-    error: string;    // 统一的错误描述
-}
-export type ResolveTaskInfoResult = ResolveTaskInfoOk | ResolveTaskInfoFail;
-
-/**
- * ⭐ testTaskNo / subTestTaskName 的统一业务入口（推荐所有调用方使用）
- *
- * 与 parseTaskInfoFromPath 的区别：
- *   - parseTaskInfoFromPath：纯解析，失败返回 null，仅给底层 utils 用
- *   - resolveTaskInfo：业务入口，附带统一错误文案与兜底空值，所有调用方都应走这里
- *
- * 用法示例：
- *   const r = resolveTaskInfo(filePath);
- *   if (!r.ok) { showWarning(r.error); return; }
- *   const { testTaskNo, subTestTaskName } = r.info;
- */
-export function resolveTaskInfo(filePath: string): ResolveTaskInfoResult {
-    const info = parseTaskInfoFromPath(filePath);
-    if (info) {
-        return { ok: true, info };
-    }
-    return {
-        ok: false,
-        info: { testTaskNo: '', subTestTaskName: '' },
-        error: TASK_INFO_PARSE_ERROR,
-    };
 }
 
 // ============================================

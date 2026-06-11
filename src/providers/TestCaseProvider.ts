@@ -17,9 +17,7 @@ import * as vscode from 'vscode';
 import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider';
 import { writeParams } from '../services/storage';
 import { queryTestCases, fetchTaskTree } from '../services/http';
-import { resolveTaskInfo } from '../services/utils';
-import { getTaskInfoByFilePath, extractTestPhaseName } from '../utils/command';
-import { showModal } from '../utils/message';
+import { getTaskInfoByFilePath } from '../utils/commands';
 import { sendTelemetryEvent, sendTelemetryErrorEvent, sendTelemetryException } from '../services/telemetry';
 import { stackHead } from '../services/utils';
 import type { WebviewMessage } from '../types';
@@ -131,9 +129,7 @@ export class TestCaseProvider extends BaseWebviewProvider {
     /**
      * 显示 Webview 并加载文件参数
      *
-     * 参数来源：
-     *   - 优先走 getTaskInfoByFilePath（基于 task-bindings.json 的真实后端值）
-     *   - 未绑定时回退到 resolveTaskInfo + 文件内容提取 testPhaseName
+     * 参数来源：统一通过 getTaskInfoByFilePath（基于 task-bindings.json）
      */
     async showWebview(fileUri: vscode.Uri): Promise<void> {
         const filePath = fileUri.fsPath;
@@ -150,17 +146,11 @@ export class TestCaseProvider extends BaseWebviewProvider {
             };
         } else {
             sendTelemetryEvent('testCase.viewOnline', { bound: 'false' });
-            // 未绑定：兜底用路径解析 + 文件内容，保持原有可用性
-            const r = resolveTaskInfo(filePath);
-            const testPhaseName = await extractTestPhaseName(filePath);
             params = {
-                testTaskNo: r.info.testTaskNo,
-                subTestTaskName: r.info.subTestTaskName,
-                testPhaseName,
+                testTaskNo: '',
+                subTestTaskName: '',
+                testPhaseName: '',
             };
-            if (!r.ok) {
-                showModal(this.panel, 'warning', '任务解析', r.error);
-            }
         }
 
         const config = vscode.workspace.getConfiguration('testcaseViewer');

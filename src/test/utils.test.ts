@@ -126,6 +126,21 @@ describe('services/utils', () => {
             const uri = vscode.Uri.file('/workspace/测试任务/TT_test/cases.csv');
             expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.CSV)).toBe(false);
         });
+
+        it('允许不含下划线的任务目录名', () => {
+            const uri = vscode.Uri.file('/workspace/测试任务/TT001/测试案例/cases.csv');
+            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.CSV)).toBe(true);
+        });
+
+        it('允许纯中文任务目录名', () => {
+            const uri = vscode.Uri.file('/workspace/测试任务/登录模块/测试案例/cases.csv');
+            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.CSV)).toBe(true);
+        });
+
+        it('允许纯中文任务目录名的子目录', () => {
+            const uri = vscode.Uri.file('/workspace/测试任务/登录模块/测试案例/子目录/data.yaml');
+            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.YAML)).toBe(true);
+        });
     });
 
     describe('FILE_PATTERNS', () => {

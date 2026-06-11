@@ -25,7 +25,7 @@ import { registerBindTaskFeatures } from './providers/BindTaskProvider';
 import { pushTestCase } from './services/http';
 import { applyTestCaseNos, createParser, detectFileType, ensureTrackingColumns, parseFileToRows } from './parsers';
 import { ensureBindingsFile } from './utils/taskInfoStore';
-import { getCurrentTaskInfo } from './utils/command';
+import { getCurrentTaskInfo } from './utils/commands';
 import { showPushErrorModal, showPushResult, showModal } from './utils/message';
 import { ensureHighlightFile } from './utils/highlightStore';
 import { ensureSnapshotFile, savePushSnapshot, getDeletedSnapshotIds } from './utils/pushSnapshotStore';
@@ -125,7 +125,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     const fileCheck = FileTypeChecker.isQualifiedFile(target);
     if (!fileCheck.qualified) {
         sendTelemetryEvent('explorerPush.aborted', { reason: 'dirNotQualified', ext: '' });
-        showPushErrorModal(panel, baseName, `文件不在合规目录下\n\n请将文件放入 测试任务/任务编号/测试案例/ 目录结构中。\n当前文件：${baseName}`);
+        showPushErrorModal(panel, baseName, `文件不在合规目录下\n\n请将文件放入 测试任务/<任务文件夹>/测试案例/ 目录结构中。\n当前文件：${baseName}`);
         return;
     }
 

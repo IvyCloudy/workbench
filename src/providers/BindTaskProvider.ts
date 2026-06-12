@@ -61,8 +61,7 @@ class TaskFolderDecorationProvider implements vscode.FileDecorationProvider {
         const fsPath = uri.fsPath;
         if (!fsPath) return undefined;
 
-        const boundPaths = getAllBoundFolderPaths(effectiveContext!);
-        const fsPathNorm = fsPath.replace(/\\/g, '/');
+        const boundPaths = getAllBoundFolderPaths(effectiveContext!);        const fsPathNorm = fsPath.replace(/\\/g, '/');
 
         // 找到 exaxt 匹配的绑定文件夹路径
         let matchedPath = '';
@@ -158,45 +157,15 @@ function registerRevealBoundTaskCommand(): vscode.Disposable {
                 return;
             }
 
-            // 方案 A：打开目标文件夹内任意子文件，用 showActiveFileInExplorer 强制展开
-            const fileToOpen = findAnyFileInDir(fullPath);
-            if (fileToOpen) {
-                console.log('[revealBoundTask] opening file:', fileToOpen);
-                try {
-                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(fileToOpen));
-                    await vscode.window.showTextDocument(doc, { preview: true });
-                    await new Promise(r => setTimeout(r, 400));
-                    await vscode.commands.executeCommand('workbench.files.action.showActiveFileInExplorer');
-                    await new Promise(r => setTimeout(r, 500));
-                    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
-                    console.log('[revealBoundTask] done via file open');
-                    return;
-                } catch (e) {
-                    console.log('[revealBoundTask] file open failed:', e);
-                    sendTelemetryException('revealBoundTask.fileOpenFailed', { errorMessage: String((e as any)?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
-                }
-            }
+            // 找到文件夹内任意文件，用 revealInExplorer 展开（不打开编辑器，无闪烁）
+            const fileToReveal = findAnyFileInDir(fullPath);
+            const targetUri = fileToReveal
+                ? vscode.Uri.file(fileToReveal)
+                : vscode.Uri.file(fullPath);
 
-            // 方案 B：先 reveal 第一个子项（触发父级展开），再 reveal 目标文件夹选中它
-            let childPath = '';
-            try {
-                const entries = fs.readdirSync(fullPath, { withFileTypes: true });
-                if (entries.length > 0) {
-                    childPath = path.join(fullPath, entries[0].name);
-                }
-            } catch (_) { /* ignore */ }
-
-            console.log('[revealBoundTask] using child reveal approach, child:', childPath);
             await vscode.commands.executeCommand('workbench.view.explorer');
-            await new Promise(r => setTimeout(r, 500));
-
-            if (childPath) {
-                await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(childPath));
-                await new Promise(r => setTimeout(r, 500));
-            }
-
-            await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(fullPath));
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, 300));
+            await vscode.commands.executeCommand('revealInExplorer', targetUri);
 
             console.log('[revealBoundTask] done');
             sendTelemetryEvent('command.executed', { command: 'testcaseViewer.revealBoundTask' });

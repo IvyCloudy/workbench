@@ -14,7 +14,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { getAllBoundItems, getAllBoundFolderPaths } from '../utils/taskInfoStore';
+import { getAllBoundItems, getAllBoundFolderPaths, clearBindingsCache } from '../utils/taskInfoStore';
 import { sendTelemetryEvent, sendTelemetryException } from '../services/telemetry';
 import { stackHead } from '../services/utils';
 
@@ -110,16 +110,19 @@ class BindTasksTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
         const items = getAllBoundItems(effectiveContext!);
         return items.map(entry => {
             const info = entry.taskInfo!;
-            const taskName = info.name || '';
-            const description = `${info.testTaskNo || ''} / ${info.subTestTaskName || ''}`;
+            const testTaskName = info.testTaskName || '';
+            const subTestTaskName = info.subTestTaskName || '';
+            // childPath 格式：测试任务/${任务文件名}，取第二段
+            const parts = (info.childPath || '').split('/');
+            const originalFileName = parts.length >= 2 ? parts[1] : (info.childPath ? path.basename(info.childPath) : '');
+            const displayLabel = `🔗 ${originalFileName} ${testTaskName}_${subTestTaskName}`;
             const fullPath = path.join(info.rootPath || '', info.childPath || '');
 
             const item = new vscode.TreeItem(
-                `🔗 ${taskName}`,
+                displayLabel,
                 vscode.TreeItemCollapsibleState.None
             );
-            item.tooltip = `已绑定测试任务: ${taskName}\n路径: ${fullPath}`;
-            item.description = description;
+            item.tooltip = `已绑定测试任务: ${originalFileName}\n路径: ${fullPath}`;
             if (fullPath) {
                 item.command = {
                     command: 'testcaseViewer.revealBoundTask',
@@ -232,7 +235,10 @@ export function registerBindTaskFeatures(context: vscode.ExtensionContext): vsco
     // 视图变为可见时自动刷新（打开资源管理器/切换回 Explorer 时触发）
     disposables.push(
         bindTaskTreeView.onDidChangeVisibility(e => {
-            if (e.visible) bindTasksTreeProvider.refresh();
+            if (e.visible) {
+                bindTasksTreeProvider.refresh();
+                taskFolderDecorationProvider.refresh();
+            }
         })
     );
 
@@ -244,6 +250,7 @@ export function registerBindTaskFeatures(context: vscode.ExtensionContext): vsco
         vscode.workspace.onDidSaveTextDocument(doc => {
             if (doc.uri.fsPath.includes('task-bindings.json')) {
                 sendTelemetryEvent('bindings.fileChanged', {});
+                clearBindingsCache(); // 强制清除缓存，确保读到最新数据
                 taskFolderDecorationProvider.refresh();
                 bindTasksTreeProvider.refresh();
             }

@@ -441,6 +441,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             );
             webviewPanel.webview.onDidReceiveMessage(async (m: any) => {
                 if (m?.type === 'openTextEditor') {
+                    sendTelemetryEvent('editor.unqualified.openText', { targetFile: fileName });
                     try { webviewPanel.dispose(); } catch (_) { /* ignore */ }
                     await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
                 }

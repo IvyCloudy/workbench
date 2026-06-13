@@ -290,16 +290,34 @@ function registerEditorCommands(
     return [
         vscode.commands.registerCommand('testcaseViewer.openWithEditor', async () => {
             const uri = getActiveFileUri();
-            if (uri && extPattern.test(uri.fsPath) && isTestCaseFile(uri)) {
-                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.openWithEditor' });
+            if (!uri || !extPattern.test(uri.fsPath)) {
+                sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.openWithEditor', reason: 'noActiveFileOrExt' });
+                return;
+            }
+            if (!isTestCaseFile(uri)) {
+                sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.openWithEditor', reason: 'notTestCaseFile' });
+                return;
+            }
+            sendTelemetryEvent('command.executed', { command: 'testcaseViewer.openWithEditor' });
+            try {
                 await vscode.commands.executeCommand('vscode.openWith', uri, TESTCASE_EDITOR_VIEWTYPE);
+            } catch (err: any) {
+                sendTelemetryException('command.openWithEditor.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                throw err;
             }
         }),
         vscode.commands.registerCommand('testcaseViewer.openWithText', async () => {
             const uri = getActiveFileUri();
-            if (uri && extPattern.test(uri.fsPath)) {
-                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.openWithText' });
+            if (!uri || !extPattern.test(uri.fsPath)) {
+                sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.openWithText', reason: 'noActiveFileOrExt' });
+                return;
+            }
+            sendTelemetryEvent('command.executed', { command: 'testcaseViewer.openWithText' });
+            try {
                 await vscode.commands.executeCommand('vscode.openWith', uri, 'default');
+            } catch (err: any) {
+                sendTelemetryException('command.openWithText.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                throw err;
             }
         })
     ];
@@ -378,13 +396,29 @@ export async function activate(context: vscode.ExtensionContext) {
         // 全局命令
         vscode.commands.registerCommand('tableBrowser.open', () => {
             sendTelemetryEvent('command.executed', { command: 'tableBrowser.open' });
-            return tableBrowserProvider.show();
+            try {
+                return tableBrowserProvider.show();
+            } catch (err: any) {
+                sendTelemetryException('command.tableBrowser.open.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                throw err;
+            }
         }),
         vscode.commands.registerCommand('testcaseViewer.viewOnline', async () => {
             const uri = getActiveFileUri();
-            if (uri && isTestCaseFile(uri)) {
-                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.viewOnline' });
+            if (!uri) {
+                sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.viewOnline', reason: 'noActiveFile' });
+                return;
+            }
+            if (!isTestCaseFile(uri)) {
+                sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.viewOnline', reason: 'notTestCaseFile' });
+                return;
+            }
+            sendTelemetryEvent('command.executed', { command: 'testcaseViewer.viewOnline' });
+            try {
                 await testCaseProvider.showWebview(uri);
+            } catch (err: any) {
+                sendTelemetryException('command.viewOnline.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                throw err;
             }
         }),
 
@@ -466,4 +500,5 @@ export async function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
     console.log('[Extension] 插件已停用');
+    try { sendTelemetryEvent('extension.deactivate', {}); } catch (_) { /* ignore */ }
 }

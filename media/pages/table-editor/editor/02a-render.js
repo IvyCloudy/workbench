@@ -80,11 +80,12 @@ function _computeViewRows() {
     var headers = (S.data && S.data.headers) || [];
     var skw = (S._searchKw || '').toLowerCase();
     var hasColFilters = S._colFilters && Object.keys(S._colFilters).length > 0;
-    // 仅看推送失败：当 _failedOnly=true 且 _pushFailedTsIds 非空时启用
-    var failedOnly = !!(S._failedOnly && S._pushFailedTsIds && S._pushFailedTsIds.size > 0);
+    // 仅看推送失败：当 _failedOnly=true 且失败集合非空时启用
+    var hasFailedById = !!(S._pushFailedTsIds && S._pushFailedTsIds.size > 0);
+    var failedOnly = !!(S._failedOnly && hasFailedById);
     var failedTsCol = failedOnly ? headers.indexOf('testcase_id') : -1;
     if (failedOnly && failedTsCol < 0) {
-        // 没有 tsId 列就无法定位失败行，自动失效该筛选
+        // 没有 tsId 列，无法定位失败行，自动失效该筛选
         failedOnly = false;
     }
     // 仅看已修改行：基于 S.mods / _detailModCellKeys（未提交的本地修改）
@@ -134,9 +135,12 @@ function _computeViewRows() {
             if (!passed) continue;
         }
         if (failedOnly) {
-            var _tsv = row[failedTsCol];
-            if (_tsv === undefined || _tsv === null || _tsv === '') continue;
-            if (!S._pushFailedTsIds.has(String(_tsv))) continue;
+            var _tsv = (failedTsCol >= 0) ? row[failedTsCol] : undefined;
+            var _isFailedRow = false;
+            if (_tsv !== undefined && _tsv !== null && _tsv !== '' && S._pushFailedTsIds.has(String(_tsv))) {
+                _isFailedRow = true;
+            }
+            if (!_isFailedRow) continue;
         }
         if (modifiedOnly) {
             if (!_modRowSet.has(ri)) continue;

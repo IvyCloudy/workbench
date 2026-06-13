@@ -513,6 +513,26 @@ window.addEventListener('message', function (e) {
                 S._highlightedCells = null;
             }
         }
+        // 推送失败标记：从扩展端持久化文件（push-failures.json）下发，按 testcase_id 关联。
+        // 字段存在则覆盖恢复整套失败映射；不存在则保留前端现有内存集合。
+        if ('pushFailures' in m) {
+            if (m.pushFailures && typeof m.pushFailures === 'object') {
+                var pf = m.pushFailures;
+                S._pushFailedTsIds = new Set();
+                S._pushFailedReasons = new Map();
+                for (var _pfk in pf) {
+                    if (!Object.prototype.hasOwnProperty.call(pf, _pfk)) continue;
+                    var _kStr = String(_pfk);
+                    if (!_kStr) continue;
+                    S._pushFailedTsIds.add(_kStr);
+                    if (pf[_pfk]) S._pushFailedReasons.set(_kStr, String(pf[_pfk]));
+                }
+            } else {
+                S._pushFailedTsIds = new Set();
+                S._pushFailedReasons = new Map();
+                if (S._failedOnly) S._failedOnly = false;
+            }
+        }
         // 删除行信息（快照中有但当前数据中已不存在的行）
         if ('deletedInfos' in m) {
             if (m.deletedInfos && Array.isArray(m.deletedInfos) && m.deletedInfos.length > 0) {

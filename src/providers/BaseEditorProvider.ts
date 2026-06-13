@@ -23,6 +23,7 @@ import { getNonce, isInQualifiedDir, buildErrorHtml, FILE_PATTERNS, TS_ID_COLUMN
 import { getCurrentTaskInfo, type GetCurrentTaskInfoResult } from '../utils/commands';
 import { showPushErrorModal, showPushResult, showPushDone, showSaveResult } from '../utils/message';
 import { setHighlight, clearHighlight } from '../utils/highlightStore';
+import { getFailures, mergeFailures } from '../utils/pushFailureStore';
 import { savePushSnapshot, diffPushSnapshot, type RowDiff, type DiffResult, type DeletedRowInfo, type AddedRowInfo } from '../utils/pushSnapshotStore';
 import { markDeletedRows } from '../utils/deletedRowsStore';
 import { pushTestCase } from '../services/http';
@@ -49,6 +50,12 @@ export interface PushContext {
      * 失败弹窗显示「第 X 行」时优先使用此映射，避免按推送数组下标导致行号错位。
      */
     rowIndexMap?: Record<string, number>;
+    /**
+     * 按 payload 数组下标 -> 表格 1-based 行号 的兜底映射。
+     * 当行的 testcase_id 为空（首次推送场景）时，rowIndexMap 不会建键，
+     * 此时通过 body[i] 与 pushIndexToRow[i] 的顺序对齐仍可定位失败行号。
+     */
+    pushIndexToRow?: number[];
     /**
      * 通知自保存防抖时间戳（推送回写 testCaseNo 到文件前调用），
      * 防止推送写盘触发的 fsWatcher 在 pushSuccess 刷新期间覆盖高亮状态。
@@ -88,7 +95,7 @@ export class PushViaHttpClient implements PushStrategy {
                 costMs: String(Date.now() - _pushStart),
             });
             showPushErrorModal(webviewPanel, path.basename(ctx.filePath),
-                '未绑定任务，无法推送。请先在 task-bindings.json 中完成绑定。');
+                '未绑定任务，无法推送。请在测试任务插件绑定后再试。');
             return;
         }
         const taskInfo = {
@@ -144,14 +151,20 @@ export class PushViaHttpClient implements PushStrategy {
         // 解析后端返回：type=1 成功，data 即新的 testCaseNo；type=2 失败，data 为错误原因
         const body: any[] = Array.isArray(result.body) ? result.body : [];
         const successMappings: Array<{ tsId: string; testCaseNo: string }> = [];
-        const failures: Array<{ tsId: string; reason: string }> = [];
-        body.forEach(item => {
+        // failures 同时记下在 body 中的索引，用于兜底按 pushIndexToRow / pushData 顺序定位行号
+        const failures: Array<{ tsId: string; reason: string; bodyIndex: number }> = [];
+        body.forEach((item, bi) => {
             if (!item) return;
             const t = String(item.type == null ? '' : item.type);
-            const sid = String(item.sourceId == null ? '' : item.sourceId);
+            let sid = String(item.sourceId == null ? '' : item.sourceId);
+            // 后端可能对失败行不返回 sourceId（实测 mock 返回 sourceId=""），按 bodyIndex 从 pushData 反查 testcase_id 兜底
+            if (!sid && Array.isArray(pushData) && pushData[bi]) {
+                const fallback = pushData[bi][TS_ID_COLUMN];
+                if (fallback != null && fallback !== '') sid = String(fallback);
+            }
             const dataField = item.data == null ? '' : String(item.data);
             if (t === '1') successMappings.push({ tsId: sid, testCaseNo: dataField });
-            else if (t === '2') failures.push({ tsId: sid, reason: dataField });
+            else if (t === '2') failures.push({ tsId: sid, reason: dataField, bodyIndex: bi });
         });
 
         // 成功项：扩展端按 testcase_id 回写 testCaseNo 到原文件。
@@ -229,8 +242,14 @@ export class PushViaHttpClient implements PushStrategy {
         }
 
         // 失败项按 testcase_id 反查行号，统一通过 webview 弹窗展示（与右键文件推送一致）
-        // 优先使用前端传来的 rowIndexMap（真实表格 1-based 行号），缺省时退回按推送数组下标计算（旧逻辑）
+        // 行号定位优先级：
+        //   1) frontRowIndexMap[tsId]：前端基于真实表格 tsId -> 行号 的映射（最准确）
+        //   2) frontPushIndexToRow[bodyIndex]：前端按 payload 数组下标 -> 表格行号（兜底，
+        //      解决 testcase_id 为空时无法用 tsId 反查的场景；依赖后端 body 顺序与 payload 一致）
+        //   3) tsIdToRowIndex[tsId]：扩展端基于 pushData 推送数组下标计算
+        //   4) 都拿不到则 rowIndex=undefined，前端显示 "(无)" 不可跳转
         const frontRowIndexMap = ctx.rowIndexMap || {};
+        const frontPushIndexToRow: number[] = Array.isArray(ctx.pushIndexToRow) ? ctx.pushIndexToRow : [];
         const tsIdToRowIndex = new Map<string, number>();
         if (Array.isArray(pushData)) {
             pushData.forEach((rec: any, i: number) => {
@@ -238,18 +257,21 @@ export class PushViaHttpClient implements PushStrategy {
                 if (id) tsIdToRowIndex.set(id, i);
             });
         }
-        console.log('[推送][调试] failures=', JSON.stringify(failures));
-        console.log('[推送][调试] frontRowIndexMap=', JSON.stringify(frontRowIndexMap));
-        console.log('[推送][调试] tsIdToRowIndex=', JSON.stringify(Array.from(tsIdToRowIndex.entries())));
         const failureItems = failures.map(f => {
-            const front = frontRowIndexMap[f.tsId];
             let rowIndex: number | undefined;
+            const front = frontRowIndexMap[f.tsId];
             if (typeof front === 'number' && front > 0) {
                 rowIndex = front;
-            } else if (tsIdToRowIndex.has(f.tsId)) {
+            } else if (
+                f.bodyIndex >= 0 &&
+                f.bodyIndex < frontPushIndexToRow.length &&
+                typeof frontPushIndexToRow[f.bodyIndex] === 'number' &&
+                frontPushIndexToRow[f.bodyIndex] > 0
+            ) {
+                rowIndex = frontPushIndexToRow[f.bodyIndex];
+            } else if (f.tsId && tsIdToRowIndex.has(f.tsId)) {
                 rowIndex = tsIdToRowIndex.get(f.tsId)! + 1;
             }
-            console.log(`[推送][调试] failure tsId="${f.tsId}" front=${front} rowIndex=${rowIndex}`);
             return { tsId: f.tsId, reason: f.reason, rowIndex };
         });
 
@@ -265,6 +287,36 @@ export class PushViaHttpClient implements PushStrategy {
             failures: failureItems,
             total,
         });
+
+        // 持久化推送失败标记：以 testcase_id（行稳定唯一标识）为 key，关闭/重开文件后高亮恢复
+        try {
+            const batchTsIds: string[] = [];
+            if (Array.isArray(pushData)) {
+                for (const rec of pushData) {
+                    const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
+                    if (id) batchTsIds.push(id);
+                }
+            }
+            const failuresMap: { [tsId: string]: string } = {};
+            failures.forEach(f => {
+                if (f && f.tsId !== undefined && f.tsId !== null && f.tsId !== '') {
+                    failuresMap[String(f.tsId)] = String(f.reason || '');
+                }
+            });
+            const successTsIds: string[] = successMappings
+                .map(s => s && s.tsId)
+                .filter((t: any) => t !== undefined && t !== null && t !== '')
+                .map((t: any) => String(t));
+            console.log('[推送/失败持久化] filePath=' + ctx.filePath
+                + ' batchTsIds=' + batchTsIds.length
+                + ' successTsIds=' + successTsIds.length
+                + ' failureCount=' + Object.keys(failuresMap).length
+                + ' sample=' + JSON.stringify(failuresMap).slice(0, 200));
+            await mergeFailures(ctx.filePath, batchTsIds, failuresMap, successTsIds);
+            console.log('[推送/失败持久化] 已写入 push-failures.json');
+        } catch (err: any) {
+            console.error('[推送] 持久化失败标记失败:', err?.message || err);
+        }
 
         // 埋点：推送结果汇总
         sendTelemetryEvent('editorPush.complete', {
@@ -410,6 +462,23 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         const ready = new Promise<void>((resolve) => { markReady = resolve; });
         BaseEditorProvider.panelMap.set(filePath, { panel: webviewPanel, ready, markReady });
 
+        // ⚡ 预解析（Prefetch）：在 webview 脚本加载的同时并行解析文件，
+        // 避免出现「webview 加载完 → 发 init → 才开始 parse」的串行等待延迟。
+        // 等 init 消息到达时若 prefetch 已完成，则直接复用结果立即推送，显著缩短首屏数据展示时间。
+        const _prefetchStart = Date.now();
+        const prefetchPromise: Promise<{ tableData: any; sourceData: any; generated: boolean } | null> =
+            (async () => {
+                try {
+                    const result = await session.parser.parse(filePath);
+                    const ensured = ensureTrackingColumns(result.tableData, result.sourceData);
+                    log(`⚡ prefetch parse done dur=${Date.now() - _prefetchStart}ms rows=${(ensured.tableData?.rows || []).length} generated=${ensured.generated}`);
+                    return { tableData: ensured.tableData, sourceData: result.sourceData, generated: ensured.generated };
+                } catch (err: any) {
+                    log('⚠ prefetch parse failed:', err?.message || err);
+                    return null;
+                }
+            })();
+
         // 自身落盘后短时间内忽略外部变更通知，避免触发自我反弹刷新。
         // 守护期需覆盖：parser.save 写盘耗时 + fsWatcher / onDidSaveTextDocument 通知延迟 + 防抖 150ms。
         // 大文件 YAML 序列化 + 写盘可能 > 800ms，故放宽到 3 秒。
@@ -423,7 +492,18 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     const oldData = session.cachedTableData;
                     const prevRowsLen = (oldData?.rows || []).length;
                     const _parseStart = Date.now();
-                    const result = await session.parser.parse(filePath);
+                    // ⚡ init 场景优先复用 resolveCustomEditor 启动时的预解析结果，避免重复 parse
+                    let result: { tableData: any; sourceData: any };
+                    let prefetchHit: { tableData: any; sourceData: any; generated: boolean } | null = null;
+                    if (reason === 'init') {
+                        try { prefetchHit = await prefetchPromise; } catch (_) { prefetchHit = null; }
+                    }
+                    if (prefetchHit) {
+                        result = { tableData: prefetchHit.tableData, sourceData: prefetchHit.sourceData };
+                        log(`⚡ prefetch hit on init, skip reparse`);
+                    } else {
+                        result = await session.parser.parse(filePath);
+                    }
                     const _parseDur = Date.now() - _parseStart;
                     const newRowsLen = (result.tableData?.rows || []).length;
                     const newColsLen = (result.tableData?.headers || []).length;
@@ -437,7 +517,10 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     }
                     session.originalSourceData = result.sourceData;
                     // 仅确保 testcase_id 列存在；缺失时立刻落盘让 testcase_id 持久化
-                    const ensured = ensureTrackingColumns(result.tableData, session.originalSourceData);
+                    // prefetch 命中时 ensureTrackingColumns 已执行过，无需重复
+                    const ensured = prefetchHit
+                        ? { tableData: prefetchHit.tableData, generated: prefetchHit.generated }
+                        : ensureTrackingColumns(result.tableData, session.originalSourceData);
                     session.cachedTableData = ensured.tableData;
                     if (ensured.generated) {
                         try {
@@ -508,6 +591,11 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 if (highlighted !== undefined) {
                     msgPayload.highlightedCells = highlighted;
                 }
+                // 推送失败标记：从 store 读取，每次推送数据时都下发，
+                // 确保关闭/重开文件后失败行高亮可恢复（按 testcase_id 关联，行号变动也不影响）
+                try {
+                    msgPayload.pushFailures = getFailures(filePath);
+                } catch { /* ignore */ }
                 const deleted = session.deletedInfos;
                 if (deleted !== undefined) {
                     msgPayload.deletedInfos = deleted;
@@ -522,6 +610,25 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 webviewPanel.webview.postMessage(msgPayload);
             } catch (err: any) {
                 log('❌ push failed:', err?.message || err);
+                // 兜底：diff/highlight 等周边逻辑出错时，已经成功 parse 的数据仍要推给前端，
+                // 否则前端会一直停在 loading 状态，必须切换文件触发 visible reload 才能恢复。
+                try {
+                    if (session.cachedTableData) {
+                        const dataStr = JSON.stringify(session.cachedTableData);
+                        const uint8Array = new TextEncoder().encode(dataStr);
+                        const fallbackPayload: any = {
+                            type: session.type + 'Data',
+                            data: Array.from(uint8Array),
+                            force: !!force,
+                            reason: reason + ':fallback',
+                            externalChange: false,
+                        };
+                        log(`📤 push (fallback) rows=${(session.cachedTableData.rows || []).length}`);
+                        webviewPanel.webview.postMessage(fallbackPayload);
+                    }
+                } catch (e2: any) {
+                    log('❌ fallback push also failed:', e2?.message || e2);
+                }
             }
         };
 
@@ -688,6 +795,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                         filePath,
                         refresh: (reason) => pushDataToWebview(true, reason, true),
                         rowIndexMap: (msg.rowIndexMap && typeof msg.rowIndexMap === 'object') ? msg.rowIndexMap : undefined,
+                        pushIndexToRow: Array.isArray(msg.pushIndexToRow) ? msg.pushIndexToRow : undefined,
                         markSelfSave: () => { lastSelfSaveAt = Date.now(); },
                     };
                     await this.pushStrategy.push(msg.data, pushCtx, webviewPanel, this.context);

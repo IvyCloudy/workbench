@@ -952,6 +952,9 @@ function pushFromContextMenu() {
     }
     var tsCol = headers.indexOf('testcase_id');
     var rowIndexMap = {};
+    // 按 payload 数组下标 -> 表格 1-based 行号 的映射（兜底用）：
+    // 当行的 testcase_id 为空时，仍可通过 body[i] 顺序对齐定位失败行号。
+    var pushIndexToRow = [];
     var payload = indices.map(function (ri) {
         var record = {};
         var row = S.data.rows[ri] || [];
@@ -962,6 +965,7 @@ function pushFromContextMenu() {
                 rowIndexMap[String(tid)] = ri + 1;
             }
         }
+        pushIndexToRow.push(ri + 1);
         return record;
     });
     // 缓存本批参与推送的行索引，供 pushResult 回来后清除对应的 S.mods 修改高亮。
@@ -989,5 +993,5 @@ function pushFromContextMenu() {
             if (typeof showToast === 'function') showToast('推送超时未响应，已解除按钮锁定', 'error');
         }
     }, 30000);
-    S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap });
+    S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap, pushIndexToRow: pushIndexToRow });
 }

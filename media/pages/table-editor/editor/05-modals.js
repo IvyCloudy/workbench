@@ -403,7 +403,48 @@ function bindXsPrompt() {
     if (input) input.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter') { ev.preventDefault(); closeXsPrompt(true); }
         else if (ev.key === 'Escape') { ev.preventDefault(); closeXsPrompt(false); }
+        else if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'v' || ev.key === 'V')) {
+            // VSCode webview 沙箱下 <input> 的原生 Ctrl/Cmd+V 偶发失效，
+            // 显式调用 clipboard API 兜底，确保弹窗输入框任何时候都能粘贴文本。
+            try {
+                if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+                    ev.preventDefault();
+                    navigator.clipboard.readText().then(function (text) {
+                        if (text == null) text = '';
+                        var el = ev.target;
+                        var start = (typeof el.selectionStart === 'number') ? el.selectionStart : el.value.length;
+                        var end = (typeof el.selectionEnd === 'number') ? el.selectionEnd : el.value.length;
+                        var before = el.value.slice(0, start);
+                        var after = el.value.slice(end);
+                        el.value = before + String(text) + after;
+                        var caret = before.length + String(text).length;
+                        try { el.setSelectionRange(caret, caret); } catch (_) {}
+                        try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+                    }).catch(function () { /* 静默失败，回退浏览器默认（如可用） */ });
+                }
+            } catch (_) { /* ignore */ }
+        }
         ev.stopPropagation();
+    });
+    if (input) input.addEventListener('paste', function (ev) {
+        // 浏览器原生 paste 事件能命中时优先使用，避免与 keydown 兜底重复粘贴
+        try {
+            var dt = ev.clipboardData || (window).clipboardData;
+            if (!dt) return;
+            var text = dt.getData('text');
+            if (text == null) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            var el = ev.target;
+            var start = (typeof el.selectionStart === 'number') ? el.selectionStart : el.value.length;
+            var end = (typeof el.selectionEnd === 'number') ? el.selectionEnd : el.value.length;
+            var before = el.value.slice(0, start);
+            var after = el.value.slice(end);
+            el.value = before + String(text) + after;
+            var caret = before.length + String(text).length;
+            try { el.setSelectionRange(caret, caret); } catch (_) {}
+            try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+        } catch (_) { /* ignore */ }
     });
 }
 
@@ -674,7 +715,25 @@ function renderDetailV2() {
     var rawType = (dt.rawRowTypes && dt.rawRowTypes[ri]) || 'array';
     var rawRows = (dt.rawRowGroups && dt.rawRowGroups[ri]) || [];
 
-    // 嵌套对象类型：当作只有一条 step 的特例
+    // 嵌套对象类型：当作只有一条 step 的特例。
+    // 当行刚被插入、rawRowGroups 为空时，左侧不渲染"+ 添加步骤"按钮（嵌套对象固定 1 条），
+    // 用户会卡死无法进入编辑。这里按字段骨架自动补一条空对象，并标记为已修改以便保存写回。
+    if (rawType === 'object' && rawRows.length === 0) {
+        if (!dt.rawRowGroups) dt.rawRowGroups = [];
+        if (!dt.rawRowGroups[ri]) dt.rawRowGroups[ri] = [];
+        var seedObj = {};
+        (dt.headers || []).forEach(function (h) {
+            var kind = _inferDetailFieldKind(dt, h);
+            if (kind === 'array') seedObj[h] = [];
+            else if (kind === 'object') seedObj[h] = {};
+            else seedObj[h] = '';
+        });
+        dt.rawRowGroups[ri].push(seedObj);
+        rawRows = dt.rawRowGroups[ri];
+        if (!S._dv2StepMods) S._dv2StepMods = new Set();
+        S._dv2StepMods.add(0);
+    }
+
     var stepCount = rawRows.length;
     if (S._dv2ActiveStep == null || S._dv2ActiveStep < 0 || S._dv2ActiveStep >= stepCount) {
         S._dv2ActiveStep = stepCount > 0 ? 0 : -1;

@@ -28,6 +28,7 @@ import { ensureBindingsFile } from './utils/taskInfoStore';
 import { getCurrentTaskInfo } from './utils/commands';
 import { showPushErrorModal, showPushResult, showModal } from './utils/message';
 import { ensureHighlightFile } from './utils/highlightStore';
+import { ensurePushFailureFile, mergeFailures } from './utils/pushFailureStore';
 import { ensureSnapshotFile, savePushSnapshot, getDeletedSnapshotIds } from './utils/pushSnapshotStore';
 import { TS_ID_COLUMN } from './services/utils';
 import { ensureDeletedRowsFile, syncDeletedRows, refreshAndGetDeletedRows, getPendingDeletedRows, markDeletedRows } from './utils/deletedRowsStore';
@@ -133,7 +134,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     const currentTask = await getCurrentTaskInfo(filePath);
     if (!currentTask.bind) {
         sendTelemetryEvent('explorerPush.aborted', { reason: 'unbound', ext: '' });
-        showPushErrorModal(panel, baseName, `未绑定任务，无法推送\n\n文件 ${baseName} 所在的任务尚未在系统中完成绑定，请联系项目管理员配置。`);
+        showPushErrorModal(panel, baseName, '未绑定任务，无法推送。请在测试任务插件绑定后再试。');
         return;
     }
     const fileExt = path.extname(filePath).toLowerCase();
@@ -222,6 +223,28 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     });
 
     showPushResult(panel, baseName, successMappings.length, failureItems, rows.length);
+
+    // 持久化推送失败标记：以 testcase_id（行稳定唯一标识）为 key，跨 webview/vscode 重启依然保持
+    try {
+        const batchTsIds: string[] = [];
+        for (const rec of rows) {
+            const id = rec && (rec as any)[TS_ID_COLUMN] != null ? String((rec as any)[TS_ID_COLUMN]) : '';
+            if (id) batchTsIds.push(id);
+        }
+        const failuresMap: { [tsId: string]: string } = {};
+        failures.forEach(f => {
+            if (f && f.tsId !== undefined && f.tsId !== null && f.tsId !== '') {
+                failuresMap[String(f.tsId)] = String(f.reason || '');
+            }
+        });
+        const successTsIds: string[] = successMappings
+            .map(s => s && s.tsId)
+            .filter((t: any) => t !== undefined && t !== null && t !== '')
+            .map((t: any) => String(t));
+        await mergeFailures(filePath, batchTsIds, failuresMap, successTsIds);
+    } catch (err: any) {
+        console.error('[推送] 持久化失败标记失败:', err?.message || err);
+    }
     // 埋点：推送结果汇总
     sendTelemetryEvent('explorerPush.complete', {
         ext: fileExt,
@@ -310,6 +333,12 @@ export async function activate(context: vscode.ExtensionContext) {
     await ensureHighlightFile(context).catch(err => {
         console.error('[Extension] 初始化高亮存储文件失败:', err?.message || err);
         sendTelemetryException('highlight.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+    });
+
+    // 初始化推送失败存储文件（以 testcase_id 为 key 持久化失败高亮）
+    await ensurePushFailureFile(context).catch(err => {
+        console.error('[Extension] 初始化推送失败存储文件失败:', err?.message || err);
+        sendTelemetryException('pushFailure.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
     });
 
     // 初始化推送快照存储文件（每次推送后记录基线，后续差异比对用）

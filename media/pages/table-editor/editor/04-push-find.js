@@ -34,6 +34,10 @@ function pushChanges() {
     var tsCol = headers.indexOf('testcase_id');
     // 收集 testcase_id -> 真实表格行号 (1-based)，用于失败弹窗显示"第 X 行"，避免后端按数组下标导致行号错位
     var rowIndexMap = {};
+    // 按 payload 数组下标 -> 表格 1-based 行号 的映射（兜底用）：
+    // 当行的 testcase_id 为空（首次推送场景）时，rowIndexMap 不会建键，
+    // 此时通过 body[i] 与 pushIndexToRow[i] 的顺序对齐仍可定位失败行号。
+    var pushIndexToRow = [];
     var payload = picked.map(function (ri) {
         var record = {};
         var row = S.data.rows[ri] || [];
@@ -44,6 +48,7 @@ function pushChanges() {
                 rowIndexMap[String(tid)] = ri + 1;
             }
         }
+        pushIndexToRow.push(ri + 1);
         return record;
     });
     // 缓存本批参与推送的行索引，供 pushResult 回来后清除对应的 S.mods 修改高亮。
@@ -72,7 +77,7 @@ function pushChanges() {
             if (typeof showToast === 'function') showToast('推送超时未响应，已解除按钮锁定', 'error');
         }
     }, 30000);
-    S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap });
+    S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap, pushIndexToRow: pushIndexToRow });
 }
 
 function saveFile() {

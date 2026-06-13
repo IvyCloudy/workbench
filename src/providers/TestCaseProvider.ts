@@ -17,9 +17,9 @@ import * as vscode from 'vscode';
 import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider';
 import { writeParams } from '../services/storage';
 import { queryTestCases, fetchTaskTree } from '../services/http';
-import { resolveTaskInfo } from '../services/utils';
-import { getTaskInfoByFilePath, extractTestPhaseName } from '../utils/command';
-import { showModal } from '../utils/message';
+import { getTaskInfoByFilePath } from '../utils/commands';
+import { sendTelemetryEvent, sendTelemetryErrorEvent, sendTelemetryException } from '../services/telemetry';
+import { stackHead } from '../services/utils';
 import type { WebviewMessage } from '../types';
 
 // ============================================
@@ -129,9 +129,7 @@ export class TestCaseProvider extends BaseWebviewProvider {
     /**
      * 显示 Webview 并加载文件参数
      *
-     * 参数来源：
-     *   - 优先走 getTaskInfoByFilePath（基于 task-bindings.json 的真实后端值）
-     *   - 未绑定时回退到 resolveTaskInfo + 文件内容提取 testPhaseName
+     * 参数来源：统一通过 getTaskInfoByFilePath（基于 task-bindings.json）
      */
     async showWebview(fileUri: vscode.Uri): Promise<void> {
         const filePath = fileUri.fsPath;
@@ -139,6 +137,7 @@ export class TestCaseProvider extends BaseWebviewProvider {
 
         let params: TestCaseParams;
         if (result.bind) {
+            sendTelemetryEvent('testCase.viewOnline', { bound: 'true' });
             const info = result.taskInfo as any;
             params = {
                 testTaskNo: info.testTaskNo,
@@ -146,17 +145,12 @@ export class TestCaseProvider extends BaseWebviewProvider {
                 testPhaseName: info.testPhaseName,
             };
         } else {
-            // 未绑定：兜底用路径解析 + 文件内容，保持原有可用性
-            const r = resolveTaskInfo(filePath);
-            const testPhaseName = await extractTestPhaseName(filePath);
+            sendTelemetryEvent('testCase.viewOnline', { bound: 'false' });
             params = {
-                testTaskNo: r.info.testTaskNo,
-                subTestTaskName: r.info.subTestTaskName,
-                testPhaseName,
+                testTaskNo: '',
+                subTestTaskName: '',
+                testPhaseName: '',
             };
-            if (!r.ok) {
-                showModal(this.panel, 'warning', '任务解析', r.error);
-            }
         }
 
         const config = vscode.workspace.getConfiguration('testcaseViewer');
@@ -165,6 +159,7 @@ export class TestCaseProvider extends BaseWebviewProvider {
         this.readyParams = { ...params, apiUrl };
 
         await this.show();
+        sendTelemetryEvent('testCase.webview.shown', {});
         await writeParams(this.context, params);
     }
 
@@ -174,6 +169,7 @@ export class TestCaseProvider extends BaseWebviewProvider {
     protected handleMessage: MessageHandler = async (msg: WebviewMessage) => {
         try {
             if (msg.command === 'ready' && this.readyParams) {
+                sendTelemetryEvent('testCase.webview.ready', {});
                 this.postMessage({
                     command: 'init',
                     ...this.readyParams,
@@ -184,12 +180,14 @@ export class TestCaseProvider extends BaseWebviewProvider {
             }
 
             if (msg.command === 'fetchTaskTree') {
+                sendTelemetryEvent('testCase.taskTree.requested', {});
                 const treeData = await this.queryService.getTaskTree();
                 this.postMessage({ command: 'taskTreeData', data: treeData });
                 return;
             }
 
             if (msg.command === 'query') {
+                sendTelemetryEvent('testCase.query.requested', { currentPage: String(msg.currentPage || 1) });
                 const result = await this.queryService.queryTestCases({
                     currentPage: msg.currentPage || 1,
                     pageSize: msg.pageSize || '20',
@@ -205,14 +203,17 @@ export class TestCaseProvider extends BaseWebviewProvider {
                 });
 
                 if (!result.success) {
+                    sendTelemetryErrorEvent('testCase.query.error', { queryError: result.error || '查询失败' });
                     this.postMessage({ command: 'showError', message: result.error || '查询失败' });
                 } else if (result.endOfData) {
+                    sendTelemetryEvent('testCase.query.endOfData', {});
                     this.postMessage({ command: 'endOfData' });
                 } else {
                     this.postMessage({ command: 'showData', data: result.data });
                 }
             }
         } catch (err: any) {
+            sendTelemetryException('testCase.message.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
             this.postMessage({
                 command: 'showError',
                 message: `消息处理失败: ${err?.message || err}`,

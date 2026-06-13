@@ -92,6 +92,15 @@ let resolvedFilePath: string | null = null;
 // ============================================
 
 /**
+ * 强制清除绑定数据缓存，下次读取时重新从磁盘加载。
+ * 在 task-bindings.json 被外部修改后调用。
+ */
+export function clearBindingsCache(): void {
+    cachedItems = null;
+    cachedMtimeMs = 0;
+}
+
+/**
  * 解析绑定文件的绝对路径（必要时创建 globalStorage 目录与文件）。
  * 在 activate 阶段调用一次，把路径打到日志便于用户找到。
  */

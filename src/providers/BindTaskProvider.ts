@@ -14,7 +14,9 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { getAllBoundItems, getAllBoundFolderPaths } from '../utils/taskInfoStore';
+import { getAllBoundItems, getAllBoundFolderPaths, clearBindingsCache } from '../utils/taskInfoStore';
+import { sendTelemetryEvent, sendTelemetryException } from '../services/telemetry';
+import { stackHead } from '../services/utils';
 
 // ============================================
 // 全局上下文引用
@@ -59,8 +61,7 @@ class TaskFolderDecorationProvider implements vscode.FileDecorationProvider {
         const fsPath = uri.fsPath;
         if (!fsPath) return undefined;
 
-        const boundPaths = getAllBoundFolderPaths(effectiveContext!);
-        const fsPathNorm = fsPath.replace(/\\/g, '/');
+        const boundPaths = getAllBoundFolderPaths(effectiveContext!);        const fsPathNorm = fsPath.replace(/\\/g, '/');
 
         // 找到 exaxt 匹配的绑定文件夹路径
         let matchedPath = '';
@@ -108,16 +109,19 @@ class BindTasksTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
         const items = getAllBoundItems(effectiveContext!);
         return items.map(entry => {
             const info = entry.taskInfo!;
-            const taskName = info.name || '';
-            const description = `${info.testTaskNo || ''} / ${info.subTestTaskName || ''}`;
+            const testTaskName = info.testTaskName || '';
+            const subTestTaskName = info.subTestTaskName || '';
+            // childPath 格式：测试任务/${任务文件名}，取第二段
+            const parts = (info.childPath || '').split('/');
+            const originalFileName = parts.length >= 2 ? parts[1] : (info.childPath ? path.basename(info.childPath) : '');
+            const displayLabel = `🔗 ${originalFileName} ${testTaskName}_${subTestTaskName}`;
             const fullPath = path.join(info.rootPath || '', info.childPath || '');
 
             const item = new vscode.TreeItem(
-                `🔗 ${taskName}`,
+                displayLabel,
                 vscode.TreeItemCollapsibleState.None
             );
-            item.tooltip = `已绑定测试任务: ${taskName}\n路径: ${fullPath}`;
-            item.description = description;
+            item.tooltip = `已绑定测试任务: ${originalFileName}\n路径: ${fullPath}`;
             if (fullPath) {
                 item.command = {
                     command: 'testcaseViewer.revealBoundTask',
@@ -146,52 +150,25 @@ function registerRevealBoundTaskCommand(): vscode.Disposable {
             let folderExists = false;
             try { folderExists = fs.existsSync(fullPath); } catch (_) { /* ignore */ }
             if (!folderExists) {
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.revealBoundTask', execResult: 'folderNotExist' });
                 vscode.window.showWarningMessage(
                     `文件夹不存在，请检查 task-bindings.json 中的路径配置:\n${fullPath}`
                 );
                 return;
             }
 
-            // 方案 A：打开目标文件夹内任意子文件，用 showActiveFileInExplorer 强制展开
-            const fileToOpen = findAnyFileInDir(fullPath);
-            if (fileToOpen) {
-                console.log('[revealBoundTask] opening file:', fileToOpen);
-                try {
-                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(fileToOpen));
-                    await vscode.window.showTextDocument(doc, { preview: true });
-                    await new Promise(r => setTimeout(r, 400));
-                    await vscode.commands.executeCommand('workbench.files.action.showActiveFileInExplorer');
-                    await new Promise(r => setTimeout(r, 500));
-                    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
-                    console.log('[revealBoundTask] done via file open');
-                    return;
-                } catch (e) {
-                    console.log('[revealBoundTask] file open failed:', e);
-                }
-            }
+            // 找到文件夹内任意文件，用 revealInExplorer 展开（不打开编辑器，无闪烁）
+            const fileToReveal = findAnyFileInDir(fullPath);
+            const targetUri = fileToReveal
+                ? vscode.Uri.file(fileToReveal)
+                : vscode.Uri.file(fullPath);
 
-            // 方案 B：先 reveal 第一个子项（触发父级展开），再 reveal 目标文件夹选中它
-            let childPath = '';
-            try {
-                const entries = fs.readdirSync(fullPath, { withFileTypes: true });
-                if (entries.length > 0) {
-                    childPath = path.join(fullPath, entries[0].name);
-                }
-            } catch (_) { /* ignore */ }
-
-            console.log('[revealBoundTask] using child reveal approach, child:', childPath);
             await vscode.commands.executeCommand('workbench.view.explorer');
-            await new Promise(r => setTimeout(r, 500));
-
-            if (childPath) {
-                await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(childPath));
-                await new Promise(r => setTimeout(r, 500));
-            }
-
-            await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(fullPath));
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, 300));
+            await vscode.commands.executeCommand('revealInExplorer', targetUri);
 
             console.log('[revealBoundTask] done');
+            sendTelemetryEvent('command.executed', { command: 'testcaseViewer.revealBoundTask' });
         }
     );
 }
@@ -227,7 +204,10 @@ export function registerBindTaskFeatures(context: vscode.ExtensionContext): vsco
     // 视图变为可见时自动刷新（打开资源管理器/切换回 Explorer 时触发）
     disposables.push(
         bindTaskTreeView.onDidChangeVisibility(e => {
-            if (e.visible) bindTasksTreeProvider.refresh();
+            if (e.visible) {
+                bindTasksTreeProvider.refresh();
+                taskFolderDecorationProvider.refresh();
+            }
         })
     );
 
@@ -238,6 +218,8 @@ export function registerBindTaskFeatures(context: vscode.ExtensionContext): vsco
     disposables.push(
         vscode.workspace.onDidSaveTextDocument(doc => {
             if (doc.uri.fsPath.includes('task-bindings.json')) {
+                sendTelemetryEvent('bindings.fileChanged', {});
+                clearBindingsCache(); // 强制清除缓存，确保读到最新数据
                 taskFolderDecorationProvider.refresh();
                 bindTasksTreeProvider.refresh();
             }

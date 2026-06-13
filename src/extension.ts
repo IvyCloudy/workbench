@@ -25,13 +25,14 @@ import { registerBindTaskFeatures } from './providers/BindTaskProvider';
 import { pushTestCase } from './services/http';
 import { applyTestCaseNos, createParser, detectFileType, ensureTrackingColumns, parseFileToRows } from './parsers';
 import { ensureBindingsFile } from './utils/taskInfoStore';
-import { getCurrentTaskInfo } from './utils/command';
+import { getCurrentTaskInfo } from './utils/commands';
 import { showPushErrorModal, showPushResult, showModal } from './utils/message';
 import { ensureHighlightFile } from './utils/highlightStore';
 import { ensureSnapshotFile, savePushSnapshot, getDeletedSnapshotIds } from './utils/pushSnapshotStore';
 import { TS_ID_COLUMN } from './services/utils';
 import { ensureDeletedRowsFile, syncDeletedRows, refreshAndGetDeletedRows, getPendingDeletedRows, markDeletedRows } from './utils/deletedRowsStore';
-import { initTelemetry, trackEvent, trackError, trackException } from './services/telemetry';
+import { initTelemetry, sendTelemetryEvent, sendTelemetryErrorEvent, sendTelemetryException } from './services/telemetry';
+import { stackHead } from './services/utils';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
@@ -117,12 +118,14 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
 
     // 多文件警告复用已有 webview，避免创建独立标签页
     if (multiFile) {
+        sendTelemetryEvent('explorerPush.aborted', { reason: 'multiFile', ext: '' });
         showModal(panel, 'warning', '多文件推送', '暂不支持多文件推送，请逐个推送。将仅处理首个文件。');
     }
 
     const fileCheck = FileTypeChecker.isQualifiedFile(target);
     if (!fileCheck.qualified) {
-        showPushErrorModal(panel, baseName, `文件不在合规目录下\n\n请将文件放入 测试任务/任务编号/测试案例/ 目录结构中。\n当前文件：${baseName}`);
+        sendTelemetryEvent('explorerPush.aborted', { reason: 'dirNotQualified', ext: '' });
+        showPushErrorModal(panel, baseName, `文件不在合规目录下\n\n请将文件放入 测试任务/<任务文件夹>/测试案例/ 目录结构中。\n当前文件：${baseName}`);
         return;
     }
 
@@ -132,10 +135,11 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     // 任务信息统一由 getCurrentTaskInfo 提供：未绑定一律拒绝推送
     const currentTask = await getCurrentTaskInfo(filePath);
     if (!currentTask.bind) {
+        sendTelemetryEvent('explorerPush.aborted', { reason: 'unbound', ext: '' });
         showPushErrorModal(panel, baseName, `未绑定任务，无法推送\n\n文件 ${baseName} 所在的任务尚未在系统中完成绑定，请联系项目管理员配置。`);
-        trackError('explorerPush.rejected', { reason: 'unbound', ext: fileExt });
         return;
     }
+
     const taskInfo = {
         testTaskNo: currentTask.taskInfo.testTaskNo || '',
         subTestTaskName: currentTask.taskInfo.subTestTaskName || '',
@@ -143,9 +147,8 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
 
     const rows = await parseFileToRows(filePath);
     if (!rows || rows.length === 0) {
+        sendTelemetryEvent('explorerPush.aborted', { reason: 'noData', ext: fileExt });
         showPushErrorModal(panel, baseName, `文件无数据\n\n${baseName} 中未检测到有效的测试案例数据，请检查文件内容。`);
-        vscode.window.showWarningMessage(`文件无数据: ${path.basename(filePath)}`);
-        trackError('explorerPush.rejected', { reason: 'empty', ext: fileExt });
         return;
     }
 
@@ -158,15 +161,17 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
 
 
     console.log(`[推送] 文件: ${filePath}, ${rows.length} 行`);
-    trackEvent('explorerPush.start', { ext: fileExt }, { rowCount: rows.length });
+    sendTelemetryEvent('explorerPush.start', { ext: fileExt, totalRows: String(rows.length) });
     const pushResult = await pushTestCase(context, rows, taskInfo, path.basename(filePath));
     if (pushResult.returnCode !== 'SUC0000') {
         showPushErrorModal(panel, baseName, `后端返回失败: ${pushResult.errorMsg || '未知错误'}`);
         vscode.window.showErrorMessage(`推送失败: ${pushResult.errorMsg || '未知错误'}`);
-        trackError('explorerPush.failed', {
+        sendTelemetryErrorEvent('explorerPush.failed', {
             ext: fileExt,
             returnCode: pushResult.returnCode || '',
-        }, { rowCount: rows.length, durationMs: Date.now() - pushStart });
+            totalRows: String(rows.length),
+            costMs: String(Date.now() - pushStart),
+        });
         return;
     }
 
@@ -198,6 +203,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
             }
         } catch (err: any) {
             console.error(`[推送] 回写 testCaseNo 失败: ${err?.message || err}`);
+            sendTelemetryException('explorerPush.writeBackFailed', { ext: fileExt, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
         }
     }
 
@@ -218,14 +224,13 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
 
     showPushResult(panel, baseName, successMappings.length, failureItems, rows.length);
     // 埋点：推送结果汇总
-    trackEvent('explorerPush.complete', {
+    sendTelemetryEvent('explorerPush.complete', {
         ext: fileExt,
-        outcome: failures.length === 0 ? 'allSuccess' : (successMappings.length === 0 ? 'allFail' : 'partial'),
-    }, {
-        rowCount: rows.length,
-        successCount: successMappings.length,
-        failedCount: failures.length,
-        durationMs: Date.now() - pushStart,
+        pushResult: failures.length === 0 ? 'allSuccess' : (successMappings.length === 0 ? 'allFail' : 'partial'),
+        totalRows: String(rows.length),
+        successRows: String(successMappings.length),
+        failedRows: String(failures.length),
+        costMs: String(Date.now() - pushStart),
     });
 
     // 统一通过对应 webview 弹窗展示（与编辑器内推送一致）
@@ -241,6 +246,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
         // 极端兵头：webview 未能拉起，退回原生提示
         const succ = successMappings.length;
         const fail = failures.length;
+        sendTelemetryEvent('explorerPush.noPanelFallback', { succ: String(succ), fail: String(fail), ext: fileExt });
         if (fail === 0) {
             vscode.window.showInformationMessage(`推送成功：${baseName}，共 ${succ} 条。`);
         } else if (succ === 0) {
@@ -263,12 +269,14 @@ function registerEditorCommands(
         vscode.commands.registerCommand('testcaseViewer.openWithEditor', async () => {
             const uri = getActiveFileUri();
             if (uri && extPattern.test(uri.fsPath) && isTestCaseFile(uri)) {
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.openWithEditor' });
                 await vscode.commands.executeCommand('vscode.openWith', uri, TESTCASE_EDITOR_VIEWTYPE);
             }
         }),
         vscode.commands.registerCommand('testcaseViewer.openWithText', async () => {
             const uri = getActiveFileUri();
             if (uri && extPattern.test(uri.fsPath)) {
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.openWithText' });
                 await vscode.commands.executeCommand('vscode.openWith', uri, 'default');
             }
         })
@@ -290,28 +298,31 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // 全局未捕获异常上报（兜底）
     process.on('unhandledRejection', (reason: any) => {
-        try { trackException('extension.unhandledRejection', reason); } catch (_) { /* ignore */ }
+        try { sendTelemetryException('extension.unhandledRejection', { errorMessage: String(reason?.message || String(reason)).slice(0, 500), stackHead: stackHead(reason) }); } catch (_) { /* ignore */ }
     });
 
     // 初始化测试任务绑定文件（不存在则创建空模板，并打印路径便于用户定位）
     await ensureBindingsFile(context).catch(err => {
         console.error('[Extension] 初始化绑定文件失败:', err?.message || err);
-        trackException('bindings.initFailed', err);
+        sendTelemetryException('bindings.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
     });
 
     // 初始化高亮存储文件（用于持久化推送后 testCaseNo 单元格的高亮标识）
     await ensureHighlightFile(context).catch(err => {
         console.error('[Extension] 初始化高亮存储文件失败:', err?.message || err);
+        sendTelemetryException('highlight.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
     });
 
     // 初始化推送快照存储文件（每次推送后记录基线，后续差异比对用）
     await ensureSnapshotFile(context).catch(err => {
         console.error('[Extension] 初始化快照存储文件失败:', err?.message || err);
+        sendTelemetryException('snapshot.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
     });
 
     // 初始化已删除行追踪存储文件（管理待同步的删除行记录）
     await ensureDeletedRowsFile(context).catch(err => {
         console.error('[Extension] 初始化删除行存储文件失败:', err?.message || err);
+        sendTelemetryException('deletedRows.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
     });
 
     // 注册绑定任务相关功能（装饰器 + TreeView + revealBoundTask 命令 + 监听）
@@ -338,13 +349,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
         // 全局命令
         vscode.commands.registerCommand('tableBrowser.open', () => {
-            trackEvent('command.executed', { command: 'tableBrowser.open' });
+            sendTelemetryEvent('command.executed', { command: 'tableBrowser.open' });
             return tableBrowserProvider.show();
         }),
         vscode.commands.registerCommand('testcaseViewer.viewOnline', async () => {
             const uri = getActiveFileUri();
             if (uri && isTestCaseFile(uri)) {
-                trackEvent('command.executed', { command: 'testcaseViewer.viewOnline' });
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.viewOnline' });
                 await testCaseProvider.showWebview(uri);
             }
         }),
@@ -357,12 +368,13 @@ export async function activate(context: vscode.ExtensionContext) {
             'testcaseViewer.pushTestCaseFromExplorer',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
                 const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
-                trackEvent('command.executed', { command: 'testcaseViewer.pushTestCaseFromExplorer' });
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.pushTestCaseFromExplorer' });
                 try {
                     await handleFilePush(targets, context);
                 } catch (err: any) {
                     const baseName = targets[0] ? path.basename(targets[0].fsPath) : '';
                     const panel = targets[0] ? BaseEditorProvider.getPanel(targets[0].fsPath) : undefined;
+                    sendTelemetryException('explorerPush.commandError', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                     showPushErrorModal(panel, baseName, `推送失败: ${err.message || err}`);
                 }
             }
@@ -374,12 +386,14 @@ export async function activate(context: vscode.ExtensionContext) {
             async () => {
                 const uri = getActiveFileUri();
                 if (!uri || !isTestCaseFile(uri)) {
+                    sendTelemetryEvent('syncDeletedRows.aborted', { reason: 'notTestCaseFile' });
                     vscode.window.showInformationMessage('请先打开测试案例文件再执行同步');
                     return;
                 }
                 try {
                     const fileType = detectFileType(uri.fsPath);
                     if (!fileType) {
+                        sendTelemetryEvent('syncDeletedRows.aborted', { reason: 'unsupportedFileType' });
                         vscode.window.showErrorMessage('不支持的文件类型');
                         return;
                     }
@@ -387,6 +401,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     const parsed = await parser.parse(uri.fsPath);
                     const deletedRows = refreshAndGetDeletedRows(uri.fsPath, parsed.tableData);
                     if (deletedRows.length === 0) {
+                        sendTelemetryEvent('syncDeletedRows.noPending', {});
                         vscode.window.showInformationMessage('当前文件无待同步的已删除行');
                         return;
                     }
@@ -400,11 +415,14 @@ export async function activate(context: vscode.ExtensionContext) {
                     if (result.synced.length > 0) {
                         vscode.window.showInformationMessage(`已同步 ${result.synced.length} 行删除记录`);
                     }
+                    sendTelemetryEvent('syncDeletedRows.complete', {
+                        syncedTotal: String(result.synced.length),
+                        failedRows: String(result.failed.length),
+                    });
                 } catch (err: any) {
                     console.error('[syncDeletedRows] 失败:', err?.message || err);
                     vscode.window.showErrorMessage(`删除行同步失败: ${err?.message || err}`);
-                    vscode.window.showErrorMessage(`推送失败: ${err.message || err}`);
-                    trackException('explorerPush.uncaught', err);
+                    sendTelemetryException('syncDeletedRows.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                 }
             }
         ),
@@ -415,7 +433,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     updateShowIcon();
     console.log('[Extension] 插件激活完成');
-    trackEvent('extension.activate.done', undefined, { activateMs: Date.now() - _activateStart });
+    sendTelemetryEvent('extension.activate.done', { activateMs: String(Date.now() - _activateStart) });
 }
 
 export function deactivate() {

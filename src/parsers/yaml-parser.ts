@@ -168,17 +168,44 @@ export class YamlFileParser implements FileParser {
             tablesByField.set(detailTable.field, detailTable);
         }
 
+        // 行身份解析：用 testcase_id（稳定主键）把当前 row 与 originalData 中的真实记录对齐，
+        // 避免"右键插入行/排序/中间删除"导致的 originalData[rowIdx] 索引错位
+        // —— 若不做此对齐，新插入行会回退到相邻原始行的对象/对象数组数据，造成"刷新后被相邻行覆盖"。
+        const tsIdColIdx = headers.indexOf('testcase_id');
+        const origByTsId = new Map<string, any>();
+        if (Array.isArray(originalData) && tsIdColIdx >= 0) {
+            for (const rec of originalData) {
+                if (rec && typeof rec === 'object') {
+                    const tid = (rec as any)['testcase_id'];
+                    if (tid !== undefined && tid !== null && tid !== '') {
+                        origByTsId.set(String(tid), rec);
+                    }
+                }
+            }
+        }
+
         const records: any[] = rows.map((row, rowIdx) => {
             const record: any = {};
-            // 取该行对应的原始记录（基于 1-based 主表行号 rowIdx 与 originalData 的下标对齐），
-            // 用于在主表标量字段回写时根据原类型（数组/数字/布尔/对象）做尽量保真的还原，
-            // 避免把原本是 string[] 的字段（如 preconditions）退化为 "a; b" 字符串落盘。
-            const origRecord: any = (Array.isArray(originalData) && rowIdx < originalData.length)
-                ? originalData[rowIdx] : undefined;
+            // 优先按 testcase_id 在 originalData 中查找真实匹配的源记录；
+            // 找不到（新插入行）→ origRecord 为 undefined，让明细字段回退到"空对象/空数组"而不是错位行的旧数据。
+            const tsIdVal = (tsIdColIdx >= 0) ? row[tsIdColIdx] : undefined;
+            let origRecord: any = undefined;
+            if (tsIdVal !== undefined && tsIdVal !== null && tsIdVal !== '' && origByTsId.size > 0) {
+                origRecord = origByTsId.get(String(tsIdVal));
+            }
+            // 兜底：testcase_id 列不存在或没找到匹配 → 仍按 rowIdx 取（保留对老文件的兼容性，
+            // 但仅在 origByTsId 完全不可用时使用，避免错位风险）
+            if (!origRecord && origByTsId.size === 0
+                && Array.isArray(originalData) && rowIdx < originalData.length) {
+                origRecord = originalData[rowIdx];
+            }
             headers.forEach((h, i) => {
                 const dt = tablesByField.get(h);
-                if (dt && originalData && dt.rowGroups) {
-                    record[h] = this.reconstructDetail(rowIdx, dt, originalData, row, i);
+                if (dt && dt.rowGroups) {
+                    // 取真实匹配源记录上的明细字段值；未匹配到则传 undefined，
+                    // reconstructDetail 内部会按 rawRowTypes 回退到空对象/空数组。
+                    const origDetailData = origRecord ? origRecord[h] : undefined;
+                    record[h] = this.reconstructDetail(rowIdx, dt, origDetailData, row, i);
                 } else {
                     const origVal = origRecord ? origRecord[h] : undefined;
                     record[h] = this.coerceValue(row[i], origVal);
@@ -389,23 +416,27 @@ export class YamlFileParser implements FileParser {
     private reconstructDetail(
         rowIdx: number,
         detailTable: DetailTableData,
-        originalData: any[],
+        origDetailData: any,
         row: string[],
         i: number
     ): any {
         const editedRows: string[][] = detailTable.rowGroups[rowIdx] || [];
         const rawRowsFromFront: any[] = (detailTable.rawRowGroups && detailTable.rawRowGroups[rowIdx]) || [];
         const rawType = detailTable.rawRowTypes ? detailTable.rawRowTypes[rowIdx] : undefined;
-        const origDetailData = rowIdx < originalData.length
-            ? originalData[rowIdx]?.[detailTable.field] : undefined;
-
-        // 无明细且前端也没有 raw：回退到主表单元格值的解析
-        if (editedRows.length === 0 && rawRowsFromFront.length === 0) {
-            return origDetailData !== undefined ? origDetailData : this.parseCellValue(row[i]);
-        }
 
         const isObjectType = rawType === 'object'
             || (rawType === undefined && origDetailData && typeof origDetailData === 'object' && !Array.isArray(origDetailData));
+
+        // 无明细且前端也没有 raw：
+        //   1) 已有 origDetailData（按 testcase_id 真实匹配到原始记录）→ 沿用原值
+        //   2) 否则按 rawType 回退到空对象/空数组/parseCellValue —— 关键：插入新行时
+        //      origDetailData 为 undefined，避免错位继承相邻行数据
+        if (editedRows.length === 0 && rawRowsFromFront.length === 0) {
+            if (origDetailData !== undefined) return origDetailData;
+            if (rawType === 'object') return {};
+            if (rawType === 'array') return [];
+            return this.parseCellValue(row[i]);
+        }
 
         // ---------- 优先信任前端 rawRowGroups（v2 弹窗写入的真实结构）----------
         // v2 弹窗每次编辑都直接写到 detailTable.rawRowGroups[rowIdx][di][field]，

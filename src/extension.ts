@@ -28,7 +28,7 @@ import { applyTestCaseNos, createParser, detectFileType, ensureTrackingColumns, 
 import { ensureBindingsFile } from './utils/taskInfoStore';
 import { getCurrentTaskInfo } from './utils/commands';
 import { showPushErrorModal, showModal, showPushResult } from './utils/message';
-import { markAsCreatedByCommand, unmarkAsCreatedByCommand, isCreatedByCommand, cleanupRecords } from './utils/fileIdentifier';
+import { markAsCreatedByCommand, unmarkAsCreatedByCommand, isCreatedByCommand, cleanupRecords, filterTemplateExampleRows, getTemplateExampleTsIds, TEMPLATE_EXAMPLE_TS_ID } from './utils/fileIdentifier';
 import { ensureHighlightFile } from './utils/highlightStore';
 import { ensurePushFailureFile, mergeFailures } from './utils/pushFailureStore';
 import { ensureSnapshotFile, savePushSnapshot, getDeletedSnapshotIds } from './utils/pushSnapshotStore';
@@ -147,11 +147,25 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
         subTestTaskName: currentTask.taskInfo.subTestTaskName || '',
     };
 
-    const rows = await parseFileToRows(filePath);
+    let rows = await parseFileToRows(filePath);
     if (!rows || rows.length === 0) {
         sendTelemetryEvent('explorerPush.aborted', { reason: 'noData', ext: fileExt });
         showPushErrorModal(panel, baseName, `文件无数据\n\n${baseName} 中未检测到有效的测试案例数据，请检查文件内容。`);
         return;
+    }
+
+    // 过滤模板示例行：通过"新增测试案例"命令创建的文件首行是结构示例，
+    // 用户未修改 testcase_id（仍为占位文案"案例唯一标识，不可修改"）时不应推送。
+    const beforeFilterLen = rows.length;
+    rows = filterTemplateExampleRows(filePath, rows);
+    if (rows.length === 0) {
+        sendTelemetryEvent('explorerPush.aborted', { reason: 'onlyTemplateExample', ext: fileExt });
+        showPushErrorModal(panel, baseName,
+            `${baseName} 仅包含模板示例数据，请先填写真实的测试案例后再推送。\n\n提示：请修改首行的"案例唯一标识，不可修改"等占位字段为真实数据。`);
+        return;
+    }
+    if (rows.length !== beforeFilterLen) {
+        sendTelemetryEvent('explorerPush.skipTemplateExample', { ext: fileExt, skipped: String(beforeFilterLen - rows.length) });
     }
 
     // 若之前 ensureOpenedInTestcaseEditor 失败，此处再次尝试打开
@@ -160,7 +174,6 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
             panel = await ensureOpenedInTestcaseEditor(target);
         } catch (_) { /* ignore */ }
     }
-
 
     console.log(`[推送] 文件: ${filePath}, ${rows.length} 行`);
     sendTelemetryEvent('explorerPush.start', { ext: fileExt, totalRows: String(rows.length) });
@@ -190,6 +203,18 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
         else if (t === '2') failures.push({ tsId: sid, reason: dataField });
     });
 
+    // 防御埋点：样例行按设计不应进入后端推送结果。一旦在 successMappings/failures 中出现样例 tsId，
+    // 说明过滤逻辑被绕过（文件标识丢失 / 上下文变量异常等），需以该事件快速定位问题。
+    const leakedSuccess = successMappings.filter(m => m && String(m.tsId).trim() === TEMPLATE_EXAMPLE_TS_ID).length;
+    const leakedFailure = failures.filter(f => f && String(f.tsId).trim() === TEMPLATE_EXAMPLE_TS_ID).length;
+    if (leakedSuccess > 0 || leakedFailure > 0) {
+        sendTelemetryErrorEvent('explorerPush.templateExampleLeaked', {
+            ext: fileExt,
+            leakedSuccess: String(leakedSuccess),
+            leakedFailure: String(leakedFailure),
+        });
+    }
+
     // 把成功项的 testCaseNo 回写到原文件（按 testcase_id 匹配）
     if (successMappings.length > 0) {
         try {
@@ -199,9 +224,13 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
                 const parsed = await parser.parse(filePath);
                 ensureTrackingColumns(parsed.tableData, parsed.sourceData);
                 applyTestCaseNos(parsed.tableData, parsed.sourceData, successMappings);
-                await parser.save(filePath, parsed.tableData, parsed.sourceData);
+                // 先保存推送快照，再写盘：避免 fsWatcher 在 savePushSnapshot 之前触发
+                // BaseEditorProvider.diffPushSnapshot，导致样例行因"快照中无该 tsId"被误判为新增行（绿色高亮）。
                 const pushedTsIds = new Set(successMappings.map(m => m.tsId));
+                // 合并样例行 tsId：让样例行也写入快照基线，避免被 diff 误判为新增行
+                getTemplateExampleTsIds(filePath, parsed.tableData).forEach(id => pushedTsIds.add(id));
                 await savePushSnapshot(filePath, parsed.tableData, pushedTsIds);
+                await parser.save(filePath, parsed.tableData, parsed.sourceData);
             }
         } catch (err: any) {
             console.error(`[推送] 回写 testCaseNo 失败: ${err?.message || err}`);

@@ -19,6 +19,8 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { DetailTableData } from '../types';
+import { sendTelemetryException, sendTelemetryErrorEvent } from '../services/telemetry';
+import { stackHead } from '../services/utils';
 
 // ============================================
 // 常量
@@ -26,6 +28,11 @@ import type { DetailTableData } from '../types';
 
 const TS_ID_COLUMN = 'testcase_id';
 const TC_NO_COLUMN = 'testCaseNo';
+
+// 样例行的 testcase_id 占位文案（与 fileIdentifier.ts 中 TEMPLATE_EXAMPLE_TS_ID 保持一致）。
+// 样例行是创建测试案例文件时的模板示例行，仅用于明确表格结构，
+// 不应参与推送，也不应被 diff 误判为"新增行"而高亮为绿色。
+const TEMPLATE_EXAMPLE_TS_ID = '案例唯一标识，不可修改';
 
 // 快照格式版本标记：\x01 分隔主表单元格序列化 与 明细数据签名。
 // 旧格式快照不含 \x01，diffPushSnapshot 可据此做向后兼容处理。
@@ -60,18 +67,39 @@ function loadStore(): SnapshotStore {
     try {
         const text = fs.readFileSync(resolvedFilePath, 'utf-8');
         const parsed = JSON.parse(text);
-        if (typeof parsed !== 'object' || Array.isArray(parsed) || !parsed) return {};
+        if (typeof parsed !== 'object' || Array.isArray(parsed) || !parsed) {
+            // 快照文件格式异常（被外部篡改 / 捯坏），需上报便于定位绿色高亮误判类问题
+            sendTelemetryErrorEvent('snapshot.load.invalidFormat', {
+                fileType: typeof parsed,
+            });
+            return {};
+        }
         cachedStore = parsed as SnapshotStore;
         return cachedStore;
-    } catch {
+    } catch (err: any) {
+        // 快照读取 / 反序列化异常：上报以便反查 "diff 异常 / 高亮误判" 问题
+        sendTelemetryException('snapshot.load.failed', {
+            errorMessage: String(err?.message || String(err)).slice(0, 500),
+            stackHead: stackHead(err),
+        });
         return {};
     }
 }
 
 async function saveStore(store: SnapshotStore): Promise<void> {
     if (!resolvedFilePath) return;
-    await fs.promises.writeFile(resolvedFilePath, JSON.stringify(store, null, 2), 'utf-8');
-    cachedStore = store;
+    try {
+        await fs.promises.writeFile(resolvedFilePath, JSON.stringify(store, null, 2), 'utf-8');
+        cachedStore = store;
+    } catch (err: any) {
+        // 快照写入异常：磁盘 / 权限 / globalStorage 不可写。后续 diff 将不准确。
+        sendTelemetryException('snapshot.save.failed', {
+            errorMessage: String(err?.message || String(err)).slice(0, 500),
+            stackHead: stackHead(err),
+        });
+        // 内存缓存仍保持新值，避免在同一会话内反复失败
+        cachedStore = store;
+    }
 }
 
 // ============================================
@@ -122,6 +150,10 @@ export async function ensureSnapshotFile(context: vscode.ExtensionContext): Prom
         catch { await fs.promises.writeFile(fp, JSON.stringify({}), 'utf-8'); }
     } catch (err: any) {
         console.error('[SnapshotStore] 初始化失败:', err?.message || err);
+        sendTelemetryException('snapshot.init.failed', {
+            errorMessage: String(err?.message || String(err)).slice(0, 500),
+            stackHead: stackHead(err),
+        });
     }
     return fp;
 }
@@ -249,9 +281,11 @@ export function diffPushSnapshot(
         const tcNo = tcIdx >= 0 && row[tcIdx] != null ? String(row[tcIdx]) : '';
         if (id) currIdSet.add(id);
         // 检测新增行：当前数据中有但快照中不存在的行。
-        // 防御：已有 testCaseNo 说明已被后端确认并推送过，即使快照中找不到（如快照损坏
+        // 防御 1：已有 testCaseNo 说明已被后端确认并推送过，即使快照中找不到（如快照损坏
         // 或 tsId 被意外重新生成），也不应被标为新增行，避免已推送案例被误标绿。
-        if (id && !(id in snapshots) && !tcNo) {
+        // 防御 2：样例行（testcase_id 为占位文案）从语义上就不是"用户新增"的行，而是文件创建时的
+        // 模板示例，同样不应被标为新增行（它也不会参与推送，快照中不会有其记录）。
+        if (id && !(id in snapshots) && !tcNo && id.trim() !== TEMPLATE_EXAMPLE_TS_ID) {
             addedInfos.push({ rowIndex: ri, tsId: id });
             return;
         }

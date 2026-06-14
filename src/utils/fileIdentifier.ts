@@ -15,6 +15,8 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { sendTelemetryException, sendTelemetryErrorEvent } from '../services/telemetry';
+import { stackHead } from '../services/utils';
 
 // 记录文件的相对路径（相对于工作区根目录）
 const RECORD_DIR = '.vscode/testcase-viewer';
@@ -44,7 +46,12 @@ function readRecordFile(): Record<string, { createdAt: string; version: string }
     try {
         const content = fs.readFileSync(recordFilePath, 'utf-8');
         return JSON.parse(content);
-    } catch {
+    } catch (err: any) {
+        // 读/反序列化失败：记录文件可能损坏或权限异常，会导致样例行识别失效，需上报便于排查
+        sendTelemetryException('fileIdentifier.read.failed', {
+            errorMessage: String(err?.message || String(err)).slice(0, 500),
+            stackHead: stackHead(err),
+        });
         return {};
     }
 }
@@ -55,16 +62,25 @@ function readRecordFile(): Record<string, { createdAt: string; version: string }
 function writeRecordFile(records: Record<string, { createdAt: string; version: string }>): void {
     const recordFilePath = getRecordFilePath();
     if (!recordFilePath) {
+        sendTelemetryErrorEvent('fileIdentifier.write.noWorkspace', {});
         return;
     }
-    
-    // 确保目录存在
-    const recordDir = path.dirname(recordFilePath);
-    if (!fs.existsSync(recordDir)) {
-        fs.mkdirSync(recordDir, { recursive: true });
+
+    try {
+        // 确保目录存在
+        const recordDir = path.dirname(recordFilePath);
+        if (!fs.existsSync(recordDir)) {
+            fs.mkdirSync(recordDir, { recursive: true });
+        }
+
+        fs.writeFileSync(recordFilePath, JSON.stringify(records, null, 2), 'utf-8');
+    } catch (err: any) {
+        // 写入失败：磁盘只读 / 权限不足 / 工作区不可写。后续样例行将无法被正确识别。
+        sendTelemetryException('fileIdentifier.write.failed', {
+            errorMessage: String(err?.message || String(err)).slice(0, 500),
+            stackHead: stackHead(err),
+        });
     }
-    
-    fs.writeFileSync(recordFilePath, JSON.stringify(records, null, 2), 'utf-8');
 }
 
 /**
@@ -118,13 +134,13 @@ export function getFileCreationInfo(filePath: string): { createdAt: string; vers
 export function cleanupRecords(): void {
     const records = readRecordFile();
     const existingRecords: Record<string, { createdAt: string; version: string }> = {};
-    
+
     for (const filePath of Object.keys(records)) {
         if (fs.existsSync(filePath)) {
             existingRecords[filePath] = records[filePath];
         }
     }
-    
+
     writeRecordFile(existingRecords);
 }
 
@@ -173,4 +189,74 @@ export function showCreationInfoInStatusBar(filePath: string): vscode.StatusBarI
     statusBarItem.show();
     
     return statusBarItem;
+}
+
+// ============================================================================
+// 模板示例行识别（方案 A）
+// ----------------------------------------------------------------------------
+// 通过"新增测试案例"命令创建的文件，会内置一行模板示例数据，用于展示表格
+// 字段结构。这条数据本身没有业务含义，不应作为最终推送数据上报后端。
+//
+// 判定规则（同时满足才视为示例行，避免误伤）：
+//   1. 文件必须是通过命令创建（isCreatedByCommand === true）
+//   2. 行的 testcase_id 等于占位文案 `案例唯一标识，不可修改`
+//      —— 用户一旦修改 testcase_id（实际编辑后会自动生成 UUID），
+//        即视为真实数据，恢复正常推送。
+// ============================================================================
+
+/** 测试案例 id 列名（与 services/utils.ts 中 TS_ID_COLUMN 保持一致） */
+const TS_ID_COLUMN = 'testcase_id';
+
+/** 模板示例行的 testcase_id 占位文案（与 case_example.yaml 模板保持一致） */
+export const TEMPLATE_EXAMPLE_TS_ID = '案例唯一标识，不可修改';
+
+/**
+ * 判断给定行记录是否为模板示例行。
+ * @param record 单条测试案例记录（对象形式）
+ */
+export function isTemplateExampleRow(record: any): boolean {
+    if (!record || typeof record !== 'object') return false;
+    const tsId = record[TS_ID_COLUMN];
+    if (tsId == null) return false;
+    return String(tsId).trim() === TEMPLATE_EXAMPLE_TS_ID;
+}
+
+/**
+ * 过滤推送数据中的模板示例行。
+ * 仅当文件由命令创建时才执行过滤；非命令创建的文件原样返回。
+ * @param filePath 文件绝对路径
+ * @param rows 待推送的记录数组
+ * @returns 过滤后的记录数组
+ */
+export function filterTemplateExampleRows<T = any>(filePath: string, rows: T[]): T[] {
+    if (!Array.isArray(rows) || rows.length === 0) return rows;
+    if (!isCreatedByCommand(filePath)) return rows;
+    return rows.filter(rec => !isTemplateExampleRow(rec));
+}
+
+/**
+ * 收集模板示例行的 testcase_id 集合，便于把它们一并写入推送快照基线，
+ * 避免 diffPushSnapshot 把"未参与推送"的样例行误判为新增行（高亮绿色）。
+ * 仅当文件由命令创建时返回非空集合。
+ *
+ * @param filePath  文件绝对路径
+ * @param tableData 当前文件解析得到的 tableData（提供 headers + rows）
+ */
+export function getTemplateExampleTsIds(
+    filePath: string,
+    tableData: { headers: string[]; rows: any[][] } | null | undefined,
+): Set<string> {
+    const result = new Set<string>();
+    if (!tableData || !isCreatedByCommand(filePath)) return result;
+    const headers = tableData.headers || [];
+    const rows = tableData.rows || [];
+    const tsIdx = headers.indexOf(TS_ID_COLUMN);
+    if (tsIdx < 0) return result;
+    for (const row of rows) {
+        const id = row && row[tsIdx] != null ? String(row[tsIdx]) : '';
+        if (id && id.trim() === TEMPLATE_EXAMPLE_TS_ID) {
+            result.add(id);
+        }
+    }
+    return result;
 }

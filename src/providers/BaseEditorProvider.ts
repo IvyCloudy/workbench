@@ -30,6 +30,7 @@ import { pushTestCase } from '../services/http';
 import { createParser, ensureTrackingColumns, applyTestCaseNos, type FileParser, type FileType } from '../parsers';
 import { sendTelemetryEvent, sendTelemetryErrorEvent, sendTelemetryException } from '../services/telemetry';
 import { stackHead } from '../services/utils';
+import { filterTemplateExampleRows, getTemplateExampleTsIds, TEMPLATE_EXAMPLE_TS_ID } from '../utils/fileIdentifier';
 
 // 重新导出工具，便于子类使用
 export { isInQualifiedDir, FILE_PATTERNS };
@@ -135,6 +136,27 @@ export class PushViaHttpClient implements PushStrategy {
             sendTelemetryException('editorPush.reparseFailed', { ext: _ext, errorMessage: String(parseErr?.message || String(parseErr)).slice(0, 500), stackHead: stackHead(parseErr) });
         }
 
+        // 过滤模板示例行：通过"新增测试案例"命令创建的文件首行是结构示例，
+        // 用户未修改 testcase_id（仍为占位文案）时不应推送到后端。
+        const beforeFilterLen = Array.isArray(pushData) ? pushData.length : 0;
+        pushData = filterTemplateExampleRows(ctx.filePath, pushData);
+        const afterFilterLen = Array.isArray(pushData) ? pushData.length : 0;
+        if (beforeFilterLen > 0 && afterFilterLen === 0) {
+            sendTelemetryEvent('editorPush.aborted', { reason: 'onlyTemplateExample', ext: _ext });
+            const baseName = path.basename(ctx.filePath);
+            showPushErrorModal(webviewPanel, baseName,
+                `${baseName} 仅包含模板示例数据，请先填写真实的测试案例后再推送。\n\n提示：请修改首行的"案例唯一标识，不可修改"等占位字段为真实数据。`);
+            webviewPanel.webview.postMessage({ type: 'pushError', message: '仅包含模板示例数据，已取消推送' });
+            return;
+        }
+        if (beforeFilterLen !== afterFilterLen) {
+            console.log(`[推送] 已过滤 ${beforeFilterLen - afterFilterLen} 行模板示例数据`);
+            sendTelemetryEvent('editorPush.skipTemplateExample', {
+                ext: _ext,
+                skipped: String(beforeFilterLen - afterFilterLen),
+            });
+        }
+
         const result = await pushTestCase(extensionContext, pushData, taskInfo, path.basename(ctx.filePath));
         if (result.returnCode !== 'SUC0000') {
             showPushErrorModal(webviewPanel, path.basename(ctx.filePath), result.errorMsg || '推送失败');
@@ -167,6 +189,18 @@ export class PushViaHttpClient implements PushStrategy {
             else if (t === '2') failures.push({ tsId: sid, reason: dataField, bodyIndex: bi });
         });
 
+        // 防御埋点：样例行按设计不应进入后端推送结果。一旦在 successMappings/failures 中出现样例 tsId，
+        // 说明过滤逻辑被绕过（文件标识丢失 / 上下文变量异常等），需以该事件快速定位问题。
+        const leakedSuccess = successMappings.filter(m => m && String(m.tsId).trim() === TEMPLATE_EXAMPLE_TS_ID).length;
+        const leakedFailure = failures.filter(f => f && String(f.tsId).trim() === TEMPLATE_EXAMPLE_TS_ID).length;
+        if (leakedSuccess > 0 || leakedFailure > 0) {
+            sendTelemetryErrorEvent('editorPush.templateExampleLeaked', {
+                ext: _ext,
+                leakedSuccess: String(leakedSuccess),
+                leakedFailure: String(leakedFailure),
+            });
+        }
+
         // 成功项：扩展端按 testcase_id 回写 testCaseNo 到原文件。
         // testCaseNo 落盘后刷新前端数据 —— 但有失败项时跳过刷新，
         // 避免刷新触发的 renderTable() 擦除 showPushResult 设置的失败行高亮。
@@ -189,6 +223,8 @@ export class PushViaHttpClient implements PushStrategy {
                         if (id) allPushedTsIds.add(id);
                     }
                 }
+                // 合并样例行 tsId：让样例行也写入快照基线，避免被 diff 误判为新增行（绿色高亮）
+                getTemplateExampleTsIds(ctx.filePath, parsed.tableData).forEach(id => allPushedTsIds.add(id));
                 await savePushSnapshot(ctx.filePath, parsed.tableData, allPushedTsIds);
                 if (oldHL && oldHL.rowIndices && oldHL.rowIndices.length > 0) {
                     const rows = parsed.tableData.rows;
@@ -233,6 +269,8 @@ export class PushViaHttpClient implements PushStrategy {
                     }
                 }
                 const parsed = await ctx.session.parser.parse(ctx.filePath);
+                // 合并样例行 tsId：避免被 diff 误判为新增行（绿色高亮）
+                getTemplateExampleTsIds(ctx.filePath, parsed.tableData).forEach(id => allPushedTsIds.add(id));
                 await savePushSnapshot(ctx.filePath, parsed.tableData, allPushedTsIds);
                 ctx.session.cachedTableData = null;
             } catch (err: any) {

@@ -344,6 +344,107 @@ function _inferDetailColKind(dt) {
     return 'array';
 }
 
+// 从明细表读取某行某列的"真实原始数据"（对象 / 对象数组）。
+// 主表 S.data.rows[ri][ci] 上仅保存显示文本（'[N 项]' / '{N 字段}'），真实结构在 rawRowGroups。
+// - 列的 rawRowTypes[ri] === 'object'：返回单个对象（或 null）
+// - 列的 rawRowTypes[ri] === 'array' ：返回对象数组（可能为空数组）
+// - 非 detail 列或没有数据：返回 undefined
+function _readDetailCellRaw(ri, ci) {
+    var dt = (typeof getDetailTableByCol === 'function') ? getDetailTableByCol(ci) : null;
+    if (!dt) return undefined;
+    var raws = (dt.rawRowGroups && dt.rawRowGroups[ri]) || [];
+    var kind = (dt.rawRowTypes && dt.rawRowTypes[ri])
+        || _inferDetailColKind(dt);
+    if (kind === 'object') {
+        return (raws.length > 0 && raws[0] && typeof raws[0] === 'object') ? raws[0] : null;
+    }
+    // 默认按数组返回
+    return raws.slice();
+}
+
+// 把"真实原始数据"（对象 / 对象数组）写入明细表，并同步主表显示文本。
+// 用于：粘贴单元格、Ctrl+V 落到 detail 列时，保持与"明细弹窗保存"一致的写入路径。
+// 调用方在调用前应已 pushHistory()。
+function _writeDetailCellFromRaw(ri, ci, raw) {
+    var dt = (typeof getDetailTableByCol === 'function') ? getDetailTableByCol(ci) : null;
+    if (!dt) return false;
+    var headers = dt.headers || [];
+    // 规范化为 rawRows 数组（对象数组）+ 类型
+    var rawRows = [];
+    var kind;
+    if (Array.isArray(raw)) {
+        kind = 'array';
+        for (var i = 0; i < raw.length; i++) {
+            var item = raw[i];
+            if (item && typeof item === 'object' && !Array.isArray(item)) {
+                rawRows.push(JSON.parse(JSON.stringify(item)));
+            }
+        }
+    } else if (raw && typeof raw === 'object') {
+        // 单对象：按列已有类型决定包装方式
+        kind = (dt.rawRowTypes && dt.rawRowTypes[ri]) || _inferDetailColKind(dt);
+        rawRows = [JSON.parse(JSON.stringify(raw))];
+    } else {
+        // null / undefined / 标量：清空
+        kind = (dt.rawRowTypes && dt.rawRowTypes[ri]) || _inferDetailColKind(dt);
+        rawRows = [];
+    }
+
+    // 1) 写 rawRowGroups
+    if (!dt.rawRowGroups) dt.rawRowGroups = [];
+    while (dt.rawRowGroups.length <= ri) dt.rawRowGroups.push([]);
+    dt.rawRowGroups[ri] = rawRows;
+
+    // 2) 同步 rowGroups（字符串二维结构，主表显示路径兼容）
+    if (!dt.rowGroups) dt.rowGroups = [];
+    while (dt.rowGroups.length <= ri) dt.rowGroups.push([]);
+    dt.rowGroups[ri] = rawRows.map(function (rawObj) {
+        return headers.map(function (h) {
+            var v = rawObj ? rawObj[h] : undefined;
+            if (v == null) return '';
+            if (Array.isArray(v)) {
+                if (v.length === 0) return '[]';
+                if (typeof v[0] === 'object' && v[0] !== null) {
+                    try { return JSON.stringify(v); } catch (_) { return '[' + v.length + ' 项]'; }
+                }
+                return v.map(function (x) { return String(x == null ? '' : x); }).join('; ');
+            }
+            if (typeof v === 'object') {
+                try { return JSON.stringify(v); } catch (_) { return '{' + Object.keys(v).length + ' 字段}'; }
+            }
+            return String(v);
+        });
+    });
+
+    // 3) 同步 rawRowTypes
+    if (!dt.rawRowTypes) dt.rawRowTypes = [];
+    while (dt.rawRowTypes.length <= ri) dt.rawRowTypes.push('none');
+    dt.rawRowTypes[ri] = kind;
+
+    // 4) 写主表显示文本（与 detail 弹窗保存逻辑保持一致）
+    var displayText;
+    if (rawRows.length === 0) {
+        displayText = (kind === 'object') ? '{}' : '[]';
+    } else if (kind === 'object') {
+        var firstRow = rawRows[0] || {};
+        var fieldCount = 0;
+        Object.keys(firstRow).forEach(function (k) {
+            var vv = firstRow[k];
+            if (vv !== '' && vv !== null && vv !== undefined) fieldCount++;
+        });
+        if (fieldCount === 0) fieldCount = headers.length;
+        displayText = '{' + fieldCount + ' 字段}';
+    } else {
+        displayText = '[' + rawRows.length + ' 项]';
+    }
+    if (S.data && Array.isArray(S.data.rows) && S.data.rows[ri]) {
+        S.data.rows[ri][ci] = displayText;
+    }
+    if (S.mods) S.mods.add(ri + ',' + ci);
+    if (S._detailModCellKeys) S._detailModCellKeys.add(ri + ',' + ci);
+    return true;
+}
+
 // 判断当前文件是否已经被推送过：只要任意一行 testCaseNo 列非空，即视为已推送过。
 // 关闭文件再打开时，扩展端 diffPushSnapshot 也是基于推送快照来判定新增/删除高亮的，
 // 这里保持同一标准：从未推送的文件，新增行不上绿色高亮、被删除行不显示 ghost，
@@ -679,8 +780,16 @@ function copyCell() {
             var r = rowList[i];
             var line = [];
             for (var c = rc.c1; c <= rc.c2; c++) {
-                var v = (rows[r] && rows[r][c] !== undefined) ? rows[r][c] : '';
-                line.push(Array.isArray(v) ? v.slice() : v);
+                var v;
+                // detail 列：从明细表读取真实的对象 / 对象数组，而非主表的显示文本（如 '[3 项]'）
+                var _rawDt = (typeof _readDetailCellRaw === 'function') ? _readDetailCellRaw(r, c) : undefined;
+                if (_rawDt !== undefined) {
+                    v = _rawDt;
+                } else {
+                    v = (rows[r] && rows[r][c] !== undefined) ? rows[r][c] : '';
+                }
+                // 对象/对象数组需要深拷贝，避免后续粘贴/编辑共享引用污染源数据
+                line.push((typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(v) : (Array.isArray(v) ? v.slice() : v));
             }
             grid.push(line);
         }
@@ -689,10 +798,17 @@ function copyCell() {
         return;
     }
     if (S._ctxRow < 0 || S._ctxCol < 0) return;
-    var v0 = (S.data.rows[S._ctxRow] && S.data.rows[S._ctxRow][S._ctxCol]);
-    if (v0 === undefined) v0 = '';
-    // 数组单元格拷贝一份副本，避免后续粘贴后引用共享
-    S.clip = Array.isArray(v0) ? v0.slice() : v0;
+    // detail 列：优先从明细表读取真实的对象 / 对象数组
+    var _rawDtSingle = (typeof _readDetailCellRaw === 'function') ? _readDetailCellRaw(S._ctxRow, S._ctxCol) : undefined;
+    var v0;
+    if (_rawDtSingle !== undefined) {
+        v0 = _rawDtSingle;
+    } else {
+        v0 = (S.data.rows[S._ctxRow] && S.data.rows[S._ctxRow][S._ctxCol]);
+        if (v0 === undefined) v0 = '';
+    }
+    // 单元格深拷贝（含对象 / 对象数组），避免后续粘贴或编辑导致引用共享污染源数据
+    S.clip = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(v0) : (Array.isArray(v0) ? v0.slice() : v0);
     showToast('已复制', 'success');
 }
 
@@ -739,14 +855,36 @@ function pasteCell() {
                 if (isFrozenCol(cIdx)) { skippedTsId = true; continue; }
                 var src = grid[i][j];
                 var isArrTarget = typeof isArrayCol === 'function' && isArrayCol(cIdx);
+                // detail 列：若源是对象 / 对象数组，走写入 detail 表的路径，同步 rawRowGroups / rowGroups / rawRowTypes
+                var _isDetailTarget = (typeof isDetailColumn === 'function') && isDetailColumn(cIdx);
+                if (_isDetailTarget && src && (Array.isArray(src) || (typeof src === 'object'))) {
+                    var _hasObjSrc = false;
+                    if (Array.isArray(src)) {
+                        for (var _xoi = 0; _xoi < src.length; _xoi++) { if (src[_xoi] && typeof src[_xoi] === 'object') { _hasObjSrc = true; break; } }
+                    } else { _hasObjSrc = true; }
+                    if (_hasObjSrc) {
+                        if (typeof _writeDetailCellFromRaw === 'function' && _writeDetailCellFromRaw(rIdx, cIdx, src)) {
+                            changed++;
+                            continue;
+                        }
+                    }
+                }
                 var nv;
                 if (isArrTarget && !Array.isArray(src)) {
-                    var s = (src === null || src === undefined) ? '' : String(src);
+                    var s = (src === null || src === undefined) ? '' : (typeof src === 'object' ? (function () { try { return JSON.stringify(src); } catch (_e) { return ''; } })() : String(src));
                     nv = s === '' ? [] : s.split(/;\s*|\n+/).map(function (x) { return x.trim(); }).filter(function (x) { return x !== ''; });
                 } else if (!isArrTarget && Array.isArray(src)) {
-                    nv = formatCellValue(src);
+                    // 对象数组：保留对象结构（深拷贝）；标量数组：扁平化为字符串
+                    var hasObjS = false;
+                    for (var _soi = 0; _soi < src.length; _soi++) { if (src[_soi] && typeof src[_soi] === 'object') { hasObjS = true; break; } }
+                    nv = hasObjS
+                        ? ((typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(src) : src)
+                        : formatCellValue(src);
                 } else if (isArrTarget && Array.isArray(src)) {
-                    nv = src.slice();
+                    nv = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(src) : src.slice();
+                } else if (src && typeof src === 'object') {
+                    // 普通对象：深拷贝
+                    nv = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(src) : src;
                 } else {
                     nv = src;
                 }
@@ -767,13 +905,38 @@ function pasteCell() {
     pushHistory();
     var target = S.clip;
     var isArr = typeof isArrayCol === 'function' && isArrayCol(S._ctxCol);
+    // detail 列：若 target 是对象 / 对象数组，走写入 detail 表的路径
+    var _isDetailTargetSingle = (typeof isDetailColumn === 'function') && isDetailColumn(S._ctxCol);
+    if (_isDetailTargetSingle && target && (Array.isArray(target) || typeof target === 'object')) {
+        var _hasObjT0 = false;
+        if (Array.isArray(target)) {
+            for (var _xoi0 = 0; _xoi0 < target.length; _xoi0++) { if (target[_xoi0] && typeof target[_xoi0] === 'object') { _hasObjT0 = true; break; } }
+        } else { _hasObjT0 = true; }
+        if (_hasObjT0 && typeof _writeDetailCellFromRaw === 'function' && _writeDetailCellFromRaw(S._ctxRow, S._ctxCol, target)) {
+            saveFile();
+            renderTable();
+            showToast('已粘贴', 'success');
+            return;
+        }
+    }
     if (isArr && !Array.isArray(target)) {
-        var s2 = (target === null || target === undefined) ? '' : String(target);
+        var s2 = (target === null || target === undefined) ? '' : (typeof target === 'object' ? (function () { try { return JSON.stringify(target); } catch (_e) { return ''; } })() : String(target));
         target = s2 === '' ? [] : s2.split(/;\s*|\n+/).map(function (x) { return x.trim(); }).filter(function (x) { return x !== ''; });
     } else if (!isArr && Array.isArray(target)) {
-        target = formatCellValue(target);
+        // 对象数组保留原结构（深拷贝），仅当目标列不是数组列时若是标量数组才扁平化为字符串
+        var hasObjT = false;
+        for (var _toi = 0; _toi < target.length; _toi++) { if (target[_toi] && typeof target[_toi] === 'object') { hasObjT = true; break; } }
+        if (hasObjT) {
+            target = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(target) : target;
+        } else {
+            target = formatCellValue(target);
+        }
     } else if (isArr && Array.isArray(target)) {
-        target = target.slice(); // 避免引用共享
+        // 标量数组列：按需深拷贝；若是对象数组放进标量数组列，则序列化每个元素
+        target = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(target) : target.slice();
+    } else if (target && typeof target === 'object') {
+        // 普通对象：直接深拷贝赋值
+        target = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(target) : target;
     }
     S.data.rows[S._ctxRow][S._ctxCol] = target;
     S.mods.add(S._ctxRow + ',' + S._ctxCol);

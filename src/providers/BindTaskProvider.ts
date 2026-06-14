@@ -15,7 +15,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getAllBoundItems, getAllBoundFolderPaths, clearBindingsCache } from '../utils/taskInfoStore';
-import { sendTelemetryEvent, sendTelemetryException } from '../services/telemetry';
+import { sendTelemetryEvent } from '../utils/telemetry';
 import { stackHead } from '../services/utils';
 
 // ============================================

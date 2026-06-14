@@ -34,7 +34,7 @@ import { ensurePushFailureFile, mergeFailures } from './utils/pushFailureStore';
 import { ensureSnapshotFile, savePushSnapshot, getDeletedSnapshotIds } from './utils/pushSnapshotStore';
 import { TS_ID_COLUMN } from './services/utils';
 import { ensureDeletedRowsFile, syncDeletedRows, refreshAndGetDeletedRows, getPendingDeletedRows, markDeletedRows } from './utils/deletedRowsStore';
-import { initTelemetry, sendTelemetryEvent, sendTelemetryErrorEvent, sendTelemetryException } from './services/telemetry';
+import { initTelemetry, sendTelemetryEvent, sendTelemetryErrorEvent } from './utils/telemetry';
 import { stackHead } from './services/utils';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
@@ -234,7 +234,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
             }
         } catch (err: any) {
             console.error(`[推送] 回写 testCaseNo 失败: ${err?.message || err}`);
-            sendTelemetryException('explorerPush.writeBackFailed', { ext: fileExt, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                sendTelemetryErrorEvent('explorerPush.writeBackFailed', { ext: fileExt, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
         }
     }
 
@@ -486,7 +486,7 @@ async function handleCreateNewTestCase(targets: vscode.Uri[], context: vscode.Ex
         
     } catch (err: any) {
         vscode.window.showErrorMessage(`创建测试案例失败: ${err.message || err}`);
-        sendTelemetryException('createNewTestCase.error', { 
+        sendTelemetryErrorEvent('createNewTestCase.error', {
             errorMessage: String(err?.message || String(err)).slice(0, 500), 
             stackHead: stackHead(err) 
         });
@@ -512,7 +512,7 @@ async function openWithPluginEditor(fileUri: vscode.Uri, originalFileName: strin
         try {
             const document = await vscode.workspace.openTextDocument(fileUri);
             await vscode.window.showTextDocument(document);
-            sendTelemetryException('createNewTestCase.openEditor.failed', { 
+            sendTelemetryErrorEvent('createNewTestCase.openEditor.failed', {
                 errorMessage: String(err?.message || String(err)).slice(0, 500),
                 stackHead: stackHead(err) 
             });
@@ -644,7 +644,7 @@ function registerEditorCommands(
             try {
                 await vscode.commands.executeCommand('vscode.openWith', uri, TESTCASE_EDITOR_VIEWTYPE);
             } catch (err: any) {
-                sendTelemetryException('command.openWithEditor.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+            sendTelemetryErrorEvent('command.openWithEditor.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                 throw err;
             }
         }),
@@ -658,7 +658,7 @@ function registerEditorCommands(
             try {
                 await vscode.commands.executeCommand('vscode.openWith', uri, 'default');
             } catch (err: any) {
-                sendTelemetryException('command.openWithText.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+            sendTelemetryErrorEvent('command.openWithText.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                 throw err;
             }
         })
@@ -680,37 +680,37 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // 全局未捕获异常上报（兜底）
     process.on('unhandledRejection', (reason: any) => {
-        try { sendTelemetryException('extension.unhandledRejection', { errorMessage: String(reason?.message || String(reason)).slice(0, 500), stackHead: stackHead(reason) }); } catch (_) { /* ignore */ }
+        try { sendTelemetryErrorEvent('extension.unhandledRejection', { errorMessage: String(reason?.message || String(reason)).slice(0, 500), stackHead: stackHead(reason) }); } catch (_) { /* ignore */ }
     });
 
     // 初始化测试任务绑定文件（不存在则创建空模板，并打印路径便于用户定位）
     await ensureBindingsFile(context).catch(err => {
         console.error('[Extension] 初始化绑定文件失败:', err?.message || err);
-        sendTelemetryException('bindings.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+        sendTelemetryErrorEvent('bindings.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
     });
 
     // 初始化高亮存储文件（用于持久化推送后 testCaseNo 单元格的高亮标识）
     await ensureHighlightFile(context).catch(err => {
         console.error('[Extension] 初始化高亮存储文件失败:', err?.message || err);
-        sendTelemetryException('highlight.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+        sendTelemetryErrorEvent('highlight.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
     });
 
     // 初始化推送失败存储文件（以 testcase_id 为 key 持久化失败高亮）
     await ensurePushFailureFile(context).catch(err => {
         console.error('[Extension] 初始化推送失败存储文件失败:', err?.message || err);
-        sendTelemetryException('pushFailure.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+        sendTelemetryErrorEvent('pushFailure.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
     });
 
     // 初始化推送快照存储文件（每次推送后记录基线，后续差异比对用）
     await ensureSnapshotFile(context).catch(err => {
         console.error('[Extension] 初始化快照存储文件失败:', err?.message || err);
-        sendTelemetryException('snapshot.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+        sendTelemetryErrorEvent('snapshot.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
     });
 
     // 初始化已删除行追踪存储文件（管理待同步的删除行记录）
     await ensureDeletedRowsFile(context).catch(err => {
         console.error('[Extension] 初始化删除行存储文件失败:', err?.message || err);
-        sendTelemetryException('deletedRows.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+        sendTelemetryErrorEvent('deletedRows.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
     });
 
     // 注册绑定任务相关功能（装饰器 + TreeView + revealBoundTask 命令 + 监听）
@@ -741,7 +741,7 @@ export async function activate(context: vscode.ExtensionContext) {
             try {
                 return tableBrowserProvider.show();
             } catch (err: any) {
-                sendTelemetryException('command.tableBrowser.open.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+            sendTelemetryErrorEvent('command.tableBrowser.open.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                 throw err;
             }
         }),
@@ -759,7 +759,7 @@ export async function activate(context: vscode.ExtensionContext) {
             try {
                 await testCaseProvider.showWebview(uri);
             } catch (err: any) {
-                sendTelemetryException('command.viewOnline.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+            sendTelemetryErrorEvent('command.viewOnline.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                 throw err;
             }
         }),
@@ -778,7 +778,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 } catch (err: any) {
                     const baseName = targets[0] ? path.basename(targets[0].fsPath) : '';
                     const panel = targets[0] ? BaseEditorProvider.getPanel(targets[0].fsPath) : undefined;
-                    sendTelemetryException('explorerPush.commandError', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+            sendTelemetryErrorEvent('explorerPush.commandError', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                     showPushErrorModal(panel, baseName, `推送失败: ${err.message || err}`);
                 }
             }
@@ -793,7 +793,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 try {
                     await handleCreateNewTestCase(targets, context);
                 } catch (err: any) {
-                    sendTelemetryException('createNewTestCase.commandError', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+            sendTelemetryErrorEvent('createNewTestCase.commandError', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                     vscode.window.showErrorMessage(`创建测试案例失败: ${err.message || err}`);
                 }
             }
@@ -830,7 +830,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 try {
                     await handleCreateNewTestCase([targetUri], context);
                 } catch (err: any) {
-                    sendTelemetryException('createNewTestCaseQuick.commandError', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+            sendTelemetryErrorEvent('createNewTestCaseQuick.commandError', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                     vscode.window.showErrorMessage(`创建测试案例失败: ${err.message || err}`);
                 }
             }
@@ -878,7 +878,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 } catch (err: any) {
                     console.error('[syncDeletedRows] 失败:', err?.message || err);
                     vscode.window.showErrorMessage(`删除行同步失败: ${err?.message || err}`);
-                    sendTelemetryException('syncDeletedRows.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+        sendTelemetryErrorEvent('syncDeletedRows.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                 }
             }
         ),

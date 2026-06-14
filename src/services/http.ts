@@ -18,7 +18,7 @@ import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
 import { readConfig } from './storage';
-import { sendTelemetryEvent, sendTelemetryErrorEvent, sendTelemetryException } from './telemetry';
+import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
 import { stackHead } from './utils';
 import type { AppConfig, ApiResponse, QueryOptions } from '../types';
 
@@ -74,7 +74,7 @@ function addSm2Signature(headers: Record<string, string>, appConfig: AppConfig):
         headers['X-Signature'] = sm2.doEncrypt(String(timestamp), publicKey);
     } catch (error) {
         console.error('[http] SM2 签名失败:', error);
-        sendTelemetryException('http.sm2.signFailed', { errorMessage: String((error as any)?.message || String(error)).slice(0, 500), stackHead: stackHead(error) });
+        sendTelemetryErrorEvent('http.sm2.signFailed', { errorMessage: String((error as any)?.message || String(error)).slice(0, 500), stackHead: stackHead(error) });
     }
 }
 
@@ -167,12 +167,15 @@ async function post<T = any>(
 export async function fetchTaskTree(context: vscode.ExtensionContext): Promise<any[]> {
     const url = `${await getApiBaseUrl(context)}/test-task/task-tree`;
     sendTelemetryEvent('api.fetchTaskTree.start', {});
+    const _start = Date.now();
     const response = await post<ApiResponse<any[]>>(context, url, {});
+    const _costMs = String(Date.now() - _start);
+    maybeReportAuthFailure(response.status, 'fetchTaskTree');
     if (response.data.returnCode === 'SUC0000') {
-        sendTelemetryEvent('api.fetchTaskTree.ok', { returnCode: response.data.returnCode });
+        sendTelemetryEvent('api.fetchTaskTree.ok', { returnCode: response.data.returnCode, costMs: _costMs });
         return response.data.body || [];
     }
-    sendTelemetryErrorEvent('api.fetchTaskTree.fail', { returnCode: response.data.returnCode || '' });
+    sendTelemetryErrorEvent('api.fetchTaskTree.fail', { returnCode: response.data.returnCode || '', costMs: _costMs });
     throw new Error(response.data.errorMsg || '获取任务树失败');
 }
 
@@ -199,8 +202,14 @@ export async function queryTestCases(
     if (opts.testType) body.testType = opts.testType;
     if (opts.type) body.type = opts.type;
 
+    const _start = Date.now();
     const response = await post<ApiResponse>(context, url, body);
-    sendTelemetryEvent('api.queryTestCases.done', { returnCode: response.data.returnCode || '', currentPage: String(opts.currentPage || 1) });
+    maybeReportAuthFailure(response.status, 'queryTestCases');
+    sendTelemetryEvent('api.queryTestCases.done', {
+        returnCode: response.data.returnCode || '',
+        currentPage: String(opts.currentPage || 1),
+        costMs: String(Date.now() - _start),
+    });
     return response.data;
 }
 
@@ -213,8 +222,14 @@ export async function batchImportData(
 ): Promise<ApiResponse> {
     const url = `${await getApiBaseUrl(context)}/test-task/batch-import`;
     const body = { headers: opts.headers, rows: opts.selectedRows };
+    const _start = Date.now();
     const response = await post<ApiResponse>(context, url, body);
-    sendTelemetryEvent('api.batchImport.done', { returnCode: response.data.returnCode || '', totalRows: String(opts.selectedRows.length) });
+    maybeReportAuthFailure(response.status, 'batchImport');
+    sendTelemetryEvent('api.batchImport.done', {
+        returnCode: response.data.returnCode || '',
+        totalRows: String(opts.selectedRows.length),
+        costMs: String(Date.now() - _start),
+    });
     return response.data;
 }
 
@@ -257,6 +272,7 @@ export async function pushTestCase(
             'errorMsg=', (response.data as any)?.errorMsg || '');
         console.log('[推送][响应] body  :', JSON.stringify(response.data, null, 2));
 
+        maybeReportAuthFailure(response.status, 'pushTestCase');
         const _rc = (response.data as any)?.returnCode || '';
         const _success = _rc === 'SUC0000';
         if (_success) {
@@ -276,12 +292,22 @@ export async function pushTestCase(
         }
         return response.data;
     } catch (err: any) {
-        sendTelemetryException('api.pushTestCase.exception', {
+        sendTelemetryErrorEvent('api.pushTestCase.exception', {
             totalRows: String(data.length),
             errorMessage: String(err?.message || String(err)).slice(0, 500),
             stackHead: stackHead(err),
         });
         throw err;
+    }
+}
+
+/**
+ * 当响应状态码为 401/403 时，上报一次鉴权失效事件。
+ * 用于运营侧观察：登录态过期 / token 失效 / 权限被收回 的整体趋势。
+ */
+function maybeReportAuthFailure(httpStatus: number, api: string): void {
+    if (httpStatus === 401 || httpStatus === 403) {
+        sendTelemetryErrorEvent('api.auth.unauthorized', { api, httpStatus: String(httpStatus) });
     }
 }
 

@@ -19,7 +19,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { DetailTableData } from '../types';
-import { sendTelemetryException, sendTelemetryErrorEvent } from '../services/telemetry';
+import { sendTelemetryErrorEvent } from './telemetry';
 import { stackHead } from '../services/utils';
 
 // ============================================
@@ -78,7 +78,7 @@ function loadStore(): SnapshotStore {
         return cachedStore;
     } catch (err: any) {
         // 快照读取 / 反序列化异常：上报以便反查 "diff 异常 / 高亮误判" 问题
-        sendTelemetryException('snapshot.load.failed', {
+            sendTelemetryErrorEvent('snapshot.load.failed', {
             errorMessage: String(err?.message || String(err)).slice(0, 500),
             stackHead: stackHead(err),
         });
@@ -93,7 +93,7 @@ async function saveStore(store: SnapshotStore): Promise<void> {
         cachedStore = store;
     } catch (err: any) {
         // 快照写入异常：磁盘 / 权限 / globalStorage 不可写。后续 diff 将不准确。
-        sendTelemetryException('snapshot.save.failed', {
+        sendTelemetryErrorEvent('snapshot.save.failed', {
             errorMessage: String(err?.message || String(err)).slice(0, 500),
             stackHead: stackHead(err),
         });
@@ -150,7 +150,7 @@ export async function ensureSnapshotFile(context: vscode.ExtensionContext): Prom
         catch { await fs.promises.writeFile(fp, JSON.stringify({}), 'utf-8'); }
     } catch (err: any) {
         console.error('[SnapshotStore] 初始化失败:', err?.message || err);
-        sendTelemetryException('snapshot.init.failed', {
+        sendTelemetryErrorEvent('snapshot.init.failed', {
             errorMessage: String(err?.message || String(err)).slice(0, 500),
             stackHead: stackHead(err),
         });

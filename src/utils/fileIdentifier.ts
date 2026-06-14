@@ -15,7 +15,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { sendTelemetryException, sendTelemetryErrorEvent } from '../services/telemetry';
+import { sendTelemetryErrorEvent } from '../utils/telemetry';
 import { stackHead } from '../services/utils';
 
 // 记录文件的相对路径（相对于工作区根目录）
@@ -48,7 +48,7 @@ function readRecordFile(): Record<string, { createdAt: string; version: string }
         return JSON.parse(content);
     } catch (err: any) {
         // 读/反序列化失败：记录文件可能损坏或权限异常，会导致样例行识别失效，需上报便于排查
-        sendTelemetryException('fileIdentifier.read.failed', {
+        sendTelemetryErrorEvent('fileIdentifier.read.failed', {
             errorMessage: String(err?.message || String(err)).slice(0, 500),
             stackHead: stackHead(err),
         });
@@ -76,7 +76,7 @@ function writeRecordFile(records: Record<string, { createdAt: string; version: s
         fs.writeFileSync(recordFilePath, JSON.stringify(records, null, 2), 'utf-8');
     } catch (err: any) {
         // 写入失败：磁盘只读 / 权限不足 / 工作区不可写。后续样例行将无法被正确识别。
-        sendTelemetryException('fileIdentifier.write.failed', {
+        sendTelemetryErrorEvent('fileIdentifier.write.failed', {
             errorMessage: String(err?.message || String(err)).slice(0, 500),
             stackHead: stackHead(err),
         });

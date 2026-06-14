@@ -28,7 +28,7 @@ import { savePushSnapshot, diffPushSnapshot, type RowDiff, type DiffResult, type
 import { markDeletedRows } from '../utils/deletedRowsStore';
 import { pushTestCase } from '../services/http';
 import { createParser, ensureTrackingColumns, applyTestCaseNos, type FileParser, type FileType } from '../parsers';
-import { sendTelemetryEvent, sendTelemetryErrorEvent, sendTelemetryException } from '../services/telemetry';
+import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
 import { stackHead } from '../services/utils';
 import { filterTemplateExampleRows, getTemplateExampleTsIds, TEMPLATE_EXAMPLE_TS_ID } from '../utils/fileIdentifier';
 
@@ -133,7 +133,7 @@ export class PushViaHttpClient implements PushStrategy {
             }
         } catch (parseErr: any) {
             console.warn('[推送] 重新解析文件失败，使用前端数据兜底:', parseErr?.message || parseErr);
-            sendTelemetryException('editorPush.reparseFailed', { ext: _ext, errorMessage: String(parseErr?.message || String(parseErr)).slice(0, 500), stackHead: stackHead(parseErr) });
+                            sendTelemetryErrorEvent('editorPush.reparseFailed', { ext: _ext, errorMessage: String(parseErr?.message || String(parseErr)).slice(0, 500), stackHead: stackHead(parseErr) });
         }
 
         // 过滤模板示例行：通过"新增测试案例"命令创建的文件首行是结构示例，
@@ -256,7 +256,7 @@ export class PushViaHttpClient implements PushStrategy {
                 }
             } catch (err: any) {
                 console.error('[推送] testCaseNo 回写失败:', err?.message || err);
-                sendTelemetryException('editorPush.writeBackFailed', { ext: _ext, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                sendTelemetryErrorEvent('editorPush.writeBackFailed', { ext: _ext, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
             }
         } else if (failures.length > 0) {
             // 全部推送失败：仍更新快照基线，使下次 diff 不再标记为修改
@@ -275,7 +275,7 @@ export class PushViaHttpClient implements PushStrategy {
                 ctx.session.cachedTableData = null;
             } catch (err: any) {
                 console.error('[推送] 全部失败，快照更新失败:', err?.message || err);
-                sendTelemetryException('editorPush.allFailSnapshotFailed', { ext: _ext, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                sendTelemetryErrorEvent('editorPush.allFailSnapshotFailed', { ext: _ext, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
             }
         }
 
@@ -469,7 +469,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         try {
             await vscode.commands.executeCommand('workbench.action.keepEditor');
         } catch (e: any) {
-            sendTelemetryException('editor.keepEditor.failed', { errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
+            sendTelemetryErrorEvent('editor.keepEditor.failed', { errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
         }
 
         // 先识别文件类型；不合格直接展示错误页
@@ -588,7 +588,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                             log('💾 testcase_id 已补全并落盘');
                         } catch (e: any) {
                             log('⚠ testcase_id 落盘失败:', e?.message || e);
-                            sendTelemetryException('editor.testcaseId.saveFailed', { fileFormat: resolved.type || '', errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
+            sendTelemetryErrorEvent('editor.testcaseId.saveFailed', { fileFormat: resolved.type || '', errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
                         }
                     }
                     // init / 外部变更 / 推送成功 / 重置刷新时，用当前数据与推送快照做差异比对（均排除 testCaseNo 列）
@@ -708,7 +708,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 await pushDataToWebview(true, 'visible', true);
             } catch (err: any) {
                 log('❌ visible-reload failed:', err?.message || err);
-                sendTelemetryException('editor.visibleChange.failed', { fileFormat: session.type, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+            sendTelemetryErrorEvent('editor.visibleChange.failed', { fileFormat: session.type, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                 // 兜底：解析失败时仍按缓存推送一次，保证前端有数据
                 try { await pushDataToWebview(false, 'visible'); } catch (_) { /* ignore */ }
             }
@@ -884,7 +884,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 }
             } catch (err: any) {
                 const errMsg = err?.message || String(err) || '操作失败';
-                sendTelemetryException('editor.message.error', { messageKind: msg?.type || '', fileFormat: session.type, errorMessage: errMsg.slice(0, 500), stackHead: stackHead(err) });
+            sendTelemetryErrorEvent('editor.message.error', { messageKind: msg?.type || '', fileFormat: session.type, errorMessage: errMsg.slice(0, 500), stackHead: stackHead(err) });
                 if (msg?.type === 'save') {
                     sendTelemetryErrorEvent('editor.save.error', { fileFormat: session.type, errorMessage: errMsg.slice(0, 500) });
                     webviewPanel.webview.postMessage({ type: 'saveError', message: errMsg });

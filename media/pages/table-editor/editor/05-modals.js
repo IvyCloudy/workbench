@@ -403,7 +403,48 @@ function bindXsPrompt() {
     if (input) input.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter') { ev.preventDefault(); closeXsPrompt(true); }
         else if (ev.key === 'Escape') { ev.preventDefault(); closeXsPrompt(false); }
+        else if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'v' || ev.key === 'V')) {
+            // VSCode webview 沙箱下 <input> 的原生 Ctrl/Cmd+V 偶发失效，
+            // 显式调用 clipboard API 兜底，确保弹窗输入框任何时候都能粘贴文本。
+            try {
+                if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+                    ev.preventDefault();
+                    navigator.clipboard.readText().then(function (text) {
+                        if (text == null) text = '';
+                        var el = ev.target;
+                        var start = (typeof el.selectionStart === 'number') ? el.selectionStart : el.value.length;
+                        var end = (typeof el.selectionEnd === 'number') ? el.selectionEnd : el.value.length;
+                        var before = el.value.slice(0, start);
+                        var after = el.value.slice(end);
+                        el.value = before + String(text) + after;
+                        var caret = before.length + String(text).length;
+                        try { el.setSelectionRange(caret, caret); } catch (_) {}
+                        try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+                    }).catch(function () { /* 静默失败，回退浏览器默认（如可用） */ });
+                }
+            } catch (_) { /* ignore */ }
+        }
         ev.stopPropagation();
+    });
+    if (input) input.addEventListener('paste', function (ev) {
+        // 浏览器原生 paste 事件能命中时优先使用，避免与 keydown 兜底重复粘贴
+        try {
+            var dt = ev.clipboardData || (window).clipboardData;
+            if (!dt) return;
+            var text = dt.getData('text');
+            if (text == null) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            var el = ev.target;
+            var start = (typeof el.selectionStart === 'number') ? el.selectionStart : el.value.length;
+            var end = (typeof el.selectionEnd === 'number') ? el.selectionEnd : el.value.length;
+            var before = el.value.slice(0, start);
+            var after = el.value.slice(end);
+            el.value = before + String(text) + after;
+            var caret = before.length + String(text).length;
+            try { el.setSelectionRange(caret, caret); } catch (_) {}
+            try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+        } catch (_) { /* ignore */ }
     });
 }
 
@@ -511,11 +552,20 @@ function hasDetailRows(ri) {
 }
 
 // 判断某列在某主行上是否有可点开的明细
+// 兼容空对象/空数组占位（{} / []）：右键插入新行时，明细列会被设置为占位字符串，
+// 此时 rowGroups/rawRowGroups 都为空数组，但仍应展示为可点击链接（点击后弹窗里可新建步骤/字段）
 function hasDetailRowsAtCol(ri, ci) {
     var dt = getDetailTableByCol(ci);
     if (!dt || !dt.rowGroups) return false;
     var g = dt.rowGroups[ri];
-    return Array.isArray(g) && g.length > 0;
+    if (Array.isArray(g) && g.length > 0) return true;
+    // 主表单元格是 '[]' / '{}' 占位时也视为 detail：让用户能点开弹窗编辑
+    var rows = (S.data && S.data.rows) || [];
+    var row = rows[ri];
+    if (!row) return false;
+    var v = row[ci];
+    if (v === '[]' || v === '{}') return true;
+    return false;
 }
 
 function isDetailModalOpen() {
@@ -665,7 +715,25 @@ function renderDetailV2() {
     var rawType = (dt.rawRowTypes && dt.rawRowTypes[ri]) || 'array';
     var rawRows = (dt.rawRowGroups && dt.rawRowGroups[ri]) || [];
 
-    // 嵌套对象类型：当作只有一条 step 的特例
+    // 嵌套对象类型：当作只有一条 step 的特例。
+    // 当行刚被插入、rawRowGroups 为空时，左侧不渲染"+ 添加步骤"按钮（嵌套对象固定 1 条），
+    // 用户会卡死无法进入编辑。这里按字段骨架自动补一条空对象，并标记为已修改以便保存写回。
+    if (rawType === 'object' && rawRows.length === 0) {
+        if (!dt.rawRowGroups) dt.rawRowGroups = [];
+        if (!dt.rawRowGroups[ri]) dt.rawRowGroups[ri] = [];
+        var seedObj = {};
+        (dt.headers || []).forEach(function (h) {
+            var kind = _inferDetailFieldKind(dt, h);
+            if (kind === 'array') seedObj[h] = [];
+            else if (kind === 'object') seedObj[h] = {};
+            else seedObj[h] = '';
+        });
+        dt.rawRowGroups[ri].push(seedObj);
+        rawRows = dt.rawRowGroups[ri];
+        if (!S._dv2StepMods) S._dv2StepMods = new Set();
+        S._dv2StepMods.add(0);
+    }
+
     var stepCount = rawRows.length;
     if (S._dv2ActiveStep == null || S._dv2ActiveStep < 0 || S._dv2ActiveStep >= stepCount) {
         S._dv2ActiveStep = stepCount > 0 ? 0 : -1;
@@ -990,6 +1058,29 @@ function dv2DeleteArrayItem(field, ii) {
     renderDetailV2();
 }
 
+// 推断明细表中"某字段在跨行/跨步骤的主流类型"：扫描所有行/所有 step 的真实值，
+// 任一处出现 array → 返回 'array'；否则任一处出现 object → 返回 'object'；
+// 其余情况（包括字段从未出现过）→ 返回 'scalar'。
+// 用于：新 step 按该类型给默认值（数组→[]、对象→{}、标量→''），与其他行/步骤保持类型一致。
+function _inferDetailFieldKind(dt, field) {
+    if (!dt || !field) return 'scalar';
+    var raws = dt.rawRowGroups || [];
+    var sawObject = false;
+    for (var ri = 0; ri < raws.length; ri++) {
+        var grp = raws[ri];
+        if (!Array.isArray(grp)) continue;
+        for (var di = 0; di < grp.length; di++) {
+            var step = grp[di];
+            if (!step || typeof step !== 'object') continue;
+            if (!Object.prototype.hasOwnProperty.call(step, field)) continue;
+            var v = step[field];
+            if (Array.isArray(v)) return 'array';
+            if (v && typeof v === 'object') sawObject = true;
+        }
+    }
+    return sawObject ? 'object' : 'scalar';
+}
+
 function dv2AddStep() {
     var dt = getCurrentDetailTable();
     var ri = S._detailRowIdx;
@@ -997,9 +1088,17 @@ function dv2AddStep() {
     if ((dt.rawRowTypes && dt.rawRowTypes[ri]) === 'object') { showToast('嵌套对象不支持多步骤', 'error'); return; }
     if (!dt.rawRowGroups) dt.rawRowGroups = [];
     if (!dt.rawRowGroups[ri]) dt.rawRowGroups[ri] = [];
-    // 以 schema headers 作为新 step 的字段骨架
+    // 以 schema headers 作为新 step 的字段骨架；
+    // 字段默认值按"全表跨行/跨步骤推断"的列级类型给：array→[]、object→{}、其余→''。
+    // 这样新加 step 的 data 等数组字段就不会被初始化为空字符串，
+    // 保存为 yaml 时与其他行的类型保持一致（避免类型漂移）。
     var newStep = {};
-    (dt.headers || []).forEach(function (h) { newStep[h] = ''; });
+    (dt.headers || []).forEach(function (h) {
+        var kind = _inferDetailFieldKind(dt, h);
+        if (kind === 'array') newStep[h] = [];
+        else if (kind === 'object') newStep[h] = {};
+        else newStep[h] = '';
+    });
     dt.rawRowGroups[ri].push(newStep);
     S._dv2ActiveStep = dt.rawRowGroups[ri].length - 1;
     if (!S._dv2StepMods) S._dv2StepMods = new Set();
@@ -1125,6 +1224,13 @@ function saveDetailModal() {
             displayText = '{' + fieldCount + ' 字段}';
         } else {
             displayText = '[' + rawRows.length + ' 项]';
+        }
+        // 关键：把新 displayText 写回主表 S.data.rows，
+        // 否则 renderTable() 仍会用旧值渲染，导致用户在弹窗中"添加项/删除项"后
+        // 主表对应单元格的项数不刷新（例如保持旧的 "[2 项]"，新增后未变成 "[3 项]"）。
+        if (S.data && Array.isArray(S.data.rows)
+            && S.data.rows[ri] && colIdx < S.data.rows[ri].length) {
+            S.data.rows[ri][colIdx] = displayText;
         }
         S.mods.add(ri + ',' + colIdx);
         S._detailModCellKeys.add(ri + ',' + colIdx);

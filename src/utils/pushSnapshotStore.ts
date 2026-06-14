@@ -265,7 +265,10 @@ export function diffPushSnapshot(
         });
 
         // 2) 解析旧快照
+        // 防御：行有 testCaseNo（已推送过，不会被前面判定为新增）但快照中查不到 id 的极端情况
+        // （快照损坏 / tsId 被重新生成等），跳过 diff 避免 oldRaw=undefined 触发 indexOf 崩溃。
         const oldRaw = snapshots[id];
+        if (oldRaw == null) return;
         const hasOldDetail = oldRaw.indexOf(DETAIL_SEP) >= 0;
         const oldMainPart = hasOldDetail ? oldRaw.split(DETAIL_SEP)[0] : oldRaw;
         const oldDetailPart = hasOldDetail ? oldRaw.slice(oldMainPart.length + 1) : '';

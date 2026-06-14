@@ -209,6 +209,12 @@ export class TestCaseProvider extends BaseWebviewProvider {
                     sendTelemetryEvent('testCase.query.endOfData', {});
                     this.postMessage({ command: 'endOfData' });
                 } else {
+                    const _list: any[] = Array.isArray(result.data?.list) ? result.data.list
+                        : (Array.isArray(result.data) ? result.data : []);
+                    sendTelemetryEvent('testCase.query.success', {
+                        currentPage: String(msg.currentPage || 1),
+                        rows: String(_list.length),
+                    });
                     this.postMessage({ command: 'showData', data: result.data });
                 }
             }

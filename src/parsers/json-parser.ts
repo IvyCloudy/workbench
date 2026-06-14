@@ -100,22 +100,50 @@ export class JsonFileParser implements FileParser {
 
         const useFlatTopLevel = tablesByField.size > 0;
 
+        // 行身份解析：用 testcase_id 把当前 row 与 originalData 中的真实记录对齐，
+        // 避免"右键插入行/排序/中间删除"导致的索引错位（新插入行 fallback 到相邻原始行的对象数组数据）。
+        const tsIdColIdx = headers.indexOf('testcase_id');
+        const origByTsId = new Map<string, any>();
+        if (Array.isArray(originalData) && tsIdColIdx >= 0) {
+            for (const rec of originalData) {
+                if (rec && typeof rec === 'object') {
+                    const tid = (rec as any)['testcase_id'];
+                    if (tid !== undefined && tid !== null && tid !== '') {
+                        origByTsId.set(String(tid), rec);
+                    }
+                }
+            }
+        }
+
         const records: any[] = rows.map((row, rowIdx) => {
-            // 取该行原始记录，用于标量数组列等的类型还原
-            const origRecord: any = (Array.isArray(originalData) && rowIdx < originalData.length)
-                ? originalData[rowIdx] : undefined;
+            // 优先按 testcase_id 在 originalData 中查找真实匹配的源记录；找不到（新插入行）→ origRecord 为 undefined
+            const tsIdVal = (tsIdColIdx >= 0) ? row[tsIdColIdx] : undefined;
+            let origRecord: any = undefined;
+            if (tsIdVal !== undefined && tsIdVal !== null && tsIdVal !== '' && origByTsId.size > 0) {
+                origRecord = origByTsId.get(String(tsIdVal));
+            }
+            // 兜底：testcase_id 不可用时退回 rowIdx 索引（保留对老文件兼容）
+            if (!origRecord && origByTsId.size === 0
+                && Array.isArray(originalData) && rowIdx < originalData.length) {
+                origRecord = originalData[rowIdx];
+            }
             if (useFlatTopLevel) {
                 // 顶层 key 模式：逐列处理，detail 列走 reconstructDetail，其余列尝试 JSON.parse 还原
                 const record: any = {};
                 headers.forEach((h, i) => {
                     const dt = tablesByField.get(h);
-                    if (dt && originalData && dt.rowGroups) {
+                    if (dt && dt.rowGroups) {
                         const editedRows: string[][] = dt.rowGroups[rowIdx] || [];
                         const rawType = (dt.rawRowTypes && dt.rawRowTypes[rowIdx]) || 'none';
-                        if (editedRows.length > 0 || rawType === 'object') {
-                            record[h] = this.reconstructDetail(rowIdx, dt, originalData);
+                        const rawRowsFromFront: any[] = (dt.rawRowGroups && dt.rawRowGroups[rowIdx]) || [];
+                        if (editedRows.length > 0 || rawRowsFromFront.length > 0) {
+                            const origDetailData = origRecord ? origRecord[h] : undefined;
+                            record[h] = this.reconstructDetail(rowIdx, dt, origDetailData);
                             return;
                         }
+                        // 新插入行的空 detail 列：按 rawType 回退到 [] / {}，避免错位继承相邻行数据
+                        if (rawType === 'object') { record[h] = {}; return; }
+                        if (rawType === 'array') { record[h] = []; return; }
                     }
                     const origVal = origRecord ? origRecord[h] : undefined;
                     // 当前端送回数组（chip 列）或原值是数组/对象/数字/布尔时，走 coerceValue 保真还原；
@@ -132,10 +160,11 @@ export class JsonFileParser implements FileParser {
                 return record;
             }
             // 路径展开模式（保留原逻辑）
-            if (detailTable && detailTable.field && originalData && detailTable.rowGroups) {
+            if (detailTable && detailTable.field && detailTable.rowGroups) {
                 const editedRows: string[][] = detailTable.rowGroups[rowIdx] || [];
                 if (editedRows.length > 0) {
-                    const reconstructed = this.reconstructDetail(rowIdx, detailTable, originalData);
+                    const origDetailData = origRecord ? origRecord[detailTable.field] : undefined;
+                    const reconstructed = this.reconstructDetail(rowIdx, detailTable, origDetailData);
                     const record = this.unflattenRow(headers, row);
                     record[detailTable.field] = reconstructed;
                     return record;
@@ -239,15 +268,34 @@ export class JsonFileParser implements FileParser {
      * 重建 detail 字段为对应原始类型：
      * - 数组：返回 any[]
      * - 嵌套对象：返回单个对象
+     * 注：origDetailData 由调用方（save）按 testcase_id 真实匹配后传入，
+     *     避免直接用 originalData[rowIdx] 在新插入行时索引错位继承相邻行数据。
      */
-    private reconstructDetail(rowIdx: number, detailTable: DetailTableData, originalData: any[]): any {
+    private reconstructDetail(rowIdx: number, detailTable: DetailTableData, origDetailData: any): any {
         const editedRows: string[][] = detailTable.rowGroups[rowIdx] || [];
+        const rawRowsFromFront: any[] = (detailTable.rawRowGroups && detailTable.rawRowGroups[rowIdx]) || [];
         const rawType = detailTable.rawRowTypes ? detailTable.rawRowTypes[rowIdx] : undefined;
-        const origDetailData = rowIdx < originalData.length
-            ? originalData[rowIdx]?.[detailTable.field] : undefined;
 
         const isObjectType = rawType === 'object'
             || (rawType === undefined && origDetailData && typeof origDetailData === 'object' && !Array.isArray(origDetailData));
+
+        // 无明细且前端也没有 raw：按 rawType 回退到空对象/空数组（新插入行的占位场景），
+        // origDetailData 由 save 传入（按 tsId 真实匹配）；找不到匹配 → undefined → 走空值回退
+        if (editedRows.length === 0 && rawRowsFromFront.length === 0) {
+            if (origDetailData !== undefined) return origDetailData;
+            if (rawType === 'object') return {};
+            return [];
+        }
+
+        // 优先信任前端 rawRowGroups（弹窗写入的真实结构），与 yaml-parser 行为保持一致
+        if (rawRowsFromFront.length > 0) {
+            if (isObjectType) {
+                const r0 = rawRowsFromFront[0];
+                if (r0 && typeof r0 === 'object' && !Array.isArray(r0)) return { ...r0 };
+                return r0 ?? {};
+            }
+            return rawRowsFromFront.map(r => (r && typeof r === 'object') ? { ...r } : r);
+        }
 
         if (isObjectType) {
             const editedFirst = editedRows[0] || [];

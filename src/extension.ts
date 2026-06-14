@@ -30,6 +30,7 @@ import { getCurrentTaskInfo } from './utils/commands';
 import { showPushErrorModal, showModal, showPushResult } from './utils/message';
 import { markAsCreatedByCommand, unmarkAsCreatedByCommand, isCreatedByCommand, cleanupRecords } from './utils/fileIdentifier';
 import { ensureHighlightFile } from './utils/highlightStore';
+import { ensurePushFailureFile, mergeFailures } from './utils/pushFailureStore';
 import { ensureSnapshotFile, savePushSnapshot, getDeletedSnapshotIds } from './utils/pushSnapshotStore';
 import { TS_ID_COLUMN } from './services/utils';
 import { ensureDeletedRowsFile, syncDeletedRows, refreshAndGetDeletedRows, getPendingDeletedRows, markDeletedRows } from './utils/deletedRowsStore';
@@ -135,7 +136,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     const currentTask = await getCurrentTaskInfo(filePath);
     if (!currentTask.bind) {
         sendTelemetryEvent('explorerPush.aborted', { reason: 'unbound', ext: '' });
-        showPushErrorModal(panel, baseName, `未绑定任务，无法推送\n\n文件 ${baseName} 所在的任务尚未在系统中完成绑定，请联系项目管理员配置。`);
+        showPushErrorModal(panel, baseName, '未绑定任务，无法推送。请在测试任务插件绑定后再试。');
         return;
     }
     const fileExt = path.extname(filePath).toLowerCase();
@@ -224,6 +225,28 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     });
 
     showPushResult(panel, baseName, successMappings.length, failureItems, rows.length);
+
+    // 持久化推送失败标记：以 testcase_id（行稳定唯一标识）为 key，跨 webview/vscode 重启依然保持
+    try {
+        const batchTsIds: string[] = [];
+        for (const rec of rows) {
+            const id = rec && (rec as any)[TS_ID_COLUMN] != null ? String((rec as any)[TS_ID_COLUMN]) : '';
+            if (id) batchTsIds.push(id);
+        }
+        const failuresMap: { [tsId: string]: string } = {};
+        failures.forEach(f => {
+            if (f && f.tsId !== undefined && f.tsId !== null && f.tsId !== '') {
+                failuresMap[String(f.tsId)] = String(f.reason || '');
+            }
+        });
+        const successTsIds: string[] = successMappings
+            .map(s => s && s.tsId)
+            .filter((t: any) => t !== undefined && t !== null && t !== '')
+            .map((t: any) => String(t));
+        await mergeFailures(filePath, batchTsIds, failuresMap, successTsIds);
+    } catch (err: any) {
+        console.error('[推送] 持久化失败标记失败:', err?.message || err);
+    }
     // 埋点：推送结果汇总
     sendTelemetryEvent('explorerPush.complete', {
         ext: fileExt,
@@ -580,16 +603,34 @@ function registerEditorCommands(
     return [
         vscode.commands.registerCommand('testcaseViewer.openWithEditor', async () => {
             const uri = getActiveFileUri();
-            if (uri && extPattern.test(uri.fsPath) && isTestCaseFile(uri)) {
-                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.openWithEditor' });
+            if (!uri || !extPattern.test(uri.fsPath)) {
+                sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.openWithEditor', reason: 'noActiveFileOrExt' });
+                return;
+            }
+            if (!isTestCaseFile(uri)) {
+                sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.openWithEditor', reason: 'notTestCaseFile' });
+                return;
+            }
+            sendTelemetryEvent('command.executed', { command: 'testcaseViewer.openWithEditor' });
+            try {
                 await vscode.commands.executeCommand('vscode.openWith', uri, TESTCASE_EDITOR_VIEWTYPE);
+            } catch (err: any) {
+                sendTelemetryException('command.openWithEditor.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                throw err;
             }
         }),
         vscode.commands.registerCommand('testcaseViewer.openWithText', async () => {
             const uri = getActiveFileUri();
-            if (uri && extPattern.test(uri.fsPath)) {
-                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.openWithText' });
+            if (!uri || !extPattern.test(uri.fsPath)) {
+                sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.openWithText', reason: 'noActiveFileOrExt' });
+                return;
+            }
+            sendTelemetryEvent('command.executed', { command: 'testcaseViewer.openWithText' });
+            try {
                 await vscode.commands.executeCommand('vscode.openWith', uri, 'default');
+            } catch (err: any) {
+                sendTelemetryException('command.openWithText.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                throw err;
             }
         })
     ];
@@ -623,6 +664,12 @@ export async function activate(context: vscode.ExtensionContext) {
     await ensureHighlightFile(context).catch(err => {
         console.error('[Extension] 初始化高亮存储文件失败:', err?.message || err);
         sendTelemetryException('highlight.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+    });
+
+    // 初始化推送失败存储文件（以 testcase_id 为 key 持久化失败高亮）
+    await ensurePushFailureFile(context).catch(err => {
+        console.error('[Extension] 初始化推送失败存储文件失败:', err?.message || err);
+        sendTelemetryException('pushFailure.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
     });
 
     // 初始化推送快照存储文件（每次推送后记录基线，后续差异比对用）
@@ -662,13 +709,29 @@ export async function activate(context: vscode.ExtensionContext) {
         // 全局命令
         vscode.commands.registerCommand('tableBrowser.open', () => {
             sendTelemetryEvent('command.executed', { command: 'tableBrowser.open' });
-            return tableBrowserProvider.show();
+            try {
+                return tableBrowserProvider.show();
+            } catch (err: any) {
+                sendTelemetryException('command.tableBrowser.open.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                throw err;
+            }
         }),
         vscode.commands.registerCommand('testcaseViewer.viewOnline', async () => {
             const uri = getActiveFileUri();
-            if (uri && isTestCaseFile(uri)) {
-                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.viewOnline' });
+            if (!uri) {
+                sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.viewOnline', reason: 'noActiveFile' });
+                return;
+            }
+            if (!isTestCaseFile(uri)) {
+                sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.viewOnline', reason: 'notTestCaseFile' });
+                return;
+            }
+            sendTelemetryEvent('command.executed', { command: 'testcaseViewer.viewOnline' });
+            try {
                 await testCaseProvider.showWebview(uri);
+            } catch (err: any) {
+                sendTelemetryException('command.viewOnline.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                throw err;
             }
         }),
 
@@ -830,4 +893,5 @@ export async function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
     console.log('[Extension] 插件已停用');
+    try { sendTelemetryEvent('extension.deactivate', {}); } catch (_) { /* ignore */ }
 }

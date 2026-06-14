@@ -210,11 +210,10 @@ function countMatchedRows() {
             if (S._failedOnly && S._pushFailedTsIds) {
                 var hdr = S.data.headers || [];
                 var tsCol = hdr.indexOf('testcase_id');
-                if (tsCol >= 0) {
-                    var tsv = row[tsCol];
-                    if (tsv === undefined || tsv === null || tsv === '') return;
-                    if (!S._pushFailedTsIds.has(String(tsv))) return;
-                }
+                var tsvForCount = (tsCol >= 0) ? row[tsCol] : undefined;
+                var matchedById = (tsvForCount !== undefined && tsvForCount !== null && tsvForCount !== '' &&
+                    S._pushFailedTsIds && S._pushFailedTsIds.has(String(tsvForCount)));
+                if (!matchedById) return;
             }
             if (S._modifiedOnly) {
                 if (!(typeof _getModifiedRowSet === 'function' && _getModifiedRowSet().has(ri))) return;

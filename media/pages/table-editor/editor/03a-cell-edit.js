@@ -333,13 +333,52 @@ function hideContextMenu() {
 }
 
 // ==================== 行/列 操作 ====================
+// 推断某个明细表的"列级主流类型"：扫描 rawRowTypes 找首个非 'none' 的类型；
+// 全为 'none' 时按列在原始数据中的形态兜底（默认 'array'，与对象数组列最常见）
+function _inferDetailColKind(dt) {
+    if (!dt) return 'array';
+    var types = dt.rawRowTypes || [];
+    for (var i = 0; i < types.length; i++) {
+        if (types[i] === 'array' || types[i] === 'object') return types[i];
+    }
+    return 'array';
+}
+
+// 判断当前文件是否已经被推送过：只要任意一行 testCaseNo 列非空，即视为已推送过。
+// 关闭文件再打开时，扩展端 diffPushSnapshot 也是基于推送快照来判定新增/删除高亮的，
+// 这里保持同一标准：从未推送的文件，新增行不上绿色高亮、被删除行不显示 ghost，
+// 与重开后无高亮/无 ghost 的行为保持一致。
+function _filePushedBefore() {
+    var headers = (S.data && S.data.headers) || [];
+    var tcIdx = headers.indexOf('testCaseNo');
+    if (tcIdx < 0) return false;
+    var rows = (S.data && S.data.rows) || [];
+    for (var i = 0; i < rows.length; i++) {
+        var v = rows[i] && rows[i][tcIdx];
+        if (v != null && String(v) !== '') return true;
+    }
+    return false;
+}
+
 function insertRow(at) {
     var headers = S.data.headers || [];
     var width = headers.length;
     var newRow = new Array(width).fill('');
-    // 标量数组列的默认值为空数组，避免不同列同一行内类型冲突
+    // 标量数组列的默认值为空数组；明细列（对象/对象数组）的默认值为 '[]' 或 '{}'，
+    // 让新行该列立刻显示为可点击编辑链接（与下方 rawRowTypes 同步标注，避免刷新后被错位回退到相邻行的原始数据）
+    var idts = getDetailTables();
+    var detailKindByCol = {};
     headers.forEach(function (_, ci) {
-        if (typeof isArrayCol === 'function' && isArrayCol(ci)) newRow[ci] = [];
+        if (typeof isArrayCol === 'function' && isArrayCol(ci)) {
+            newRow[ci] = [];
+            return;
+        }
+        var dtCol = (typeof getDetailTableByCol === 'function') ? getDetailTableByCol(ci) : null;
+        if (dtCol) {
+            var kind = _inferDetailColKind(dtCol);
+            detailKindByCol[ci] = kind;
+            newRow[ci] = (kind === 'object') ? '{}' : '[]';
+        }
     });
     // 新行自动生成 testcase_id；testCaseNo 保留为空（由推送响应回写）
     var tsCol = headers.indexOf('testcase_id');
@@ -350,12 +389,21 @@ function insertRow(at) {
     S.data.rows.splice(at, 0, newRow);
     // 同步所有明细表：在插入位置插入空条目，确保 rowGroups/rawRowGroups/rawRowTypes
     // 与主表 rows 长度一致，避免后续 buildRowDetailSignature 按行索引误读其他行的明细数据
-    var idts = getDetailTables();
+    // 关键：rawRowTypes 写入推断出的列级类型（'array'/'object'）而非 'none'，
+    //   - 让保存路径识别为"空对象/空数组"而不是回退到 originalData[rowIdx]（避免相邻行数据被错复制）
+    //   - 让弹窗按对应类型展示（嵌套对象 / 步骤列表）
     idts.forEach(function (dt) {
         if (!dt) return;
         if (dt.rowGroups) dt.rowGroups.splice(at, 0, []);
         if (dt.rawRowGroups) dt.rawRowGroups.splice(at, 0, []);
-        if (dt.rawRowTypes) dt.rawRowTypes.splice(at, 0, 'none');
+        if (dt.rawRowTypes) {
+            // 找到该明细表对应的主表列下标，复用上面已推断的 kind
+            var headersArr = S.data.headers || [];
+            var colIdx = headersArr.indexOf(dt.field);
+            var kind = (colIdx >= 0 && detailKindByCol[colIdx])
+                ? detailKindByCol[colIdx] : _inferDetailColKind(dt);
+            dt.rawRowTypes.splice(at, 0, kind);
+        }
     });
     if (!S._addedRowSet) S._addedRowSet = new Set();
     // 插入位置之后已有的新增行索引整体+1
@@ -364,7 +412,11 @@ function insertRow(at) {
         S._addedRowSet.forEach(function (ri) { if (ri >= at) toShift.push(ri); });
         toShift.forEach(function (ri) { S._addedRowSet.delete(ri); S._addedRowSet.add(ri + 1); });
     }
-    S._addedRowSet.add(at);
+    // 仅当文件已被推送过时才标绿（与关闭重开后扩展端 diff 行为一致）：
+    // 未推送的文件没有快照基线，重开后所有行都会被视为初始数据 → 不应有“新增”概念。
+    if (_filePushedBefore()) {
+        S._addedRowSet.add(at);
+    }
     // 更新选中集合（被插入位置之后的索引整体+1）
     var ns = new Set();
     S.sel.forEach(function (i) { ns.add(i >= at ? i + 1 : i); });
@@ -390,12 +442,16 @@ function deleteRow(ri) {
     if (ri < 0 || ri >= S.data.rows.length) return;
     pushHistory();
     // 立即记录删除行信息，实现实时 ghost 行展示（不等扩展端异步回包）
+    // 判定条件：仅当该行 testCaseNo 列非空（即已成功推送过）才记录 ghost；
+    // 未推送过的行删除后直接物理删除，与扩展端 diff 行为一致（避免重开后 ghost 消失的不一致体验）。
     var headers = (S.data && S.data.headers) || [];
     var tsIdIdx = headers.indexOf('testcase_id');
+    var tcIdx = headers.indexOf('testCaseNo');
     var rowToDelete = S.data.rows[ri];
-    if (tsIdIdx >= 0) {
+    if (tsIdIdx >= 0 && tcIdx >= 0) {
         var tsId = rowToDelete[tsIdIdx] != null ? String(rowToDelete[tsIdIdx]) : '';
-        if (tsId) {
+        var tcNo = rowToDelete[tcIdx] != null ? String(rowToDelete[tcIdx]) : '';
+        if (tsId && tcNo) {
             var delCells = [];
             for (var hi = 0; hi < headers.length; hi++) {
                 var v = hi < rowToDelete.length ? rowToDelete[hi] : undefined;
@@ -446,13 +502,17 @@ function deleteSelectedRows() {
     pushHistory();
     var sorted = Array.from(S.sel).sort(function (a, b) { return b - a; });
     // 立即记录所有被删除行的信息，实现实时 ghost 行展示
+    // 判定条件：仅当该行 testCaseNo 列非空（即已成功推送过）才记录 ghost；
+    // 未推送过的行删除后直接物理删除，与扩展端 diff 行为一致（避免重开后 ghost 消失的不一致体验）。
     var headers = (S.data && S.data.headers) || [];
     var tsIdIdx = headers.indexOf('testcase_id');
-    if (tsIdIdx >= 0) {
+    var tcIdx = headers.indexOf('testCaseNo');
+    if (tsIdIdx >= 0 && tcIdx >= 0) {
         for (var di = 0; di < sorted.length; di++) {
             var rowToDelete = S.data.rows[sorted[di]];
             var tsId = rowToDelete[tsIdIdx] != null ? String(rowToDelete[tsIdIdx]) : '';
-            if (tsId) {
+            var tcNo = rowToDelete[tcIdx] != null ? String(rowToDelete[tcIdx]) : '';
+            if (tsId && tcNo) {
                 var delCells = [];
                 for (var hi = 0; hi < headers.length; hi++) {
                     var v = hi < rowToDelete.length ? rowToDelete[hi] : undefined;
@@ -892,6 +952,9 @@ function pushFromContextMenu() {
     }
     var tsCol = headers.indexOf('testcase_id');
     var rowIndexMap = {};
+    // 按 payload 数组下标 -> 表格 1-based 行号 的映射（兜底用）：
+    // 当行的 testcase_id 为空时，仍可通过 body[i] 顺序对齐定位失败行号。
+    var pushIndexToRow = [];
     var payload = indices.map(function (ri) {
         var record = {};
         var row = S.data.rows[ri] || [];
@@ -902,6 +965,7 @@ function pushFromContextMenu() {
                 rowIndexMap[String(tid)] = ri + 1;
             }
         }
+        pushIndexToRow.push(ri + 1);
         return record;
     });
     // 缓存本批参与推送的行索引，供 pushResult 回来后清除对应的 S.mods 修改高亮。
@@ -929,5 +993,5 @@ function pushFromContextMenu() {
             if (typeof showToast === 'function') showToast('推送超时未响应，已解除按钮锁定', 'error');
         }
     }, 30000);
-    S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap });
+    S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap, pushIndexToRow: pushIndexToRow });
 }

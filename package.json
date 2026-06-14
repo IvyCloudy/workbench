@@ -79,7 +79,7 @@
         },
         {
           "command": "testcaseViewer.createNewTestCase",
-          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例[\\/]/i && resourceExtname == ''",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例(?:[\\/]|$)/i && resourceExtname == ''",
           "group": "2_workspace@1"
         },
         {
@@ -91,7 +91,7 @@
       "commandPalette": [
         {
           "command": "testcaseViewer.createNewTestCaseQuick",
-          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例[\\/]/i"
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例(?:[\\/]|$)/i"
         }
       ]
     },

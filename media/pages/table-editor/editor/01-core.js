@@ -728,9 +728,39 @@ function formatCellValue(v) {
         // 标量数组列的单元格：主表不再需要拼接成字符串（由 chip 渲染负责），
         // 但查找/搜索/拷贝单元格等路径仍会调用 formatCellValue，统一以 "; " 拼接。
         if (v.length === 0) return '';
-        return v.map(function (x) { return x === null || x === undefined ? '' : String(x); }).join('; ');
+        return v.map(function (x) {
+            if (x === null || x === undefined) return '';
+            // 对象数组：每个元素序列化为 JSON，避免出现 [object Object]
+            if (typeof x === 'object') {
+                try { return JSON.stringify(x); } catch (_e) { return ''; }
+            }
+            return String(x);
+        }).join('; ');
+    }
+    // 普通对象：序列化为 JSON 字符串（避免 String({}) → [object Object]）
+    if (typeof v === 'object') {
+        try { return JSON.stringify(v); } catch (_e) { return ''; }
     }
     return String(v);
+}
+// 深拷贝单元格值：对象/对象数组使用 JSON 深拷贝，避免引用共享导致复制后编辑互相污染
+function _deepCloneCellValue(v) {
+    if (v === null || v === undefined) return v;
+    if (Array.isArray(v)) {
+        // 含对象元素的数组（对象数组）走 JSON 深拷贝；纯标量数组走 slice 即可
+        var hasObj = false;
+        for (var i = 0; i < v.length; i++) {
+            if (v[i] && typeof v[i] === 'object') { hasObj = true; break; }
+        }
+        if (hasObj) {
+            try { return JSON.parse(JSON.stringify(v)); } catch (_e) { return v.slice(); }
+        }
+        return v.slice();
+    }
+    if (typeof v === 'object') {
+        try { return JSON.parse(JSON.stringify(v)); } catch (_e) { return v; }
+    }
+    return v;
 }
 // 判断某列是否为标量数组列（string[] / number[]）
 function isArrayCol(ci) {

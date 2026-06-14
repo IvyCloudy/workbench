@@ -17,6 +17,7 @@
  */
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { TableBrowserProvider } from './providers/TableBrowserProvider';
 import { TestCaseProvider } from './providers/TestCaseProvider';
 import { UnifiedEditorProvider, FileTypeChecker } from './providers/UnifiedEditorProvider';
@@ -26,7 +27,8 @@ import { pushTestCase } from './services/http';
 import { applyTestCaseNos, createParser, detectFileType, ensureTrackingColumns, parseFileToRows } from './parsers';
 import { ensureBindingsFile } from './utils/taskInfoStore';
 import { getCurrentTaskInfo } from './utils/commands';
-import { showPushErrorModal, showPushResult, showModal } from './utils/message';
+import { showPushErrorModal, showModal, showPushResult } from './utils/message';
+import { markAsCreatedByCommand, unmarkAsCreatedByCommand, isCreatedByCommand, cleanupRecords } from './utils/fileIdentifier';
 import { ensureHighlightFile } from './utils/highlightStore';
 import { ensureSnapshotFile, savePushSnapshot, getDeletedSnapshotIds } from './utils/pushSnapshotStore';
 import { TS_ID_COLUMN } from './services/utils';
@@ -257,6 +259,317 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
 }
 
 // ============================================
+// 创建新测试案例处理
+// ============================================
+
+/**
+ * 增强型输入验证和路径解析
+ */
+interface ParsedPath {
+    dirPath: string;      // 目录路径
+    fileName: string;     // 文件名（不含扩展名）
+    extension: string;    // 文件扩展名
+    fullPath: string;     // 完整路径
+}
+
+/**
+ * 解析用户输入的路径，支持智能路径输入
+ */
+function parseUserInput(input: string, baseDir: string): ParsedPath | string {
+    if (!input || input.trim().length === 0) {
+        return '文件名不能为空';
+    }
+    
+    const trimmed = input.trim();
+    
+    // 验证文件名特殊字符
+    if (/[<>:"|?*]/.test(trimmed)) {
+        return '路径不能包含特殊字符 < > : " | ? *';
+    }
+    
+    // 分离路径和文件名
+    let dirPart = '';
+    let filePart = trimmed;
+    
+    // 支持路径分隔符（/ 或 \）
+    const lastSlash = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+    if (lastSlash >= 0) {
+        dirPart = trimmed.substring(0, lastSlash);
+        filePart = trimmed.substring(lastSlash + 1);
+    }
+    
+    if (!filePart) {
+        return '文件名不能为空';
+    }
+    
+    // 确定文件扩展名
+    let fileName = filePart;
+    let extension = '.yaml'; // 默认扩展名
+    
+    if (filePart.includes('.')) {
+        const ext = path.extname(filePart).toLowerCase();
+        if (['.yaml', '.yml', '.json', '.csv'].includes(ext)) {
+            extension = ext;
+            fileName = filePart.substring(0, filePart.length - ext.length);
+        }
+    }
+    
+    // 构建完整路径
+    let targetDir = baseDir;
+    if (dirPart) {
+        targetDir = path.join(baseDir, dirPart);
+    }
+    
+    const fullFileName = `${fileName}${extension}`;
+    const fullPath = path.join(targetDir, fullFileName);
+    
+    return {
+        dirPath: targetDir,
+        fileName: fullFileName,
+        extension: extension,
+        fullPath: fullPath
+    };
+}
+
+/**
+ * 资源管理器右键「新增测试案例」入口（真正的 New File 风格交互）
+ * 
+ * 交互方式（完全模拟 VS Code New File）：
+ *   1. 右键点击测试案例目录或文件
+ *   2. 自动创建默认名称的测试案例文件（如：未命名测试案例.yaml）
+ *   3. 在资源管理器中选中新创建的文件并进入重命名模式（inline 编辑）
+ *   4. 用户可以直接修改文件名，按回车确认
+ *   5. 创建完成后用插件编辑器打开文件
+ */
+async function handleCreateNewTestCase(targets: vscode.Uri[], context: vscode.ExtensionContext): Promise<void> {
+    if (!targets || targets.length === 0) return;
+    
+    const target = targets[0];
+    const targetPath = target.fsPath;
+    
+    // 判断目标是文件还是目录
+    const stats = await fs.promises.stat(targetPath);
+    let baseDir = targetPath;
+    
+    if (stats.isFile()) {
+        // 如果是文件，取其所在目录
+        baseDir = path.dirname(targetPath);
+    }
+    
+    // 验证目录是否在测试案例目录下
+    if (!baseDir.includes('测试案例')) {
+        vscode.window.showErrorMessage('只能在测试案例目录或其子文件夹中创建新测试案例');
+        return;
+    }
+    
+    // 生成默认文件名（避免重复）
+    let defaultFileName = '未命名测试案例.yaml';
+    let defaultFilePath = path.join(baseDir, defaultFileName);
+    let counter = 1;
+    
+    while (fs.existsSync(defaultFilePath)) {
+        defaultFileName = `未命名测试案例${counter}.yaml`;
+        defaultFilePath = path.join(baseDir, defaultFileName);
+        counter++;
+    }
+    
+    // 读取模板文件
+    const templatePath = path.join(context.extensionUri.fsPath, 'case_example.yaml');
+    let templateContent: string;
+    
+    try {
+        templateContent = await fs.promises.readFile(templatePath, 'utf-8');
+        
+        // 根据文件类型调整模板内容
+        const ext = path.extname(defaultFileName).toLowerCase();
+        if (ext === '.json') {
+            templateContent = convertYamlToJson(templateContent);
+        } else if (ext === '.csv') {
+            templateContent = convertYamlToCsv(templateContent);
+        }
+    } catch (err: any) {
+        vscode.window.showErrorMessage(`读取模板文件失败: ${err.message || err}`);
+        return;
+    }
+    
+    // 创建新文件（使用默认名称）
+    try {
+        await fs.promises.writeFile(defaultFilePath, templateContent, 'utf-8');
+        
+        // 标记文件为通过命令创建
+        markAsCreatedByCommand(defaultFilePath);
+        
+        // 获取新创建文件的 URI
+        const newFileUri = vscode.Uri.file(defaultFilePath);
+        
+        // 在资源管理器中选中新创建的文件
+        await vscode.commands.executeCommand('revealInExplorer', newFileUri);
+        
+        // 等待一下，确保文件在资源管理器中选中
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // 触发重命名命令（进入 inline 编辑模式）
+        await vscode.commands.executeCommand('renameFile');
+        
+        // 监听文件重命名完成
+        const renameDisposable = vscode.workspace.onDidRenameFiles(async (event) => {
+            for (const file of event.files) {
+                if (file.oldUri.fsPath === defaultFilePath) {
+                    // 文件重命名完成，用插件编辑器打开
+                    renameDisposable.dispose();
+                    await openWithPluginEditor(file.newUri, defaultFileName);
+                    break;
+                }
+            }
+        });
+        
+        // 如果用户取消重命名（ESC），仍然需要打开文件
+        setTimeout(async () => {
+            // 检查文件是否还存在（未被重命名）
+            if (fs.existsSync(defaultFilePath)) {
+                await openWithPluginEditor(newFileUri, defaultFileName);
+            }
+            renameDisposable.dispose();
+        }, 30000); // 30秒超时
+        
+    } catch (err: any) {
+        vscode.window.showErrorMessage(`创建测试案例失败: ${err.message || err}`);
+        sendTelemetryException('createNewTestCase.error', { 
+            errorMessage: String(err?.message || String(err)).slice(0, 500), 
+            stackHead: stackHead(err) 
+        });
+    }
+}
+
+/**
+ * 使用插件编辑器打开文件
+ */
+async function openWithPluginEditor(fileUri: vscode.Uri, originalFileName: string): Promise<void> {
+    try {
+        // 使用插件编辑器打开文件
+        await vscode.commands.executeCommand('vscode.openWith', fileUri, TESTCASE_EDITOR_VIEWTYPE);
+        
+        const fileName = path.basename(fileUri.fsPath);
+        vscode.window.showInformationMessage(`测试案例 ${fileName} 创建成功`);
+        sendTelemetryEvent('createNewTestCase.success', { 
+            fileName: fileName,
+            fileType: path.extname(fileName)
+        });
+    } catch (err: any) {
+        // 如果插件编辑器打开失败，fallback 到文本编辑器
+        try {
+            const document = await vscode.workspace.openTextDocument(fileUri);
+            await vscode.window.showTextDocument(document);
+            sendTelemetryException('createNewTestCase.openEditor.failed', { 
+                errorMessage: String(err?.message || String(err)).slice(0, 500),
+                stackHead: stackHead(err) 
+            });
+        } catch (fallbackErr: any) {
+            vscode.window.showErrorMessage(`打开文件失败: ${fallbackErr.message || fallbackErr}`);
+        }
+    }
+}
+
+/**
+ * 将YAML模板转换为JSON格式
+ */
+function convertYamlToJson(yamlContent: string): string {
+    // 简单的YAML到JSON转换（针对模板结构）
+    try {
+        // 这里可以使用js-yaml库，但为了减少依赖，提供基础转换
+        const lines = yamlContent.split('\n');
+        const result: any = {};
+        let currentStep: any = null;
+        
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            
+            if (trimmed.startsWith('testcase_id:')) {
+                result.testcase_id = trimmed.split(':')[1]?.trim() || '';
+            } else if (trimmed.startsWith('path:')) {
+                result.path = trimmed.split(':')[1]?.trim() || '';
+            } else if (trimmed.startsWith('name:')) {
+                result.name = trimmed.split(':')[1]?.trim() || '';
+            } else if (trimmed.startsWith('type:')) {
+                result.type = trimmed.split(':')[1]?.trim() || '';
+            } else if (trimmed.startsWith('priority:')) {
+                result.priority = trimmed.split(':')[1]?.trim() || '';
+            }
+        }
+        
+        // 添加示例步骤
+        result.steps = [
+            {
+                id: 1,
+                operation: '步骤名称',
+                data: ['步骤数据1'],
+                ui_expected: ['UI检查点1'],
+                api_expected: ['API检查点1'],
+                db_expected: ['数据库检查点1']
+            }
+        ];
+        
+        return JSON.stringify(result, null, 2);
+    } catch {
+        // 转换失败，返回基础JSON结构
+        return JSON.stringify({
+            testcase_id: '',
+            path: '',
+            name: '',
+            type: '',
+            priority: '低',
+            steps: []
+        }, null, 2);
+    }
+}
+
+/**
+ * 将YAML模板转换为CSV格式
+ */
+function convertYamlToCsv(yamlContent: string): string {
+    // CSV表头
+    const headers = [
+        'testcase_id',
+        'path',
+        'name',
+        'type',
+        'preconditions',
+        'priority',
+        'step_id',
+        'step_operation',
+        'step_data',
+        'ui_expected',
+        'api_expected',
+        'db_expected'
+    ];
+    
+    // CSV第一行（示例数据）
+    const exampleRow = [
+        'TC001',
+        '功能条目/测试要点',
+        '案例名称',
+        '功能测试',
+        '案例前置条件',
+        '低',
+        '1',
+        '步骤名称1',
+        '步骤数据1',
+        'UI检查点1',
+        'API检查点1',
+        '数据库检查点1'
+    ];
+    
+    // 构建CSV内容
+    const csvLines = [
+        headers.join(','),
+        exampleRow.map(cell => `"${cell}"`).join(',')
+    ];
+    
+    return csvLines.join('\n');
+}
+
+// ============================================
 // 编辑器命令注册
 // ============================================
 
@@ -379,6 +692,58 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         ),
 
+        // 新增测试案例命令
+        vscode.commands.registerCommand(
+            'testcaseViewer.createNewTestCase',
+            async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
+                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCase' });
+                try {
+                    await handleCreateNewTestCase(targets, context);
+                } catch (err: any) {
+                    sendTelemetryException('createNewTestCase.commandError', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                    vscode.window.showErrorMessage(`创建测试案例失败: ${err.message || err}`);
+                }
+            }
+        ),
+
+        // 快速创建测试案例命令（从命令面板调用）
+        vscode.commands.registerCommand(
+            'testcaseViewer.createNewTestCaseQuick',
+            async () => {
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCaseQuick' });
+                
+                // 获取当前活动文件或选择的文件夹
+                const activeUri = getActiveFileUri();
+                let targetUri: vscode.Uri | undefined;
+                
+                if (activeUri) {
+                    // 检查当前文件是否在测试案例目录下
+                    if (activeUri.fsPath.includes('测试案例')) {
+                        const stats = await fs.promises.stat(activeUri.fsPath);
+                        if (stats.isFile()) {
+                            targetUri = vscode.Uri.file(path.dirname(activeUri.fsPath));
+                        } else {
+                            targetUri = activeUri;
+                        }
+                    }
+                }
+                
+                // 如果当前不在测试案例目录，提示用户选择目录
+                if (!targetUri) {
+                    vscode.window.showErrorMessage('请在测试案例目录下使用此命令，或在资源管理器中右键点击测试案例文件夹');
+                    return;
+                }
+                
+                try {
+                    await handleCreateNewTestCase([targetUri], context);
+                } catch (err: any) {
+                    sendTelemetryException('createNewTestCaseQuick.commandError', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                    vscode.window.showErrorMessage(`创建测试案例失败: ${err.message || err}`);
+                }
+            }
+        ),
+
         // 已删除行同步命令（将已删除行同步到线上并清除本地快照）
         vscode.commands.registerCommand(
             'workbench.syncDeletedRows',
@@ -428,6 +793,34 @@ export async function activate(context: vscode.ExtensionContext) {
 
         // 监听标签页激活变化，更新图标显示
         vscode.window.tabGroups.onDidChangeTabs(() => updateShowIcon()),
+
+        // 监听文件重命名，同步更新记录
+        vscode.workspace.onDidRenameFiles((event) => {
+            for (const file of event.files) {
+                const oldPath = file.oldUri.fsPath;
+                const newPath = file.newUri.fsPath;
+                
+                // 检查旧路径是否有记录
+                if (isCreatedByCommand(oldPath)) {
+                    // 移除旧路径的记录
+                    unmarkAsCreatedByCommand(oldPath);
+                    // 为新路径添加记录
+                    markAsCreatedByCommand(newPath);
+                }
+                
+                // 更新 BaseEditorProvider.panelMap 中的键值，防止数据保存到旧路径
+                BaseEditorProvider.updatePanelMapKey(oldPath, newPath);
+            }
+        }),
+
+        // 监听文件删除，同步清理记录
+        vscode.workspace.onDidDeleteFiles((event) => {
+            for (const file of event.files) {
+                if (isCreatedByCommand(file.fsPath)) {
+                    unmarkAsCreatedByCommand(file.fsPath);
+                }
+            }
+        }),
     );
 
     updateShowIcon();

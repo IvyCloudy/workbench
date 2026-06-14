@@ -43,11 +43,24 @@
       },
       {
         "command": "testcaseViewer.pushTestCaseFromExplorer",
-        "title": "推送测试案例"
+        "title": "推送测试案例",
+        "icon": "$(cloud-upload)"
       },
       {
         "command": "testcaseViewer.revealBoundTask",
         "title": "定位绑定任务"
+      },
+      {
+        "command": "testcaseViewer.createNewTestCase",
+        "title": "新增测试案例",
+        "icon": "$(add)",
+        "category": "测试案例"
+      },
+      {
+        "command": "testcaseViewer.createNewTestCaseQuick",
+        "title": "新增测试案例",
+        "icon": "$(add)",
+        "category": "测试案例"
       }
     ],
     "menus": {
@@ -61,8 +74,24 @@
       "explorer/context": [
         {
           "command": "testcaseViewer.pushTestCaseFromExplorer",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例[\\/].+\\.(csv|yaml|yml|json)$/i",
           "group": "2_workspace"
+        },
+        {
+          "command": "testcaseViewer.createNewTestCase",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例[\\/]/i && resourceExtname == ''",
+          "group": "2_workspace@1"
+        },
+        {
+          "command": "testcaseViewer.createNewTestCase",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例[\\/].+\\.(csv|yaml|yml|json)$/i && resourceExtname != ''",
+          "group": "2_workspace@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "testcaseViewer.createNewTestCaseQuick",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例[\\/]/i"
         }
       ]
     },

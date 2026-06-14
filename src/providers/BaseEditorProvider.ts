@@ -313,6 +313,15 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         return BaseEditorProvider.panelMap.get(filePath)?.panel;
     }
 
+    /** 更新 panelMap 中的键值（文件重命名时调用） */
+    static updatePanelMapKey(oldPath: string, newPath: string): void {
+        const entry = BaseEditorProvider.panelMap.get(oldPath);
+        if (entry) {
+            BaseEditorProvider.panelMap.delete(oldPath);
+            BaseEditorProvider.panelMap.set(newPath, entry);
+        }
+    }
+
     /** 等待 webview 完成 init（已 ready 的立即 resolve） */
     static waitReady(filePath: string, timeoutMs = 5000): Promise<void> {
         const entry = BaseEditorProvider.panelMap.get(filePath);
@@ -345,7 +354,8 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         webviewPanel: vscode.WebviewPanel,
         _token: vscode.CancellationToken
     ): Promise<void> {
-        const filePath = document.uri.fsPath;
+        // 使用 let 定义 filePath，使其可在文件重命名时更新
+        let filePath = document.uri.fsPath;
         const fileName = filePath.split(path.sep).pop() || '';
         // panel 唯一 ID，便于在多 tab 场景下区分日志
         const panelId = `${fileName}#${Math.random().toString(36).slice(2, 8)}`;
@@ -428,6 +438,16 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     const newRowsLen = (result.tableData?.rows || []).length;
                     const newColsLen = (result.tableData?.headers || []).length;
                     log(`🔍 parse done reason=${reason} prevRows=${prevRowsLen} newRows=${newRowsLen} cols=${newColsLen} dur=${_parseDur}ms force=${!!force}`);
+                    log(`📋 headers: [${result.tableData?.headers?.join(', ')}]`);
+                    // 调试：如果表头只有 testcase_id，记录文件内容前 500 字符
+                    if (result.tableData?.headers?.length <= 1) {
+                        try {
+                            const content = await require('fs').promises.readFile(filePath, 'utf-8');
+                            log(`⚠️ 表头异常！文件内容预览: ${content.slice(0, 500)}`);
+                        } catch (e: any) {
+                            log(`⚠️ 无法读取文件: ${e?.message}`);
+                        }
+                    }
                     // 防御：force=true 时若新解析为 0 行而旧 cache > 0 行，
                     // 多半是 fs.writeFile 尚未完全 flush，watcher 提前触发读到部分/空文件。
                     // 直接放弃本次推送，保留旧缓存与前端现状，下次正常事件会重新触发。
@@ -594,11 +614,24 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             try { watcherCreateSub.dispose(); } catch (_) { /* ignore */ }
             try { watcher.dispose(); } catch (_) { /* ignore */ }
             try { saveDocSub.dispose(); } catch (_) { /* ignore */ }
+            try { renameSub.dispose(); } catch (_) { /* ignore */ }
             if (externalChangeTimer) { clearTimeout(externalChangeTimer); externalChangeTimer = null; }
             // 仅当当前 panel 仍是注册项时才移除（避免同一文件第二次 open 后误删新条目）
             const cur = BaseEditorProvider.panelMap.get(filePath);
             if (cur && cur.panel === webviewPanel) {
                 BaseEditorProvider.panelMap.delete(filePath);
+            }
+        });
+
+        // 监听文件重命名，更新内部 filePath 引用
+        const renameSub = vscode.workspace.onDidRenameFiles((event) => {
+            for (const file of event.files) {
+                if (file.oldUri.fsPath === filePath) {
+                    log(`🔄 文件重命名: ${filePath} -> ${file.newUri.fsPath}`);
+                    filePath = file.newUri.fsPath;
+                    // 更新 panelMap 中的键值
+                    BaseEditorProvider.updatePanelMapKey(file.oldUri.fsPath, filePath);
+                }
             }
         });
 

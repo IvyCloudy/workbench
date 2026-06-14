@@ -1,0 +1,35 @@
+- testcase_id: 案例唯一标识，不可修改
+  path: 功能条目/测试要点/
+  name: 案例名称
+  type: 案例类型
+  preconditions:
+    - 案例前置条件
+  priority: 低
+  steps:
+    - id: 1
+      operation: 步骤名称1
+      data:
+        - 步骤数据1
+        - 步骤数据2
+      ui_expected:
+        - UI检查点1
+        - UI检查点2
+      api_expected:
+        - API检查点1
+        - API检查点2
+      db_expected:
+        - 数据库检查点1
+        - 数据库检查点2
+    - id: 2
+      operation: 步骤名称2
+      data:
+        - 步骤数据1
+        - 步骤数据2
+      ui_expected:
+        - UI检查点1
+        - UI检查点2
+      api_expected:
+        - API检查点1
+      db_expected:
+        - 数据库检查点1
+        - 数据库检查点2

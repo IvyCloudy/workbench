@@ -172,8 +172,6 @@ export class PushViaHttpClient implements PushStrategy {
         // 避免刷新触发的 renderTable() 擦除 showPushResult 设置的失败行高亮。
         if (successMappings.length > 0) {
             try {
-                // ⚠ 在异步 save() 之前快照当前高亮，防止文件监听器覆盖（若 watcher 发现快照无变化则置 undefined）
-                const oldHL = ctx.session.highlightedCells;
                 const parsed = await ctx.session.parser.parse(ctx.filePath);
                 ensureTrackingColumns(parsed.tableData, parsed.sourceData);
                 applyTestCaseNos(parsed.tableData, parsed.sourceData, successMappings);
@@ -181,36 +179,14 @@ export class PushViaHttpClient implements PushStrategy {
                 ctx.markSelfSave?.();
                 await ctx.session.parser.save(ctx.filePath, parsed.tableData, parsed.sourceData);
                 ctx.markSelfSave?.();
-                // 所有已推送行（无论成功/失败）更新快照基线，使下次 diff 不再标记为修改
-                const allPushedTsIds = new Set<string>();
-                if (Array.isArray(pushData)) {
-                    for (const rec of pushData) {
-                        const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
-                        if (id) allPushedTsIds.add(id);
-                    }
-                }
-                await savePushSnapshot(ctx.filePath, parsed.tableData, allPushedTsIds);
-                if (oldHL && oldHL.rowIndices && oldHL.rowIndices.length > 0) {
-                    const rows = parsed.tableData.rows;
-                    const tsIdIdx = parsed.tableData.headers.indexOf(TS_ID_COLUMN);
-                    const remainingRows: number[] = [];
-                    const remainingCells: [number, number][] = [];
-                    for (const ri of oldHL.rowIndices) {
-                        const id = tsIdIdx >= 0 && ri < rows.length ? String(rows[ri]?.[tsIdIdx] ?? '') : '';
-                        if (!allPushedTsIds.has(id)) remainingRows.push(ri);
-                    }
-                    if (oldHL.cells) {
-                        for (const [ri, ci] of oldHL.cells) {
-                            const id = tsIdIdx >= 0 && ri < rows.length ? String(rows[ri]?.[tsIdIdx] ?? '') : '';
-                            if (!allPushedTsIds.has(id)) remainingCells.push([ri, ci]);
-                        }
-                    }
-                    ctx.session.highlightedCells = remainingRows.length > 0
-                        ? { colIdx: oldHL.colIdx, rowIndices: remainingRows, cells: remainingCells.length > 0 ? remainingCells : undefined }
-                        : null;
-                } else {
-                    ctx.session.highlightedCells = null;
-                }
+                // 推送完成后全量更新快照基线（无论成功/失败），
+                // 使下次 diff 不再标记本次推送行为为修改。
+                // 失败行的高亮由 pushFailures 机制独立管理，不依赖快照差异。
+                // 注意：必须全量而非增量更新，否则未推送但已编辑的行会保留旧快照，
+                // 导致下次 diff 误判为"修改"高亮。
+                await savePushSnapshot(ctx.filePath, parsed.tableData);
+                // 快照已是全量基线，旧高亮信息无需保留 → 清空
+                ctx.session.highlightedCells = null;
                 await clearHighlight(ctx.filePath);
                 // 落盘后让缓存失效，下次可见切换 / 手动刷新时自动重读最新文件
                 ctx.session.cachedTableData = null;
@@ -223,17 +199,13 @@ export class PushViaHttpClient implements PushStrategy {
                 sendTelemetryException('editorPush.writeBackFailed', { ext: _ext, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
             }
         } else if (failures.length > 0) {
-            // 全部推送失败：仍更新快照基线，使下次 diff 不再标记为修改
+            // 全部推送失败：全量更新快照基线，避免未推送但已编辑的行保留旧快照，
+            // 导致下次 diff 误判为"修改"高亮。失败行高亮由 pushFailures 独立管理。
             try {
-                const allPushedTsIds = new Set<string>();
-                if (Array.isArray(pushData)) {
-                    for (const rec of pushData) {
-                        const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
-                        if (id) allPushedTsIds.add(id);
-                    }
-                }
                 const parsed = await ctx.session.parser.parse(ctx.filePath);
-                await savePushSnapshot(ctx.filePath, parsed.tableData, allPushedTsIds);
+                await savePushSnapshot(ctx.filePath, parsed.tableData);
+                ctx.session.highlightedCells = null;
+                await clearHighlight(ctx.filePath);
                 ctx.session.cachedTableData = null;
             } catch (err: any) {
                 console.error('[推送] 全部失败，快照更新失败:', err?.message || err);

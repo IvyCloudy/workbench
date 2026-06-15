@@ -24,7 +24,6 @@ import { BaseEditorProvider } from './providers/BaseEditorProvider';
 import { registerBindTaskFeatures } from './providers/BindTaskProvider';
 import { pushTestCase } from './services/http';
 import { applyTestCaseNos, createParser, detectFileType, ensureTrackingColumns, parseFileToRows } from './parsers';
-import { ensureBindingsFile } from './utils/taskInfoStore';
 import { getCurrentTaskInfo } from './utils/commands';
 import { showPushErrorModal, showPushResult, showModal } from './utils/message';
 import { ensureHighlightFile } from './utils/highlightStore';
@@ -339,12 +338,6 @@ export async function activate(context: vscode.ExtensionContext) {
     // 全局未捕获异常上报（兜底）
     process.on('unhandledRejection', (reason: any) => {
         try { sendTelemetryException('extension.unhandledRejection', { errorMessage: String(reason?.message || String(reason)).slice(0, 500), stackHead: stackHead(reason) }); } catch (_) { /* ignore */ }
-    });
-
-    // 初始化测试任务绑定文件（不存在则创建空模板，并打印路径便于用户定位）
-    await ensureBindingsFile(context).catch(err => {
-        console.error('[Extension] 初始化绑定文件失败:', err?.message || err);
-        sendTelemetryException('bindings.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
     });
 
     // 初始化高亮存储文件（用于持久化推送后 testCaseNo 单元格的高亮标识）

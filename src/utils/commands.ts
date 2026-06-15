@@ -19,27 +19,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { FILE_PATTERNS } from '../services/utils';
-import { findBindingByPath } from './taskInfoStore';
-
-// ============================================
-// 类型定义
-// ============================================
-
-/** 完整的测试任务信息（与 task-bindings.json 中字段对齐 + testPhaseName） */
-export interface FullTaskInfo {
-    /** 测试任务编号（后端真实值） */
-    testTaskNo: string;
-    /** 测试任务名称 */
-    testTaskName: string;
-    /** 子测试任务 ID */
-    subTestTaskId: number;
-    /** 子测试任务名称 */
-    subTestTaskName: string;
-    /** 测试阶段名称（来源于文件内容） */
-    testPhaseName: string;
-    /** 阶段 ID（与 testPhaseName 配套） */
-    phaseId: number;
-}
+import { findBindingByPath, type Project } from './taskInfoStore';
 
 export interface GetTaskInfoResult {
     /** 是否成功绑定到真实后端任务信息 */
@@ -48,7 +28,7 @@ export interface GetTaskInfoResult {
      * 当 bind=true 时为完整字段；
      * 当 bind=false 时为空对象 {}（按需求约定）。
      */
-    taskInfo: FullTaskInfo | Record<string, never>;
+    taskInfo: Project | Record<string, never>;
 }
 
 // ============================================
@@ -61,7 +41,7 @@ export interface GetTaskInfoResult {
  * 流程：
  *   1. 通过 findBindingByPath(filePath) 查找绑定点
  *   2. 从文件内容提取 testPhaseName
- *   3. 在 binding.testPhaseList 中查 phaseId
+ *   3. 在 binding.testPhaseList 中查 testPhaseId
  *   4. 全部齐备返回 bind=true，否则 bind=false
  */
 export async function getTaskInfoByFilePath(
@@ -81,18 +61,18 @@ export async function getTaskInfoByFilePath(
     if (!testPhaseName) return { bind: false, taskInfo: {} };
 
     // Step3: 在 testPhaseList 中查找匹配的阶段 ID
-    let phaseId = 0;
+    let testPhaseId = 0;
     if (info.testPhaseList && Array.isArray(info.testPhaseList)) {
         const matched = info.testPhaseList.find(p => p.testPhaseName === testPhaseName);
         if (matched && matched.testPhaseId != null) {
-            phaseId = matched.testPhaseId;
+            testPhaseId = matched.testPhaseId;
         }
     }
     // 向后兼容：如果当前阶段的名称等于文件中的阶段名，直接取 testPhaseId
-    if (phaseId === 0 && info.testPhaseName === testPhaseName && info.testPhaseId != null) {
-        phaseId = info.testPhaseId;
+    if (testPhaseId === 0 && info.testPhaseName === testPhaseName && info.testPhaseId != null) {
+        testPhaseId = info.testPhaseId;
     }
-    if (phaseId === 0) {
+    if (testPhaseId === 0) {
         return { bind: false, taskInfo: {} };
     }
 
@@ -105,12 +85,9 @@ export async function getTaskInfoByFilePath(
     return {
         bind: true,
         taskInfo: {
-            testTaskNo: info.testTaskNo,
-            testTaskName: info.testTaskName,
-            subTestTaskId: Number(info.subTestTaskId),
-            subTestTaskName: info.subTestTaskName,
+            ...info,
             testPhaseName,
-            phaseId,
+            testPhaseId,
         },
     };
 }
@@ -127,7 +104,7 @@ export interface CurrentTaskInfo {
 }
 
 /** getCurrentTaskInfo 返回格式：bind 标记 + taskInfo 对象（未绑定时 taskInfo 为空）。 */
-export interface GetCurrentTaskInfoResult {
+export interface CurrentTask {
     /** 是否在 task-bindings.json 中命中绑定（用于第一行最左侧的状态标签） */
     bind: boolean;
     /**
@@ -145,8 +122,8 @@ export interface GetCurrentTaskInfoResult {
  *   - 命中 → 返回绑定文件中的 testTaskNo / testTaskName / subTestTaskName
  *   - 未命中 → taskInfo 为空对象 {}（UI 层会渲染为占位符 "-"）
  */
-export async function getCurrentTaskInfo(fullPath: string): Promise<GetCurrentTaskInfoResult> {
-    const empty: GetCurrentTaskInfoResult = { bind: false, taskInfo: {} };
+export async function getCurrentTaskInfo(fullPath: string): Promise<CurrentTask> {
+    const empty: CurrentTask = { bind: false, taskInfo: {} };
     if (!fullPath) return empty;
 
     const entry = findBindingByPath(fullPath);
@@ -162,8 +139,8 @@ export async function getCurrentTaskInfo(fullPath: string): Promise<GetCurrentTa
     };
 }
 
-/** @deprecated 使用 GetCurrentTaskInfoResult 替代 */
-export type HeaderTaskInfo = GetCurrentTaskInfoResult;
+/** @deprecated 使用 CurrentTask 替代 */
+export type HeaderTaskInfo = CurrentTask;
 
 // ============================================
 // 公共：从文件内容提取 testPhaseName

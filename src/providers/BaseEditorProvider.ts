@@ -20,7 +20,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getNonce, isInQualifiedDir, buildErrorHtml, FILE_PATTERNS, TS_ID_COLUMN, escapeHtml } from '../services/utils';
-import { getCurrentTaskInfo, type GetCurrentTaskInfoResult } from '../utils/commands';
+import { getCurrentTaskInfo, type CurrentTask } from '../utils/commands';
 import { showPushErrorModal, showPushResult, showPushDone, showSaveResult } from '../utils/message';
 import { setHighlight, clearHighlight } from '../utils/highlightStore';
 import { getFailures, mergeFailures } from '../utils/pushFailureStore';
@@ -845,9 +845,15 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         // 未绑定（或未命中）时三项为空串，由 buildEditorHtml 渲染为 "-"
         const currentTask = this.context
             ? await getCurrentTaskInfo(filePath)
-            : { bind: false, taskInfo: {} };
-
-        webviewPanel.webview.html = await this.buildEditorHtml(nonce, webviewPanel, session.type, currentTask);
+            : { bind: false, taskInfo: {} as Record<string, never> };
+        const info = currentTask.taskInfo as { testTaskNo?: string; testTaskName?: string; subTestTaskName?: string };
+        const taskInfoForWebView = {
+            bind: currentTask.bind,
+            testTaskNo: info.testTaskNo || '',
+            testTaskName: info.testTaskName || '',
+            subTestTaskName: info.subTestTaskName || ''
+        }
+        webviewPanel.webview.html = await this.buildEditorHtml(nonce, webviewPanel, session.type, taskInfoForWebView);
         log('✅ html ready');
     }
 
@@ -858,7 +864,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         nonce: string,
         webviewPanel: vscode.WebviewPanel,
         dataType: FileType,
-        taskInfo: GetCurrentTaskInfoResult
+        taskInfo: { bind: boolean, testTaskNo: string, testTaskName: string, subTestTaskName: string }
     ): Promise<string> {
         const msgType = `${dataType}Data`;
 
@@ -901,10 +907,9 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
 
         // 未命中绑定时，表头三项统一展示占位符 "-"
         const PLACEHOLDER = '-';
-        const innerTask = taskInfo?.taskInfo;
-        const safeTestTaskNo = escapeHtml((innerTask && innerTask.testTaskNo) || PLACEHOLDER);
-        const safeSubTestTaskName = escapeHtml((innerTask && innerTask.subTestTaskName) || PLACEHOLDER);
-        const safeTestTaskName = escapeHtml((innerTask && innerTask.testTaskName) || PLACEHOLDER);
+        const safeTestTaskNo = escapeHtml(taskInfo?.testTaskNo || PLACEHOLDER);
+        const safeTestTaskName = escapeHtml(taskInfo?.testTaskName || PLACEHOLDER);
+        const safeSubTestTaskName = escapeHtml(taskInfo?.subTestTaskName || PLACEHOLDER);
 
         // 绑定状态标签：首行最左侧展示"已绑定任务 / 未绑定任务"
         const isBound = !!taskInfo?.bind;

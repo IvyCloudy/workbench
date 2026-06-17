@@ -240,6 +240,14 @@ function _buildRowHtml(ri, tsIdColIdx) {
     var rh = S.rowHeights[ri];
     var resizedCls = (rh && rh > 0) ? ' xs-tr-resized' : '';
     var rowStyle = (rh && rh > 0) ? ' style="height:' + rh + 'px"' : '';
+    // 多行省略号：按当前行高换算可显示行数，写入 CSS 变量 --xs-clamp
+    // 行高 - td 上下 padding/border(14px) = wrap 可视高，除以单行高(font-size 13px*line-height 1.4≈18.2px)
+    var clampVar = '';
+    if (rh && rh > 0) {
+        var _wrapH = rh - 14;
+        var _lines = Math.max(1, Math.floor(_wrapH / 18.2));
+        clampVar = '--xs-clamp:' + _lines + ';';
+    }
     var failCls = '';
     var failReason = '';
     if (S._pushFailedTsIds && S._pushFailedTsIds.size > 0 && tsIdColIdx >= 0) {
@@ -302,8 +310,9 @@ function _buildRowHtml(ri, tsIdColIdx) {
             inner = escapeHtml(rawText);
             titleAttr = rawText ? ' title="' + escapeHtml(rawText) + '"' : '';
         }
+        var wrapStyleAttr = clampVar ? ' style="' + clampVar + '"' : '';
         html += '<td class="xs-td xs-editable' + modCls + colSelCls2 + frozenCls2 + hiliCls + (isDetail ? ' xs-detail-cell' : '') + arrCellCls + '" data-row="' + ri + '" data-col="' + ci + '"' + titleAttr + '>'
-            + '<div class="xs-cell-wrap">' + inner + '</div></td>';
+            + '<div class="xs-cell-wrap"' + wrapStyleAttr + '>' + inner + '</div></td>';
     }
     html += '</tr>';
     return html;
@@ -483,7 +492,15 @@ function patchCell(ri, ci) {
     } else {
         inner = escapeHtml(rawText);
     }
-    td.innerHTML = '<div class="xs-cell-wrap">' + inner + '</div>';
+    // 保留拖动行高对应的 --xs-clamp 变量（行高已持久化时不能丢失多行省略号配置）
+    var rh2 = S.rowHeights[ri];
+    var clampVar2 = '';
+    if (rh2 && rh2 > 0) {
+        var _wrapH2 = rh2 - 14;
+        var _lines2 = Math.max(1, Math.floor(_wrapH2 / 18.2));
+        clampVar2 = ' style="--xs-clamp:' + _lines2 + ';"';
+    }
+    td.innerHTML = '<div class="xs-cell-wrap"' + clampVar2 + '>' + inner + '</div>';
     // class 同步
     if (S.mods.has(ri + ',' + ci)) td.classList.add('modified'); else td.classList.remove('modified');
     if (isDetail) td.classList.add('xs-detail-cell'); else td.classList.remove('xs-detail-cell');

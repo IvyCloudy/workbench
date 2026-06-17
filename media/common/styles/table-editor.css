@@ -140,10 +140,10 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 /* 行号格底部 3px 行高拖手柄：仅在该窄条上显示 row-resize 光标 */
 .xs-td-cb .xs-row-resizer{position:absolute;left:0;right:0;bottom:0;height:4px;cursor:row-resize;z-index:4}
 tbody tr:hover .xs-td-cb .xs-row-resizer{background:rgba(0,120,212,.25)}
-.xs-cell-wrap{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;word-break:break-word}
-/* 行高被人为调大后，单元格内容自动换行多行展示 */
-tbody tr.xs-tr-resized .xs-td{white-space:normal;overflow:auto}
-tbody tr.xs-tr-resized .xs-cell-wrap{white-space:pre-wrap;overflow:visible;text-overflow:clip}
+.xs-cell-wrap{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;word-break:break-word;line-height:1.4}
+/* 行高被人为调大后：单元格内容多行换行 + 多行省略号（行数由 JS 写入 CSS 变量 --xs-clamp） */
+tbody tr.xs-tr-resized .xs-td{white-space:normal;overflow:hidden}
+tbody tr.xs-tr-resized .xs-cell-wrap{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--xs-clamp,99);line-clamp:var(--xs-clamp,99);white-space:pre-wrap;word-break:break-word;overflow:hidden;text-overflow:ellipsis;line-height:1.4}
 .xs-td-cb:hover{background:rgba(0,120,212,.1)}
 .xs-td-cb::after{content:'';position:absolute;left:2px;right:2px;bottom:2px;height:3px;background:transparent;border-radius:1px}
 tbody tr:hover .xs-td-cb::after{background:rgba(0,120,212,.3)}
@@ -171,7 +171,9 @@ tbody tr{position:relative}
 tbody tr:hover{background:#f8f8f8}
 tbody tr.selected{background:#e3f2fd}
 tbody tr.hidden{display:none}
-tbody tr td.xs-td-cb{text-align:center;background:inherit}
+/* 第一列为 position:sticky；常态必须保持不透明背景，否则横向滚动时右侧单元格会从其下方穿透叠加。
+   hover / selected / 推送失败 等更具体规则会按优先级正常覆盖此处的白底。 */
+tbody tr td.xs-td-cb{text-align:center;background:#fff}
 tbody tr td.xs-td-cb input{width:16px;height:16px;cursor:pointer}
 
 /* 复选框 + 行号竖排堆叠（在同一列内显示） */

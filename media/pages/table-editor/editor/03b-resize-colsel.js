@@ -330,22 +330,44 @@ function startRowResize(e) {
     var TD_CHROME = 14;
     var MIN_SINGLE = 32;
 
+    // 探测 cell-wrap 的行高（用于把"行高"换算成"可显示行数"）。
+    // 若读不到（display:-webkit-box 下 lineHeight 为 normal），用 fontSize*1.4 兜底。
+    function _probeLineHeight() {
+        if (!rowWraps[0]) return 18;
+        var cs = window.getComputedStyle(rowWraps[0]);
+        var lh = parseFloat(cs.lineHeight);
+        if (!isFinite(lh) || lh <= 0) {
+            var fs = parseFloat(cs.fontSize) || 13;
+            lh = fs * 1.4;
+        }
+        return lh;
+    }
+
     // ----- 清除 cell-wrap 内联样式（恢复 CSS 控制）-----
     function _clearWraps() {
         for (var c = 0; c < rowWraps.length; c++) {
             rowWraps[c].style.whiteSpace = '';
             rowWraps[c].style.overflow = '';
             rowWraps[c].style.height = '';
+            rowWraps[c].style.removeProperty('--xs-clamp');
         }
     }
-    // ----- 按行高锁定 cell-wrap 尺寸，开启换行并裁剪溢出 -----
+    // ----- 按行高写入 --xs-clamp（可显示行数），实现"超出可见区域显示 …" -----
+    // 关键点：先临时给 tr 加 xs-tr-resized 类，让 CSS 的 -webkit-line-clamp 生效，
+    //        再按 (wrapH / lineHeight) 算出 clamp 行数；不再设固定 height，避免与
+    //        line-clamp 冲突导致渲染抖动。
     function _lockWraps(rowH) {
         if (rowH <= TD_CHROME) return;
+        if (!tr.classList.contains('xs-tr-resized')) tr.classList.add('xs-tr-resized');
         var wrapH = rowH - TD_CHROME;
+        var lh = _probeLineHeight();
+        var lines = Math.max(1, Math.floor(wrapH / lh));
         for (var l = 0; l < rowWraps.length; l++) {
-            rowWraps[l].style.whiteSpace = 'pre-wrap';
-            rowWraps[l].style.overflow = 'hidden';
-            rowWraps[l].style.height = wrapH + 'px';
+            // 清除可能残留的 height/whiteSpace/overflow，让 CSS 接管
+            rowWraps[l].style.whiteSpace = '';
+            rowWraps[l].style.overflow = '';
+            rowWraps[l].style.height = '';
+            rowWraps[l].style.setProperty('--xs-clamp', String(lines));
         }
     }
 

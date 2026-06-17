@@ -2,18 +2,41 @@
  * 03b-resize-colsel.js  —— 列宽 / 列选择 / 行高（尺寸 & 选区）
  * -----------------------------------------------------------------------------
  * 由原 03-cell-ops.js 拆分而来，集中处理"鼠标拖动改变尺寸"以及"按列选区"：
+ *   0. 配置常量：PROTECTED_COLS（受保护列名清单，集中维护，见文件顶部）
  *   1. 列宽拖动：startColResize（拖动 .xs-resizer 实时改宽，mouseup 后持久化）
  *      autoFitColumn（双击 resizer 自适应：用离屏量尺测真实内容宽度）
- *   2. 列选择（Excel 风格）：isFrozenCol（tsId 为冻结列）/ onColHeaderMouseDown
- *      （列头按住左键横扫成区间；Ctrl/Shift 修饰）/ updateColSelClasses
- *      / applyColumnsBulk / clearSelectedCols / fillSelectedCols
+ *   2. 列选择（Excel 风格）：
+ *      - isFrozenCol（testcase_id 完全只读：禁止编辑/粘贴/清空/批量等任意写入）
+ *      - isProtectedCol（业务必备列仅锁结构：禁止删除列/重命名列，不影响数据操作）
+ *      - onColHeaderMouseDown（列头按住左键横扫成区间；Ctrl/Shift 修饰）
+ *      - updateColSelClasses / applyColumnsBulk / clearSelectedCols / fillSelectedCols
  *   3. 行高拖动：startRowResize（拖动 .xs-row-resizer 实时改高）
  *      resetRowHeight（双击自适应：离屏量尺读 wrap 后真实高度，幂等）
  *
- * 单元格编辑、右键菜单、行/列数据操作见 03a-cell-edit.js。
+ * 单元格编辑、右键菜单、行/列数据操作见 03a-cell-edit.js（其中 deleteCol /
+ * renameCol 内已基于 isFrozenCol + isProtectedCol 做兜底拦截）。
  * 跨文件依赖通过全局作用域共享（S、persistUiStateDebounced、isArrayCol、
  * formatCellValue、_computeRowOffsets 等）。
  * ========================================================================== */
+
+
+// ==================== 配置常量 ====================
+// 受保护列名清单：命中的列在右键菜单中不渲染「删除该列 / 重命名列」，
+// 并在 deleteCol / renameCol 函数内部做兜底拦截。
+// 维护说明：业务必备列请直接在此追加/移除列名（英文字段名，与 headers 中一致）。
+// 与 isFrozenCol（testcase_id 完全只读）语义不同，本清单仅锁结构（列名/列存在性），
+// 不影响单元格编辑、粘贴、批量清空、批量填充等数据操作。
+var PROTECTED_COLS = [
+    'testcase_id',
+    'testCaseNo',
+    'path',
+    'name',
+    'preconditions',
+    'description',
+    'priority',
+    'test_type',
+    'steps'
+];
 
 
 // ==================== 列宽拖动 ====================
@@ -115,6 +138,21 @@ function isFrozenCol(ci) {
     if (typeof ci !== 'number' || ci < 0) return false;
     var headers = (S.data && S.data.headers) || [];
     return headers[ci] === 'testcase_id';
+}
+
+// 受保护列：禁止结构性变更（删除列 / 重命名列），但不限制编辑、粘贴、批量等
+// 与 isFrozenCol 语义不同：isFrozenCol 是"完全只读"，isProtectedCol 仅锁列名/列存在性
+// 命中后右键菜单中的 "删除该列" / "重命名列" 直接不渲染（不显示）
+// 列名清单 PROTECTED_COLS 见文件顶部「配置常量」区，便于集中维护
+function isProtectedCol(ci) {
+    if (typeof ci !== 'number' || ci < 0) return false;
+    var headers = (S.data && S.data.headers) || [];
+    var name = headers[ci];
+    if (!name) return false;
+    for (var i = 0; i < PROTECTED_COLS.length; i++) {
+        if (PROTECTED_COLS[i] === name) return true;
+    }
+    return false;
 }
 
 // 列头按下 -> 进入「横扫选列」模式；mousemove 阶段实时把锚点列与悬停列形成区间；

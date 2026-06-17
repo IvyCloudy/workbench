@@ -197,9 +197,13 @@ function showContextMenu(e) {
     if (isHeader) {
         items.push({ label: '在左侧插入列', action: function () { insertCol(S._ctxCol); } });
         items.push({ label: '在右侧插入列', action: function () { insertCol(S._ctxCol + 1); } });
-        items.push({ divider: true });
-        items.push({ label: '删除该列', action: function () { deleteCol(S._ctxCol); }, disabled: S._ctxCol < 0 || isFrozenCol(S._ctxCol) });
-        items.push({ label: '重命名列', action: function () { renameCol(S._ctxCol); }, disabled: S._ctxCol < 0 || isFrozenCol(S._ctxCol) });
+        // 受保护列（如 testcase_id / testCaseNo / path / name 等业务必备列）：
+        // 直接不渲染「删除该列 / 重命名列」两项，避免误操作破坏结构
+        if (S._ctxCol >= 0 && !isProtectedCol(S._ctxCol)) {
+            items.push({ divider: true });
+            items.push({ label: '删除该列', action: function () { deleteCol(S._ctxCol); }, disabled: isFrozenCol(S._ctxCol) });
+            items.push({ label: '重命名列', action: function () { renameCol(S._ctxCol); }, disabled: isFrozenCol(S._ctxCol) });
+        }
         if (S.colSel.size > 0) {
             // 冻结列（testcase_id）不参与清空 / 批量填充：只统计可操作列数；全为冻结列时灰显
             var _opCntH = 0;
@@ -274,8 +278,11 @@ function showContextMenu(e) {
         items.push({ divider: true });
         items.push({ label: '插入列（左侧）', action: function () { insertCol(S._ctxCol); }, disabled: S._ctxCol < 0 });
         items.push({ label: '插入列（右侧）', action: function () { insertCol(S._ctxCol + 1); }, disabled: S._ctxCol < 0 });
-        items.push({ label: '重命名列', action: function () { renameCol(S._ctxCol); }, disabled: S._ctxCol < 0 || isFrozenCol(S._ctxCol) });
-        items.push({ label: '删除该列', action: function () { deleteCol(S._ctxCol); }, disabled: S._ctxCol < 0 || isFrozenCol(S._ctxCol) });
+        // 受保护列：不渲染「重命名列 / 删除该列」，与表头右键菜单保持一致
+        if (S._ctxCol >= 0 && !isProtectedCol(S._ctxCol)) {
+            items.push({ label: '重命名列', action: function () { renameCol(S._ctxCol); }, disabled: isFrozenCol(S._ctxCol) });
+            items.push({ label: '删除该列', action: function () { deleteCol(S._ctxCol); }, disabled: isFrozenCol(S._ctxCol) });
+        }
         items.push({ divider: true });
         items.push({ label: '删除该行', action: function () { deleteRow(S._ctxRow); }, disabled: S._ctxRow < 0 });
         if (S.sel.size > 0) {
@@ -710,6 +717,12 @@ function deleteCol(ci) {
         showToast('testcase_id 列为冻结列，不允许删除', 'error');
         return;
     }
+    // 受保护列（业务必备列）禁止删除：兜底防御，正常右键菜单已不渲染此项
+    if (isProtectedCol(ci)) {
+        var _hName = (S.data && S.data.headers && S.data.headers[ci]) || '';
+        showToast('「' + _hName + '」为受保护列，不允许删除', 'error');
+        return;
+    }
     xsConfirm('确定删除该列？', function () {
         pushHistory();
         S.data.headers.splice(ci, 1);
@@ -752,6 +765,12 @@ function renameCol(ci) {
     // 冻结列（testcase_id）禁止重命名：很多依赖 headers.indexOf('testcase_id') 的逻辑（推送、失败映射、行高/列宽索引等）会失效
     if (isFrozenCol(ci)) {
         showToast('testcase_id 列为冻结列，不允许重命名', 'error');
+        return;
+    }
+    // 受保护列（业务必备列）禁止重命名：兜底防御，正常右键菜单已不渲染此项
+    if (isProtectedCol(ci)) {
+        var _hName2 = (S.data && S.data.headers && S.data.headers[ci]) || '';
+        showToast('「' + _hName2 + '」为受保护列，不允许重命名', 'error');
         return;
     }
     xsPrompt('重命名列', S.data.headers[ci], function (name) {

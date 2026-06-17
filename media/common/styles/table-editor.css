@@ -109,16 +109,26 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 
 /* 表格样式 */
 .xs-table{border-collapse:collapse;table-layout:fixed;width:100%}
-.xs-th{background:#f5f5f5;border:1px solid var(--bd);padding:8px 18px 8px 8px;position:relative;user-select:none;font-weight:500;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
+/* 表头：浅灰底 + 强底部分割线，与 tbody 视觉分层 */
+.xs-th{background:#fafbfc;border:1px solid #e1e4e8;border-bottom:2px solid #d0d7de;padding:8px 8px 8px 10px;position:relative;user-select:none;font-weight:500;text-align:left;white-space:normal;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box;vertical-align:top}
 .xs-th[data-sort]{background:#e3f2fd}
-.xs-th[data-sort]::after{content:'\25b2';margin-left:4px;font-size:10px;opacity:.5}
+.xs-th[data-sort]::after{content:'\25b2';margin-left:4px;font-size:10px;opacity:.6;color:var(--p)}
 .xs-th[data-sort="desc"]::after{content:'\25bc'}
-.xs-th-cb{width:50px;text-align:center;padding:8px;box-sizing:border-box;position:sticky;left:0;top:0;z-index:5;background:#f5f5f5}
+.xs-th-cb{width:50px;text-align:center;padding:8px;box-sizing:border-box;position:sticky;left:0;top:0;z-index:5;background:#fafbfc;border-bottom:2px solid #d0d7de}
 /* 左上角行号表头：仅显示 # 字符，不可选中也不可点击 */
-.xs-th-cb.xs-th-rownum{cursor:default;color:#999;font-weight:600;user-select:none}
-.xs-th:not(.xs-th-cb){position:sticky;top:0;z-index:2;background:#f5f5f5}
-.xs-th-text{display:inline;vertical-align:middle}
-.xs-th-filter{position:absolute;right:4px;top:50%;transform:translateY(-50%);cursor:pointer;opacity:.45;color:#666;padding:2px 4px;border-radius:2px;line-height:0;user-select:none;display:inline-flex;align-items:center;justify-content:center}
+.xs-th-cb.xs-th-rownum{cursor:default;color:#8b95a1;font-weight:600;user-select:none}
+.xs-th:not(.xs-th-cb){position:sticky;top:0;z-index:2;background:#fafbfc}
+/* 表头列内布局：左侧 labels 自适应、右侧漏斗固定 */
+.xs-th-inner{display:flex;align-items:flex-start;gap:6px;min-width:0;padding-right:6px}
+.xs-th-labels{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+/* 第一行：中文别名 —— 主标题，深色加粗 */
+.xs-th-cn{display:block;font-size:13px;font-weight:600;color:#24292f;line-height:1.3;white-space:normal;word-break:break-word;letter-spacing:.2px}
+/* 第二行：英文 key —— 弱化为辅助标签 */
+.xs-th-text{display:block;font-size:11px;font-weight:400;color:#8b95a1;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.3px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+/* 当列没有中文映射时，英文 key 单独成行，提升为主标题样式 */
+.xs-th-text.xs-th-text-only{font-size:13px;font-weight:600;color:#24292f;font-family:inherit;letter-spacing:0}
+/* 漏斗按钮：常驻轻显，hover/active 加深 */
+.xs-th-filter{flex-shrink:0;cursor:pointer;opacity:.55;color:#8b95a1;padding:2px 4px;border-radius:3px;line-height:0;user-select:none;display:inline-flex;align-items:center;justify-content:center;margin-top:1px}
 .xs-th-filter .xs-funnel-icon{display:block;pointer-events:none}
 .xs-th:hover .xs-th-filter{opacity:1}
 .xs-th-filter:hover{background:rgba(0,120,212,.12);color:var(--p);opacity:1}
@@ -132,7 +142,7 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 .xs-resizer:hover::after{background:var(--p)}
 
 /* 单元格样式 */
-.xs-td{border:1px solid var(--bd);padding:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box;vertical-align:top}
+.xs-td{border:1px solid #eaecef;padding:7px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box;vertical-align:top;color:#24292f;line-height:1.5}
 .xs-td-cb{width:50px;text-align:center;cursor:pointer;position:sticky;left:0;z-index:3;background:#fff;overflow:visible;user-select:none}
 .xs-td-cb input{cursor:pointer}
 /* 行号格内的行号文本：居中显示，禁止鼠标交互（事件由父 td 处理） */
@@ -168,8 +178,13 @@ tbody tr.xs-tr-resized .xs-td textarea.xs-cell-input,.xs-td textarea.xs-cell-inp
 
 /* 行样式 */
 tbody tr{position:relative}
-tbody tr:hover{background:#f8f8f8}
+/* 斑马纹：偶数行浅底，提升多行可读性 */
+tbody tr:nth-child(even) td{background:#fafbfc}
+/* hover：柔和浅蓝（不使用 !important，避免覆盖 selected / push-failed 等更具体的状态色） */
+tbody tr:hover td{background:#f0f6ff}
 tbody tr.selected{background:#e3f2fd}
+tbody tr.selected td{background:#e3f2fd}
+tbody tr.selected:hover td{background:#d6e9fb}
 tbody tr.hidden{display:none}
 /* 第一列为 position:sticky；常态必须保持不透明背景，否则横向滚动时右侧单元格会从其下方穿透叠加。
    hover / selected / 推送失败 等更具体规则会按优先级正常覆盖此处的白底。 */
@@ -183,7 +198,7 @@ tbody tr td.xs-td-cb input{width:16px;height:16px;cursor:pointer}
 tbody tr.selected td.xs-td-cb .xs-rownum{color:var(--p)}
 tbody tr.xs-tr-push-failed td.xs-td-cb .xs-rownum{color:var(--d)}
 tbody tr.selected td.xs-td-cb{background:#e3f2fd}
-tbody tr:hover td.xs-td-cb{background:#f8f8f8}
+tbody tr:hover td.xs-td-cb{background:#f0f6ff}
 
 /* 推送失败行：浅红色背景 + 左侧红条提示，便于一眼识别 */
 tbody tr.xs-tr-push-failed{background:#fde8e8}
@@ -238,10 +253,11 @@ tbody tr.xs-tr-push-failed td.xs-td.xs-cell-selected{background:#f5dadc}
 .xs-td.xs-cell-selected.xs-col-selected{background:#cfe4f8}
 /* 矩形锚点格：保持现有 active 高亮（outline 由 .xs-editable.active 提供） */
 
-/* 冻结列（如 tsId）：浅灰底 + 浅灰文字 + 禁止鼠标编辑光标，提示用户该列只读 */
-.xs-th.xs-th-frozen{background:#eef0f2 !important;color:#888}
-.xs-td.xs-td-frozen{background:#f7f8fa;color:#888;cursor:not-allowed}
-tbody tr.selected td.xs-td.xs-td-frozen{background:#dde7f3}
+/* 冻结列（如 tsId）：浅灰底 + 浅灰文字 + 禁止鼠标编辑光标，提示用户该列只读；
+   横向滚动时通过 box-shadow 提示与右侧内容的边界 */
+.xs-th.xs-th-frozen{background:#eef0f2 !important;color:#8b95a1;box-shadow:2px 0 4px -2px rgba(0,0,0,.06)}
+.xs-td.xs-td-frozen{background:#f7f8fa;color:#6e7781;cursor:not-allowed;box-shadow:2px 0 4px -2px rgba(0,0,0,.06)}
+tbody tr.selected td.xs-td-frozen{background:#dde7f3}
 /* 冻结列也参与单元格矩形选区（# 全选 / 跨列拖选）：保持冻结灰调，但加深以体现选中态 */
 .xs-td.xs-td-frozen.xs-cell-selected{background:#dde7f3}
 .xs-td.xs-td-frozen.xs-col-selected{background:#d3deeb}
@@ -331,8 +347,10 @@ tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-frozen{background:#fbd9d9}
 .xs-detail-table td.xs-editable.modified{background:#fffbe6}
 .xs-detail-table tbody tr:hover{background:#f0f4ff}
 .xs-detail-table td input{width:100%;border:none;outline:none;padding:0;margin:0;font:inherit;background:transparent}
-.xs-detail-link{color:var(--p);cursor:pointer;text-decoration:underline;font-weight:500}
-.xs-detail-link:hover{color:#005a9e}
+/* 多项缩略链接：去掉超链接下划线，改为浅灰药丸；hover 时变蓝提示可点击 */
+.xs-detail-link{display:inline-flex;align-items:center;gap:3px;color:#0969da;background:#ddf4ff;border:1px solid #b6e3ff;border-radius:10px;padding:1px 9px;font-size:12px;font-weight:600;line-height:18px;cursor:pointer;text-decoration:none;letter-spacing:.2px;box-shadow:0 1px 0 rgba(9,105,218,.06);transition:background .12s,color .12s,border-color .12s,box-shadow .12s,transform .08s}
+.xs-detail-link:hover{background:#0969da;border-color:#0969da;color:#fff;box-shadow:0 1px 4px rgba(9,105,218,.28);transform:translateY(-.5px)}
+.xs-detail-link:active{transform:translateY(0);box-shadow:0 1px 0 rgba(9,105,218,.06)}
 .xs-detail-row-cb{width:36px;text-align:center;position:relative;padding:0 4px}
 .xs-detail-row-cb input{width:14px;height:14px;cursor:pointer}
 .xs-detail-rownum{display:inline-block;color:#888;font-size:11px;line-height:18px}
@@ -398,6 +416,10 @@ tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-frozen{background:#fbd9d9}
 .xs-dv2-field{margin-bottom:14px;border:1px solid #e5e9ef;border-radius:6px;background:#fff;overflow:hidden}
 .xs-dv2-field-hd{display:flex;align-items:center;padding:8px 12px;background:#f7f9fc;border-bottom:1px solid #e5e9ef;gap:8px;font-size:12px}
 .xs-dv2-field-name{font-weight:600;color:#333}
+/* 字段名带中文映射时：单行显示，中文主标 + 英文 key 等宽弱化 */
+.xs-dv2-field-name.has-cn{display:inline-flex;flex-direction:row;align-items:baseline;gap:6px;line-height:1.4;font-weight:normal}
+.xs-dv2-field-name-cn{font-size:13px;font-weight:600;color:#24292f;letter-spacing:.2px}
+.xs-dv2-field-name-key{font-size:11px;font-weight:400;color:#8b95a1;letter-spacing:.3px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .xs-dv2-field-type{color:#888;font-size:11px;padding:1px 6px;background:#eef0f2;border-radius:10px}
 .xs-dv2-field-type.is-array{background:#e3f2fd;color:var(--p)}
 .xs-dv2-field-actions{margin-left:auto;display:flex;gap:6px}
@@ -423,9 +445,10 @@ tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-frozen{background:#fbd9d9}
 
 /* ===== 标量数组列：chip 展示（主表单元格内）===== */
 .xs-cell-chips{display:flex;flex-wrap:nowrap;gap:4px;align-items:center;overflow:hidden;width:100%}
-.xs-chip{display:inline-flex;align-items:center;max-width:100%;padding:1px 8px;background:#e3f2fd;color:#0a4a78;border:1px solid #bcdcf5;border-radius:10px;font-size:11px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1}
-.xs-chip.is-empty{background:#f5f5f5;color:#999;border-color:#e0e0e0;font-style:italic}
-.xs-chip-more{display:inline-flex;align-items:center;padding:1px 6px;color:#888;font-size:11px;flex-shrink:0}
+/* tag chip：加深存在感（更高对比的浅蓝 + 边框） */
+.xs-chip{display:inline-flex;align-items:center;max-width:100%;padding:2px 9px;background:#e7f1ff;color:#0550ae;border:1px solid #c8dcf7;border-radius:10px;font-size:11px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;font-weight:500}
+.xs-chip.is-empty{background:#f5f5f5;color:#999;border-color:#e0e0e0;font-style:italic;font-weight:400}
+.xs-chip-more{display:inline-flex;align-items:center;padding:1px 6px;color:#6e7781;font-size:11px;flex-shrink:0;font-weight:500}
 tbody tr.xs-tr-resized .xs-cell-chips{flex-wrap:wrap}
 tbody tr.xs-tr-resized .xs-chip{white-space:normal}
 

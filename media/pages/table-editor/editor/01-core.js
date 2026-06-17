@@ -113,7 +113,10 @@ var S = {
     // 明细弹窗中修改过的单元格标记（持久化，不受 S.mods.clear() 影响）
     _detailModCellKeys: new Set(),
     // toast 当前隐藏定时器（避免连续 toast 互相截断）
-    _toastTimer: null
+    _toastTimer: null,
+    // 表头中文别名映射（仅用于表头展示，不写回原始文件）
+    // key = headers 中的英文字段名，value = 中文显示名
+    headerLabels: {}
 };
 
 // 统一判断「是否有任何弹窗/输入控件正在打开」，供全局快捷键拦截使用。
@@ -389,6 +392,10 @@ window.addEventListener('message', function (e) {
     var m = e.data;
     if (!m) return;
     if (m.type === S.msgType) {
+        // 表头中英映射：数据下发时顺带更新（需在 renderTable 之前写入 S，让骨架构造拿到最新映射）
+        if (m.headerLabels && typeof m.headerLabels === 'object') {
+            S.headerLabels = m.headerLabels;
+        }
         var hasUserChanges = (S.mods && S.mods.size > 0) || (S._history && S._history.length > 0);
         var alreadyRendered = !!(S.data && Array.isArray(S.data.headers) && S.data.headers.length > 0);
         var _curRowsLen0 = (S.data && S.data.rows && S.data.rows.length) || 0;
@@ -578,6 +585,12 @@ window.addEventListener('message', function (e) {
     } else if (m.type === 'saveError') {
         dbg('📨 recv saveError: ' + (m.message || ''));
         showToast('保存失败: ' + (m.message || ''), 'error');
+    } else if (m.type === 'headerLabelsUpdated') {
+        // 配置项 / 工作区 .vscode/headerLabels.json 变更后热更新表头别名
+        if (m.headerLabels && typeof m.headerLabels === 'object') {
+            S.headerLabels = m.headerLabels;
+            try { renderTable(); } catch (_) { /* ignore */ }
+        }
     } else if (m.type === 'pushDone') {
         // 推送流程结束钩子（隐藏 loading 等）。
         S._pushing = false;

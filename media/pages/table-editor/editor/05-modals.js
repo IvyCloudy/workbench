@@ -625,7 +625,17 @@ function openDetailModal(ri, field) {
     var title = document.getElementById('detailModalTitle');
     if (title) {
         var typeTag = rawType === 'object' ? '（嵌套对象）' : '';
-        title.textContent = (dt.fieldDisplay || dt.field || '明细') + typeTag + ' - 第 ' + (ri + 1) + ' 行';
+        // 标题字段名：优先使用中文映射，再退回 fieldDisplay/field
+        var _labels = (S && S.headerLabels) || {};
+        var _fieldKey = dt.field || '';
+        var _cn = _labels[String(_fieldKey)];
+        var _baseTitle;
+        if (_cn && typeof _cn === 'string') {
+            _baseTitle = _cn + '（' + _fieldKey + '）';
+        } else {
+            _baseTitle = dt.fieldDisplay || _fieldKey || '明细';
+        }
+        title.textContent = _baseTitle + typeTag + ' - 第 ' + (ri + 1) + ' 行';
     }
     bindDetailModal();
     renderDetailV2();
@@ -835,9 +845,24 @@ function renderDv2FieldCard(field, kind, innerHtml, withAddBtn) {
             +       '<button class="xs-dv2-field-add" data-field="' + escapeHtml(field) + '">+ 添加项</button>'
             +     '</div>';
     }
+    // 字段名：存在中文映射时第一行渲染中文（主），第二行渲染英文 key（辅，等宽小字）；
+    //         无映射时仅渲染英文 key 单行，避免空白占位。
+    var labels = (S && S.headerLabels) || {};
+    var cnLabel = labels[String(field)];
+    var hasCn = !!(cnLabel && typeof cnLabel === 'string');
+    var titleAttr = hasCn ? (cnLabel + ' (' + field + ')') : field;
+    var nameHtml;
+    if (hasCn) {
+        nameHtml = '<span class="xs-dv2-field-name has-cn" title="' + escapeHtml(titleAttr) + '">'
+            +       '<span class="xs-dv2-field-name-cn">' + escapeHtml(cnLabel) + '</span>'
+            +       '<span class="xs-dv2-field-name-key">' + escapeHtml(field) + '</span>'
+            +     '</span>';
+    } else {
+        nameHtml = '<span class="xs-dv2-field-name" title="' + escapeHtml(titleAttr) + '">' + escapeHtml(field) + '</span>';
+    }
     return '<div class="xs-dv2-field" data-field="' + escapeHtml(field) + '">'
         +    '<div class="xs-dv2-field-hd">'
-        +      '<span class="xs-dv2-field-name">' + escapeHtml(field) + '</span>'
+        +      nameHtml
         +      '<span class="xs-dv2-field-type ' + typeCls + '">' + typeLabel + '</span>'
         +      actions
         +    '</div>'

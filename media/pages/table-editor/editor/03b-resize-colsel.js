@@ -2,18 +2,41 @@
  * 03b-resize-colsel.js  —— 列宽 / 列选择 / 行高（尺寸 & 选区）
  * -----------------------------------------------------------------------------
  * 由原 03-cell-ops.js 拆分而来，集中处理"鼠标拖动改变尺寸"以及"按列选区"：
+ *   0. 配置常量：PROTECTED_COLS（受保护列名清单，集中维护，见文件顶部）
  *   1. 列宽拖动：startColResize（拖动 .xs-resizer 实时改宽，mouseup 后持久化）
  *      autoFitColumn（双击 resizer 自适应：用离屏量尺测真实内容宽度）
- *   2. 列选择（Excel 风格）：isFrozenCol（tsId 为冻结列）/ onColHeaderMouseDown
- *      （列头按住左键横扫成区间；Ctrl/Shift 修饰）/ updateColSelClasses
- *      / applyColumnsBulk / clearSelectedCols / fillSelectedCols
+ *   2. 列选择（Excel 风格）：
+ *      - isFrozenCol（testcase_id 完全只读：禁止编辑/粘贴/清空/批量等任意写入）
+ *      - isProtectedCol（业务必备列仅锁结构：禁止删除列/重命名列，不影响数据操作）
+ *      - onColHeaderMouseDown（列头按住左键横扫成区间；Ctrl/Shift 修饰）
+ *      - updateColSelClasses / applyColumnsBulk / clearSelectedCols / fillSelectedCols
  *   3. 行高拖动：startRowResize（拖动 .xs-row-resizer 实时改高）
  *      resetRowHeight（双击自适应：离屏量尺读 wrap 后真实高度，幂等）
  *
- * 单元格编辑、右键菜单、行/列数据操作见 03a-cell-edit.js。
+ * 单元格编辑、右键菜单、行/列数据操作见 03a-cell-edit.js（其中 deleteCol /
+ * renameCol 内已基于 isFrozenCol + isProtectedCol 做兜底拦截）。
  * 跨文件依赖通过全局作用域共享（S、persistUiStateDebounced、isArrayCol、
  * formatCellValue、_computeRowOffsets 等）。
  * ========================================================================== */
+
+
+// ==================== 配置常量 ====================
+// 受保护列名清单：命中的列在右键菜单中不渲染「删除该列 / 重命名列」，
+// 并在 deleteCol / renameCol 函数内部做兜底拦截。
+// 维护说明：业务必备列请直接在此追加/移除列名（英文字段名，与 headers 中一致）。
+// 与 isFrozenCol（testcase_id 完全只读）语义不同，本清单仅锁结构（列名/列存在性），
+// 不影响单元格编辑、粘贴、批量清空、批量填充等数据操作。
+var PROTECTED_COLS = [
+    'testcase_id',
+    'testCaseNo',
+    'path',
+    'name',
+    'preconditions',
+    'description',
+    'priority',
+    'test_type',
+    'steps'
+];
 
 
 // ==================== 列宽拖动 ====================
@@ -115,6 +138,21 @@ function isFrozenCol(ci) {
     if (typeof ci !== 'number' || ci < 0) return false;
     var headers = (S.data && S.data.headers) || [];
     return headers[ci] === 'testcase_id';
+}
+
+// 受保护列：禁止结构性变更（删除列 / 重命名列），但不限制编辑、粘贴、批量等
+// 与 isFrozenCol 语义不同：isFrozenCol 是"完全只读"，isProtectedCol 仅锁列名/列存在性
+// 命中后右键菜单中的 "删除该列" / "重命名列" 直接不渲染（不显示）
+// 列名清单 PROTECTED_COLS 见文件顶部「配置常量」区，便于集中维护
+function isProtectedCol(ci) {
+    if (typeof ci !== 'number' || ci < 0) return false;
+    var headers = (S.data && S.data.headers) || [];
+    var name = headers[ci];
+    if (!name) return false;
+    for (var i = 0; i < PROTECTED_COLS.length; i++) {
+        if (PROTECTED_COLS[i] === name) return true;
+    }
+    return false;
 }
 
 // 列头按下 -> 进入「横扫选列」模式；mousemove 阶段实时把锚点列与悬停列形成区间；
@@ -330,22 +368,44 @@ function startRowResize(e) {
     var TD_CHROME = 14;
     var MIN_SINGLE = 32;
 
+    // 探测 cell-wrap 的行高（用于把"行高"换算成"可显示行数"）。
+    // 若读不到（display:-webkit-box 下 lineHeight 为 normal），用 fontSize*1.4 兜底。
+    function _probeLineHeight() {
+        if (!rowWraps[0]) return 18;
+        var cs = window.getComputedStyle(rowWraps[0]);
+        var lh = parseFloat(cs.lineHeight);
+        if (!isFinite(lh) || lh <= 0) {
+            var fs = parseFloat(cs.fontSize) || 13;
+            lh = fs * 1.4;
+        }
+        return lh;
+    }
+
     // ----- 清除 cell-wrap 内联样式（恢复 CSS 控制）-----
     function _clearWraps() {
         for (var c = 0; c < rowWraps.length; c++) {
             rowWraps[c].style.whiteSpace = '';
             rowWraps[c].style.overflow = '';
             rowWraps[c].style.height = '';
+            rowWraps[c].style.removeProperty('--xs-clamp');
         }
     }
-    // ----- 按行高锁定 cell-wrap 尺寸，开启换行并裁剪溢出 -----
+    // ----- 按行高写入 --xs-clamp（可显示行数），实现"超出可见区域显示 …" -----
+    // 关键点：先临时给 tr 加 xs-tr-resized 类，让 CSS 的 -webkit-line-clamp 生效，
+    //        再按 (wrapH / lineHeight) 算出 clamp 行数；不再设固定 height，避免与
+    //        line-clamp 冲突导致渲染抖动。
     function _lockWraps(rowH) {
         if (rowH <= TD_CHROME) return;
+        if (!tr.classList.contains('xs-tr-resized')) tr.classList.add('xs-tr-resized');
         var wrapH = rowH - TD_CHROME;
+        var lh = _probeLineHeight();
+        var lines = Math.max(1, Math.floor(wrapH / lh));
         for (var l = 0; l < rowWraps.length; l++) {
-            rowWraps[l].style.whiteSpace = 'pre-wrap';
-            rowWraps[l].style.overflow = 'hidden';
-            rowWraps[l].style.height = wrapH + 'px';
+            // 清除可能残留的 height/whiteSpace/overflow，让 CSS 接管
+            rowWraps[l].style.whiteSpace = '';
+            rowWraps[l].style.overflow = '';
+            rowWraps[l].style.height = '';
+            rowWraps[l].style.setProperty('--xs-clamp', String(lines));
         }
     }
 

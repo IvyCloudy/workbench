@@ -29,6 +29,7 @@ import { markDeletedRows } from '../utils/deletedRowsStore';
 import { pushTestCase } from '../services/http';
 import { createParser, ensureTrackingColumns, applyTestCaseNos, type FileParser, type FileType } from '../parsers';
 import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
+import { getHeaderLabels, onHeaderLabelsChange } from '../utils/headerLabels';
 import { stackHead } from '../services/utils';
 import { filterTemplateExampleRows, TEMPLATE_EXAMPLE_TS_ID } from '../utils/fileIdentifier';
 
@@ -633,6 +634,8 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 if (added !== undefined) {
                     msgPayload.addedInfos = added;
                 }
+                // 表头中英映射（仅用于显示，不写回数据；每次下发都带上以保证刚打开/可见性切换时也能拿到）
+                try { msgPayload.headerLabels = getHeaderLabels(); } catch { /* ignore */ }
                 session.deletedInfos = undefined;
                 session.addedInfos = undefined;
                 log(`📤 push (${reason}) rows=${rowsLen} visible=${webviewPanel.visible} force=${!!force} external=${isExternal}`);
@@ -758,6 +761,18 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     log('📨 init from webview');
                     // 差异比对由 pushDataToWebview 内部处理（init 原因触发快照 diff）
                     await pushDataToWebview(true, 'init');
+                    // 注册表头中英映射变更监听：设置项 / 工作区文件变化时实时热更新当前 panel
+                    const _hlSubs = onHeaderLabelsChange(() => {
+                        try {
+                            webviewPanel.webview.postMessage({
+                                type: 'headerLabelsUpdated',
+                                headerLabels: getHeaderLabels(),
+                            });
+                        } catch (_) { /* ignore */ }
+                    });
+                    webviewPanel.onDidDispose(() => {
+                        _hlSubs.forEach(d => { try { d.dispose(); } catch (_) { /* ignore */ } });
+                    });
                     // 通知等待方：webview 已就绪，可以接收推送结果消息
                     try { markReady(); } catch (_) { /* ignore */ }
                     sendTelemetryEvent('editor.opened', { fileFormat: session.type });

@@ -20,7 +20,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getNonce, isInQualifiedDir, buildErrorHtml, FILE_PATTERNS, TS_ID_COLUMN, escapeHtml } from '../services/utils';
-import { getCurrentTaskInfo, type GetCurrentTaskInfoResult } from '../utils/commands';
+import { getCurrentTaskInfo, type CurrentTask } from '../utils/commands';
 import { showPushErrorModal, showPushResult, showPushDone, showSaveResult } from '../utils/message';
 import { setHighlight, clearHighlight } from '../utils/highlightStore';
 import { getFailures, mergeFailures } from '../utils/pushFailureStore';
@@ -30,7 +30,7 @@ import { pushTestCase } from '../services/http';
 import { createParser, ensureTrackingColumns, applyTestCaseNos, type FileParser, type FileType } from '../parsers';
 import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
 import { stackHead } from '../services/utils';
-import { filterTemplateExampleRows, getTemplateExampleTsIds, TEMPLATE_EXAMPLE_TS_ID } from '../utils/fileIdentifier';
+import { filterTemplateExampleRows, TEMPLATE_EXAMPLE_TS_ID } from '../utils/fileIdentifier';
 
 // 重新导出工具，便于子类使用
 export { isInQualifiedDir, FILE_PATTERNS };
@@ -206,8 +206,6 @@ export class PushViaHttpClient implements PushStrategy {
         // 避免刷新触发的 renderTable() 擦除 showPushResult 设置的失败行高亮。
         if (successMappings.length > 0) {
             try {
-                // ⚠ 在异步 save() 之前快照当前高亮，防止文件监听器覆盖（若 watcher 发现快照无变化则置 undefined）
-                const oldHL = ctx.session.highlightedCells;
                 const parsed = await ctx.session.parser.parse(ctx.filePath);
                 ensureTrackingColumns(parsed.tableData, parsed.sourceData);
                 applyTestCaseNos(parsed.tableData, parsed.sourceData, successMappings);
@@ -215,38 +213,15 @@ export class PushViaHttpClient implements PushStrategy {
                 ctx.markSelfSave?.();
                 await ctx.session.parser.save(ctx.filePath, parsed.tableData, parsed.sourceData);
                 ctx.markSelfSave?.();
-                // 所有已推送行（无论成功/失败）更新快照基线，使下次 diff 不再标记为修改
-                const allPushedTsIds = new Set<string>();
-                if (Array.isArray(pushData)) {
-                    for (const rec of pushData) {
-                        const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
-                        if (id) allPushedTsIds.add(id);
-                    }
-                }
-                // 合并样例行 tsId：让样例行也写入快照基线，避免被 diff 误判为新增行（绿色高亮）
-                getTemplateExampleTsIds(ctx.filePath, parsed.tableData).forEach(id => allPushedTsIds.add(id));
-                await savePushSnapshot(ctx.filePath, parsed.tableData, allPushedTsIds);
-                if (oldHL && oldHL.rowIndices && oldHL.rowIndices.length > 0) {
-                    const rows = parsed.tableData.rows;
-                    const tsIdIdx = parsed.tableData.headers.indexOf(TS_ID_COLUMN);
-                    const remainingRows: number[] = [];
-                    const remainingCells: [number, number][] = [];
-                    for (const ri of oldHL.rowIndices) {
-                        const id = tsIdIdx >= 0 && ri < rows.length ? String(rows[ri]?.[tsIdIdx] ?? '') : '';
-                        if (!allPushedTsIds.has(id)) remainingRows.push(ri);
-                    }
-                    if (oldHL.cells) {
-                        for (const [ri, ci] of oldHL.cells) {
-                            const id = tsIdIdx >= 0 && ri < rows.length ? String(rows[ri]?.[tsIdIdx] ?? '') : '';
-                            if (!allPushedTsIds.has(id)) remainingCells.push([ri, ci]);
-                        }
-                    }
-                    ctx.session.highlightedCells = remainingRows.length > 0
-                        ? { colIdx: oldHL.colIdx, rowIndices: remainingRows, cells: remainingCells.length > 0 ? remainingCells : undefined }
-                        : null;
-                } else {
-                    ctx.session.highlightedCells = null;
-                }
+                // 推送完成后全量更新快照基线（无论成功/失败），
+                // 使下次 diff 不再标记本次推送行为为修改。
+                // 失败行的高亮由 pushFailures 机制独立管理，不依赖快照差异。
+                // 注意：必须全量而非增量更新，否则未推送但已编辑的行会保留旧快照，
+                // 导致下次 diff 误判为"修改"高亮。样例行也会一并写入基线，
+                // 避免被 diff 误判为新增行（绿色高亮）。
+                await savePushSnapshot(ctx.filePath, parsed.tableData);
+                // 快照已是全量基线，旧高亮信息无需保留 → 清空
+                ctx.session.highlightedCells = null;
                 await clearHighlight(ctx.filePath);
                 // 落盘后让缓存失效，下次可见切换 / 手动刷新时自动重读最新文件
                 ctx.session.cachedTableData = null;
@@ -259,19 +234,14 @@ export class PushViaHttpClient implements PushStrategy {
                 sendTelemetryErrorEvent('editorPush.writeBackFailed', { ext: _ext, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
             }
         } else if (failures.length > 0) {
-            // 全部推送失败：仍更新快照基线，使下次 diff 不再标记为修改
+            // 全部推送失败：全量更新快照基线，避免未推送但已编辑的行保留旧快照，
+            // 导致下次 diff 误判为"修改"高亮。失败行高亮由 pushFailures 独立管理。
             try {
-                const allPushedTsIds = new Set<string>();
-                if (Array.isArray(pushData)) {
-                    for (const rec of pushData) {
-                        const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
-                        if (id) allPushedTsIds.add(id);
-                    }
-                }
                 const parsed = await ctx.session.parser.parse(ctx.filePath);
-                // 合并样例行 tsId：避免被 diff 误判为新增行（绿色高亮）
-                getTemplateExampleTsIds(ctx.filePath, parsed.tableData).forEach(id => allPushedTsIds.add(id));
-                await savePushSnapshot(ctx.filePath, parsed.tableData, allPushedTsIds);
+                // 全量更新快照基线（含样例行），避免被 diff 误判为新增行/修改行
+                await savePushSnapshot(ctx.filePath, parsed.tableData);
+                ctx.session.highlightedCells = null;
+                await clearHighlight(ctx.filePath);
                 ctx.session.cachedTableData = null;
             } catch (err: any) {
                 console.error('[推送] 全部失败，快照更新失败:', err?.message || err);
@@ -916,9 +886,15 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         // 未绑定（或未命中）时三项为空串，由 buildEditorHtml 渲染为 "-"
         const currentTask = this.context
             ? await getCurrentTaskInfo(filePath)
-            : { bind: false, taskInfo: {} };
-
-        webviewPanel.webview.html = await this.buildEditorHtml(nonce, webviewPanel, session.type, currentTask);
+            : { bind: false, taskInfo: {} as Record<string, never> };
+        const info = currentTask.taskInfo as { testTaskNo?: string; testTaskName?: string; subTestTaskName?: string };
+        const taskInfoForWebView = {
+            bind: currentTask.bind,
+            testTaskNo: info.testTaskNo || '',
+            testTaskName: info.testTaskName || '',
+            subTestTaskName: info.subTestTaskName || ''
+        }
+        webviewPanel.webview.html = await this.buildEditorHtml(nonce, webviewPanel, session.type, taskInfoForWebView);
         log('✅ html ready');
     }
 
@@ -929,7 +905,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         nonce: string,
         webviewPanel: vscode.WebviewPanel,
         dataType: FileType,
-        taskInfo: GetCurrentTaskInfoResult
+        taskInfo: { bind: boolean, testTaskNo: string, testTaskName: string, subTestTaskName: string }
     ): Promise<string> {
         const msgType = `${dataType}Data`;
 
@@ -972,10 +948,9 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
 
         // 未命中绑定时，表头三项统一展示占位符 "-"
         const PLACEHOLDER = '-';
-        const innerTask = taskInfo?.taskInfo;
-        const safeTestTaskNo = escapeHtml((innerTask && innerTask.testTaskNo) || PLACEHOLDER);
-        const safeSubTestTaskName = escapeHtml((innerTask && innerTask.subTestTaskName) || PLACEHOLDER);
-        const safeTestTaskName = escapeHtml((innerTask && innerTask.testTaskName) || PLACEHOLDER);
+        const safeTestTaskNo = escapeHtml(taskInfo?.testTaskNo || PLACEHOLDER);
+        const safeTestTaskName = escapeHtml(taskInfo?.testTaskName || PLACEHOLDER);
+        const safeSubTestTaskName = escapeHtml(taskInfo?.subTestTaskName || PLACEHOLDER);
 
         // 绑定状态标签：首行最左侧展示"已绑定任务 / 未绑定任务"
         const isBound = !!taskInfo?.bind;

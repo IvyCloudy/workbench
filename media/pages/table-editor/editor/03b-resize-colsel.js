@@ -31,7 +31,7 @@ function startColResize(e) {
         var colEl = document.querySelector('.xs-table colgroup col:nth-child(' + (col + 2) + ')');
         if (colEl) colEl.style.width = w + 'px';
     }
-    function onUp() {
+    function onUp(ev) {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
         if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
@@ -322,33 +322,79 @@ function startRowResize(e) {
     var startY = e.clientY;
     var startH = tr.offsetHeight;
     document.body.classList.add('xs-row-resizing');
+    // 拖动开始：清除残留样式，回归 CSS 默认单行
+    tr.classList.remove('xs-tr-resized');
+    var rowWraps = tr.querySelectorAll('.xs-cell-wrap');
+
+    // td 的 padding+边框占用：padding:6px*2 + border:1px*2 = 14px
+    var TD_CHROME = 14;
+    var MIN_SINGLE = 32;
+
+    // ----- 清除 cell-wrap 内联样式（恢复 CSS 控制）-----
+    function _clearWraps() {
+        for (var c = 0; c < rowWraps.length; c++) {
+            rowWraps[c].style.whiteSpace = '';
+            rowWraps[c].style.overflow = '';
+            rowWraps[c].style.height = '';
+        }
+    }
+    // ----- 按行高锁定 cell-wrap 尺寸，开启换行并裁剪溢出 -----
+    function _lockWraps(rowH) {
+        if (rowH <= TD_CHROME) return;
+        var wrapH = rowH - TD_CHROME;
+        for (var l = 0; l < rowWraps.length; l++) {
+            rowWraps[l].style.whiteSpace = 'pre-wrap';
+            rowWraps[l].style.overflow = 'hidden';
+            rowWraps[l].style.height = wrapH + 'px';
+        }
+    }
+
+    _clearWraps();
 
     function onMove(ev) {
         var h = Math.max(24, startH + (ev.clientY - startY));
         tr.style.height = h + 'px';
-        if (h > startH || h !== 32) tr.classList.add('xs-tr-resized');
+        // 超过单行阈值：锁定 cell-wrap 高度 + 换行，跟随拖动实时更新
+        if (h > MIN_SINGLE + 4) {
+            _lockWraps(h);
+        } else {
+            _clearWraps();
+        }
     }
-    function onUp() {
+    function onUp(ev) {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
         document.body.classList.remove('xs-row-resizing');
-        var finalH = tr.offsetHeight;
-        S.rowHeights[ri] = finalH;
+        var finalH = Math.max(24, startH + (ev.clientY - startY));
+        if (finalH > MIN_SINGLE + 4) {
+            tr.classList.add('xs-tr-resized');
+            S.rowHeights[ri] = finalH;
+            tr.style.height = finalH + 'px';
+            _lockWraps(finalH);
+        } else {
+            tr.classList.remove('xs-tr-resized');
+            delete S.rowHeights[ri];
+            tr.style.height = '';
+            _clearWraps();
+        }
+        // 强制重排：确保样式立即生效
+        // eslint-disable-next-line no-unused-expressions
+        tr.offsetHeight;
         if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
     }
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
 }
 
-// 双击行高拖手柄：按当前列宽下的内容自适应行高（与 Excel 一致，幂等）。
-// 思路与 autoFitColumn 类似：
+// 双击行高拖手柄：切换行高（与 Excel 一致）。
+//   - 第奇数次双击（当前为单行）：用离屏量尺测量真实内容高度 → 自适应展开
+//   - 第偶数次双击（当前已展开）：恢复默认单行高度
+// 测量思路与 autoFitColumn 类似：
 //   - 不能直接读 td.scrollHeight —— 在未启用 xs-tr-resized 时单元格是 nowrap+ellipsis，
 //     一行内容只有 ~20px 高，根本读不到"展开后"的真实高度。
 //   - 用离屏量尺：宽度固定为该列内容区宽度（列宽 - padding），
 //     white-space:pre-wrap + word-break:break-word，把内容塞进去后读 offsetHeight，
 //     即为该单元格"展开多行"后的真实渲染高度。
-//   - 取所有列的最大高度 + 单元格 padding，作为该行高度。
-//   - 若结果约等于默认单行高度，则视为单行内容，清空自定义高度回到默认（与 Excel 一致）。
 function resetRowHeight(e) {
     if (e.target && e.target.tagName === 'INPUT') return;
     var ct = e.currentTarget;
@@ -358,6 +404,35 @@ function resetRowHeight(e) {
     if (isNaN(ri)) return;
     if (typeof e.preventDefault === 'function') e.preventDefault();
     if (typeof e.stopPropagation === 'function') e.stopPropagation();
+
+    // 若当前已是展开状态 → 恢复默认单行高度（toggle 回单行）
+    if (S.rowHeights[ri] && S.rowHeights[ri] > 0 && tr.classList.contains('xs-tr-resized')) {
+        delete S.rowHeights[ri];
+        tr.style.height = '';
+        tr.classList.remove('xs-tr-resized');
+        // 清除拖动可能残留的内联样式（含 height）
+        var _clrWraps = tr.querySelectorAll('.xs-cell-wrap');
+        for (var _cw = 0; _cw < _clrWraps.length; _cw++) {
+            _clrWraps[_cw].style.whiteSpace = '';
+            _clrWraps[_cw].style.overflow = '';
+            _clrWraps[_cw].style.height = '';
+        }
+        var _clrTds = tr.querySelectorAll('td.xs-editable');
+        for (var _c = 0; _c < _clrTds.length; _c++) { _clrTds[_c].style.whiteSpace = ''; _clrTds[_c].style.overflow = ''; }
+        if (typeof _computeRowOffsets === 'function') {
+            try { _computeRowOffsets(); } catch (e4) { /* ignore */ }
+        }
+        if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
+        return;
+    }
+
+    // 自适应展开前，先清除拖动可能残留的 cell-wrap 内联样式
+    var _preClrWraps = tr.querySelectorAll('.xs-cell-wrap');
+    for (var _pw = 0; _pw < _preClrWraps.length; _pw++) {
+        _preClrWraps[_pw].style.whiteSpace = '';
+        _preClrWraps[_pw].style.overflow = '';
+        _preClrWraps[_pw].style.height = '';
+    }
 
     var headers = (S.data && S.data.headers) || [];
     if (headers.length === 0) {
@@ -409,12 +484,12 @@ function resetRowHeight(e) {
 
     // 行总高 = 最大内容高 + 单元格上下 padding+border
     var needH = Math.ceil(maxContentH) + CELL_PAD_V;
-    // 上下界：最小默认行高 26，最大 600
-    var DEFAULT_H = 26;
+    // 默认行高 ≈ 32px（font:13px × line-height:1.4 + padding:12 + border:2）
+    var DEFAULT_H = 32;
     var finalH = Math.max(DEFAULT_H, Math.min(600, needH));
 
-    // 若结果约等于默认行高（差异 ≤ 2px），视为单行内容，回归默认（不写自定义高度）
-    if (finalH - DEFAULT_H <= 2) {
+    // 若结果接近默认行高（差异 ≤ 3px），视为单行内容，回归默认（不写自定义高度）
+    if (finalH - DEFAULT_H <= 3) {
         delete S.rowHeights[ri];
         tr.style.height = '';
         tr.classList.remove('xs-tr-resized');

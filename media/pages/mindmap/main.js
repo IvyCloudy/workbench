@@ -526,6 +526,8 @@ function showResizeHandle(g, id) {
             renderMarkmap({ keepView: true });
             setStatus('已重置该节点宽度');
         }
+    });
+
     // 拖拽
     handle.addEventListener('mousedown', (e) => {
         e.preventDefault(); e.stopPropagation();

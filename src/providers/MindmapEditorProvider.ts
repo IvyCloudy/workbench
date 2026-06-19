@@ -32,6 +32,38 @@ import { buildXmindFile } from '../utils/xmindExporter';
 import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
 import { stackHead } from '../services/utils';
 
+/**
+ * 富元素（图片/附件）资源目录约定：
+ *   <md 所在目录>/attachments/<md 文件 basename(无扩展)>/
+ * 复制本地文件到此目录后，md 中以相对路径引用：
+ *   ![](attachments/<basename>/xxx.png)   图片
+ *   [📎 file.pdf](attachments/<basename>/file.pdf)  附件
+ */
+function getAttachmentsDir(docPath: string): string {
+    const dir = path.dirname(docPath);
+    const baseNoExt = path.basename(docPath, path.extname(docPath));
+    return path.join(dir, 'attachments', baseNoExt);
+}
+async function ensureDir(dir: string): Promise<void> {
+    try { await fs.promises.mkdir(dir, { recursive: true }); } catch (_) { /* ignore */ }
+}
+/** 在目标目录中产生一个不冲突的文件名（同名追加 -1 / -2 ...） */
+async function uniqueDestPath(targetDir: string, fileName: string): Promise<string> {
+    const ext = path.extname(fileName);
+    const stem = path.basename(fileName, ext);
+    let candidate = path.join(targetDir, fileName);
+    let i = 1;
+    while (true) {
+        try {
+            await fs.promises.access(candidate, fs.constants.F_OK);
+            candidate = path.join(targetDir, `${stem}-${i}${ext}`);
+            i++;
+        } catch (_) {
+            return candidate;
+        }
+    }
+}
+
 export const MINDMAP_EDITOR_VIEWTYPE = 'testcaseViewer.mindmapEditor';
 
 /**
@@ -88,6 +120,18 @@ export class MindmapEditorProvider implements vscode.CustomTextEditorProvider {
         let lastPushedText = '';
         // webview 写入时间戳：用于在保存（onDidSave）后避免被外部 fsWatcher 误触发再 push
         let suppressUntil = 0;
+
+        // 把本地绝对路径转换为 webview 可访问的 URI（图片显示需要）
+        const docDir = path.dirname(filePath);
+        const toWebUri = (relOrAbs: string): string => {
+            try {
+                if (!relOrAbs) return '';
+                // 网络/data URI：直接放行
+                if (/^(https?:|data:|file:)/i.test(relOrAbs)) return relOrAbs;
+                const abs = path.isAbsolute(relOrAbs) ? relOrAbs : path.join(docDir, relOrAbs);
+                return webviewPanel.webview.asWebviewUri(vscode.Uri.file(abs)).toString();
+            } catch (_) { return ''; }
+        };
 
         // ============ 把当前文档同步到 webview ============
         const pushToWebview = (reason: string) => {
@@ -167,6 +211,88 @@ export class MindmapEditorProvider implements vscode.CustomTextEditorProvider {
 
                 case 'openWithText': {
                     await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
+                    return;
+                }
+
+                // ---- 富元素：把相对路径解析为 webview 可访问 URI（用于 <img src>） ----
+                case 'resolveAsset': {
+                    const items = Array.isArray(msg.items) ? msg.items : [];
+                    const out = items.map((rel: string) => ({ rel, uri: toWebUri(rel) }));
+                    webviewPanel.webview.postMessage({
+                        type: 'resolveAssetResult',
+                        requestId: msg.requestId,
+                        items: out,
+                    });
+                    return;
+                }
+
+                // ---- 富元素：打开链接（http/https）或本地文件（附件） ----
+                case 'openExternal': {
+                    const target = String(msg.target || '');
+                    if (!target) return;
+                    try {
+                        if (/^https?:/i.test(target)) {
+                            await vscode.env.openExternal(vscode.Uri.parse(target));
+                        } else {
+                            // 本地附件：相对/绝对路径
+                            const abs = path.isAbsolute(target) ? target : path.join(docDir, target);
+                            await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(abs));
+                        }
+                    } catch (err: any) {
+                        vscode.window.showWarningMessage(`无法打开：${target}（${err?.message || err}）`);
+                    }
+                    return;
+                }
+
+                // ---- 富元素：用户点选本地文件，复制到 attachments 目录，返回 md 中应使用的相对路径 ----
+                case 'pickFile': {
+                    const kind = msg.kind === 'image' ? 'image' : 'attachment'; // 'image' | 'attachment'
+                    const filters: { [k: string]: string[] } = kind === 'image'
+                        ? { '图片': ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'] }
+                        : { '所有文件': ['*'] };
+                    const picked = await vscode.window.showOpenDialog({
+                        canSelectFiles: true,
+                        canSelectMany: false,
+                        canSelectFolders: false,
+                        openLabel: kind === 'image' ? '选择图片' : '选择附件',
+                        filters,
+                    });
+                    if (!picked || picked.length === 0) {
+                        webviewPanel.webview.postMessage({
+                            type: 'pickFileResult',
+                            requestId: msg.requestId,
+                            canceled: true,
+                        });
+                        return;
+                    }
+                    const srcPath = picked[0].fsPath;
+                    const attachDir = getAttachmentsDir(filePath);
+                    await ensureDir(attachDir);
+                    const destPath = await uniqueDestPath(attachDir, path.basename(srcPath));
+                    try {
+                        await fs.promises.copyFile(srcPath, destPath);
+                    } catch (err: any) {
+                        webviewPanel.webview.postMessage({
+                            type: 'pickFileResult',
+                            requestId: msg.requestId,
+                            ok: false,
+                            message: err?.message || String(err),
+                        });
+                        return;
+                    }
+                    // md 中应使用的相对路径（相对 md 所在目录），始终用 / 分隔，便于跨平台
+                    const relPath = path.relative(docDir, destPath).split(path.sep).join('/');
+                    const webUri = webviewPanel.webview.asWebviewUri(vscode.Uri.file(destPath)).toString();
+                    webviewPanel.webview.postMessage({
+                        type: 'pickFileResult',
+                        requestId: msg.requestId,
+                        ok: true,
+                        kind,
+                        rel: relPath,
+                        name: path.basename(destPath),
+                        webUri,
+                    });
+                    sendTelemetryEvent('mindmap.pickFile', { kind });
                     return;
                 }
             }

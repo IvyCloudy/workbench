@@ -106,3 +106,25 @@ describe('markdownMindmap 双向往返一致性', () => {
         expect(strip(tree2)).toEqual(strip(tree1));
     });
 });
+
+describe('markdownMindmap 富元素（图标/链接/图片/附件）', () => {
+    it('节点 title 中可保留 emoji 与 inline markdown 原文', () => {
+        const src = '# 🚀 项目\n## ✅ 模块A [文档](https://example.com)\n- 用例 [📎 spec.pdf](attachments/project/spec.pdf)\n- 截图 ![alt](attachments/project/x.png)\n';
+        const root = parseMarkdown(src);
+        expect(root.title).toBe('🚀 项目');
+        expect(root.children[0].title).toBe('✅ 模块A [文档](https://example.com)');
+        const leaves = root.children[0].children;
+        expect(leaves[0].title).toBe('用例 [📎 spec.pdf](attachments/project/spec.pdf)');
+        expect(leaves[1].title).toBe('截图 ![alt](attachments/project/x.png)');
+    });
+
+    it('富元素往返序列化稳定', () => {
+        const src = '# 🚀 项目\n\n## ✅ 模块A [文档](https://example.com)\n\n- 用例 [📎 spec.pdf](attachments/project/spec.pdf)\n- 截图 ![alt](attachments/project/x.png)\n';
+        const t1 = parseMarkdown(src);
+        const md1 = toMarkdown(t1);
+        const t2 = parseMarkdown(md1);
+        const md2 = toMarkdown(t2);
+        expect(md2).toBe(md1);
+        expect(strip(t2)).toEqual(strip(t1));
+    });
+});

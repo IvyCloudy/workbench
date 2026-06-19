@@ -152,7 +152,9 @@ function isAncestor(ancestor, candidateId) {
 /** 业务树 → markmap IPureNode（content 是 HTML 字符串，必须转义） */
 function toPureNode(node) {
     return {
-        content: escapeHtml(node.title || ''),
+        // 富元素渲染：把 title 中的 emoji / [文本](url) / ![alt](path) / [📎 文件名](path)
+        // 子集 markdown 转换成安全的 HTML（其它字符仍走 escapeHtml）
+        content: renderInlineRich(node.title || '', node.id),
         payload: {
             mmId: node.id,
             kind: node.kind || 'heading',
@@ -168,6 +170,86 @@ function escapeHtml(s) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+function escapeAttr(s) { return escapeHtml(s); }
+
+// ============ 富元素渲染（inline markdown 子集 → HTML） ============
+// 支持：
+//   ![alt](path)        → 图片（渲染在节点正文下方独立 div 中）
+//   [📎 xxx](path)      → 附件（chip）
+//   [文本](url)         → 普通链接
+//   emoji 字符直接保留
+// 路径相对于 md 文件目录；扩展端会异步把相对路径解析为 webview URI（resolveAsset）。
+const assetUriCache = new Map();          // rel → webview uri
+const pendingAssetReqs = new Map();       // requestId → resolve(items)
+let assetReqSeq = 0;
+function requestResolveAssets(rels) {
+    if (!rels || rels.length === 0) return;
+    const need = rels.filter(r => r && !assetUriCache.has(r));
+    if (need.length === 0) return;
+    const requestId = 'r' + (++assetReqSeq);
+    vscode.postMessage({ type: 'resolveAsset', requestId, items: need });
+}
+function isAbsoluteOrRemote(p) {
+    return /^(https?:|data:|file:|\/|[a-zA-Z]:[\\/])/.test(p);
+}
+/**
+ * 把 title（含 inline md 子集）转为 HTML 字符串。
+ * 步骤：先扫一遍把图片提取出来（独立 wrap 渲染），剩余部分按 [..](..) / 转义。
+ */
+function renderInlineRich(title, mmId) {
+    const text = String(title || '');
+    if (!text) return '';
+    // 1) 抽取图片：![alt](path)
+    const imgs = [];
+    const textNoImg = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
+        imgs.push({ alt: alt.trim(), src: src.trim() });
+        return ''; // 占位移除（图片单独渲染到下方）
+    }).trim();
+
+    // 2) 处理剩余 inline 文本：链接 + 附件 + 转义
+    let inlineHtml = '';
+    let i = 0;
+    const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g;
+    let m;
+    while ((m = linkRe.exec(textNoImg))) {
+        const before = textNoImg.slice(i, m.index);
+        if (before) inlineHtml += escapeHtml(before);
+        const label = m[1];
+        const url = m[2].trim();
+        // 判断是否附件：label 以 📎 开头 视为附件 chip
+        if (/^\s*📎/.test(label)) {
+            inlineHtml += `<span class="mm-attach" data-mm-href="${escapeAttr(url)}" title="${escapeAttr(url)}">${escapeHtml(label)}</span>`;
+        } else {
+            inlineHtml += `<a class="mm-link" href="#" data-mm-href="${escapeAttr(url)}" title="${escapeAttr(url)}">${escapeHtml(label)}</a>`;
+        }
+        i = m.index + m[0].length;
+    }
+    if (i < textNoImg.length) inlineHtml += escapeHtml(textNoImg.slice(i));
+
+    // 3) 拼接图片块
+    let imgsHtml = '';
+    if (imgs.length) {
+        const needResolve = [];
+        const parts = imgs.map(({ alt, src }) => {
+            let realSrc;
+            if (isAbsoluteOrRemote(src)) {
+                realSrc = src;
+            } else if (assetUriCache.has(src)) {
+                realSrc = assetUriCache.get(src);
+            } else {
+                needResolve.push(src);
+                realSrc = ''; // 先空着，resolveAssetResult 后再次重渲
+            }
+            return `<img class="mm-img" src="${escapeAttr(realSrc)}" alt="${escapeAttr(alt)}" data-mm-rel="${escapeAttr(src)}" />`;
+        }).join('');
+        if (needResolve.length) requestResolveAssets(needResolve);
+        imgsHtml = `<span class="mm-img-wrap">${parts}</span>`;
+    }
+
+    // 内容为空（仅图片）兜底：避免节点完全空导致测量异常
+    if (!inlineHtml && !imgsHtml) return '';
+    return inlineHtml + imgsHtml;
 }
 
 /** 把节点树发回扩展端（扩展端会序列化为 md 并 applyEdit） */
@@ -325,10 +407,27 @@ function bindNodeInteractions() {
         const fo = g.querySelector('foreignObject');
         const inner = fo ? fo.firstElementChild : null;
         if (inner) {
-            // 单击选中
+        // 单击选中；但如果点中的是链接/附件/图片 → 走富元素交互
             inner.onclick = (e) => {
                 e.stopPropagation();
                 if (isEditingNode) return;
+                const t = e.target;
+                if (t && t.nodeType === 1) {
+                    // 点击链接或附件 chip：调用扩展端打开
+                    const linkEl = t.closest('a.mm-link, span.mm-attach');
+                    if (linkEl) {
+                        e.preventDefault();
+                        const href = linkEl.getAttribute('data-mm-href');
+                        if (href) vscode.postMessage({ type: 'openExternal', target: href });
+                        return;
+                    }
+                    // 点击图片：放大预览
+                    if (t.tagName === 'IMG' && t.classList.contains('mm-img')) {
+                        e.preventDefault();
+                        showLightbox(t.getAttribute('src') || '');
+                        return;
+                    }
+                }
                 selectNode(mmId);
                 hideContextMenu();
             };
@@ -349,6 +448,14 @@ function bindNodeInteractions() {
             inner.draggable = true;
             inner.ondragstart = (e) => {
                 if (isEditingNode) { e.preventDefault(); return; }
+                // 如果拖拽起点是富元素（链接/附件/图片） → 不走节点拖拽
+                const t = e.target;
+                if (t && t.nodeType === 1) {
+                    if (t.closest && t.closest('a.mm-link, span.mm-attach, img.mm-img')) {
+                        e.preventDefault();
+                        return;
+                    }
+                }
                 dragSourceId = mmId;
                 e.dataTransfer.effectAllowed = 'move';
                 try { e.dataTransfer.setData('text/plain', mmId); } catch (_) {}
@@ -625,6 +732,11 @@ function showActionsOverlay(g, id) {
     overlay.appendChild(mkAct('+', '添加子节点 (Tab)', () => addChild(id)));
     if (!isRoot) overlay.appendChild(mkAct('↳', '添加同级 (Enter)', () => addSibling(id)));
     overlay.appendChild(mkAct('✎', '重命名 (F2)', () => startEdit(id)));
+    // 富元素插入入口
+    overlay.appendChild(mkAct('😀', '插入图标', () => insertEmoji(id)));
+    overlay.appendChild(mkAct('🔗', '插入链接', () => insertLink(id)));
+    overlay.appendChild(mkAct('🖼️', '插入图片', () => insertImage(id)));
+    overlay.appendChild(mkAct('📎', '插入附件', () => insertAttachment(id)));
     if (!isRoot) overlay.appendChild(mkAct('✕', '删除 (Del)', () => deleteNode(id), true));
 
     canvas.appendChild(overlay);
@@ -850,6 +962,11 @@ function showContextMenu(x, y, nodeId) {
         { label: '添加同级节点', shortcut: 'Enter', disabled: isRoot, action: () => addSibling(nodeId) },
         { label: '重命名', shortcut: 'F2', action: () => startEdit(nodeId) },
         { sep: true },
+        { label: '😀 插入图标', action: () => insertEmoji(nodeId) },
+        { label: '🔗 插入链接', action: () => insertLink(nodeId) },
+        { label: '🖼️ 插入图片', action: () => insertImage(nodeId) },
+        { label: '📎 插入附件', action: () => insertAttachment(nodeId) },
+        { sep: true },
         { label: '重置节点宽度', disabled: nodeWidthOverrides[nodeId] === undefined, action: () => resetNodeWidth(nodeId) },
         { sep: true },
         { label: '删除节点', shortcut: 'Del', disabled: isRoot, danger: true, action: () => deleteNode(nodeId) },
@@ -947,6 +1064,20 @@ window.addEventListener('message', (event) => {
             setStatus('解析失败');
             break;
         }
+        case 'resolveAssetResult': {
+            // 收到后入库，重渲一次（使之前空 src 的 <img> 加载出来）
+            const items = Array.isArray(msg.items) ? msg.items : [];
+            let any = false;
+            for (const it of items) {
+                if (it && it.rel && it.uri) { assetUriCache.set(it.rel, it.uri); any = true; }
+            }
+            if (any) renderMarkmap({ keepView: true });
+            break;
+        }
+        case 'pickFileResult': {
+            handlePickFileResult(msg);
+            break;
+        }
         case 'exportXmindResult': {
             if (msg.ok) setStatus(`已导出：${msg.fsPath}`);
             else if (msg.canceled) setStatus('已取消导出');
@@ -959,3 +1090,273 @@ window.addEventListener('message', (event) => {
 // ============ 启动 ============
 vscode.postMessage({ type: 'ready' });
 console.log('[Mindmap] webview 启动（markmap-view 渲染）');
+
+// ============================================================================
+// 富元素插入：图标 / 链接 / 图片 / 附件
+// 设计原则：
+//   - 节点 title 直接保留 md 原文（含 emoji、[txt](url)、![alt](path)、[📎 file](path)）
+//   - 渲染层 renderInlineRich() 把 md 子集 → HTML
+//   - 插入操作 = 在 title 末尾追加一段 md 片段，然后 pushUpdate() 写回 .md 文件
+// ============================================================================
+
+/** 通用：往节点 title 追加一段 md 片段（自动加空格分隔） */
+function appendToTitle(nodeId, fragment) {
+    const r = findNode(treeRoot, nodeId);
+    if (!r) return;
+    const cur = (r.node.title || '').trim();
+    r.node.title = cur ? `${cur} ${fragment}` : fragment;
+    renderMarkmap({ keepView: true });
+    pushUpdate();
+}
+
+// ---- 图标（Emoji Picker） ----
+const EMOJI_LIB = [
+    { cat: '常用', list: ['⭐','✅','❌','❓','❗','💡','🔥','⚡','🚀','🎯','📌','📝','🔖','🏷️','🔍','📊','📈','📉','💯','✨','⏰','⏳','🕐','📅','📆','🗓️'] },
+    { cat: '状态', list: ['🟢','🟡','🔴','🔵','🟣','🟠','⚪','⚫','✔️','✖️','⚠️','🚫','🆗','🆕','🆓','🔄','🔁','⏸️','▶️','⏹️','🟩','🟨','🟥'] },
+    { cat: '人物', list: ['👤','👥','👨‍💻','👩‍💻','🧑‍🔬','👷','🧑‍🎓','🧑‍💼','🧑‍🏫','🧑‍⚕️','👶','👧','👦'] },
+    { cat: '物品', list: ['💻','📱','🖥️','⌨️','🖱️','💾','💿','📀','📷','🎥','📹','🎤','🎧','📞','☎️','📠','📺','📻','🔋','🔌','💡','🔦','🛠️','🔧','🔨','⚙️','🧰'] },
+    { cat: '符号', list: ['➡️','⬅️','⬆️','⬇️','↗️','↘️','↙️','↖️','🔃','🔄','🔼','🔽','▶️','◀️','🔺','🔻','♦️','♠️','♣️','♥️','✚','➕','➖','✖️','➗','═','║','╠','╣'] },
+    { cat: '表情', list: ['😀','😃','😄','😁','😆','😅','😂','🤣','😊','🙂','🙃','😉','😍','🥰','😘','🤔','🤨','😐','😑','😶','🙄','😏','😣','😥','😮','🤐','😯','😪','😴'] },
+];
+let emojiPanelTargetId = null;
+function openEmojiPanel(nodeId, anchorEl) {
+    emojiPanelTargetId = nodeId;
+    const panel = $('mmEmojiPanel');
+    const grid = $('mmEmojiGrid');
+    grid.innerHTML = '';
+    const search = ($('mmEmojiSearch').value || '').trim().toLowerCase();
+    EMOJI_LIB.forEach(group => {
+        const list = search
+            ? group.list // emoji 本身没有名字，简单用类别匹配
+            : group.list;
+        if (search && !group.cat.toLowerCase().includes(search) && !list.some(e => e.includes(search))) return;
+        const cat = document.createElement('div');
+        cat.className = 'mm-em-cat';
+        cat.textContent = group.cat;
+        grid.appendChild(cat);
+        list.forEach(em => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = em;
+            b.title = em;
+            b.addEventListener('click', (e) => {
+                e.preventDefault(); e.stopPropagation();
+                if (emojiPanelTargetId) appendToTitle(emojiPanelTargetId, em);
+                closeEmojiPanel();
+            });
+            grid.appendChild(b);
+        });
+    });
+    // 定位
+    panel.classList.remove('hidden');
+    const a = (anchorEl || document.body).getBoundingClientRect();
+    const c = canvas.getBoundingClientRect();
+    let left = (a.left || (c.width / 2 - 160)) - c.left;
+    let top  = ((a.bottom || c.height / 2) - c.top) + 4;
+    panel.style.left = Math.max(8, Math.min(c.width - 328, left)) + 'px';
+    panel.style.top  = Math.max(8, Math.min(c.height - 360, top)) + 'px';
+    setTimeout(() => $('mmEmojiSearch').focus(), 0);
+}
+function closeEmojiPanel() {
+    $('mmEmojiPanel').classList.add('hidden');
+    emojiPanelTargetId = null;
+}
+$('mmEmojiClose').addEventListener('click', closeEmojiPanel);
+$('mmEmojiSearch').addEventListener('input', () => {
+    if (emojiPanelTargetId) {
+        // 简单重渲（仅按类别名/字符匹配）
+        const id = emojiPanelTargetId;
+        const grid = $('mmEmojiGrid');
+        grid.innerHTML = '';
+        const q = $('mmEmojiSearch').value.trim().toLowerCase();
+        EMOJI_LIB.forEach(group => {
+            const filtered = q
+                ? (group.cat.toLowerCase().includes(q) ? group.list : group.list.filter(e => e.includes(q)))
+                : group.list;
+            if (filtered.length === 0) return;
+            const cat = document.createElement('div');
+            cat.className = 'mm-em-cat';
+            cat.textContent = group.cat;
+            grid.appendChild(cat);
+            filtered.forEach(em => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.textContent = em;
+                b.title = em;
+                b.addEventListener('click', (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    appendToTitle(id, em);
+                    closeEmojiPanel();
+                });
+                grid.appendChild(b);
+            });
+        });
+    }
+});
+function insertEmoji(nodeId) {
+    selectNode(nodeId);
+    // 把 picker 锚定在节点上
+    const g = svgEl.querySelector(`g.markmap-node[data-mmid="${cssEscape(nodeId)}"]`);
+    const fo = g ? g.querySelector('foreignObject') : null;
+    openEmojiPanel(nodeId, fo);
+}
+
+// ---- 链接 ----
+let linkPromptTargetId = null;
+function insertLink(nodeId) {
+    linkPromptTargetId = nodeId;
+    selectNode(nodeId);
+    $('mmLinkText').value = '';
+    $('mmLinkUrl').value = '';
+    $('mmLinkPrompt').classList.remove('hidden');
+    setTimeout(() => $('mmLinkUrl').focus(), 0);
+}
+function closeLinkPrompt() { $('mmLinkPrompt').classList.add('hidden'); linkPromptTargetId = null; }
+$('mmLinkCancel').addEventListener('click', closeLinkPrompt);
+$('mmLinkOk').addEventListener('click', () => {
+    if (!linkPromptTargetId) { closeLinkPrompt(); return; }
+    let url = $('mmLinkUrl').value.trim();
+    let label = $('mmLinkText').value.trim();
+    if (!url) { setStatus('请填写 URL'); return; }
+    // 自动补 https://
+    if (!/^(https?:|mailto:|ftp:|file:)/i.test(url) && !url.startsWith('/') && !/^[a-zA-Z]:/.test(url)) {
+        url = 'https://' + url;
+    }
+    if (!label) label = url;
+    appendToTitle(linkPromptTargetId, `[${label}](${url})`);
+    closeLinkPrompt();
+});
+$('mmLinkUrl').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); $('mmLinkOk').click(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeLinkPrompt(); }
+});
+$('mmLinkText').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); closeLinkPrompt(); }
+});
+
+// ---- 图片 ----
+let imagePromptTargetId = null;
+function insertImage(nodeId) {
+    imagePromptTargetId = nodeId;
+    selectNode(nodeId);
+    $('mmImageSource').value = 'local';
+    $('mmImageUrl').value = '';
+    $('mmImageAlt').value = '';
+    $('mmImageUrlRow').style.display = 'none';
+    $('mmImagePrompt').classList.remove('hidden');
+}
+function closeImagePrompt() { $('mmImagePrompt').classList.add('hidden'); imagePromptTargetId = null; }
+$('mmImageSource').addEventListener('change', () => {
+    $('mmImageUrlRow').style.display = ($('mmImageSource').value === 'url') ? '' : 'none';
+});
+$('mmImageCancel').addEventListener('click', closeImagePrompt);
+$('mmImageOk').addEventListener('click', () => {
+    if (!imagePromptTargetId) { closeImagePrompt(); return; }
+    const src = $('mmImageSource').value;
+    const alt = $('mmImageAlt').value.trim();
+    if (src === 'url') {
+        let u = $('mmImageUrl').value.trim();
+        if (!u) { setStatus('请填写图片 URL'); return; }
+        if (!/^(https?:|data:)/i.test(u)) u = 'https://' + u;
+        appendToTitle(imagePromptTargetId, `![${alt}](${u})`);
+        closeImagePrompt();
+    } else {
+        // 本地：发起 pickFile
+        const id = imagePromptTargetId;
+        pickFile('image', alt, id);
+        closeImagePrompt();
+    }
+});
+
+// ---- 附件 ----
+function insertAttachment(nodeId) {
+    selectNode(nodeId);
+    pickFile('attachment', '', nodeId);
+}
+
+// ---- 通用文件选择（异步） ----
+const pickFileReqs = new Map(); // requestId → { kind, alt, nodeId }
+let pickReqSeq = 0;
+function pickFile(kind, alt, nodeId) {
+    const requestId = 'p' + (++pickReqSeq);
+    pickFileReqs.set(requestId, { kind, alt: alt || '', nodeId });
+    setStatus(kind === 'image' ? '正在选择图片…' : '正在选择附件…');
+    vscode.postMessage({ type: 'pickFile', kind, requestId });
+}
+function handlePickFileResult(msg) {
+    const ctx = pickFileReqs.get(msg.requestId);
+    pickFileReqs.delete(msg.requestId);
+    if (!ctx) return;
+    if (msg.canceled) { setStatus('已取消'); return; }
+    if (!msg.ok) { setStatus(`失败：${msg.message || ''}`); return; }
+    // 缓存 webview URI（图片立刻能渲染，无需二次 resolveAsset）
+    if (msg.rel && msg.webUri) assetUriCache.set(msg.rel, msg.webUri);
+    if (ctx.kind === 'image') {
+        appendToTitle(ctx.nodeId, `![${ctx.alt}](${msg.rel})`);
+    } else {
+        // 附件：用 📎 + 文件名 作为 label，url 是相对路径
+        appendToTitle(ctx.nodeId, `[📎 ${msg.name}](${msg.rel})`);
+    }
+    setStatus(ctx.kind === 'image' ? `已插入图片：${msg.name}` : `已插入附件：${msg.name}`);
+}
+
+// ---- 工具栏「插入」下拉菜单 ----
+const insertMenuEl = $('mmInsertMenu');
+function openInsertMenu() {
+    if (!selectedId) { setStatus('请先选中一个节点'); return; }
+    const btn = $('btnInsert');
+    const r = btn.getBoundingClientRect();
+    insertMenuEl.style.left = (r.left) + 'px';
+    insertMenuEl.style.top  = (r.bottom + 4) + 'px';
+    insertMenuEl.classList.remove('hidden');
+    setTimeout(() => document.addEventListener('mousedown', closeInsertMenuOnOutside, true), 0);
+}
+function closeInsertMenu() {
+    insertMenuEl.classList.add('hidden');
+    document.removeEventListener('mousedown', closeInsertMenuOnOutside, true);
+}
+function closeInsertMenuOnOutside(e) {
+    if (!insertMenuEl.contains(e.target) && e.target !== $('btnInsert')) closeInsertMenu();
+}
+$('btnInsert').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (insertMenuEl.classList.contains('hidden')) openInsertMenu();
+    else closeInsertMenu();
+});
+insertMenuEl.querySelectorAll('.mm-im-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const act = btn.dataset.act;
+        const id = selectedId;
+        closeInsertMenu();
+        if (!id) return;
+        if (act === 'emoji') insertEmoji(id);
+        else if (act === 'link') insertLink(id);
+        else if (act === 'image') insertImage(id);
+        else if (act === 'attachment') insertAttachment(id);
+    });
+});
+
+// ---- 图片 lightbox ----
+function showLightbox(src) {
+    if (!src) return;
+    const lb = $('mmLightbox');
+    $('mmLightboxImg').src = src;
+    lb.classList.remove('hidden');
+}
+function hideLightbox() {
+    $('mmLightbox').classList.add('hidden');
+    $('mmLightboxImg').src = '';
+}
+$('mmLightbox').addEventListener('click', (e) => {
+    if (e.target === $('mmLightbox') || e.target === $('mmLightboxImg')) hideLightbox();
+});
+$('mmLightboxClose').addEventListener('click', hideLightbox);
+
+// ESC 全局关闭浮层
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!$('mmLightbox').classList.contains('hidden')) { hideLightbox(); return; }
+    if (!$('mmEmojiPanel').classList.contains('hidden')) { closeEmojiPanel(); return; }
+    if (!$('mmLinkPrompt').classList.contains('hidden')) { closeLinkPrompt(); return; }
+    if (!$('mmImagePrompt').classList.contains('hidden')) { closeImagePrompt(); return; }
+});

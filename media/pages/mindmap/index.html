@@ -22,6 +22,7 @@
       <button class="mm-btn" id="btnCollapseAll" title="全部折叠">全折叠</button>
       <button class="mm-btn" id="btnFit" title="自适应缩放（按 0）">适应</button>
       <span class="mm-divider"></span>
+      <button class="mm-btn" id="btnInsert" title="为选中节点插入图标 / 链接 / 图片 / 附件">＋ 插入 ▾</button>
       <button class="mm-btn" id="btnStyle" title="调整节点样式：边框、内边距、圆角">🎨 样式</button>
       <button class="mm-btn" id="btnTheme" title="切换亮色/暗色主题">🌓 主题</button>
       <span class="mm-divider"></span>
@@ -75,6 +76,70 @@
     </div>
   </div>
   <div class="mm-statusbar" id="mmStatus">就绪</div>
+
+  <!-- 插入下拉菜单（隐藏） -->
+  <div class="mm-insert-menu hidden" id="mmInsertMenu" role="menu">
+    <button class="mm-im-item" data-act="emoji">😀<span>插入图标</span></button>
+    <button class="mm-im-item" data-act="link">🔗<span>插入链接</span></button>
+    <button class="mm-im-item" data-act="image">🖼️<span>插入图片</span></button>
+    <button class="mm-im-item" data-act="attachment">📎<span>插入附件</span></button>
+  </div>
+
+  <!-- Emoji 选择面板（隐藏） -->
+  <div class="mm-emoji-panel hidden" id="mmEmojiPanel" role="dialog" aria-label="选择图标">
+    <div class="mm-emoji-head">
+      <input type="text" id="mmEmojiSearch" placeholder="搜索 emoji（如 rocket / 火箭）" />
+      <button class="mm-btn" id="mmEmojiClose">关闭</button>
+    </div>
+    <div class="mm-emoji-grid" id="mmEmojiGrid"></div>
+  </div>
+
+  <!-- 链接输入对话框（隐藏） -->
+  <div class="mm-prompt hidden" id="mmLinkPrompt" role="dialog" aria-label="插入链接">
+    <div class="mm-prompt-title">插入链接</div>
+    <div class="mm-prompt-row">
+      <label>链接文本</label>
+      <input type="text" id="mmLinkText" placeholder="显示文本（可选，默认用 URL）" />
+    </div>
+    <div class="mm-prompt-row">
+      <label>URL</label>
+      <input type="text" id="mmLinkUrl" placeholder="https://..." />
+    </div>
+    <div class="mm-prompt-actions">
+      <button class="mm-btn" id="mmLinkCancel">取消</button>
+      <button class="mm-btn mm-btn-primary" id="mmLinkOk">确定</button>
+    </div>
+  </div>
+
+  <!-- 图片插入对话框（隐藏） -->
+  <div class="mm-prompt hidden" id="mmImagePrompt" role="dialog" aria-label="插入图片">
+    <div class="mm-prompt-title">插入图片</div>
+    <div class="mm-prompt-row">
+      <label>来源</label>
+      <select id="mmImageSource">
+        <option value="local">📁 选择本地文件</option>
+        <option value="url">🌐 网络 URL</option>
+      </select>
+    </div>
+    <div class="mm-prompt-row" id="mmImageUrlRow" style="display:none;">
+      <label>URL</label>
+      <input type="text" id="mmImageUrl" placeholder="https://example.com/x.png" />
+    </div>
+    <div class="mm-prompt-row">
+      <label>说明</label>
+      <input type="text" id="mmImageAlt" placeholder="alt 文本（可选）" />
+    </div>
+    <div class="mm-prompt-actions">
+      <button class="mm-btn" id="mmImageCancel">取消</button>
+      <button class="mm-btn mm-btn-primary" id="mmImageOk">确定</button>
+    </div>
+  </div>
+
+  <!-- 图片放大预览（隐藏） -->
+  <div class="mm-lightbox hidden" id="mmLightbox" role="dialog" aria-label="图片预览">
+    <img id="mmLightboxImg" alt="" />
+    <button class="mm-lightbox-close" id="mmLightboxClose" title="关闭（Esc）">✕</button>
+  </div>
 </div>
 <!-- markmap-view 离线 vendor（含 d3），挂载点 window.markmap -->
 <script nonce="${nonce}" src="${vendorScriptUri}"></script>

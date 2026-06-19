@@ -1,0 +1,533 @@
+/* ============================================================================
+ * 测试大纲思维导图 webview 样式
+ * ----------------------------------------------------------------------------
+ * 渲染层使用 markmap-view（SVG + 贝塞尔曲线 + d3-zoom），本文件只负责：
+ *  - 应用外壳：工具栏 / 画布 / 状态栏
+ *  - markmap SVG 节点的视觉细节（选中态、hover 操作按钮、节点高亮）
+ *  - 亮色 / 暗色 主题
+ *  - 右键菜单 / 状态栏
+ * ============================================================================ */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  background: var(--mm-bg);
+  color: var(--mm-fg);
+}
+
+/* ---------- 主题变量 ---------- */
+:root, body[data-theme="light"] {
+  --mm-bg: #fafbfc;
+  --mm-fg: #1f2328;
+  --mm-fg-muted: #57606a;
+  --mm-toolbar-bg: #ffffff;
+  --mm-toolbar-border: #e1e4e8;
+  --mm-btn-bg: #ffffff;
+  --mm-btn-fg: #24292f;
+  --mm-btn-border: #d0d7de;
+  --mm-btn-hover-bg: #f3f4f6;
+  --mm-btn-primary-bg: #2563eb;
+  --mm-btn-primary-fg: #ffffff;
+  --mm-btn-primary-hover: #1d4ed8;
+  --mm-statusbar-bg: #f6f8fa;
+  --mm-statusbar-fg: #57606a;
+  --mm-statusbar-border: #e1e4e8;
+  --mm-canvas-bg: #fafbfc;
+  --mm-node-text: #1f2328;
+  --mm-node-text-hover: #0969da;
+  --mm-node-selected-bg: rgba(37, 99, 235, 0.12);
+  --mm-node-selected-stroke: #2563eb;
+  --mm-link-stroke: #94a3b8;
+  --mm-action-bg: #ffffff;
+  --mm-action-border: #d0d7de;
+  --mm-action-fg: #24292f;
+  --mm-action-hover-bg: #2563eb;
+  --mm-action-hover-fg: #ffffff;
+  --mm-action-danger: #dc2626;
+  --mm-menu-bg: #ffffff;
+  --mm-menu-border: #d0d7de;
+  --mm-menu-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  --mm-menu-hover: #f3f4f6;
+  --mm-menu-danger: #dc2626;
+  --mm-empty-fg: #94a3b8;
+}
+
+body[data-theme="dark"] {
+  --mm-bg: #0d1117;
+  --mm-fg: #e6edf3;
+  --mm-fg-muted: #8b949e;
+  --mm-toolbar-bg: #161b22;
+  --mm-toolbar-border: #30363d;
+  --mm-btn-bg: #21262d;
+  --mm-btn-fg: #e6edf3;
+  --mm-btn-border: #30363d;
+  --mm-btn-hover-bg: #30363d;
+  --mm-btn-primary-bg: #2563eb;
+  --mm-btn-primary-fg: #ffffff;
+  --mm-btn-primary-hover: #1d4ed8;
+  --mm-statusbar-bg: #161b22;
+  --mm-statusbar-fg: #8b949e;
+  --mm-statusbar-border: #30363d;
+  --mm-canvas-bg: #0d1117;
+  --mm-node-text: #e6edf3;
+  --mm-node-text-hover: #58a6ff;
+  --mm-node-selected-bg: rgba(88, 166, 255, 0.18);
+  --mm-node-selected-stroke: #58a6ff;
+  --mm-link-stroke: #6e7681;
+  --mm-action-bg: #21262d;
+  --mm-action-border: #30363d;
+  --mm-action-fg: #e6edf3;
+  --mm-action-hover-bg: #2563eb;
+  --mm-action-hover-fg: #ffffff;
+  --mm-action-danger: #f85149;
+  --mm-menu-bg: #161b22;
+  --mm-menu-border: #30363d;
+  --mm-menu-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  --mm-menu-hover: #21262d;
+  --mm-menu-danger: #f85149;
+  --mm-empty-fg: #6e7681;
+}
+
+/* ---------- 应用外壳 ---------- */
+.mm-app {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--mm-bg);
+}
+
+/* ---------- 工具栏 ---------- */
+.mm-toolbar {
+  flex: none;
+  height: 44px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--mm-toolbar-bg);
+  border-bottom: 1px solid var(--mm-toolbar-border);
+  user-select: none;
+}
+.mm-tool-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+.mm-tool-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.mm-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--mm-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: none;
+}
+.mm-hint {
+  color: var(--mm-fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.mm-btn {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  background: var(--mm-btn-bg);
+  color: var(--mm-btn-fg);
+  border: 1px solid var(--mm-btn-border);
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+.mm-btn:hover {
+  background: var(--mm-btn-hover-bg);
+}
+.mm-btn-primary {
+  background: var(--mm-btn-primary-bg);
+  color: var(--mm-btn-primary-fg);
+  border-color: var(--mm-btn-primary-bg);
+}
+.mm-btn-primary:hover {
+  background: var(--mm-btn-primary-hover);
+  border-color: var(--mm-btn-primary-hover);
+}
+.mm-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--mm-toolbar-border);
+  margin: 0 4px;
+}
+
+/* ---------- 画布 ---------- */
+.mm-canvas {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: var(--mm-canvas-bg);
+}
+.mm-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+}
+.mm-svg:active { cursor: grabbing; }
+.mm-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mm-empty-fg);
+  font-size: 14px;
+  pointer-events: none;
+}
+.mm-empty.hidden { display: none; }
+
+/* ---------- markmap SVG 节点定制 ----------
+ * markmap-view 的 DOM 结构：
+ *   <svg>
+ *     <g class="markmap">
+ *       <g class="markmap-link"><path /></g>...     ← 父子之间的贝塞尔曲线
+ *       <g class="markmap-node" data-path="...">
+ *         <line class="markmap-line" />            ← 节点正下方的下划线
+ *         <circle class="markmap-circle" />        ← 折叠/展开按钮
+ *         <foreignObject><div>节点文本</div></foreignObject>
+ *       </g>...
+ *     </g>
+ *   </svg>
+ *
+ * 重要：markmap 通过 div.scrollWidth/scrollHeight 测量节点尺寸（含 padding，不含 border），
+ * 所以：
+ *   ✓ padding   → 被测量到 → 不会重叠（用它来留呼吸空间）
+ *   ✗ border    → 不被测量 → 会让相邻节点重叠（不要用 border）
+ *   ✓ box-shadow inset → 绘制在 padding 内部，不占空间，可作"边框"替代品
+ *   ✓ outline   → 不占空间，用于选中/编辑态的高亮
+ *
+ * 设计变量（可通过工具栏「🎨 样式」面板实时调节，存于 :root）：
+ *   --mm-node-pad-x / --mm-node-pad-y    节点内边距（被 markmap 测量）
+ *   --mm-node-border-w                   边框粗细（box-shadow inset 实现）
+ *   --mm-node-border-on                  0/1，是否显示边框
+ *   --mm-node-radius                     圆角
+ */
+
+/* 默认节点样式变量（亮色主题） */
+:root, body[data-theme="light"] {
+  --mm-node-pad-x: 10px;
+  --mm-node-pad-y: 4px;
+  --mm-node-border-w: 1.5px;
+  --mm-node-border-on: 1;          /* 1=显示边框，0=隐藏 */
+  --mm-node-radius: 6px;
+  --mm-node-bg: rgba(255,255,255,0.6);
+  --mm-node-max-width: 600px;
+}
+body[data-theme="dark"] {
+  --mm-node-bg: rgba(40,46,55,0.55);
+}
+
+/* 连线：仅控制 fill 与端点圆滑，stroke 由 markmap 动态计算 */
+.mm-svg .markmap-link { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+/* 节点下划线：仅微调端点，粗细由 lineWidth 选项动态返回（在 main.js 中按深度递减） */
+.mm-svg .markmap-node > line { stroke-linecap: round; }
+
+/* foreignObject 内的文本容器：markmap 自动给宽高，CSS 只设字体相关 */
+.mm-svg .markmap-foreign {
+  font-size: 14px;
+  line-height: 1.5;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* 节点本体样式 ——【重要】markmap DOM 结构与测量机制：
+ *   <foreignObject class="markmap-foreign">             ← markmap 设置 width = scrollWidth
+ *     <xhtml:div>                                       ← 外层 div：vendor 给 width: var(--markmap-max-width) (=600)
+ *       <xhtml:div>                                     ← 内层 div：markmap 在 _relayout 中测量 firstChild.firstChild.scrollWidth
+ *         节点 HTML 内容
+ *       </xhtml:div>
+ *     </xhtml:div>
+ *   </foreignObject>
+ * 关键：markmap 测量的是【内层 div 的 scrollWidth/scrollHeight】并据此分配 foreignObject 的 width。
+ * 所以 padding/border/background 必须加在【内层 div】，且内层 div 要 inline-block，
+ * 这样 scrollWidth = 文字真实宽 + padding，foreignObject 才能容纳完整节点而不裁切。
+ */
+/* 外层 div：覆盖 vendor 的固定宽 600px，改为内容自适应（避免 block 布局影响内层 scrollWidth）
+ * 注意：这里只用 max-content + max-width 是不够的——max-content 永远是"一行不折的宽"，
+ * 不会让长文本换行。真正的换行约束在【内层 div】上做（max-width + word-wrap）。 */
+.mm-svg .markmap-foreign > div {
+  width: max-content !important;
+  max-width: var(--mm-node-max-width);
+}
+/* 内层 div：实际承载节点视觉的元素（padding/border/bg/radius/max-width 都在这里）
+ * 关键约束：
+ *   1) inline-block + max-width=600px：短文本紧贴内容，长文本到 600px 即换行
+ *   2) word-wrap/overflow-wrap：保证超长无空格的中英文/URL 也能强制换行
+ *   3) markmap 测量内层 scrollWidth/Height ⇒ 换行后高度增大，foreignObject 高度自动跟随，节点框完整包住多行文字 */
+.mm-svg .markmap-foreign > div > div {
+  display: inline-block;
+  box-sizing: border-box;
+  max-width: var(--mm-node-max-width);
+  padding: var(--mm-node-pad-y) var(--mm-node-pad-x);
+  border-radius: var(--mm-node-radius);
+  background: var(--mm-node-bg);
+  /* 长文本自动换行（中文/英文/URL 都覆盖） */
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  white-space: normal;
+  /* box-shadow inset 模拟边框：粗细 = border-w * border-on（关闭时 = 0），不占空间 */
+  box-shadow: inset 0 0 0 calc(var(--mm-node-border-w) * var(--mm-node-border-on)) currentColor;
+  transition: box-shadow 0.12s, background-color 0.12s, transform 0.08s;
+}
+/* hover：抬升微阴影（作用在内层 div） */
+.mm-svg .markmap-foreign:hover > div > div {
+  filter: brightness(1.05);
+  transform: translateY(-0.5px);
+}
+
+/* 根节点（深度 0）：加粗、稍大字号 + 实心填充 —— 同样作用在内层 div */
+.mm-svg g.markmap-node[data-depth="0"] > foreignObject > div > div {
+  font-weight: 700;
+  font-size: 15px;
+  background: currentColor;
+  color: #fff !important;
+  box-shadow: inset 0 0 0 calc(var(--mm-node-border-w) * var(--mm-node-border-on)) currentColor;
+}
+/* 一级分支：略加粗 */
+.mm-svg g.markmap-node[data-depth="1"] > foreignObject > div > div {
+  font-weight: 600;
+}
+
+/* 选中态：在内层 div 上叠加蓝色 outline（不占空间） */
+.mm-svg .markmap-node.mm-selected > foreignObject > div > div {
+  outline: 2px solid var(--mm-node-selected-stroke);
+  outline-offset: 1px;
+}
+/* 拖拽目标 */
+.mm-svg .markmap-node.mm-drop-target > foreignObject > div > div {
+  outline: 2px dashed var(--mm-node-selected-stroke);
+  outline-offset: 1px;
+  background: var(--mm-node-selected-bg);
+}
+/* 编辑态 */
+.mm-svg .markmap-foreign[contenteditable="true"],
+.mm-svg .markmap-foreign > div[contenteditable="true"],
+.mm-svg .markmap-foreign > div > div[contenteditable="true"] {
+  cursor: text;
+  min-width: 60px;
+  background: var(--mm-toolbar-bg) !important;
+  color: var(--mm-node-text) !important;
+  outline: 2px solid var(--mm-node-selected-stroke);
+  outline-offset: 1px;
+}
+/* 折叠按钮 circle */
+.mm-svg circle.markmap-fold {
+  fill: var(--mm-toolbar-bg);
+  stroke-width: 1.6;
+  cursor: pointer;
+}
+.mm-svg circle.markmap-fold:hover {
+  fill: currentColor;
+}
+
+/* ---------- 节点宽度拖拽把手（选中节点右下角） ----------
+ * 设计：HTML 浮层（不在 SVG 内），绝对定位到选中节点 foreignObject 的右下角。
+ * 用屏幕像素拖动 → 换算到 SVG 用户坐标 → 写入该节点的 --mm-node-max-width 覆写值。
+ */
+.mm-resize-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: var(--mm-btn-primary-bg);
+  color: #fff;
+  cursor: ew-resize;
+  z-index: 49;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  user-select: none;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+  opacity: 0.85;
+  transition: opacity 0.12s, transform 0.08s;
+}
+.mm-resize-handle:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
+.mm-resize-handle.dragging {
+  opacity: 1;
+  transform: scale(1.15);
+}
+/* 拖拽时画布上覆盖一层，避免触发其它节点 hover/拖父子 */
+.mm-resize-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 48;
+  cursor: ew-resize;
+  background: transparent;
+}
+
+/* ---------- 节点悬浮操作按钮组（绝对定位浮层） ---------- */
+.mm-actions-overlay {
+  position: absolute;
+  display: flex;
+  gap: 4px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  background: var(--mm-action-bg);
+  border: 1px solid var(--mm-action-border);
+  box-shadow: var(--mm-menu-shadow);
+  z-index: 50;
+  pointer-events: auto;
+}
+.mm-actions-overlay .mm-act {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--mm-action-fg);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.12s, color 0.12s;
+}
+.mm-actions-overlay .mm-act:hover {
+  background: var(--mm-action-hover-bg);
+  color: var(--mm-action-hover-fg);
+}
+.mm-actions-overlay .mm-act.danger:hover {
+  background: var(--mm-action-danger);
+  color: #fff;
+}
+
+/* ---------- 状态栏 ---------- */
+.mm-statusbar {
+  flex: none;
+  height: 22px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--mm-statusbar-fg);
+  background: var(--mm-statusbar-bg);
+  border-top: 1px solid var(--mm-statusbar-border);
+}
+
+/* ---------- 右键菜单 ---------- */
+.mm-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  padding: 4px 0;
+  background: var(--mm-menu-bg);
+  border: 1px solid var(--mm-menu-border);
+  border-radius: 6px;
+  box-shadow: var(--mm-menu-shadow);
+  font-size: 13px;
+  user-select: none;
+}
+.mm-cm-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+  color: var(--mm-fg);
+}
+.mm-cm-item:hover {
+  background: var(--mm-menu-hover);
+}
+.mm-cm-item.disabled {
+  color: var(--mm-fg-muted);
+  cursor: not-allowed;
+}
+.mm-cm-item.disabled:hover { background: transparent; }
+.mm-cm-item.danger { color: var(--mm-menu-danger); }
+.mm-cm-shortcut {
+  color: var(--mm-fg-muted);
+  font-size: 11px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.mm-cm-sep {
+  height: 1px;
+  background: var(--mm-toolbar-border);
+  margin: 4px 0;
+}
+
+/* ---------- 节点样式调节面板 ---------- */
+.mm-style-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 100;
+  width: 280px;
+  padding: 12px 14px;
+  background: var(--mm-menu-bg);
+  border: 1px solid var(--mm-menu-border);
+  border-radius: 8px;
+  box-shadow: var(--mm-menu-shadow);
+  font-size: 12px;
+  color: var(--mm-fg);
+}
+.mm-style-panel.hidden { display: none; }
+.mm-style-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.mm-style-row:last-child { margin-bottom: 0; }
+.mm-style-label {
+  flex: 0 0 80px;
+  color: var(--mm-fg-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.mm-style-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--mm-btn-primary-bg);
+  cursor: pointer;
+}
+.mm-style-row input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--mm-btn-primary-bg);
+}
+.mm-style-val {
+  flex: 0 0 42px;
+  text-align: right;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--mm-fg);
+}
+.mm-style-actions {
+  justify-content: flex-end;
+  margin-top: 4px;
+}

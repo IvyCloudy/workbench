@@ -22,6 +22,9 @@ import { TableBrowserProvider } from './providers/TableBrowserProvider';
 import { TestCaseProvider } from './providers/TestCaseProvider';
 import { UnifiedEditorProvider, FileTypeChecker } from './providers/UnifiedEditorProvider';
 import { BaseEditorProvider } from './providers/BaseEditorProvider';
+import { MindmapEditorProvider, MINDMAP_EDITOR_VIEWTYPE, isOutlineMarkdownFile } from './providers/MindmapEditorProvider';
+import { parseMarkdown } from './utils/markdownMindmap';
+import { buildXmindFile } from './utils/xmindExporter';
 import { registerBindTaskFeatures } from './providers/BindTaskProvider';
 import { pushTestCase } from './services/http';
 import { applyTestCaseNos, createParser, detectFileType, ensureTrackingColumns, parseFileToRows } from './parsers';
@@ -719,6 +722,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const tableBrowserProvider = new TableBrowserProvider(context.extensionUri, context);
     const testCaseProvider = new TestCaseProvider(context.extensionUri, context);
     const unifiedEditorProvider = new UnifiedEditorProvider(context.extensionUri, context);
+    const mindmapEditorProvider = new MindmapEditorProvider(context);
 
     context.subscriptions.push(
         ...bindTaskDisposables,
@@ -732,6 +736,16 @@ export async function activate(context: vscode.ExtensionContext) {
             {
                 webviewOptions: { retainContextWhenHidden: true },
                 supportsMultipleEditorsPerDocument: true,
+            }
+        ),
+
+        // 测试大纲思维导图编辑器（CustomTextEditorProvider，仅限 测试大纲/**/*.md）
+        vscode.window.registerCustomEditorProvider(
+            MINDMAP_EDITOR_VIEWTYPE,
+            mindmapEditorProvider,
+            {
+                webviewOptions: { retainContextWhenHidden: true },
+                supportsMultipleEditorsPerDocument: false,
             }
         ),
 
@@ -832,6 +846,89 @@ export async function activate(context: vscode.ExtensionContext) {
                 } catch (err: any) {
             sendTelemetryErrorEvent('createNewTestCaseQuick.commandError', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                     vscode.window.showErrorMessage(`创建测试案例失败: ${err.message || err}`);
+                }
+            }
+        ),
+
+        // 测试大纲：用思维导图编辑器打开
+        vscode.commands.registerCommand(
+            'testcaseViewer.openMindmap',
+            async (uri?: vscode.Uri) => {
+                const target = uri || getActiveFileUri();
+                if (!target) {
+                    vscode.window.showInformationMessage('请先在资源管理器选中或打开 测试大纲 目录下的 .md 文件');
+                    return;
+                }
+                if (!isOutlineMarkdownFile(target.fsPath)) {
+                    vscode.window.showWarningMessage('仅支持「测试大纲」目录下的 .md 文件');
+                    return;
+                }
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.openMindmap' });
+                try {
+                    await vscode.commands.executeCommand('vscode.openWith', target, MINDMAP_EDITOR_VIEWTYPE);
+                } catch (err: any) {
+                    sendTelemetryErrorEvent('command.openMindmap.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                    vscode.window.showErrorMessage(`打开思维导图失败: ${err?.message || err}`);
+                }
+            }
+        ),
+
+        // 测试大纲：切换为 Markdown 文本编辑
+        vscode.commands.registerCommand(
+            'testcaseViewer.openMindmapAsText',
+            async (uri?: vscode.Uri) => {
+                const target = uri || getActiveFileUri();
+                if (!target) return;
+                if (!/\.md$/i.test(target.fsPath)) return;
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.openMindmapAsText' });
+                try {
+                    await vscode.commands.executeCommand('vscode.openWith', target, 'default');
+                } catch (err: any) {
+                    sendTelemetryErrorEvent('command.openMindmapAsText.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                }
+            }
+        ),
+
+        // 测试大纲：导出为 .xmind（资源管理器右键直接导出，不必先打开）
+        vscode.commands.registerCommand(
+            'testcaseViewer.exportMindmapToXmind',
+            async (uri?: vscode.Uri) => {
+                const target = uri || getActiveFileUri();
+                if (!target) {
+                    vscode.window.showInformationMessage('请选中 测试大纲 目录下的 .md 文件');
+                    return;
+                }
+                if (!isOutlineMarkdownFile(target.fsPath)) {
+                    vscode.window.showWarningMessage('仅支持「测试大纲」目录下的 .md 文件');
+                    return;
+                }
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.exportMindmapToXmind' });
+                try {
+                    const text = await fs.promises.readFile(target.fsPath, 'utf-8');
+                    const tree = parseMarkdown(text);
+                    const buf = buildXmindFile(
+                        tree,
+                        path.basename(target.fsPath, path.extname(target.fsPath)),
+                    );
+                    const defaultUri = vscode.Uri.file(
+                        path.join(
+                            path.dirname(target.fsPath),
+                            path.basename(target.fsPath, path.extname(target.fsPath)) + '.xmind',
+                        ),
+                    );
+                    const dest = await vscode.window.showSaveDialog({
+                        defaultUri,
+                        filters: { 'XMind 文件': ['xmind'] },
+                        saveLabel: '导出',
+                        title: '导出为 XMind',
+                    });
+                    if (!dest) return;
+                    await fs.promises.writeFile(dest.fsPath, Buffer.from(buf));
+                    vscode.window.showInformationMessage(`已导出：${path.basename(dest.fsPath)}`);
+                    sendTelemetryEvent('mindmap.exportXmind', { ok: 'true', from: 'explorer' });
+                } catch (err: any) {
+                    sendTelemetryErrorEvent('command.exportMindmap.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                    vscode.window.showErrorMessage(`导出 XMind 失败: ${err?.message || err}`);
                 }
             }
         ),

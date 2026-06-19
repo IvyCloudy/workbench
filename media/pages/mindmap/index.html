@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource} 'nonce-${nonce}';">
+<title>测试大纲 · 思维导图</title>
+<link rel="stylesheet" href="${styleUri}">
+</head>
+<body>
+<div class="mm-app">
+  <div class="mm-toolbar">
+    <div class="mm-tool-left">
+      <span class="mm-title">📌 <span id="mmFileName">point.md</span></span>
+      <span class="mm-hint" id="mmHint">提示：双击重命名 · Tab 加子节点 · Enter 加同级 · Delete 删除 · 右键查看完整菜单 · 滚轮缩放 · 拖动空白平移</span>
+    </div>
+    <div class="mm-tool-right">
+      <button class="mm-btn" id="btnAddRoot" title="在选中节点下添加子节点（Tab）">+ 子节点</button>
+      <button class="mm-btn" id="btnAddSibling" title="在选中节点之后添加同级节点（Enter）">+ 同级</button>
+      <button class="mm-btn" id="btnDelete" title="删除选中节点（Delete）">删除</button>
+      <button class="mm-btn" id="btnExpandAll" title="全部展开">全展开</button>
+      <button class="mm-btn" id="btnCollapseAll" title="全部折叠">全折叠</button>
+      <button class="mm-btn" id="btnFit" title="自适应缩放（按 0）">适应</button>
+      <span class="mm-divider"></span>
+      <button class="mm-btn" id="btnStyle" title="调整节点样式：边框、内边距、圆角">🎨 样式</button>
+      <button class="mm-btn" id="btnTheme" title="切换亮色/暗色主题">🌓 主题</button>
+      <span class="mm-divider"></span>
+      <button class="mm-btn mm-btn-primary" id="btnExportXmind">导出 .xmind</button>
+      <button class="mm-btn" id="btnOpenText" title="切换为 Markdown 文本编辑">用文本打开</button>
+    </div>
+  </div>
+  <div class="mm-canvas" id="mmCanvas">
+    <svg id="mmSvg" class="mm-svg"></svg>
+    <div class="mm-empty" id="mmEmpty">加载中…</div>
+    <!-- 样式调节面板（隐藏，点击「样式」按钮打开） -->
+    <div class="mm-style-panel hidden" id="mmStylePanel" role="dialog" aria-label="节点样式">
+      <div class="mm-style-row">
+        <label class="mm-style-label">
+          <input type="checkbox" id="mmCfgBorder" />
+          <span>显示边框</span>
+        </label>
+      </div>
+      <div class="mm-style-row">
+        <label class="mm-style-label" for="mmCfgBorderWidth">边框粗细</label>
+        <input type="range" id="mmCfgBorderWidth" min="1" max="4" step="0.5" value="1.5" />
+        <span class="mm-style-val" id="mmCfgBorderWidthVal">1.5px</span>
+      </div>
+      <div class="mm-style-row">
+        <label class="mm-style-label" for="mmCfgPaddingX">水平内边距</label>
+        <input type="range" id="mmCfgPaddingX" min="2" max="20" step="1" value="10" />
+        <span class="mm-style-val" id="mmCfgPaddingXVal">10px</span>
+      </div>
+      <div class="mm-style-row">
+        <label class="mm-style-label" for="mmCfgPaddingY">垂直内边距</label>
+        <input type="range" id="mmCfgPaddingY" min="0" max="12" step="1" value="4" />
+        <span class="mm-style-val" id="mmCfgPaddingYVal">4px</span>
+      </div>
+      <div class="mm-style-row">
+        <label class="mm-style-label" for="mmCfgRadius">圆角</label>
+        <input type="range" id="mmCfgRadius" min="0" max="20" step="1" value="6" />
+        <span class="mm-style-val" id="mmCfgRadiusVal">6px</span>
+      </div>
+      <div class="mm-style-row">
+        <label class="mm-style-label" for="mmCfgMaxWidth">最大宽度</label>
+        <input type="range" id="mmCfgMaxWidth" min="200" max="1000" step="20" value="600" />
+        <span class="mm-style-val" id="mmCfgMaxWidthVal">600px</span>
+      </div>
+      <div class="mm-style-row" style="font-size:11px;color:var(--mm-fg-muted);margin-top:-4px;">
+        <span style="flex:1">提示：选中节点后可拖右下角把手单独调整该节点宽度</span>
+      </div>
+      <div class="mm-style-row mm-style-actions">
+        <button class="mm-btn" id="mmCfgReset" title="恢复默认">恢复默认</button>
+        <button class="mm-btn mm-btn-primary" id="mmCfgClose">关闭</button>
+      </div>
+    </div>
+  </div>
+  <div class="mm-statusbar" id="mmStatus">就绪</div>
+</div>
+<!-- markmap-view 离线 vendor（含 d3），挂载点 window.markmap -->
+<script nonce="${nonce}" src="${vendorScriptUri}"></script>
+<script type="module" nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>

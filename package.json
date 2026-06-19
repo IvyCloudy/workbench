@@ -19,10 +19,28 @@
         "viewType": "testcaseViewer.unifiedEditor",
         "displayName": "测试案例编辑器",
         "selector": [
-          { "filenamePattern": "**/测试任务/*/测试案例/**/*.csv" },
-          { "filenamePattern": "**/测试任务/*/测试案例/**/*.yaml" },
-          { "filenamePattern": "**/测试任务/*/测试案例/**/*.yml" },
-          { "filenamePattern": "**/测试任务/*/测试案例/**/*.json" }
+          {
+            "filenamePattern": "**/测试任务/*/测试案例/**/*.csv"
+          },
+          {
+            "filenamePattern": "**/测试任务/*/测试案例/**/*.yaml"
+          },
+          {
+            "filenamePattern": "**/测试任务/*/测试案例/**/*.yml"
+          },
+          {
+            "filenamePattern": "**/测试任务/*/测试案例/**/*.json"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "testcaseViewer.mindmapEditor",
+        "displayName": "测试大纲思维导图",
+        "selector": [
+          {
+            "filenamePattern": "**/测试大纲/**/*.md"
+          }
         ],
         "priority": "default"
       }
@@ -61,6 +79,21 @@
         "title": "新增测试案例",
         "icon": "$(add)",
         "category": "测试案例"
+      },
+      {
+        "command": "testcaseViewer.openMindmap",
+        "title": "用思维导图打开",
+        "category": "测试大纲"
+      },
+      {
+        "command": "testcaseViewer.openMindmapAsText",
+        "title": "用 Text Editor 打开",
+        "category": "测试大纲"
+      },
+      {
+        "command": "testcaseViewer.exportMindmapToXmind",
+        "title": "导出为 .xmind",
+        "category": "测试大纲"
       }
     ],
     "menus": {
@@ -86,12 +119,34 @@
           "command": "testcaseViewer.createNewTestCase",
           "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例[\\/].+\\.(csv|yaml|yml|json)$/i && resourceExtname != ''",
           "group": "2_workspace@2"
+        },
+        {
+          "command": "testcaseViewer.openMindmap",
+          "when": "resourcePath =~ /测试大纲[\\/].+\\.md$/i",
+          "group": "2_workspace@3"
+        },
+        {
+          "command": "testcaseViewer.exportMindmapToXmind",
+          "when": "resourcePath =~ /测试大纲[\\/].+\\.md$/i",
+          "group": "2_workspace@4"
         }
       ],
       "commandPalette": [
         {
           "command": "testcaseViewer.createNewTestCaseQuick",
           "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例(?:[\\/]|$)/i"
+        },
+        {
+          "command": "testcaseViewer.openMindmap",
+          "when": "resourcePath =~ /测试大纲[\\/].+\\.md$/i"
+        },
+        {
+          "command": "testcaseViewer.openMindmapAsText",
+          "when": "resourcePath =~ /测试大纲[\\/].+\\.md$/i"
+        },
+        {
+          "command": "testcaseViewer.exportMindmapToXmind",
+          "when": "resourcePath =~ /测试大纲[\\/].+\\.md$/i"
         }
       ]
     },
@@ -143,16 +198,19 @@
             "createTime": "创建时间",
             "updateTime": "更新时间"
           },
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": {
+            "type": "string"
+          },
           "markdownDescription": "测试案例编辑器表头**中英映射**（仅用于显示，不会写入数据文件）。\n\n- key 为数据文件中的英文字段名，value 为中文显示名。\n- 优先级（高 → 低）：**工作区设置 > 用户设置 > 插件内置默认值**。\n- 同名 key 在高优先级中出现会覆盖低优先级；未配置的字段表头只显示英文 key。\n- 插件已内置常见字段（如 `testcase_id`、`path`、`priority`、`steps` 等），可直接覆盖或扩展。\n\n示例：\n```json\n{\n  \"testcase_id\": \"用例ID\",\n  \"path\": \"路径\"\n}\n```"
         }
       }
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run build:mindmap-vendor && npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "build:mindmap-vendor": "node scripts/build-mindmap-vendor.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -166,6 +224,9 @@
   "devDependencies": {
     "@types/node": "^20.19.41",
     "@types/vscode": "^1.84.0",
+    "d3": "^7.9.0",
+    "esbuild": "^0.24.2",
+    "markmap-view": "^0.18.12",
     "typescript": "^5.3.0",
     "vitest": "^2.1.9"
   }

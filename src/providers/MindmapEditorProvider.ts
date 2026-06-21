@@ -28,7 +28,13 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { getNonce, escapeHtml, buildErrorHtml } from '../services/utils';
 import { parseMarkdown, toMarkdown, type MindmapNode } from '../utils/markdownMindmap';
-import { buildXmindFile } from '../utils/xmindExporter';
+import {
+    buildXmindFile,
+    buildXmindFileRich,
+    type XMindRichNode,
+    type XMindRichTheme,
+    type XMindAttachmentResolver,
+} from '../utils/xmindExporter';
 import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
 import { stackHead } from '../services/utils';
 
@@ -88,9 +94,18 @@ export class MindmapEditorProvider implements vscode.CustomTextEditorProvider {
         const filePath = document.uri.fsPath;
 
         // 配置 webview
+        // localResourceRoots 必须同时包含扩展 media 目录与 md 文件相关目录，
+        // 否则 attachments/ 下的本地图片会被 webview 拒绝加载。
+        const docDirUri = vscode.Uri.file(path.dirname(filePath));
+        const workspaceRoots: vscode.Uri[] = (vscode.workspace.workspaceFolders || []).map(f => f.uri);
+        const resourceRoots: vscode.Uri[] = [
+            vscode.Uri.joinPath(this.context.extensionUri, 'media'),
+            docDirUri,
+            ...workspaceRoots,
+        ];
         webviewPanel.webview.options = {
             enableScripts: true,
-            localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
+            localResourceRoots: resourceRoots,
         };
 
         // 防御：非测试大纲 md 不应该走到这里（package.json 已限定），但保险起见兜底
@@ -142,6 +157,7 @@ export class MindmapEditorProvider implements vscode.CustomTextEditorProvider {
                 webviewPanel.webview.postMessage({
                     type: 'init',
                     fileName: path.basename(filePath),
+                    filePath,
                     tree,
                     reason,
                 });
@@ -205,7 +221,7 @@ export class MindmapEditorProvider implements vscode.CustomTextEditorProvider {
                 }
 
                 case 'exportXmind': {
-                    await this.handleExportXmind(document, webviewPanel);
+                    await this.handleExportXmind(document, webviewPanel, msg);
                     return;
                 }
 
@@ -231,12 +247,79 @@ export class MindmapEditorProvider implements vscode.CustomTextEditorProvider {
                     const target = String(msg.target || '');
                     if (!target) return;
                     try {
+                        // http(s) 外链：直接交给系统浏览器
                         if (/^https?:/i.test(target)) {
                             await vscode.env.openExternal(vscode.Uri.parse(target));
-                        } else {
-                            // 本地附件：相对/绝对路径
-                            const abs = path.isAbsolute(target) ? target : path.join(docDir, target);
-                            await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(abs));
+                            return;
+                        }
+
+                        // 本地附件：相对/绝对路径
+                        // 注意：md 中的相对路径常被 URL 编码（如空格 → %20），
+                        // 直接拼到磁盘路径会导致 fs 找不到文件。先尝试 decode，
+                        // 失败（非法编码）回退原串。
+                        let localTarget = target;
+                        try { localTarget = decodeURIComponent(target); } catch (_) { localTarget = target; }
+                        // 去除可能的 file:// 前缀（兼容某些情况下 mdimage parser 会保留协议）
+                        if (/^file:\/\//i.test(localTarget)) {
+                            try { localTarget = vscode.Uri.parse(localTarget).fsPath; } catch (_) {}
+                        }
+                        const abs = path.isAbsolute(localTarget) ? localTarget : path.join(docDir, localTarget);
+                        const fileUri = vscode.Uri.file(abs);
+
+                        // 1) 预检：文件不存在则给出明确提示，避免 macOS LaunchServices
+                        //    弹出"No application found to open URL"误导用户以为是应用问题。
+                        if (!fs.existsSync(abs)) {
+                            const pick = await vscode.window.showWarningMessage(
+                                `附件文件不存在：${abs}`,
+                                '在 Finder 中显示父目录',
+                            );
+                            if (pick) {
+                                const parent = path.dirname(abs);
+                                if (fs.existsSync(parent)) {
+                                    try {
+                                        await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(parent));
+                                    } catch (_) {}
+                                }
+                            }
+                            return;
+                        }
+
+                        // 2) 已知 VS Code 可直接渲染的文件类型 → 在右侧新列打开
+                        const ext = path.extname(abs).toLowerCase();
+                        const inEditorExts = new Set([
+                            '.txt', '.md', '.markdown', '.json', '.yaml', '.yml', '.xml', '.html', '.htm', '.css', '.js', '.ts', '.tsx', '.jsx',
+                            '.log', '.csv', '.tsv', '.ini', '.conf', '.toml', '.sh', '.bat', '.py', '.go', '.java', '.c', '.cpp', '.h', '.hpp',
+                            '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico', '.pdf',
+                        ]);
+                        if (inEditorExts.has(ext)) {
+                            await vscode.commands.executeCommand(
+                                'vscode.open',
+                                fileUri,
+                                { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
+                            );
+                            return;
+                        }
+
+                        // 3) 非 VS Code 可识别类型 → 交给操作系统默认应用
+                        //    vscode.env.openExternal 对 file:// 在不同平台支持不一，
+                        //    macOS 上某些扩展名找不到 default app 时会触发 "No application found"，
+                        //    所以这里先尝试 openExternal，失败立刻兜底 revealFileInOS。
+                        let opened = false;
+                        try {
+                            opened = await vscode.env.openExternal(fileUri);
+                        } catch (_) {
+                            opened = false;
+                        }
+                        if (!opened) {
+                            const pick = await vscode.window.showWarningMessage(
+                                `未找到能打开 ${path.basename(abs)} 的应用程序。`,
+                                '在 Finder 中显示',
+                            );
+                            if (pick) {
+                                try {
+                                    await vscode.commands.executeCommand('revealFileInOS', fileUri);
+                                } catch (_) {}
+                            }
                         }
                     } catch (err: any) {
                         vscode.window.showWarningMessage(`无法打开：${target}（${err?.message || err}）`);
@@ -295,6 +378,52 @@ export class MindmapEditorProvider implements vscode.CustomTextEditorProvider {
                     sendTelemetryEvent('mindmap.pickFile', { kind });
                     return;
                 }
+
+                // ---- 富元素：webview 直接把字节流（如压缩后的图片）发过来，
+                //      落盘到 attachments 目录，返回 md 中应使用的相对路径 ----
+                case 'saveAssetBytes': {
+                    try {
+                        const kind = msg.kind === 'image' ? 'image' : 'attachment';
+                        const base64: string = String(msg.base64 || '');
+                        const suggestedName: string = String(msg.name || 'image.bin');
+                        if (!base64) {
+                            webviewPanel.webview.postMessage({
+                                type: 'saveAssetBytesResult',
+                                requestId: msg.requestId,
+                                ok: false,
+                                message: 'empty bytes',
+                            });
+                            return;
+                        }
+                        const buf = Buffer.from(base64, 'base64');
+                        const attachDir = getAttachmentsDir(filePath);
+                        await ensureDir(attachDir);
+                        // 文件名安全化：仅保留 ASCII 字母/数字/._-，其余替换成 _
+                        const safeName = suggestedName.replace(/[^\w.\-]+/g, '_') || 'image.bin';
+                        const destPath = await uniqueDestPath(attachDir, safeName);
+                        await fs.promises.writeFile(destPath, buf);
+                        const relPath = path.relative(path.dirname(filePath), destPath).split(path.sep).join('/');
+                        const webUri = webviewPanel.webview.asWebviewUri(vscode.Uri.file(destPath)).toString();
+                        webviewPanel.webview.postMessage({
+                            type: 'saveAssetBytesResult',
+                            requestId: msg.requestId,
+                            ok: true,
+                            kind,
+                            rel: relPath,
+                            name: path.basename(destPath),
+                            webUri,
+                        });
+                        sendTelemetryEvent('mindmap.saveAssetBytes', { kind });
+                    } catch (err: any) {
+                        webviewPanel.webview.postMessage({
+                            type: 'saveAssetBytesResult',
+                            requestId: msg.requestId,
+                            ok: false,
+                            message: err?.message || String(err),
+                        });
+                    }
+                    return;
+                }
             }
         });
 
@@ -306,15 +435,69 @@ export class MindmapEditorProvider implements vscode.CustomTextEditorProvider {
 
     /**
      * 把当前文档另存为 .xmind 文件。
+     *
+     * 三级优先策略：
+     *   1) richTree + theme（webview 自己组装的富节点树 + 当前主题）→ 完整保留配色 / 形状 / 图片 / 链接
+     *   2) base64（旧路径：webview 用 simple-mind-map 自带导出器生成的字节）→ 兼容，但无主题
+     *   3) 回退：用文档 markdown 解析重建，仅含结构和文字
      */
     private async handleExportXmind(
         document: vscode.TextDocument,
         webviewPanel: vscode.WebviewPanel,
+        msg?: {
+            base64?: string;
+            name?: string;
+            richTree?: XMindRichNode;
+            theme?: XMindRichTheme;
+            layout?: string;
+        },
     ): Promise<void> {
         try {
-            const text = document.getText();
-            const tree = parseMarkdown(text);
-            const buf = buildXmindFile(tree, path.basename(document.uri.fsPath, path.extname(document.uri.fsPath)));
+            const sheetTitle = path.basename(
+                document.uri.fsPath,
+                path.extname(document.uri.fsPath),
+            );
+            let buf: Uint8Array;
+            if (msg && msg.richTree && typeof msg.richTree === 'object') {
+                // 附件解析器：把 md 中附件路径（相对 / 绝对）读为字节，
+                // 供 exporter 写入 .xmind 包内的 resources/，
+                // 达到 XMind 中点击附件以“理解为附件”而非外链打开的效果。
+                const docDir = path.dirname(document.uri.fsPath);
+                const attachmentResolver: XMindAttachmentResolver = {
+                    resolve: (ref: string) => {
+                        if (!ref || /^https?:/i.test(ref) || /^data:/i.test(ref)) return null;
+                        let r = ref;
+                        try { r = decodeURIComponent(r); } catch (_) { /* ignore */ }
+                        if (/^file:\/\//i.test(r)) {
+                            try { r = vscode.Uri.parse(r).fsPath; } catch (_) { /* ignore */ }
+                        }
+                        const abs = path.isAbsolute(r) ? r : path.join(docDir, r);
+                        try {
+                            if (!fs.existsSync(abs)) return null;
+                            const bytes = fs.readFileSync(abs);
+                            return {
+                                bytes: new Uint8Array(bytes),
+                                filename: path.basename(abs),
+                            };
+                        } catch (_) {
+                            return null;
+                        }
+                    },
+                };
+                buf = buildXmindFileRich(
+                    msg.richTree,
+                    msg.theme || {},
+                    sheetTitle,
+                    msg.layout,
+                    attachmentResolver,
+                );
+            } else if (msg && typeof msg.base64 === 'string' && msg.base64) {
+                buf = Buffer.from(msg.base64, 'base64');
+            } else {
+                const text = document.getText();
+                const tree = parseMarkdown(text);
+                buf = buildXmindFile(tree, sheetTitle);
+            }
 
             // 默认保存到同目录、同名 .xmind
             const defaultUri = vscode.Uri.file(
@@ -362,11 +545,20 @@ export class MindmapEditorProvider implements vscode.CustomTextEditorProvider {
         const scriptUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pages', 'mindmap', 'main.js'),
         ).toString();
-        const styleUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pages', 'mindmap', 'style.css'),
+        const styleLayoutUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pages', 'mindmap', 'styles', 'layout.css'),
+        ).toString();
+        const stylePanelsUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pages', 'mindmap', 'styles', 'panels.css'),
+        ).toString();
+        const stylePopupsUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pages', 'mindmap', 'styles', 'popups.css'),
         ).toString();
         const vendorScriptUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pages', 'mindmap', 'vendor', 'markmap.bundle.js'),
+            vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pages', 'mindmap', 'vendor', 'simple-mind-map.bundle.js'),
+        ).toString();
+        const vendorStyleUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pages', 'mindmap', 'vendor', 'simple-mind-map.bundle.css'),
         ).toString();
         const mediaBase = webview.asWebviewUri(
             vscode.Uri.joinPath(this.context.extensionUri, 'media'),
@@ -377,8 +569,11 @@ export class MindmapEditorProvider implements vscode.CustomTextEditorProvider {
         html = html
             .replace(/\$\{nonce\}/g, nonce)
             .replace(/\$\{scriptUri\}/g, scriptUri)
-            .replace(/\$\{styleUri\}/g, styleUri)
+            .replace(/\$\{styleLayoutUri\}/g, styleLayoutUri)
+            .replace(/\$\{stylePanelsUri\}/g, stylePanelsUri)
+            .replace(/\$\{stylePopupsUri\}/g, stylePopupsUri)
             .replace(/\$\{vendorScriptUri\}/g, vendorScriptUri)
+            .replace(/\$\{vendorStyleUri\}/g, vendorStyleUri)
             .replace(/\$\{mediaBase\}/g, mediaBase)
             .replace(/\$\{cspSource\}/g, cspSource);
         // 防御：忽略 escapeHtml 等未替换占位符

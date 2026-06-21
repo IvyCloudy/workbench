@@ -1,0 +1,492 @@
+/* ============================================================
+ * Add Pictures Modal（新版图片对话框，参考 ProcessOn 设计）
+ * ============================================================ */
+/* 居中 modal，左侧偏移 28px，给右侧 rail（约 56px 宽 + 14px 右距）留出空间，
+   确保即使在窄屏下也不会遮挡 rail 按钮。 */
+.mm-img-modal {
+    position: fixed;
+    top: 50%;
+    left: calc(50% - 36px);
+    transform: translate(-50%, -50%);
+    z-index: 9000;
+    width: 560px;
+    max-width: calc(100vw - 96px);
+    background: var(--mm-toolbar-bg);
+    color: var(--mm-fg);
+    border: 1px solid var(--mm-border);
+    border-radius: 10px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.45);
+    padding: 0;
+    overflow: hidden;
+}
+.mm-img-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px 10px;
+}
+.mm-img-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--mm-fg);
+}
+.mm-img-close {
+    background: transparent;
+    border: 0;
+    color: var(--mm-fg-muted);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    line-height: 1;
+}
+.mm-img-close:hover {
+    background: var(--mm-hover-bg, rgba(127,127,127,0.15));
+    color: var(--mm-fg);
+}
+
+/* Tabs */
+.mm-img-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--mm-border);
+    background: transparent;
+}
+.mm-img-tab {
+    background: transparent;
+    border: 0;
+    color: var(--mm-fg-muted);
+    font-size: 13px;
+    padding: 10px 16px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    font-weight: 500;
+}
+.mm-img-tab:hover {
+    color: var(--mm-fg);
+}
+.mm-img-tab.active {
+    color: var(--mm-fg);
+    font-weight: 600;
+    border-bottom-color: var(--mm-accent, #2f80ed);
+}
+
+/* Panels */
+.mm-img-panel {
+    padding: 18px;
+    /* 让不同 Tab 切换时弹窗整体高度保持一致（与 Local Drop 区匹配） */
+    min-height: 276px;
+    box-sizing: border-box;
+}
+.mm-img-panel.hidden {
+    display: none;
+}
+
+/* Web Image: 单行布局（输入框 + 蓝色 Insert Image 按钮） */
+.mm-img-web-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.mm-img-web-row input {
+    flex: 1;
+    box-sizing: border-box;
+    background: var(--mm-input-bg);
+    color: var(--mm-input-fg);
+    border: 1px solid var(--mm-input-border);
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-size: 13px;
+    height: 34px;
+}
+.mm-img-web-row input:focus {
+    outline: none;
+    border-color: var(--mm-accent, #2f80ed);
+}
+.mm-img-insert-btn {
+    flex: 0 0 auto;
+    height: 34px;
+    padding: 0 18px;
+    background: var(--mm-accent, #2f80ed);
+    color: #fff;
+    border: 0;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.mm-img-insert-btn:hover {
+    filter: brightness(1.08);
+}
+
+/* Local Image: Drop Zone */
+.mm-img-drop {
+    border: 1.5px dashed var(--mm-border);
+    border-radius: 6px;
+    padding: 36px 16px 28px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    min-height: 240px;
+    transition: border-color 0.15s, background 0.15s;
+    cursor: pointer;
+    text-align: center;
+}
+.mm-img-drop:hover,
+.mm-img-drop.dragover {
+    border-color: var(--mm-accent, #2f80ed);
+    background: var(--mm-accent-soft, rgba(47,128,237,0.06));
+}
+.mm-img-drop-cta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--mm-accent, #2f80ed);
+    font-size: 14px;
+    font-weight: 500;
+}
+.mm-img-plus {
+    font-size: 18px;
+    line-height: 1;
+}
+.mm-img-drop-hint {
+    color: var(--mm-fg-muted);
+    font-size: 12px;
+}
+.mm-img-upload-btn {
+    margin-top: 8px;
+    background: var(--mm-accent, #2f80ed);
+    color: #fff;
+    border: 0;
+    border-radius: 4px;
+    padding: 7px 18px;
+    font-size: 13px;
+    cursor: pointer;
+    font-weight: 500;
+}
+.mm-img-upload-btn:hover {
+    filter: brightness(1.08);
+}
+
+/* Local Image: 已选文件预览卡片 */
+.mm-img-preview {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    margin-top: 12px;
+    background: var(--mm-input-bg, rgba(127,127,127,0.06));
+    border: 1px solid var(--mm-border);
+    border-radius: 6px;
+}
+.mm-img-preview.hidden {
+    display: none;
+}
+.mm-img-preview-thumb {
+    width: 44px;
+    height: 44px;
+    object-fit: cover;
+    border-radius: 4px;
+    background: rgba(127,127,127,0.15);
+    flex: 0 0 auto;
+}
+.mm-img-preview-info {
+    flex: 1;
+    min-width: 0;
+}
+.mm-img-preview-name {
+    color: var(--mm-fg);
+    font-size: 13px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.mm-img-preview-meta {
+    color: var(--mm-fg-muted);
+    font-size: 11px;
+    margin-top: 2px;
+}
+.mm-img-preview-clear {
+    background: transparent;
+    border: 0;
+    color: var(--mm-fg-muted);
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    line-height: 1;
+    font-size: 13px;
+    flex: 0 0 auto;
+}
+.mm-img-preview-clear:hover {
+    background: var(--mm-hover-bg, rgba(127,127,127,0.15));
+    color: var(--mm-fg);
+}
+
+/* Local Image: 底部主按钮区（Insert Image） */
+.mm-img-local-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 14px;
+}
+.mm-img-local-actions .mm-img-insert-btn[disabled] {
+    opacity: 0.5;
+    cursor: not-allowed;
+    filter: none;
+}
+
+/* Web Image fields */
+.mm-img-field {
+    margin-bottom: 12px;
+}
+.mm-img-field label {
+    display: block;
+    font-size: 12px;
+    color: var(--mm-fg-muted);
+    margin-bottom: 4px;
+}
+.mm-img-field input {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--mm-input-bg);
+    color: var(--mm-input-fg);
+    border: 1px solid var(--mm-input-border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 13px;
+}
+.mm-img-field input:focus {
+    outline: none;
+    border-color: var(--mm-accent, #2f80ed);
+}
+.mm-img-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+/* Online placeholder */
+.mm-img-empty {
+    min-height: 240px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--mm-fg-muted);
+    font-size: 13px;
+}
+
+/* ===== Link 快捷操作浮层 ===== */
+.mm-link-popup {
+    position: fixed;
+    z-index: 2000;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--mm-panel-bg, #fff);
+    color: var(--mm-fg, #333);
+    border: 1px solid var(--mm-border, #e5e7eb);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    font-size: 13px;
+    max-width: 460px;
+    user-select: none;
+}
+.mm-link-popup.hidden {
+    display: none;
+}
+.mm-link-popup-url {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--mm-fg-muted, #6b7280);
+}
+.mm-link-popup-open {
+    background: transparent;
+    border: 0;
+    color: var(--mm-accent, #2f80ed);
+    cursor: pointer;
+    padding: 2px 4px;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.mm-link-popup-open:hover {
+    text-decoration: underline;
+}
+.mm-link-popup-sep {
+    width: 1px;
+    height: 16px;
+    background: var(--mm-border, #e5e7eb);
+}
+.mm-link-popup-icon {
+    background: transparent;
+    border: 0;
+    padding: 4px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--mm-fg-muted, #6b7280);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+}
+.mm-link-popup-icon:hover {
+    background: var(--mm-hover-bg, rgba(0, 0, 0, 0.06));
+    color: var(--mm-fg, #333);
+}
+.mm-link-popup-icon-danger:hover {
+    color: #e5484d;
+}
+
+/* ===== More functions 浮层 ===== */
+.mm-mf-panel {
+    position: fixed;
+    z-index: 2000;
+    width: 268px;
+    background: var(--mm-panel-bg, #fff);
+    color: var(--mm-fg, #1f2937);
+    border: 1px solid var(--mm-border, #e5e7eb);
+    border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
+    padding: 14px 12px 10px;
+    font-size: 13px;
+    user-select: none;
+}
+.mm-mf-panel.hidden {
+    display: none;
+}
+.mm-mf-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 4px 4px;
+}
+.mm-mf-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--mm-fg, #111827);
+}
+.mm-mf-close {
+    background: transparent;
+    border: 0;
+    padding: 2px 6px;
+    cursor: pointer;
+    color: var(--mm-fg-muted, #9ca3af);
+    font-size: 14px;
+    line-height: 1;
+    border-radius: 4px;
+}
+.mm-mf-close:hover {
+    background: var(--mm-hover-bg, rgba(0, 0, 0, 0.06));
+    color: var(--mm-fg, #333);
+}
+.mm-mf-desc {
+    padding: 0 4px 8px;
+    color: var(--mm-fg-muted, #9ca3af);
+    font-size: 12px;
+    line-height: 1.5;
+}
+.mm-mf-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    border-top: 1px solid var(--mm-border, #f0f0f0);
+    padding-top: 6px;
+}
+.mm-mf-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 8px;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--mm-fg, #1f2937);
+    font-size: 13px;
+    text-align: left;
+    line-height: 1.2;
+}
+.mm-mf-item:hover {
+    background: var(--mm-hover-bg, rgba(47, 128, 237, 0.08));
+}
+.mm-mf-item.is-disabled {
+    cursor: not-allowed;
+    color: var(--mm-fg-muted, #9ca3af);
+}
+.mm-mf-item.is-disabled:hover {
+    background: transparent;
+}
+.mm-mf-icon {
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: inherit;
+    flex: 0 0 auto;
+}
+.mm-mf-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.mm-mf-hint {
+    color: var(--mm-fg-muted, #9ca3af);
+    font-size: 12px;
+    margin-left: -4px;
+}
+.mm-mf-key {
+    color: var(--mm-fg-muted, #9ca3af);
+    font-size: 12px;
+    flex: 0 0 auto;
+}
+.mm-mf-badge {
+    background: #fdecc8;
+    color: #b45309;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 4px;
+    line-height: 1.4;
+    letter-spacing: 0.5px;
+    flex: 0 0 auto;
+}
+
+/* ---- 隐藏 simple-mind-map 节点图片 hover 工具栏 ----
+ * 引擎内置在节点图片 hover 时弹出 .node-img-handle 浮层，包含：
+ *   - .node-image-remove  ：减号删除按钮（点击会清空节点图片）
+ *   - 调整/全屏按钮       ：表现不符合我们的"放大预览"预期
+ * 我们已提供双击图片 → Lightbox 放大的自定义体验，
+ * 这里直接隐藏引擎自带工具栏，避免误操作。
+ */
+.node-img-handle {
+    display: none !important;
+
+}
+
+/* 弹窗内联错误提示（替代 webview 中被屏蔽的 alert） */
+.mm-img-error {
+    color: #d93026;
+    background: rgba(217,48,38,0.08);
+    border: 1px solid rgba(217,48,38,0.25);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.5;
+    margin-top: 8px;
+}
+.mm-img-error.hidden {
+    display: none !important;
+}

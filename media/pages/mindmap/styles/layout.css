@@ -1,0 +1,803 @@
+/* ============================================================================
+ * 测试大纲 · 思维导图编辑器（webview 样式 - simple-mind-map 版本）
+ * ----------------------------------------------------------------------------
+ * 渲染层（节点圆角、连线、字体、颜色）已经完全交给 simple-mind-map 内置主题
+ * 接管，本文件只负责：
+ *   1. 工具栏 / 状态栏 / 画布容器布局
+ *   2. 富元素弹窗（Emoji 面板、链接对话框、图片对话框、Lightbox）
+ *   3. VS Code 主题（暗/亮）下的中性色变量
+ * ============================================================================ */
+
+:root {
+    --mm-bg: var(--vscode-editor-background, #1e1e1e);
+    --mm-fg: var(--vscode-editor-foreground, #d4d4d4);
+    --mm-fg-muted: var(--vscode-descriptionForeground, #888);
+    --mm-border: var(--vscode-panel-border, #333);
+    --mm-toolbar-bg: var(--vscode-sideBar-background, #252526);
+    --mm-toolbar-border: var(--vscode-panel-border, #333);
+    --mm-btn-bg: var(--vscode-button-secondaryBackground, #3a3d41);
+    --mm-btn-bg-hover: var(--vscode-button-secondaryHoverBackground, #45494e);
+    --mm-btn-fg: var(--vscode-button-secondaryForeground, #ffffff);
+    --mm-primary-bg: var(--vscode-button-background, #0e639c);
+    --mm-primary-bg-hover: var(--vscode-button-hoverBackground, #1177bb);
+    --mm-primary-fg: var(--vscode-button-foreground, #ffffff);
+    --mm-input-bg: var(--vscode-input-background, #3c3c3c);
+    --mm-input-fg: var(--vscode-input-foreground, #cccccc);
+    --mm-input-border: var(--vscode-input-border, #3c3c3c);
+    --mm-overlay: rgba(0, 0, 0, 0.55);
+    --mm-canvas-bg: var(--vscode-editor-background, #1e1e1e);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    color: var(--mm-fg);
+    background: var(--mm-bg);
+    font-family: var(--vscode-font-family, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif);
+    font-size: 13px;
+}
+
+.hidden { display: none !important; }
+
+.mm-app {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ---- 工具栏 ---- */
+.mm-toolbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--mm-toolbar-bg);
+    border-bottom: 1px solid var(--mm-toolbar-border);
+    flex-wrap: nowrap;
+}
+.mm-tool-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1 1 0;
+    min-width: 0;
+    /* 文件名过长时省略，避免把中间区域挤偏 */
+    overflow: hidden;
+}
+.mm-tool-left .mm-filename {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+.mm-tool-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+}
+.mm-tool-right {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    flex: 1 1 0;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+.mm-title {
+    font-weight: 600;
+    color: var(--mm-fg);
+    white-space: nowrap;
+}
+.mm-filename {
+    cursor: pointer;
+    border-radius: 3px;
+    padding: 1px 4px;
+    transition: background 0.12s ease;
+}
+.mm-filename:hover { background: var(--mm-btn-bg-hover); }
+.mm-filename:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4);
+    outline-offset: 1px;
+}
+/* 顶部 hint 改为图标按钮 + 悬停浮层（替代过长的一行提示文字） */
+.mm-hint-btn {
+    appearance: none;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--mm-fg-muted);
+    cursor: pointer;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+.mm-hint-btn:hover {
+    background: var(--mm-btn-bg-hover);
+    color: var(--mm-fg);
+}
+.mm-hint-popover {
+    position: fixed;
+    z-index: 1000;
+    min-width: 200px;
+    background: var(--mm-toolbar-bg);
+    border: 1px solid var(--mm-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+    padding: 10px 14px;
+    color: var(--mm-fg);
+    font-size: 12px;
+}
+.mm-hint-popover.hidden { display: none; }
+.mm-hint-pop-title {
+    font-weight: 600;
+    color: var(--mm-fg);
+    margin-bottom: 6px;
+}
+.mm-hint-pop-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 4px;
+}
+.mm-hint-pop-list li {
+    color: var(--mm-fg-muted);
+    line-height: 1.6;
+}
+.mm-hint-pop-list kbd {
+    display: inline-block;
+    min-width: 18px;
+    padding: 0 4px;
+    margin-right: 4px;
+    border: 1px solid var(--mm-border);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    background: var(--mm-btn-bg);
+    color: var(--mm-fg);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    text-align: center;
+}
+.mm-divider {
+    display: inline-block;
+    width: 1px;
+    height: 18px;
+    background: var(--mm-border);
+    margin: 0 4px;
+}
+
+.mm-btn {
+    appearance: none;
+    border: 1px solid transparent;
+    background: var(--mm-btn-bg);
+    color: var(--mm-btn-fg);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.5;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+    transition: background 0.12s ease;
+}
+.mm-btn:hover { background: var(--mm-btn-bg-hover); }
+.mm-btn:focus { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 1px; }
+.mm-btn-primary {
+    background: var(--mm-primary-bg);
+    color: var(--mm-primary-fg);
+}
+.mm-btn-primary:hover { background: var(--mm-primary-bg-hover); }
+.mm-select.mm-btn {
+    padding: 3px 8px;
+    background: var(--mm-input-bg);
+    color: var(--mm-input-fg);
+    border: 1px solid var(--mm-input-border);
+}
+
+/* ---- 画布 ---- */
+.mm-canvas {
+    position: relative;
+    flex: 1 1 auto;
+    overflow: hidden;
+    background: var(--mm-canvas-bg);
+}
+.mm-mindmap {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+.mm-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--mm-fg-muted);
+    font-size: 13px;
+    pointer-events: none;
+    background: var(--mm-canvas-bg);
+}
+
+/* simple-mind-map 自带 .smm-mind-map-container；强制让其继承画布尺寸 */
+.smm-mind-map-container {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* ---- 状态栏 ---- */
+.mm-statusbar {
+    flex: 0 0 auto;
+    padding: 4px 10px;
+    border-top: 1px solid var(--mm-toolbar-border);
+    background: var(--mm-toolbar-bg);
+    color: var(--mm-fg-muted);
+    font-size: 11px;
+}
+
+/* ---- 通用浮层 ---- */
+.mm-prompt {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 9000;
+    width: 380px;
+    background: var(--mm-toolbar-bg);
+    border: 1px solid var(--mm-border);
+    border-radius: 6px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    padding: 14px 16px;
+}
+.mm-prompt-title {
+    font-weight: 600;
+    margin-bottom: 10px;
+    color: var(--mm-fg);
+}
+.mm-prompt-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.mm-prompt-row label {
+    width: 64px;
+    color: var(--mm-fg-muted);
+    font-size: 12px;
+}
+.mm-prompt-row input,
+.mm-prompt-row select {
+    flex: 1;
+    background: var(--mm-input-bg);
+    color: var(--mm-input-fg);
+    border: 1px solid var(--mm-input-border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+.mm-prompt-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+/* ---- 插入下拉 ---- */
+.mm-insert-menu {
+    position: fixed;
+    z-index: 9001;
+    background: var(--mm-toolbar-bg);
+    border: 1px solid var(--mm-border);
+    border-radius: 4px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    padding: 4px 0;
+    min-width: 140px;
+}
+.mm-im-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    background: transparent;
+    border: 0;
+    color: var(--mm-fg);
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    text-align: left;
+}
+.mm-im-item:hover { background: var(--mm-btn-bg-hover); }
+
+/* ---- Emoji 面板（分组版） ---- */
+/* right 让出右侧 rail（rail 自身 right:14px + 宽约 42px + 间距 14px ≈ 70px） */
+.mm-emoji-panel {
+    position: fixed;
+    top: 60px;
+    right: 70px;
+    z-index: 9001;
+    width: 360px;
+    max-height: 78vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: var(--mm-toolbar-bg);
+    border: 1px solid var(--mm-border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    padding: 0;
+}
+.mm-emoji-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px 6px;
+    border-bottom: 1px solid var(--mm-border);
+}
+.mm-emoji-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--mm-fg);
+}
+.mm-emoji-x {
+    width: 24px;
+    height: 24px;
+    background: transparent;
+    border: 0;
+    color: var(--mm-fg-muted);
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 14px;
+}
+.mm-emoji-x:hover {
+    background: var(--mm-btn-bg-hover);
+    color: var(--mm-fg);
+}
+.mm-emoji-search {
+    padding: 8px 14px;
+}
+.mm-emoji-search input {
+    width: 100%;
+    background: var(--mm-input-bg);
+    color: var(--mm-input-fg);
+    border: 1px solid var(--mm-input-border);
+    border-radius: 4px;
+    padding: 5px 9px;
+    font-size: 12px;
+}
+.mm-emoji-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 14px 14px;
+}
+.mm-emoji-group {
+    margin-top: 10px;
+}
+.mm-emoji-group-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--mm-fg);
+    margin: 0 0 6px;
+}
+.mm-emoji-group-sub {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--mm-fg-muted);
+    margin: 6px 0 4px;
+}
+.mm-emoji-grid {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 4px;
+}
+.mm-emoji-cell {
+    width: 100%;
+    aspect-ratio: 1;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    padding: 0;
+    color: var(--mm-fg);
+}
+.mm-emoji-cell svg {
+    width: 22px;
+    height: 22px;
+    display: block;
+}
+.mm-emoji-cell:hover {
+    background: var(--mm-btn-bg-hover);
+    border-color: var(--mm-border);
+}
+/* 当前节点已添加该图标 —— 高亮，再次点击即可移除 */
+.mm-emoji-cell.is-on {
+    background: rgba(61, 139, 255, 0.18);
+    border-color: rgba(61, 139, 255, 0.65);
+    box-shadow: 0 0 0 1px rgba(61, 139, 255, 0.4) inset;
+}
+.mm-emoji-cell--text {
+    font-size: 11px;
+    font-weight: 600;
+}
+.mm-emoji-empty {
+    text-align: center;
+    color: var(--mm-fg-muted);
+    font-size: 12px;
+    padding: 18px 0;
+}
+/* 图标面板底部：提示文案 + 清除按钮 */
+.mm-emoji-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--mm-border);
+    background: var(--mm-toolbar-bg);
+}
+.mm-emoji-tip {
+    font-size: 11px;
+    color: var(--mm-fg-muted);
+}
+.mm-emoji-clear {
+    appearance: none;
+    border: 1px solid var(--mm-border);
+    background: transparent;
+    color: var(--mm-fg);
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.mm-emoji-clear:hover {
+    background: rgba(220, 38, 38, 0.16);
+    color: #f87171;
+    border-color: rgba(220, 38, 38, 0.5);
+}
+
+/* ---- 图片 Lightbox ---- */
+.mm-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: var(--mm-overlay);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.mm-lightbox img {
+    max-width: 90vw;
+    max-height: 90vh;
+    object-fit: contain;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+.mm-lightbox-close {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 0;
+    background: rgba(0,0,0,0.6);
+    color: #fff;
+    font-size: 16px;
+    cursor: pointer;
+}
+.mm-lightbox-close:hover { background: rgba(0,0,0,0.85); }
+
+/* Lightbox 内"删除节点图片"按钮：放在关闭按钮左侧，红色危险样式 */
+.mm-lightbox-delete {
+    position: absolute;
+    top: 16px;
+    right: 60px;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 16px;
+    border: 0;
+    background: rgba(220, 38, 38, 0.85);
+    color: #fff;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.mm-lightbox-delete:hover { background: rgba(185, 28, 28, 0.95); }
+.mm-lightbox-delete svg { display: block; }
+
+/* ---- 右侧浮动工具条（参考 ProcessOn） ---- */
+.mm-side-rail {
+    position: absolute;
+    top: 50%;
+    right: 14px;
+    transform: translateY(-50%);
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 4px;
+    background: var(--mm-toolbar-bg);
+    border: 1px solid var(--mm-border);
+    border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+.mm-rail-btn {
+    position: relative;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: var(--mm-fg);
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+.mm-rail-btn:hover {
+    background: var(--mm-btn-bg-hover);
+    color: var(--mm-fg);
+}
+.mm-rail-btn.is-active {
+    background: var(--mm-primary-bg);
+    color: var(--mm-primary-fg);
+}
+.mm-rail-btn:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4);
+    outline-offset: 1px;
+}
+/* tooltip：左侧悬停文本 */
+.mm-rail-btn::after {
+    content: attr(data-tip);
+    position: absolute;
+    right: calc(100% + 8px);
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(0, 0, 0, 0.85);
+    color: #fff;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+.mm-rail-btn:hover::after { opacity: 1; }
+
+/* =====================================================================
+ * 节点画布
+ * ===================================================================*/
+.mm-canvas { position: relative; }
+
+/* ----------------------------------------------------------------------------
+ * 富文本（richText）节点内文字兜底样式
+ * ----------------------------------------------------------------------------
+ * 开启 richText:true 后，simple-mind-map 把 data.text 当成 HTML 渲染到
+ * SVG <foreignObject> 内。浏览器默认 <p> 有 1em 上下 margin，在节点尺寸
+ * 估算时会被截断成"半行"，导致出现"文字显示不全"的情况。
+ *
+ * 这里按 #mmContainer 作用域，强制：
+ *   - 取消默认 margin/padding；
+ *   - 行高 1.4，给汉字与英文一个合理基线；
+ *   - 允许长文本换行 / 长单词拆断。
+ * 与 main.js 里 plainToHtml 的 inline style 一起做双保险，覆盖到引擎自带
+ * 编辑器双击编辑后产生的 HTML（那部分不经过 plainToHtml）。
+ */
+#mmContainer foreignObject p,
+#mmContainer foreignObject div,
+#mmContainer foreignObject span,
+#mmContainer .smm-richtext-node-wrap p,
+#mmContainer .smm-richtext-node-wrap div,
+#mmContainer .smm-richtext-node-wrap span {
+    margin: 0;
+    padding: 0;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+#mmContainer foreignObject p:empty::before,
+#mmContainer .smm-richtext-node-wrap p:empty::before {
+    /* 空段也要占住一行高度，否则空行被吞 */
+    content: '\200B';
+}
+/* 测量容器 / 渲染容器都必须严格按 box-sizing:content-box 处理：
+   引擎是按 c.style.width = customTextWidth + "px" 直接量 getBoundingClientRect()，
+   若样式里被外部规则给加上了 border-box，会导致测量宽度小于实际可用宽度，
+   渲染时换行更多 → 节点最终高度比测得的还高 → 文字下半截被裁。 */
+#mmContainer .smm-richtext-node-wrap {
+    box-sizing: content-box !important;
+}
+
+/* ============================================================================
+ * 顶部工具栏：胶囊分组 + 线性图标按钮（参考用户提供的 ProcessOn 截图风格）
+ *   - .mm-btn-group  ：把若干按钮包成一个胶囊容器，相邻按钮间出现细分隔线
+ *   - .mm-btn--icon  ：纯图标按钮（正方形，hover 灰底，无边框）
+ *   - .mm-btn--accent：主操作（导出）描红，与图中"圈选"风格的强调按钮一致
+ *   - .mm-btn--danger：删除等危险操作 hover 时红色
+ *   - .mm-btn--caret ：右侧带下拉箭头（如"插入"）
+ * ============================================================================ */
+.mm-toolbar { gap: 10px; }
+.mm-tool-right { gap: 8px; }
+.mm-tool-center { gap: 8px; }
+
+.mm-btn-group {
+    display: inline-flex;
+    align-items: center;
+    background: var(--mm-btn-bg);
+    border: 1px solid var(--mm-toolbar-border);
+    border-radius: 999px;
+    padding: 2px 4px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    gap: 0;
+}
+/* 组内按钮之间用细竖线分隔（除第一个外） */
+.mm-btn-group > .mm-btn + .mm-btn::before {
+    content: "";
+    position: absolute;
+    left: -1px;
+    top: 18%;
+    bottom: 18%;
+    width: 1px;
+    background: var(--mm-toolbar-border);
+    opacity: 0.7;
+}
+
+/* 图标按钮 —— 覆盖默认 .mm-btn 文本按钮的外观 */
+.mm-btn--icon {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 28px;
+    padding: 0 6px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: var(--mm-fg);
+    transition: background 0.12s ease, color 0.12s ease;
+}
+.mm-btn--icon:hover {
+    background: var(--mm-btn-bg-hover);
+    color: var(--mm-fg);
+}
+.mm-btn--icon:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4);
+    outline-offset: 1px;
+}
+.mm-btn--icon svg { display: block; }
+
+/* 带下拉箭头：图标 + 紧贴的小箭头 */
+.mm-btn--caret { width: auto; padding: 0 8px; gap: 4px; }
+.mm-btn-caret-icon { opacity: 0.7; }
+
+/* 删除（危险）：hover 时红色 */
+.mm-btn--danger:hover {
+    background: rgba(220, 38, 38, 0.18);
+    color: #f87171;
+}
+
+/* 强调按钮（导出）：常态描色高亮 */
+.mm-btn--accent {
+    color: var(--mm-primary-bg);
+}
+.mm-btn--accent:hover {
+    background: rgba(14, 99, 156, 0.18);
+    color: var(--mm-primary-fg, #fff);
+    background: var(--mm-primary-bg);
+}
+
+/* 组内的 select：与图标按钮统一高度，无独立边框（边框由 group 提供） */
+.mm-btn-group .mm-select.mm-btn {
+    height: 28px;
+    background: transparent;
+    color: var(--mm-fg);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 0 6px;
+    font-size: 12px;
+    cursor: pointer;
+    /* 浏览器原生下拉箭头颜色随主题 */
+}
+.mm-btn-group .mm-select.mm-btn:hover {
+    background: var(--mm-btn-bg-hover);
+}
+.mm-btn-group .mm-select.mm-btn:focus {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4);
+    outline-offset: 0;
+}
+
+/* 顶层"插入"按钮独立时（不在 group 内）也能用 */
+.mm-btn--icon + .mm-btn--icon { margin-left: 0; }
+
+/* 兼容：保留旧的 .mm-divider，让它在新布局中也表现合理 */
+.mm-toolbar .mm-divider { display: none; }
+
+/* =====================================================================
+ * 顶部工具栏按钮 tooltip（向下展开）
+ * ---------------------------------------------------------------------
+ * 使用 data-tip 属性 + ::after 伪元素，与右侧浮动 rail 共用一套交互
+ * 语义，但方向为向下，避免遮挡顶部边界。同时通过 ::before 绘制 4px
+ * 小箭头，使提示气泡指向源按钮。
+ * ===================================================================*/
+.mm-tool-right .mm-btn[data-tip],
+.mm-tool-center .mm-btn[data-tip] { position: relative; }
+
+.mm-tool-right .mm-btn[data-tip]::after,
+.mm-tool-center .mm-btn[data-tip]::after {
+    content: attr(data-tip);
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.85);
+    color: #fff;
+    font-size: 11px;
+    line-height: 1.4;
+    padding: 4px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 9999;
+    transition: opacity 0.12s ease 0.05s;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+.mm-tool-right .mm-btn[data-tip]::before,
+.mm-tool-center .mm-btn[data-tip]::before {
+    content: '';
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 50%;
+    transform: translateX(-50%) rotate(45deg);
+    width: 6px;
+    height: 6px;
+    background: rgba(0, 0, 0, 0.85);
+    pointer-events: none;
+    opacity: 0;
+    z-index: 9999;
+    transition: opacity 0.12s ease 0.05s;
+}
+
+.mm-tool-right .mm-btn[data-tip]:hover::after,
+.mm-tool-right .mm-btn[data-tip]:hover::before,
+.mm-tool-right .mm-btn[data-tip]:focus-visible::after,
+.mm-tool-right .mm-btn[data-tip]:focus-visible::before,
+.mm-tool-center .mm-btn[data-tip]:hover::after,
+.mm-tool-center .mm-btn[data-tip]:hover::before,
+.mm-tool-center .mm-btn[data-tip]:focus-visible::after,
+.mm-tool-center .mm-btn[data-tip]:focus-visible::before {
+    opacity: 1;
+}
+
+/* 当下拉选择器展开时，禁止 tooltip 显示（避免与 option 列表重叠） */
+.mm-tool-right .mm-select[data-tip]:focus::after,
+.mm-tool-right .mm-select[data-tip]:focus::before {
+    opacity: 0;
+}

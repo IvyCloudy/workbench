@@ -208,6 +208,11 @@ tbody tr.xs-tr-push-failed:hover td.xs-td-cb{background:#fbd9d9}
 /* 同时被选中时：保持失败红底（更重要的语义），仅以勾选框列的蓝条提示选中态 */
 tbody tr.xs-tr-push-failed.selected{background:#fde8e8}
 tbody tr.xs-tr-push-failed.selected td.xs-td-cb{background:#fde8e8;box-shadow:inset 3px 0 0 var(--d),inset -2px 0 0 var(--p)}
+/* 推送失败行：所有数据单元格统一红底，覆盖斑马纹(tbody tr:nth-child(even) td)
+   等 td 级默认背景（同等特异性下靠源码顺序胜出）。
+   更具体的 frozen / cb / push-updated / selected 组合覆盖规则不受影响。 */
+tbody tr.xs-tr-push-failed td{background:#fde8e8}
+tbody tr.xs-tr-push-failed:hover td{background:#fbd9d9}
 
 /* 逐格高亮（编辑保存后，精确定位变更单元格）：浅黄色 */
 .xs-td.xs-td-push-updated{background:#fff9c4 !important}

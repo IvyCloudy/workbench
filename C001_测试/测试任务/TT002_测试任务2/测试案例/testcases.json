@@ -1,6 +1,6 @@
 [
   {
-    "tsId": "6c8c7684-441e-4e01-b16d-1cd76c24d6ea",
+    "testcase_id": "c98ebc57-ce55-448f-9756-64a1b10bfca9",
     "testCaseNo": "TT17796323222931000",
     "caseId": "TC001",
     "name": "登录功能测试",
@@ -31,7 +31,7 @@
     }
   },
   {
-    "tsId": "aaaa4301-eacf-482e-b1c5-59a0f7db4a1e",
+    "testcase_id": "14aae70e-b7e6-4f16-b00c-0b9f75a01765",
     "testCaseNo": "",
     "caseId": "TC002",
     "name": "注册功能测试",
@@ -52,7 +52,7 @@
     }
   },
   {
-    "tsId": "594e245e-03f6-4082-841e-44d576d493a1",
+    "testcase_id": "2b4df153-0107-4ded-a894-e9297d09bfce",
     "testCaseNo": "TT17796323222931002",
     "caseId": "TC003",
     "name": "注册功能测试",

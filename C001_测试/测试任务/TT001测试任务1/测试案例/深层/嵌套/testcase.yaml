@@ -4,7 +4,7 @@
   testTaskName: 复杂嵌套测试
   subTestTaskName: 测试任务1
   testPhaseName: ST
-  testCaseNo: TT17796309042871000
+  testCaseNo: TT17804058941491000
   testCaseName: 验证嵌套配置
   config: "{11 字段}"
   preCondition: |
@@ -58,7 +58,7 @@
   testTaskName: 边界值测试
   subTestTaskName: 测试任务1
   testPhaseName: ST
-  testCaseNo: TT17796309042871002
+  testCaseNo: TT17804058941491002
   testCaseName: 长文本和特殊字符
   config: "{11 字段}"
   preCondition: 前置条件：需要管理员权限

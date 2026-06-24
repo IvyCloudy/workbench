@@ -1,0 +1,164 @@
+[
+  {
+    "testcase_id": "9655d23d-633c-4e3e-9feb-ec5dd5efd037",
+    "testCaseNo": "TT17810547346181000",
+    "caseId": "TC001",
+    "name": "登录功能测试",
+    "priority": "P0",
+    "config": {
+      "timeout": 30,
+      "retry": 3000
+    },
+    "tags": [
+      "登录",
+      "冒烟测试0"
+    ],
+    "steps": [
+      {
+        "no": 1,
+        "action": "输入用户名1",
+        "expect": "显示用户名"
+      },
+      {
+        "no": 2,
+        "action": "输入密码",
+        "expect": "密码显示为***"
+      }
+    ]
+  },
+  {
+    "testcase_id": "73e554dc-b958-48e7-aa81-9a66967b5da2",
+    "testCaseNo": "TT17810564225591000",
+    "caseId": "TC001",
+    "name": "登录功能测试",
+    "priority": "P0",
+    "config": {
+      "timeout": 30,
+      "retry": 3000
+    },
+    "tags": [
+      "登录",
+      "冒烟测试0"
+    ],
+    "steps": [
+      {
+        "no": 1,
+        "action": "输入用户名1",
+        "expect": "显示用户名"
+      },
+      {
+        "no": 2,
+        "action": "输入密码",
+        "expect": "密码显示为***"
+      }
+    ]
+  },
+  {
+    "testcase_id": "8c645f00-3ea8-4ced-8ae7-198e98f590f5",
+    "testCaseNo": "",
+    "caseId": "TC001",
+    "name": "登录功能测试",
+    "priority": "P0",
+    "config": {
+      "timeout": "30",
+      "retry": "3000"
+    },
+    "tags": [
+      "登录",
+      "冒烟测试0"
+    ],
+    "steps": [
+      {
+        "no": 1,
+        "action": "输入用户名1",
+        "expect": "显示用户名"
+      },
+      {
+        "no": 2,
+        "action": "输入密码",
+        "expect": "密码显示为***"
+      }
+    ]
+  },
+  {
+    "testcase_id": "3cd67f98-f6f2-421b-8e9f-2c89dac3f0a8",
+    "testCaseNo": "TT17810547854851000",
+    "caseId": "TC001",
+    "name": "登录功能测试",
+    "priority": "P0",
+    "config": {
+      "timeout": "30",
+      "retry": "3000"
+    },
+    "tags": [
+      "登录",
+      "冒烟测试0"
+    ],
+    "steps": [
+      {
+        "no": 1,
+        "action": "输入用户名1",
+        "expect": "显示用户名"
+      },
+      {
+        "no": 2,
+        "action": "输入密码",
+        "expect": "密码显示为***"
+      }
+    ]
+  },
+  {
+    "testcase_id": "68c2158b-4814-4993-a6f2-a79ea1f2f1ef",
+    "testCaseNo": "",
+    "caseId": "TC001",
+    "name": "登录功能测试",
+    "priority": "P0",
+    "config": {
+      "timeout": "30",
+      "retry": "3000"
+    },
+    "tags": [
+      "登录",
+      "冒烟测试0"
+    ],
+    "steps": [
+      {
+        "no": 1,
+        "action": "输入用户名1",
+        "expect": "显示用户名"
+      },
+      {
+        "no": 2,
+        "action": "输入密码",
+        "expect": "密码显示为***"
+      }
+    ]
+  },
+  {
+    "testcase_id": "b6d7fb17-4c5e-47a8-b908-a72351590feb",
+    "testCaseNo": "TT17810547896991000",
+    "caseId": "TC002",
+    "name": "注册功能测试",
+    "priority": "P1",
+    "config": {
+      "timeout": "30",
+      "retry": "3000"
+    },
+    "tags": [
+      "注册",
+      "uuup p p"
+    ],
+    "steps": [
+      {
+        "no": 1,
+        "action": "输入用户名1",
+        "expect": "显示用户名"
+      },
+      {
+        "no": 2,
+        "action": "输入密码",
+        "expect": "密码显示为***"
+      }
+    ]
+  }
+]

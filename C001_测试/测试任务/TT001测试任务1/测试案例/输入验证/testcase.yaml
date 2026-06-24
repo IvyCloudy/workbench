@@ -4,7 +4,7 @@
   testTaskName: 复杂嵌套测试
   subTestTaskName: 测试1
   testPhaseName: ST阶段
-  testCaseNo: TC001
+  testCaseNo: TT17810901956841000
   testCaseName: 验证嵌套配置
   config:
     enabled: true
@@ -76,7 +76,7 @@
   testTaskName: 复杂嵌套测试
   subTestTaskName: 测试1
   testPhaseName: UAT阶段
-  testCaseNo: TC002
+  testCaseNo: TT17810902005061000
   testCaseName: 验证数组和特殊值
   config:
     enabled: false
@@ -107,7 +107,7 @@
   testTaskName: 边界值测试
   subTestTaskName: 测试2
   testPhaseName: SIT阶段
-  testCaseNo: TC003
+  testCaseNo: TT17810901956841002
   testCaseName: 长文本和特殊字符
   config:
     allowedChars: "!@#$%^&*()_+-=[]{}|;':\",./<>?"

@@ -1,0 +1,14 @@
+testcase_id: f42b4137-ae39-48b2-a214-7ad13a4aa082
+id: "1"
+operation: njkjkjjlkl131000
+data:
+  - xx; xxx
+ui-expected:
+  - |
+    登录页面正常显示; 登录成功提示信息
+api-expected:
+  - |
+    登录接口返回成功状态; 获取用户权限信息成功
+db-expected:
+  - |
+    xx; xxxx

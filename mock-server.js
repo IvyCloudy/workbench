@@ -208,23 +208,34 @@ var server = http.createServer(function (req, res) {
             }
 
             // 按 tsId 逐条返回处理结果。
-            // 调试约定：第偶数条（索引为偶数：第 1、3、5... 条用户看到的行）模拟成功，
-            // 其余模拟失败，用于联调"成功回写 + 失败弹窗"全链路。
+            // 调试约定：
+            //   - type:'1' = 成功，type:'2' = 失败
+            //   - 失败比例通过 FAIL_RATIO 控制（0~1，默认 0.5 即一半失败）
+            //   - 临时调试可设为 1.0（全部失败）或 0.0（全部成功）
+            var FAIL_RATIO = 0.5;
+            var failCount = 0;
             var resultBody = data.map(function (rec, i) {
                 var tsId = rec && rec.testcase_id ? String(rec.testcase_id) : '';
-                if (i % 2 === 0) {
+                var shouldFail = (data.length === 1)
+                    ? (FAIL_RATIO > 0)               // 单条时：按 FAIL_RATIO 决定
+                    : (i % Math.round(1 / FAIL_RATIO || 2) !== 0); // 多条时：按比例失败
+                if (!shouldFail) {
                     return {
                         data: 'TT' + Date.now() + (1000 + i),
                         sourceId: tsId,
                         type: '1'
                     };
                 }
+                failCount++;
                 return {
                     data: '无效的案例类型',
                     sourceId: tsId,
                     type: '2'
                 };
             });
+            if (failCount > 0) {
+                console.log('  模拟失败: %d / %d 条 (FAIL_RATIO=%s)', failCount, data.length, FAIL_RATIO);
+            }
 
             res.writeHead(200, {
                 'Content-Type': 'application/json',

@@ -53,6 +53,60 @@ function onCellDblClick(e) {
     startEdit(e);
 }
 
+// 基于列宽 + Canvas 精确计算文本 wrapped 行数
+function _calcTextLines(text, td, ci) {
+    if (!text) return 1;
+    // 按 \n 先拆成段落，每个段落再根据列宽算 wrap 行数
+    var paragraphs = text.split('\n');
+    // 取列宽：优先自定义列宽，否则用 td 实际宽度（减去 textarea 左右 padding 6*2）
+    var colW = (S.colWidths && S.colWidths[ci] && S.colWidths[ci] > 0) ? (S.colWidths[ci] - 12) : (td ? td.offsetWidth - 12 : 200);
+    if (colW < 40) colW = 40;
+    // 获取字体信息
+    var font = td ? getComputedStyle(td).font : '13px sans-serif';
+    var totalLines = 0;
+    // 用离屏 Canvas 测量文本宽度
+    var ctx = document.createElement('canvas').getContext('2d');
+    if (ctx) ctx.font = font;
+    for (var p = 0; p < paragraphs.length; p++) {
+        var para = paragraphs[p];
+        totalLines += _countWrapLines(para, colW, ctx);
+    }
+    return Math.max(1, Math.min(totalLines, 25));
+}
+
+// 对单段文本按给定 pixel 宽度计算折行数
+function _countWrapLines(text, maxWidth, ctx) {
+    if (!text) return 1;
+    if (!ctx) {
+        // 无 Canvas 环境时降级：按 40 字符/行
+        return Math.max(1, Math.ceil(text.length / 40));
+    }
+    var lines = 0;
+    var start = 0;
+    var len = text.length;
+    while (start < len) {
+        // 二分找当前行能容纳的最长字符数
+        var lo = start + 1;
+        var hi = len;
+        var best = start;
+        while (lo <= hi) {
+            var mid = Math.floor((lo + hi) / 2);
+            var w = ctx.measureText(text.substring(start, mid + 1)).width;
+            if (w <= maxWidth) {
+                best = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        start = best + 1;
+        lines++;
+        // 安全上限
+        if (lines > 500) break;
+    }
+    return Math.max(1, lines);
+}
+
 function startEdit(e) {
     if (S.editing) return;
     var td = e.currentTarget;
@@ -71,12 +125,21 @@ function startEdit(e) {
     // 用 textarea 取代 input，使行高被拖大时单元格内容也能换行编辑
     var input = document.createElement('textarea');
     input.className = 'xs-cell-input';
-    input.rows = 1;
-    input.value = oldVal == null ? '' : String(oldVal);
-    // 所在行被人为拉高时，启用多行编辑（Enter 换行，Ctrl/Cmd+Enter 提交）
+    // 文本中的字面量 \n 在 textarea 中转为实际换行，方便多行编辑
+    var valStr = (oldVal == null ? '' : String(oldVal)).replace(/\\n/g, '\n');
+    input.value = valStr;
+    // 基于列宽精确计算所需行数（替代固定字符数估算）
+    var lineCount = _calcTextLines(valStr, td, ci);
+    input.rows = Math.max(1, Math.min(lineCount, 25));
+    // 行高被拖大或内容本身多行时，启用多行编辑模式（Enter 换行，Ctrl/Cmd+Enter 提交）
     var tr = td.parentElement;
-    var multiline = !!(tr && tr.classList && tr.classList.contains('xs-tr-resized'));
-    if (multiline) input.classList.add('xs-cell-input-multi');
+    var multiline = !!(tr && tr.classList && tr.classList.contains('xs-tr-resized')) || lineCount > 1;
+    if (multiline) {
+        input.classList.add('xs-cell-input-multi');
+        input.style.height = 'auto';
+        // 设置 min-height 保证编辑区不小于内容行数
+        input.style.minHeight = (lineCount * 18 + 12) + 'px';
+    }
     td.innerHTML = '';
     td.classList.add('xs-editing');
     td.appendChild(input);
@@ -104,7 +167,7 @@ function startEdit(e) {
             return;
         }
         if (save) {
-            var newVal = input.value;
+            var newVal = input.value.replace(/\n/g, '\\n');
             if (newVal !== oldVal) {
                 pushHistory();
                 if (bulkRect) {
@@ -159,6 +222,15 @@ function startEdit(e) {
     input.addEventListener('blur', function () { commit(true); });
     input.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter') {
+            // Alt+Enter / Option+Enter：插入换行符（同 Excel 换行操作）
+            if (ev.altKey) {
+                ev.preventDefault();
+                var start = input.selectionStart;
+                var end = input.selectionEnd;
+                input.value = input.value.slice(0, start) + '\n' + input.value.slice(end);
+                input.selectionStart = input.selectionEnd = start + 1;
+                return;
+            }
             // 多行模式：Ctrl/Cmd+Enter 提交，Enter 换行（保持 textarea 默认行为）
             // 单行模式：Enter 提交（保持原有交互）
             if (multiline) {

@@ -279,30 +279,24 @@ function _buildRowHtml(ri, tsIdColIdx) {
     var rowNumTitle = '原始行号: ' + (ri + 1);
     if (failReason) rowNumTitle += ' | 推送失败：' + failReason;
     // 渲染为普通行；不再提供整行 HTML5 拖动排序能力（与矩形拖选、行横扫存在交互冲突）。
-    var html = '<tr data-row="' + ri + '" class="' + (selCls + resizedCls + failCls).trim() + '"' + rowStyle + '>'
-        + '<td class="xs-td xs-td-cb xs-td-rownum" data-row="' + ri + '" title="' + escapeHtml(rowNumTitle) + '">'
-        +   '<span class="xs-rownum">' + (ri + 1) + '</span>'
-        +   '<div class="xs-row-resizer" data-row="' + ri + '" title="拖动调整行高；双击自适应内容"></div>'
-        + '</td>';
+    // 先遍历一次构造所有单元格 inner HTML，检测是否有 <br> 换行
+    var cells = [];
+    var hasBr = false;
     for (var ci = 0; ci < headers.length; ci++) {
         var v = row[ci];
         var modCls = (S.mods.has(ri + ',' + ci) || (S._detailModCellKeys && S._detailModCellKeys.has(ri + ',' + ci))) ? ' modified' : '';
         var hiliCls = '';
         if (S._highlightedCells) {
-            // 精确逐格高亮优先（编辑保存场景）→ 绿色
             if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
                 hiliCls = ' xs-td-push-updated';
             } else if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)) {
-                // colIdx === -1 表示整行任意列变化，高亮该行所有单元格 → 橙色
                 if (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci) {
                     hiliCls = ' xs-td-push-updated-row';
                 }
             }
         }
-        // 新增行高亮 → 绿色，优先级高于修改高亮（同时是新增+修改时以新增为准）
         if (S._addedRowSet && S._addedRowSet.has(ri)) {
             hiliCls = ' xs-td-push-added';
-            // 新增行的 modCls 应移除，避免与前端的 modified 标记混淆
             modCls = '';
         }
         var colSelCls2 = S.colSel.has(ci) ? ' xs-col-selected' : '';
@@ -322,12 +316,25 @@ function _buildRowHtml(ri, tsIdColIdx) {
             titleAttr = arr.length > 0 ? ' title="' + escapeHtml(rawText) + '"' : '';
             arrCellCls = ' xs-arr-cell';
         } else {
-            inner = escapeHtml(rawText);
+            inner = escapeHtml(rawText).replace(/\\n/g, '<br>').replace(/\n/g, '<br>');
             titleAttr = rawText ? ' title="' + escapeHtml(rawText) + '"' : '';
         }
-        var wrapStyleAttr = clampVar ? ' style="' + clampVar + '"' : '';
-        html += '<td class="xs-td xs-editable' + modCls + colSelCls2 + frozenCls2 + hiliCls + (isDetail ? ' xs-detail-cell' : '') + arrCellCls + '" data-row="' + ri + '" data-col="' + ci + '"' + titleAttr + '>'
-            + '<div class="xs-cell-wrap"' + wrapStyleAttr + '>' + inner + '</div></td>';
+        if (inner.indexOf('<br>') >= 0) hasBr = true;
+        cells.push({ inner: inner, modCls: modCls, colSelCls2: colSelCls2, frozenCls2: frozenCls2, hiliCls: hiliCls, isDetail: isDetail, arrCellCls: arrCellCls, titleAttr: titleAttr });
+    }
+    // 行内任一单元格含 <br> 时，整行 cell-wrap 启用 pre-wrap，使长文本也能换行填充行高
+    var multilineClamp = clampVar;
+    if (!clampVar && hasBr) multilineClamp = 'white-space:pre-wrap;';
+    var html = '<tr data-row="' + ri + '" class="' + (selCls + resizedCls + failCls).trim() + '"' + rowStyle + '>'
+        + '<td class="xs-td xs-td-cb xs-td-rownum" data-row="' + ri + '" title="' + escapeHtml(rowNumTitle) + '">'
+        +   '<span class="xs-rownum">' + (ri + 1) + '</span>'
+        +   '<div class="xs-row-resizer" data-row="' + ri + '" title="拖动调整行高；双击自适应内容"></div>'
+        + '</td>';
+    for (var ci2 = 0; ci2 < cells.length; ci2++) {
+        var c = cells[ci2];
+        var wrapStyleAttr = multilineClamp ? ' style="' + multilineClamp + '"' : '';
+        html += '<td class="xs-td xs-editable' + c.modCls + c.colSelCls2 + c.frozenCls2 + c.hiliCls + (c.isDetail ? ' xs-detail-cell' : '') + c.arrCellCls + '" data-row="' + ri + '" data-col="' + ci2 + '"' + c.titleAttr + '>'
+            + '<div class="xs-cell-wrap"' + wrapStyleAttr + '>' + c.inner + '</div></td>';
     }
     html += '</tr>';
     return html;
@@ -505,7 +512,7 @@ function patchCell(ri, ci) {
         var arr = Array.isArray(v) ? v : [];
         inner = _buildArrayChipsHtml(arr);
     } else {
-        inner = escapeHtml(rawText);
+        inner = escapeHtml(rawText).replace(/\\n/g, '<br>').replace(/\n/g, '<br>');
     }
     // 保留拖动行高对应的 --xs-clamp 变量（行高已持久化时不能丢失多行省略号配置）
     var rh2 = S.rowHeights[ri];
@@ -514,6 +521,21 @@ function patchCell(ri, ci) {
         var _wrapH2 = rh2 - 14;
         var _lines2 = Math.max(1, Math.floor(_wrapH2 / 18.2));
         clampVar2 = ' style="--xs-clamp:' + _lines2 + ';"';
+    }
+    // 本行任意格含换行（\n 字面量或实际换行）且无自定义行高时，
+    // 启用 pre-wrap 使整行长文本也能换行填充行高，与 _buildRowHtml 行为一致
+    if (!clampVar2) {
+        var _anyBr = inner.indexOf('<br>') >= 0;
+        if (!_anyBr) {
+            for (var _j = 0; _j < row.length; _j++) {
+                var _rv = formatCellValue(row[_j]);
+                if (_rv && (_rv.indexOf('\\n') >= 0 || _rv.indexOf('\n') >= 0)) {
+                    _anyBr = true;
+                    break;
+                }
+            }
+        }
+        if (_anyBr) clampVar2 = ' style="white-space:pre-wrap;"';
     }
     td.innerHTML = '<div class="xs-cell-wrap"' + clampVar2 + '>' + inner + '</div>';
     // class 同步

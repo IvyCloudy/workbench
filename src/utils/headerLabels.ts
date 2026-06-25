@@ -19,6 +19,7 @@
 import * as vscode from 'vscode';
 
 const CONFIG_KEY = 'testcaseViewer.headerLabels';
+const REVERSE_CONFIG_KEY = 'testcaseViewer.headerReverseLabels';
 
 export type HeaderLabels = { [key: string]: string };
 
@@ -40,6 +41,69 @@ export function getHeaderLabels(): HeaderLabels {
 }
 
 /**
+ * 从插件配置中读取反向映射（中文别名 → 英文 key），用于推送时将中文表头还原为英文字段名。
+ *
+ * 映射来源（合并优先级，从低到高）：
+ *   1. 从 headerLabels 正向表自动反转生成（兜底，非精确）。
+ *   2. 插件内置默认值（package.json 中 headerReverseLabels.default）。
+ *   3. 用户/工作区通过 headerReverseLabels 显式配置（最高优先级）。
+ *
+ * 步骤 2 和 3 由 VSCode 自动合并，调用 getConfiguration().get() 拿到最终结果。
+ * 显式配置的 headerReverseLabels 会覆盖自动反转的结果，用户可精确控制每个中文表头的英文字段。
+ */
+export function getReverseHeaderLabels(): HeaderLabels {
+    // 先以 headerLabels 正向表自动反转作为兜底映射
+    const forward = getHeaderLabels();
+    const reverse: HeaderLabels = {};
+    for (const [en, zh] of Object.entries(forward)) {
+        if (typeof zh === 'string' && zh.trim() !== '') {
+            const existing = reverse[zh];
+            if (!existing || (!en.includes('-') && existing.includes('-'))) {
+                reverse[zh] = en;
+            }
+        }
+    }
+    // 从 headerReverseLabels 配置读取显式反向映射，覆盖自动反转结果
+    try {
+        const cfg = vscode.workspace.getConfiguration().get<HeaderLabels>(REVERSE_CONFIG_KEY);
+        if (cfg && typeof cfg === 'object') {
+            for (const k in cfg) {
+                if (Object.prototype.hasOwnProperty.call(cfg, k)) {
+                    const v = (cfg as any)[k];
+                    if (typeof v === 'string') reverse[k] = v;
+                }
+            }
+        }
+    } catch { /* ignore */ }
+    return reverse;
+}
+
+/**
+ * 将 push 数据对象的 key 从中文映射回英文。
+ * 仅当对象中包含中文 key（即数据文件使用中文表头）时才执行转换。
+ */
+export function normalizePushData(data: any[]): any[] {
+    if (!Array.isArray(data) || data.length === 0) return data;
+    // 快速判断：首行是否有中文 key
+    const first = data[0];
+    if (!first || typeof first !== 'object') return data;
+    const keys = Object.keys(first);
+    const hasChineseKey = keys.some(k => /[\u4e00-\u9fff]/.test(k));
+    if (!hasChineseKey) return data;
+
+    const reverse = getReverseHeaderLabels();
+    return data.map((rec: any) => {
+        if (!rec || typeof rec !== 'object') return rec;
+        const mapped: any = {};
+        for (const [k, v] of Object.entries(rec)) {
+            const en = reverse[k] || k;
+            mapped[en] = v;
+        }
+        return mapped;
+    });
+}
+
+/**
  * 监听表头映射变更（仅设置项变更）。
  * 返回 Disposable 数组，调用方负责注册到 context.subscriptions 或 panel.onDidDispose。
  */
@@ -47,7 +111,7 @@ export function onHeaderLabelsChange(handler: () => void): vscode.Disposable[] {
     const disposables: vscode.Disposable[] = [];
     disposables.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
-            if (e.affectsConfiguration(CONFIG_KEY)) {
+            if (e.affectsConfiguration(CONFIG_KEY) || e.affectsConfiguration(REVERSE_CONFIG_KEY)) {
                 try { handler(); } catch { /* ignore */ }
             }
         })

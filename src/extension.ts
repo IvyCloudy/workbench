@@ -32,6 +32,7 @@ import { ensureHighlightFile } from './utils/highlightStore';
 import { ensurePushFailureFile, mergeFailures } from './utils/pushFailureStore';
 import { ensureSnapshotFile, savePushSnapshot, getDeletedSnapshotIds } from './utils/pushSnapshotStore';
 import { ensureBindingsFile } from './utils/taskInfoStore';
+import { normalizePushData } from './utils/headerLabels';
 import { TS_ID_COLUMN } from './services/utils';
 import { ensureDeletedRowsFile, syncDeletedRows, refreshAndGetDeletedRows, getPendingDeletedRows, markDeletedRows } from './utils/deletedRowsStore';
 import { initTelemetry, sendTelemetryEvent, sendTelemetryErrorEvent } from './utils/telemetry';
@@ -177,7 +178,8 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
 
     console.log(`[推送] 文件: ${filePath}, ${rows.length} 行`);
     sendTelemetryEvent('explorerPush.start', { ext: fileExt, totalRows: String(rows.length) });
-    const pushResult = await pushTestCase(context, rows, taskInfo, path.basename(filePath));
+    const pushData = normalizePushData(rows);
+    const pushResult = await pushTestCase(context, pushData, taskInfo, path.basename(filePath));
     if (pushResult.returnCode !== 'SUC0000') {
         showPushErrorModal(panel, baseName, `后端返回失败: ${pushResult.errorMsg || '未知错误'}`);
         vscode.window.showErrorMessage(`推送失败: ${pushResult.errorMsg || '未知错误'}`);
@@ -393,7 +395,7 @@ function parseUserInput(input: string, baseDir: string): ParsedPath | string {
  *   4. 用户可以直接修改文件名，按回车确认
  *   5. 创建完成后用插件编辑器打开文件
  */
-async function handleCreateNewTestCase(targets: vscode.Uri[], context: vscode.ExtensionContext): Promise<void> {
+async function handleCreateNewTestCase(targets: vscode.Uri[], context: vscode.ExtensionContext, forcedExt?: string): Promise<void> {
     if (!targets || targets.length === 0) return;
     
     const target = targets[0];
@@ -414,30 +416,48 @@ async function handleCreateNewTestCase(targets: vscode.Uri[], context: vscode.Ex
         return;
     }
     
+    // 选择文件格式：右键子菜单已指定格式则跳过选择，否则弹出 QuickPick
+    let chosenExt: string;
+    if (forcedExt) {
+        chosenExt = forcedExt;
+    } else {
+        const fileTypePick = await vscode.window.showQuickPick(
+            [
+                { label: '$(file) CSV (.csv)', description: '表格格式，推荐用于结构化案例', extension: '.csv' },
+                { label: '$(file) YAML (.yaml)', description: '层次化格式，适合复杂步骤描述', extension: '.yaml' },
+            ],
+            {
+                placeHolder: '请选择测试案例文件格式',
+                ignoreFocusOut: true,
+            }
+        );
+        if (!fileTypePick) return; // 用户取消
+        chosenExt = fileTypePick.extension;
+    }
+    
     // 生成默认文件名（避免重复）
-    let defaultFileName = '未命名测试案例.yaml';
+    let defaultFileName = `未命名测试案例${chosenExt}`;
     let defaultFilePath = path.join(baseDir, defaultFileName);
     let counter = 1;
     
     while (fs.existsSync(defaultFilePath)) {
-        defaultFileName = `未命名测试案例${counter}.yaml`;
+        defaultFileName = `未命名测试案例${counter}${chosenExt}`;
         defaultFilePath = path.join(baseDir, defaultFileName);
         counter++;
     }
     
     // 读取模板文件
-    const templatePath = path.join(context.extensionUri.fsPath, 'case_example.yaml');
     let templateContent: string;
     
     try {
-        templateContent = await fs.promises.readFile(templatePath, 'utf-8');
-        
-        // 根据文件类型调整模板内容
-        const ext = path.extname(defaultFileName).toLowerCase();
-        if (ext === '.json') {
-            templateContent = convertYamlToJson(templateContent);
-        } else if (ext === '.csv') {
-            templateContent = convertYamlToCsv(templateContent);
+        if (chosenExt === '.csv') {
+            // CSV 模板独立文件，中文表头，与 case_example.csv 保持一致
+            const csvTemplatePath = path.join(context.extensionUri.fsPath, 'case_example.csv');
+            templateContent = await fs.promises.readFile(csvTemplatePath, 'utf-8');
+        } else {
+            // YAML 使用 case_example.yaml 模板
+            const yamlTemplatePath = path.join(context.extensionUri.fsPath, 'case_example.yaml');
+            templateContent = await fs.promises.readFile(yamlTemplatePath, 'utf-8');
         }
     } catch (err: any) {
         vscode.window.showErrorMessage(`读取模板文件失败: ${err.message || err}`);
@@ -490,6 +510,90 @@ async function handleCreateNewTestCase(targets: vscode.Uri[], context: vscode.Ex
             errorMessage: String(err?.message || String(err)).slice(0, 500), 
             stackHead: stackHead(err) 
         });
+    }
+}
+
+/**
+ * 新增测试要点 - 在测试大纲目录下创建 测试要点.md
+ */
+async function handleCreateNewTestPoint(targets: vscode.Uri[], context: vscode.ExtensionContext): Promise<void> {
+    if (!targets || targets.length === 0) return;
+
+    const target = targets[0];
+    const targetPath = target.fsPath;
+
+    // 判断目标是文件还是目录
+    const stats = await fs.promises.stat(targetPath);
+    let baseDir = targetPath;
+
+    if (stats.isFile()) {
+        baseDir = path.dirname(targetPath);
+    }
+
+    // 验证目录是否在测试大纲目录下
+    if (!baseDir.includes('测试大纲')) {
+        vscode.window.showErrorMessage('只能在测试大纲目录或其子文件夹中创建新测试要点');
+        return;
+    }
+
+    // 生成默认文件名（避免重复）
+    let defaultFileName = '测试要点.md';
+    let defaultFilePath = path.join(baseDir, defaultFileName);
+    let counter = 1;
+
+    while (fs.existsSync(defaultFilePath)) {
+        defaultFileName = `测试要点${counter}.md`;
+        defaultFilePath = path.join(baseDir, defaultFileName);
+        counter++;
+    }
+
+    // 读取模板文件
+    const templatePath = path.join(context.extensionUri.fsPath, 'point_example.md');
+    let templateContent: string;
+
+    try {
+        templateContent = await fs.promises.readFile(templatePath, 'utf-8');
+    } catch (err: any) {
+        vscode.window.showErrorMessage(`读取模板文件失败: ${err.message || err}`);
+        return;
+    }
+
+    // 创建新文件
+    try {
+        await fs.promises.writeFile(defaultFilePath, templateContent, 'utf-8');
+
+        // 获取新创建文件的 URI
+        const newFileUri = vscode.Uri.file(defaultFilePath);
+
+        // 在资源管理器中选中
+        await vscode.commands.executeCommand('revealInExplorer', newFileUri);
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // 触发重命名命令
+        await vscode.commands.executeCommand('renameFile');
+
+        // 监听文件重命名完成
+        const renameDisposable = vscode.workspace.onDidRenameFiles(async (event) => {
+            for (const file of event.files) {
+                if (file.oldUri.fsPath === defaultFilePath) {
+                    renameDisposable.dispose();
+                    // 用默认编辑器打开
+                    await vscode.commands.executeCommand('vscode.open', file.newUri);
+                    break;
+                }
+            }
+        });
+
+        // 超时兜底
+        setTimeout(async () => {
+            if (fs.existsSync(defaultFilePath)) {
+                await vscode.commands.executeCommand('vscode.open', newFileUri);
+            }
+            renameDisposable.dispose();
+        }, 30000);
+
+    } catch (err: any) {
+        vscode.window.showErrorMessage(`创建测试要点失败: ${err.message || err}`);
     }
 }
 
@@ -784,7 +888,35 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         ),
 
-        // 新增测试案例命令
+        // 新增测试案例命令（右键子菜单 - CSV）
+        vscode.commands.registerCommand(
+            'testcaseViewer.createNewTestCaseCsv',
+            async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
+                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCaseCsv' });
+                try {
+                    await handleCreateNewTestCase(targets, context, '.csv');
+                } catch (err: any) {
+                    vscode.window.showErrorMessage(`创建测试案例失败: ${err.message || err}`);
+                }
+            }
+        ),
+
+        // 新增测试案例命令（右键子菜单 - YAML）
+        vscode.commands.registerCommand(
+            'testcaseViewer.createNewTestCaseYaml',
+            async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
+                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCaseYaml' });
+                try {
+                    await handleCreateNewTestCase(targets, context, '.yaml');
+                } catch (err: any) {
+                    vscode.window.showErrorMessage(`创建测试案例失败: ${err.message || err}`);
+                }
+            }
+        ),
+
+        // 新增测试案例命令（命令面板入口，走 QuickPick 选格式）
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestCase',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
@@ -832,6 +964,20 @@ export async function activate(context: vscode.ExtensionContext) {
                 } catch (err: any) {
             sendTelemetryErrorEvent('createNewTestCaseQuick.commandError', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
                     vscode.window.showErrorMessage(`创建测试案例失败: ${err.message || err}`);
+                }
+            }
+        ),
+
+        // 新增测试要点命令（在测试大纲目录下右键）
+        vscode.commands.registerCommand(
+            'testcaseViewer.createNewTestPoint',
+            async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
+                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestPoint' });
+                try {
+                    await handleCreateNewTestPoint(targets, context);
+                } catch (err: any) {
+                    vscode.window.showErrorMessage(`创建测试要点失败: ${err.message || err}`);
                 }
             }
         ),

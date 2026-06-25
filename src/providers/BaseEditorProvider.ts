@@ -29,7 +29,7 @@ import { markDeletedRows } from '../utils/deletedRowsStore';
 import { pushTestCase } from '../services/http';
 import { createParser, ensureTrackingColumns, applyTestCaseNos, type FileParser, type FileType } from '../parsers';
 import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
-import { getHeaderLabels, onHeaderLabelsChange } from '../utils/headerLabels';
+import { getHeaderLabels, onHeaderLabelsChange, normalizePushData } from '../utils/headerLabels';
 import { stackHead } from '../services/utils';
 import { filterTemplateExampleRows, TEMPLATE_EXAMPLE_TS_ID } from '../utils/fileIdentifier';
 
@@ -158,7 +158,7 @@ export class PushViaHttpClient implements PushStrategy {
             });
         }
 
-        const result = await pushTestCase(extensionContext, pushData, taskInfo, path.basename(ctx.filePath));
+        const result = await pushTestCase(extensionContext, normalizePushData(pushData), taskInfo, path.basename(ctx.filePath));
         if (result.returnCode !== 'SUC0000') {
             showPushErrorModal(webviewPanel, path.basename(ctx.filePath), result.errorMsg || '推送失败');
             webviewPanel.webview.postMessage({ type: 'pushError', message: result.errorMsg || '推送失败' });

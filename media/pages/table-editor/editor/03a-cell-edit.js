@@ -345,6 +345,10 @@ function showContextMenu(e) {
         }
         items.push({ divider: true });
         items.push({ label: '在下方复制此行', action: copyRowInline, disabled: S._ctxRow < 0 });
+        var _selRows = (typeof getPushTargetRows === 'function') ? getPushTargetRows() : [];
+        if (_selRows.length > 1) {
+            items.push({ label: '复制选中行 (' + _selRows.length + ')', action: copySelectedRows });
+        }
         items.push({ label: '在上方插入行', action: function () { insertRow(S._ctxRow); }, disabled: S._ctxRow < 0 });
         items.push({ label: '在下方插入行', action: function () { insertRow(S._ctxRow + 1); }, disabled: S._ctxRow < 0 });
         items.push({ divider: true });
@@ -1186,6 +1190,55 @@ function copyRowInline() {
     saveFile();
     renderTable();
     showToast('已在下方复制一行', 'success');
+}
+
+// 复制多行：在每行下方依次插入副本（从后往前插入以保持索引正确）
+function copySelectedRows() {
+    var selRows = (typeof getPushTargetRows === 'function') ? getPushTargetRows() : [];
+    if (selRows.length <= 1) return;
+    pushHistory();
+    // 降序排列，从后往前插入，避免索引偏移
+    selRows.sort(function (a, b) { return b - a; });
+    var headers0 = S.data.headers || [];
+    var tsCol0 = headers0.indexOf('testcase_id');
+    var tcCol0 = headers0.indexOf('testCaseNo');
+    var dts = getDetailTables();
+    selRows.forEach(function (rowIdx) {
+        var src = S.data.rows[rowIdx] || [];
+        var newRow = src.map(function (v) { return Array.isArray(v) ? v.slice() : v; });
+        if (tsCol0 >= 0) newRow[tsCol0] = genUuidV4();
+        if (tcCol0 >= 0) newRow[tcCol0] = '';
+        var at = rowIdx + 1;
+        S.data.rows.splice(at, 0, newRow);
+        // 同步复制明细表
+        dts.forEach(function (dt) {
+            if (!dt || !dt.rowGroups) return;
+            var srcDetail = (dt.rowGroups[rowIdx] || []).map(function (dr) { return dr.slice(); });
+            var srcRaw = (dt.rawRowGroups && dt.rawRowGroups[rowIdx])
+                ? JSON.parse(JSON.stringify(dt.rawRowGroups[rowIdx])) : [];
+            dt.rowGroups.splice(at, 0, srcDetail);
+            if (dt.rawRowGroups) dt.rawRowGroups.splice(at, 0, srcRaw);
+            if (dt.rawRowTypes) {
+                var srcType = dt.rawRowTypes[rowIdx] || 'none';
+                dt.rawRowTypes.splice(at, 0, srcType);
+            }
+        });
+    });
+    // 重建选中集：原索引 r → r + (选中行中 < r 的个数)
+    if (S.sel && S.sel.size > 0) {
+        var newSel = new Set();
+        var asc = selRows.slice().sort(function (a, b) { return a - b; });
+        S.sel.forEach(function (r) {
+            var shift = 0;
+            for (var j = 0; j < asc.length; j++) { if (asc[j] < r) shift++; }
+            newSel.add(r + shift);
+        });
+        S.sel = newSel;
+    }
+    S.cellSel = null;
+    saveFile();
+    renderTable();
+    showToast('已复制 ' + selRows.length + ' 行', 'success');
 }
 
 function pushFromContextMenu() {

@@ -31,6 +31,7 @@ import { ensurePushFailureFile, mergeFailures } from './utils/pushFailureStore';
 import { ensureSnapshotFile, savePushSnapshot, getDeletedSnapshotIds } from './utils/pushSnapshotStore';
 import { TS_ID_COLUMN } from './services/utils';
 import { ensureDeletedRowsFile, syncDeletedRows, refreshAndGetDeletedRows, getPendingDeletedRows, markDeletedRows } from './utils/deletedRowsStore';
+import { ensureMarkFile } from './utils/markStore';
 import { initTelemetry, sendTelemetryEvent, sendTelemetryErrorEvent, sendTelemetryException } from './services/telemetry';
 import { stackHead } from './services/utils';
 
@@ -362,6 +363,11 @@ export async function activate(context: vscode.ExtensionContext) {
     await ensureDeletedRowsFile(context).catch(err => {
         console.error('[Extension] 初始化删除行存储文件失败:', err?.message || err);
         sendTelemetryException('deletedRows.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+    });
+
+    // 初始化用户标记存储文件（持久化手动高亮标记）
+    await ensureMarkFile(context).catch(err => {
+        console.error('[Extension] 初始化标记存储文件失败:', err?.message || err);
     });
 
     // 注册绑定任务相关功能（装饰器 + TreeView + revealBoundTask 命令 + 监听）

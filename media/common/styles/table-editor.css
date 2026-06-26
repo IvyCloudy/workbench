@@ -82,6 +82,17 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 .xs-icon-btn-deleted.active:hover{background:#fbd9d9}
 .xs-icon-btn-deleted.is-disabled{opacity:.4;cursor:not-allowed;pointer-events:none;border-color:var(--bd)}
 
+/* "仅看已标记行"筛选按钮（书签图标，蓝紫色系） */
+.xs-icon-btn-marked{width:24px;min-width:24px;height:24px;padding:0;box-sizing:border-box;border-color:#ddd6fe}
+.xs-icon-btn-marked svg{width:16px;height:16px}
+.xs-icon-btn-marked .xs-ib-fg path{fill:var(--tl)}
+.xs-icon-btn-marked:hover{border-color:#a78bfa;background:#ede9fe}
+.xs-icon-btn-marked:hover .xs-ib-fg path{fill:#7c3aed}
+.xs-icon-btn-marked.active{background:#ede9fe;border-color:#7c3aed;box-shadow:0 0 0 2px rgba(124,58,237,.25)}
+.xs-icon-btn-marked.active .xs-ib-fg path{fill:#5b21b6}
+.xs-icon-btn-marked.active:hover{background:#ddd6fe}
+.xs-icon-btn-marked.is-disabled{opacity:.4;cursor:not-allowed;pointer-events:none;border-color:var(--bd)}
+
 /* 自定义 tooltip：hover 立即显示，无浏览器原生 title 的 ~1s 延迟 */
 .xs-tip{position:relative}
 .xs-tip::after{
@@ -244,6 +255,18 @@ tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-push-added{background:#fde8e8
 .xs-ghost-row td.xs-td-ghost{background:#fff0f0;color:#aaa;font-size:11px;padding:2px 8px}
 .xs-ghost-row td.xs-td-ghost del{color:#999}
 .xs-ghost-row td.xs-ghost-cb{background:#fce4e4;color:#d32f2f;text-align:center;font-size:11px;padding:2px 4px}
+
+/* 用户标记高亮（手动标记的单元格/区域）：默认蓝紫色系；具体颜色通过内联 style 覆盖 */
+/* 标记单元格无边框，由相邻普通格的边框提供外边界，相邻标记格之间自然融为一体 */
+.xs-td.xs-td-user-marked{border:0;background:#e3f2fd}
+tbody tr:hover td.xs-td.xs-td-user-marked{background:#bbdefb}
+tbody tr.selected td.xs-td.xs-td-user-marked{background:#90caf9}
+tbody tr.xs-tr-push-failed td.xs-td.xs-td-user-marked{background:#f5d7e0;box-shadow:inset 3px 0 0 #1976d2}
+tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-user-marked{background:#f0c5d5;box-shadow:inset 3px 0 0 #1976d2}
+tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-user-marked{background:#f5d7e0;box-shadow:inset 3px 0 0 #1976d2}
+/* 标记格被单元格/列拖选时：取消四边内圈 box-shadow，避免每个单元格各自画圈导致视觉分割 */
+.xs-td.xs-td-user-marked.xs-cell-selected{box-shadow:none !important}
+.xs-td.xs-td-user-marked.xs-col-selected{box-shadow:none !important}
 
 /* 列选中（Excel 风格）：表头加深、单元格浅蓝；不覆盖行选中（同时存在时使用渐变叠加色） */
 .xs-th.xs-col-selected{background:#cfe4f8 !important;box-shadow:inset 0 3px 0 var(--p)}
@@ -475,3 +498,17 @@ tbody tr.xs-tr-resized .xs-chip{white-space:normal}
 .xs-arr-row-del{flex-shrink:0;width:30px;height:30px;line-height:28px;text-align:center;color:#999;cursor:pointer;border:1px solid transparent;border-radius:3px;font-size:14px;background:transparent}
 .xs-arr-row-del:hover{background:#e34d59;color:#fff;border-color:#e34d59}
 .xs-arr-tip{margin-top:6px;color:#888;font-size:11px;line-height:1.4}
+
+/* ==================== 标记颜色选择器 ==================== */
+.xs-mark-picker{position:fixed;z-index:10001;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.18);padding:10px 12px;min-width:280px;user-select:none;font-size:12px}
+.xs-mp-title{font-size:11px;color:#888;margin:2px 0 4px;font-weight:500}
+.xs-mp-row{display:flex;gap:3px;margin-bottom:3px;flex-wrap:wrap}
+.xs-mp-swatch{display:inline-block;width:22px;height:22px;border-radius:3px;cursor:pointer;box-sizing:border-box;border:1px solid rgba(0,0,0,.08);transition:transform .1s}
+.xs-mp-swatch:hover{transform:scale(1.2);box-shadow:0 1px 4px rgba(0,0,0,.25)}
+.xs-mp-swatch.xs-mp-sel{border:2px solid #1565c0;transform:scale(1.15)}
+.xs-mp-footer{display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid #eee}
+.xs-mp-preview{display:inline-flex;align-items:center;justify-content:center;width:40px;height:28px;border-radius:4px;border:1px solid #ccc;font-size:13px;font-weight:600;flex-shrink:0}
+.xs-mp-btn{padding:5px 16px;border:1px solid var(--p);border-radius:3px;background:var(--p);color:#fff;cursor:pointer;font-size:12px;line-height:1.4}
+.xs-mp-btn:hover{filter:brightness(.9)}
+.xs-mp-btn-cancel{background:#fff;color:#666;border-color:#ccc}
+.xs-mp-btn-cancel:hover{background:#f5f5f5;filter:none}

@@ -57,6 +57,7 @@ function renderTable() {
     if (typeof updateModifiedFilterBtn === 'function') updateModifiedFilterBtn();
     if (typeof updateAddedFilterBtn === 'function') updateAddedFilterBtn();
     if (typeof updateDeletedFilterBtn === 'function') updateDeletedFilterBtn();
+    if (typeof updateMarkedFilterBtn === 'function') updateMarkedFilterBtn();
     updateSearchClear();
     if (typeof updateColSelClasses === 'function') updateColSelClasses();
     if (typeof updateCellSelClasses === 'function') updateCellSelClasses();
@@ -95,11 +96,13 @@ function _computeViewRows() {
     var addedOnly = !!(S._addedOnly && S._addedRowSet && S._addedRowSet.size > 0);
     // 仅看已删除行：展示 ghost 行，隐藏所有常规行
     var deletedOnly = !!(S._deletedOnly && S._deletedInfos && S._deletedInfos.length > 0);
+    // 仅看已标记行：基于用户手动标记（含行标记和单元格标记）
+    var markedOnly = !!(S._markedOnly);
     if (deletedOnly) {
         // 仅看已删除行时，常规行全部隐藏，只展示 ghost 区域
         return [];
     }
-    if (!skw && !hasColFilters && !failedOnly && !modifiedOnly && !addedOnly) {
+    if (!skw && !hasColFilters && !failedOnly && !modifiedOnly && !addedOnly && !markedOnly) {
         // 直接整段：避免大数组 push 开销
         var arr = new Array(rows.length);
         for (var i = 0; i < rows.length; i++) arr[i] = i;
@@ -147,6 +150,9 @@ function _computeViewRows() {
         }
         if (addedOnly) {
             if (!S._addedRowSet.has(ri)) continue;
+        }
+        if (markedOnly) {
+            if (!_isRowMarked(ri)) continue;
         }
         out.push(ri);
     }
@@ -285,19 +291,46 @@ function _buildRowHtml(ri, tsIdColIdx) {
     for (var ci = 0; ci < headers.length; ci++) {
         var v = row[ci];
         var modCls = (S.mods.has(ri + ',' + ci) || (S._detailModCellKeys && S._detailModCellKeys.has(ri + ',' + ci))) ? ' modified' : '';
-        var hiliCls = '';
-        if (S._highlightedCells) {
-            if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
-                hiliCls = ' xs-td-push-updated';
-            } else if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)) {
-                if (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci) {
-                    hiliCls = ' xs-td-push-updated-row';
-                }
+        // 按时间顺序选择高亮：最新操作的类型优先显示
+        // bestTime 和 bestClass/bestStyle 记录当前生效的高亮
+        var bestTime = 0;
+        var bestClass = '';
+        var bestInlineStyle = '';
+        var bestMkInfo = null; // {bgColor, fontColor}
+
+        // 1) 推送单元格级变更高亮
+        if (S._highlightedCells && S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
+            var t = S._highlightedTime || 0;
+            if (t >= bestTime) { bestTime = t; bestClass = ' xs-td-push-updated'; bestMkInfo = null; }
+        }
+        // 2) 推送整行级变更高亮
+        if (S._highlightedCells && S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)) {
+            if (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci) {
+                var t = S._highlightedTime || 0;
+                if (t >= bestTime) { bestTime = t; bestClass = ' xs-td-push-updated-row'; bestMkInfo = null; }
             }
         }
+        // 3) 新增行高亮
         if (S._addedRowSet && S._addedRowSet.has(ri)) {
-            hiliCls = ' xs-td-push-added';
-            modCls = '';
+            var t = S._addedRowTime || 0;
+            if (t >= bestTime) { bestTime = t; bestClass = ' xs-td-push-added'; modCls = ''; bestMkInfo = null; }
+        }
+        // 4) 用户手动标记高亮
+        if (typeof isUserMarked === 'function') {
+            var mkInfo = isUserMarked(ri, ci);
+            if (mkInfo) {
+                var t = mkInfo.timestamp || 0;
+                if (t >= bestTime) { bestTime = t; bestClass = ' xs-td-user-marked'; bestMkInfo = mkInfo; modCls = (bestClass === ' xs-td-push-added') ? '' : modCls; }
+            }
+        }
+
+        var hiliCls = bestClass;
+        var mkStyle = '';
+        if (bestMkInfo) {
+            var st = '';
+            if (bestMkInfo.bgColor) st += 'background:' + bestMkInfo.bgColor + ';';
+            if (bestMkInfo.fontColor) st += 'color:' + bestMkInfo.fontColor + ';';
+            if (st) mkStyle = ' style="' + st + '"';
         }
         var colSelCls2 = S.colSel.has(ci) ? ' xs-col-selected' : '';
         var frozenCls2 = (String(headers[ci]) === 'testcase_id') ? ' xs-td-frozen' : '';
@@ -320,7 +353,7 @@ function _buildRowHtml(ri, tsIdColIdx) {
             titleAttr = rawText ? ' title="' + escapeHtml(rawText) + '"' : '';
         }
         if (inner.indexOf('<br>') >= 0) hasBr = true;
-        cells.push({ inner: inner, modCls: modCls, colSelCls2: colSelCls2, frozenCls2: frozenCls2, hiliCls: hiliCls, isDetail: isDetail, arrCellCls: arrCellCls, titleAttr: titleAttr });
+        cells.push({ inner: inner, modCls: modCls, colSelCls2: colSelCls2, frozenCls2: frozenCls2, hiliCls: hiliCls, isDetail: isDetail, arrCellCls: arrCellCls, titleAttr: titleAttr, mkStyle: mkStyle });
     }
     // 行内任一单元格含 <br> 时，整行 cell-wrap 启用 pre-wrap，使长文本也能换行填充行高
     var multilineClamp = clampVar;
@@ -333,7 +366,7 @@ function _buildRowHtml(ri, tsIdColIdx) {
     for (var ci2 = 0; ci2 < cells.length; ci2++) {
         var c = cells[ci2];
         var wrapStyleAttr = multilineClamp ? ' style="' + multilineClamp + '"' : '';
-        html += '<td class="xs-td xs-editable' + c.modCls + c.colSelCls2 + c.frozenCls2 + c.hiliCls + (c.isDetail ? ' xs-detail-cell' : '') + c.arrCellCls + '" data-row="' + ri + '" data-col="' + ci2 + '"' + c.titleAttr + '>'
+        html += '<td class="xs-td xs-editable' + c.modCls + c.colSelCls2 + c.frozenCls2 + c.hiliCls + (c.isDetail ? ' xs-detail-cell' : '') + c.arrCellCls + '" data-row="' + ri + '" data-col="' + ci2 + '"' + c.titleAttr + c.mkStyle + '>'
             + '<div class="xs-cell-wrap"' + wrapStyleAttr + '>' + c.inner + '</div></td>';
     }
     html += '</tr>';
@@ -544,27 +577,47 @@ function patchCell(ri, ci) {
     if (isArrCol) td.classList.add('xs-arr-cell'); else td.classList.remove('xs-arr-cell');
     var frozen = (String(headers[ci]) === 'testcase_id');
     if (frozen) td.classList.add('xs-td-frozen'); else td.classList.remove('xs-td-frozen');
-    // 新增行高亮（绿底）
-    if (S._addedRowSet && S._addedRowSet.has(ri)) {
-        td.classList.add('xs-td-push-added');
-    } else {
-        td.classList.remove('xs-td-push-added');
+    // 按时间顺序选择高亮：最新操作的类型优先显示（与 _buildRowHtml 一致）
+    var _bestTime = 0;
+    var _bestClass = '';
+    var _bestMkInfo = null;
+
+    // 1) 推送单元格级变更高亮
+    if (S._highlightedCells && S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
+        var _t1 = S._highlightedTime || 0;
+        if (_t1 >= _bestTime) { _bestTime = _t1; _bestClass = 'xs-td-push-updated'; _bestMkInfo = null; }
     }
-    // 推送变更高亮
-    if (S._highlightedCells) {
-        if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
-            td.classList.add('xs-td-push-updated');
-        } else {
-            td.classList.remove('xs-td-push-updated');
+    // 2) 推送整行级变更高亮
+    if (S._highlightedCells && S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)) {
+        if (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci) {
+            var _t2 = S._highlightedTime || 0;
+            if (_t2 >= _bestTime) { _bestTime = _t2; _bestClass = 'xs-td-push-updated-row'; _bestMkInfo = null; }
         }
-        if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)
-            && (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci)) {
-            td.classList.add('xs-td-push-updated-row');
-        } else {
-            td.classList.remove('xs-td-push-updated-row');
-        }
+    }
+    // 3) 新增行高亮
+    if (S._addedRowSet && S._addedRowSet.has(ri)) {
+        var _t3 = S._addedRowTime || 0;
+        if (_t3 >= _bestTime) { _bestTime = _t3; _bestClass = 'xs-td-push-added'; _bestMkInfo = null; }
+    }
+    // 4) 用户手动标记高亮
+    var _mkInfo = (typeof isUserMarked === 'function') ? isUserMarked(ri, ci) : null;
+    if (_mkInfo) {
+        var _t4 = _mkInfo.timestamp || 0;
+        if (_t4 >= _bestTime) { _bestTime = _t4; _bestClass = 'xs-td-user-marked'; _bestMkInfo = _mkInfo; }
+    }
+
+    // 清除所有高亮 class
+    td.classList.remove('xs-td-push-updated', 'xs-td-push-updated-row', 'xs-td-push-added', 'xs-td-user-marked');
+    if (_bestClass) td.classList.add(_bestClass);
+    // 应用标记颜色（仅当标记是最新操作时）
+    if (_bestMkInfo) {
+        if (_bestMkInfo.bgColor) td.style.setProperty('background', _bestMkInfo.bgColor, 'important');
+        else td.style.setProperty('background', '', 'important');
+        if (_bestMkInfo.fontColor) td.style.setProperty('color', _bestMkInfo.fontColor, 'important');
+        else td.style.setProperty('color', '', 'important');
     } else {
-        td.classList.remove('xs-td-push-updated', 'xs-td-push-updated-row');
+        td.style.setProperty('background', '', 'important');
+        td.style.setProperty('color', '', 'important');
     }
     // tooltip 同步
     if (rawText) td.setAttribute('title', rawText); else td.removeAttribute('title');

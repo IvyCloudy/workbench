@@ -110,13 +110,20 @@ var S = {
     _addedOnly: false,
     // "仅看已删除行"筛选开关
     _deletedOnly: false,
+    // "仅看已标记行"筛选开关
+    _markedOnly: false,
     // 明细弹窗中修改过的单元格标记（持久化，不受 S.mods.clear() 影响）
     _detailModCellKeys: new Set(),
     // toast 当前隐藏定时器（避免连续 toast 互相截断）
     _toastTimer: null,
     // 表头中文别名映射（仅用于表头展示，不写回原始文件）
     // key = headers 中的英文字段名，value = 中文显示名
-    headerLabels: {}
+    headerLabels: {},
+    // 用户手动标记高亮：rects 列表 + 渲染用的快速查找 Map/Set
+    _userMarks: { rects: [], cellMap: null, rowMap: null, rowSet: null, cellTime: null, rowTime: null },
+    // 高亮操作时间戳（用于按时间顺序决定叠加优先级）
+    _highlightedTime: 0,  // _highlightedCells 最近一次设置的时间
+    _addedRowTime: 0      // _addedRowSet 最近一次更新的时间
 };
 
 // 统一判断「是否有任何弹窗/输入控件正在打开」，供全局快捷键拦截使用。
@@ -134,6 +141,95 @@ function _isAnyModalOpen() {
 function _isFocusInForm() {
     var ae = document.activeElement;
     return !!(ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable));
+}
+
+// ==================== 用户标记高亮 ====================
+// 重建 _userMarks 的快速查找 Set（含颜色信息和时间戳）
+// rects 按应用顺序排列，后标记的覆盖先标记的
+function _rebuildUserMarksCache() {
+    var rects = (S._userMarks && S._userMarks.rects) || [];
+    var cellMap = {};  // key:"ri:ci" -> {bgColor, fontColor, timestamp}
+    var rowMap = {};   // key:rowIdx -> {bgColor, fontColor, timestamp}
+    var rowSet = new Set();
+    var cellTime = {}; // key:"ri:ci" -> timestamp (用于外部时间比较)
+    var rowTime = {};  // key:rowIdx -> timestamp
+    rects.forEach(function (rc) {
+        var bg = rc.bgColor || null;
+        var fg = rc.fontColor || null;
+        var ts = (rc.timestamp != null) ? rc.timestamp : 0;  // 无时间戳视为时间 0（最旧）
+        if (rc.c1 === -1) {
+            // 整行标记：覆盖该行内之前所有单元格级标记
+            for (var r = rc.r1; r <= rc.r2; r++) {
+                rowSet.add(r);
+                rowMap[r] = { bgColor: bg, fontColor: fg, timestamp: ts };
+                rowTime[r] = ts;
+                var rPrefix = r + ':';
+                for (var key in cellMap) {
+                    if (cellMap.hasOwnProperty(key) && key.indexOf(rPrefix) === 0) {
+                        delete cellMap[key];
+                        delete cellTime[key];
+                    }
+                }
+            }
+        } else {
+            for (var r = rc.r1; r <= rc.r2; r++) {
+                for (var c = rc.c1; c <= rc.c2; c++) {
+                    var ck = r + ':' + c;
+                    cellMap[ck] = { bgColor: bg, fontColor: fg, timestamp: ts };
+                    cellTime[ck] = ts;
+                }
+            }
+        }
+    });
+    S._userMarks.cellMap = cellMap;
+    S._userMarks.rowMap = rowMap;
+    S._userMarks.rowSet = rowSet;
+    S._userMarks.cellTime = cellTime;
+    S._userMarks.rowTime = rowTime;
+}
+// 判断 (ri, ci) 是否被用户标记，返回 {bgColor, fontColor, timestamp} 或 null
+// 优先级由 _rebuildUserMarksCache 保证：rects 顺序遍历，后标记自动覆盖先标记
+function isUserMarked(ri, ci) {
+    var um = S._userMarks;
+    if (!um || !um.rects || um.rects.length === 0) return null;
+    if (!um.cellMap) _rebuildUserMarksCache();
+    // cellMap 已包含"最后生效的单元格级标记"（被行标记覆盖的项已清除）
+    var cellInfo = um.cellMap && um.cellMap[ri + ':' + ci];
+    if (cellInfo) return cellInfo;
+    // 整行标记（未被后续单元格级标记覆盖的行）
+    if (um.rowSet && um.rowSet.has(ri)) return um.rowMap[ri] || { bgColor: null, fontColor: null, timestamp: 0 };
+    return null;
+}
+// 判断某行是否有任何单元格被标记（行标记 或 单元格标记都算）
+function _isRowMarked(ri) {
+    var um = S._userMarks;
+    if (!um || !um.rects || um.rects.length === 0) return false;
+    if (!um.cellMap) _rebuildUserMarksCache();
+    // 整行标记
+    if (um.rowSet && um.rowSet.has(ri)) return true;
+    // 单元格级标记：遍历 cellMap 查找该行
+    var prefix = ri + ':';
+    for (var key in um.cellMap) {
+        if (um.cellMap.hasOwnProperty(key) && key.indexOf(prefix) === 0) return true;
+    }
+    return false;
+}
+// 统计有标记的行的数量
+function _countMarkedRows() {
+    var um = S._userMarks;
+    if (!um || !um.rects || um.rects.length === 0) return 0;
+    if (!um.cellMap) _rebuildUserMarksCache();
+    var markedSet = new Set();
+    // 整行标记的所有行
+    if (um.rowSet) um.rowSet.forEach(function (r) { markedSet.add(r); });
+    // 单元格标记的所属行
+    for (var key in um.cellMap) {
+        if (um.cellMap.hasOwnProperty(key)) {
+            var colonIdx = key.indexOf(':');
+            if (colonIdx > 0) markedSet.add(parseInt(key.substring(0, colonIdx), 10));
+        }
+    }
+    return markedSet.size;
 }
 
 // ==================== 撤销/重做 ====================
@@ -191,7 +287,9 @@ function snapshot() {
             headers: Array.isArray(d.headers) ? d.headers.slice() : [],
             rows: _cloneRows(d.rows),
             mods: Array.from(S.mods),
-            addedRowSet: S._addedRowSet ? Array.from(S._addedRowSet) : []
+            addedRowSet: S._addedRowSet ? Array.from(S._addedRowSet) : [],
+            highlightedTime: S._highlightedTime || 0,
+            addedRowTime: S._addedRowTime || 0
         };
         // 兼容字段：columnTypes 等若存在则一并保留（浅引用够用，前端不修改）
         if (d.columnTypes) snap.columnTypes = d.columnTypes;
@@ -232,6 +330,8 @@ function restoreSnapshot(snap) {
     // 撤销/重做时从快照恢复新增行集合，确保 _addedRowSet 与数据状态严格同步。
     // 旧快照不含 addedRowSet 字段时降级为空集合，避免从过期的 _addedInfos 重建错误索引。
     S._addedRowSet = new Set(snap.addedRowSet || []);
+    S._highlightedTime = snap.highlightedTime || 0;
+    S._addedRowTime = snap.addedRowTime || 0;
     renderTable();
     saveFile();
 }
@@ -428,8 +528,10 @@ window.addEventListener('message', function (e) {
                         }
                     }
                     S._highlightedCells = hl;
+                    S._highlightedTime = Date.now();
                 } else {
                     S._highlightedCells = null;
+                    S._highlightedTime = 0;
                     // highlightedCells=null 表示后端 diff 无变化（数据已回到快照基线），
                     // 同步清除 detailModCellKeys 避免单元格黄色背景残留
                     if (S._detailModCellKeys && S._detailModCellKeys.size > 0) S._detailModCellKeys.clear();
@@ -440,6 +542,7 @@ window.addEventListener('message', function (e) {
             if ('addedInfos' in m) {
                 if (!S._addedRowSet) S._addedRowSet = new Set();
                 S._addedRowSet.clear();
+                S._addedRowTime = Date.now();
                 if (m.addedInfos && Array.isArray(m.addedInfos) && m.addedInfos.length > 0) {
                     S._addedInfos = m.addedInfos;
                     for (var _ai = 0; _ai < m.addedInfos.length; _ai++) {
@@ -462,6 +565,20 @@ window.addEventListener('message', function (e) {
                     S._deletedInfos = [];
                     if (S._deletedOnly) S._deletedOnly = false;
                 }
+            }
+            // 用户标记更新
+            if ('userMarks' in m) {
+                var um2 = m.userMarks;
+                if (um2 && Array.isArray(um2)) {
+                    S._userMarks.rects = um2;
+                } else {
+                    S._userMarks.rects = [];
+                }
+                S._userMarks.cellMap = null;
+                S._userMarks.rowMap = null;
+                S._userMarks.rowSet = null;
+                S._userMarks.cellTime = null;
+                S._userMarks.rowTime = null;
             }
             renderTable();
             return;
@@ -497,6 +614,7 @@ window.addEventListener('message', function (e) {
             S._failedOnly = false;
             S._modifiedOnly = false;
             S._highlightedCells = null;
+            S._highlightedTime = 0;
         }
         // 高亮信息更新（必须在 _lastHeadSig 检查之后，避免首次 init 被列变化分支覆盖）
         // 仅在字段存在时更新：visible/reload 等不带 highlightedCells 时保留已有高亮
@@ -516,8 +634,10 @@ window.addEventListener('message', function (e) {
                     }
                 }
                 S._highlightedCells = hl;
+                S._highlightedTime = Date.now();
             } else {
                 S._highlightedCells = null;
+                S._highlightedTime = 0;
             }
         }
         // 推送失败标记：从扩展端持久化文件（push-failures.json）下发，按 testcase_id 关联。
@@ -555,6 +675,7 @@ window.addEventListener('message', function (e) {
         if ('addedInfos' in m) {
             if (!S._addedRowSet) S._addedRowSet = new Set();
             S._addedRowSet.clear();
+            S._addedRowTime = Date.now();
             if (m.addedInfos && Array.isArray(m.addedInfos) && m.addedInfos.length > 0) {
                 S._addedInfos = m.addedInfos;
                 for (var ai = 0; ai < m.addedInfos.length; ai++) {
@@ -567,6 +688,20 @@ window.addEventListener('message', function (e) {
             if (S._addedRowSet.size === 0) {
                 if (S._addedOnly) S._addedOnly = false;
             }
+        }
+        // 用户标记高亮（持久化数据）
+        if ('userMarks' in m) {
+            var um = m.userMarks;
+            if (um && Array.isArray(um)) {
+                S._userMarks.rects = um;
+            } else {
+                S._userMarks.rects = [];
+            }
+            S._userMarks.cellMap = null;
+            S._userMarks.rowMap = null;
+            S._userMarks.rowSet = null;
+            S._userMarks.cellTime = null;
+            S._userMarks.rowTime = null;
         }
         clearHistory();
         renderTable();
@@ -591,6 +726,20 @@ window.addEventListener('message', function (e) {
             S.headerLabels = m.headerLabels;
             try { renderTable(); } catch (_) { /* ignore */ }
         }
+    } else if (m.type === 'userMarksUpdated') {
+        // 用户标记更新：从扩展端推送最新的标记列表
+        var um = m.userMarks;
+        if (um && Array.isArray(um)) {
+            S._userMarks.rects = um;
+        } else {
+            S._userMarks.rects = [];
+        }
+        S._userMarks.cellMap = null;
+        S._userMarks.rowMap = null;
+        S._userMarks.rowSet = null;
+        S._userMarks.cellTime = null;
+        S._userMarks.rowTime = null;
+        try { renderTable(); } catch (_) { /* ignore */ }
     } else if (m.type === 'pushDone') {
         // 推送流程结束钩子（隐藏 loading 等）。
         S._pushing = false;

@@ -19,7 +19,7 @@ function bindToolbar() {
             var hasFailed = !!(S._pushFailedTsIds && S._pushFailedTsIds.size > 0);
             if (!hasFailed) return;
             S._failedOnly = !S._failedOnly;
-            if (S._failedOnly) { S._modifiedOnly = false; S._addedOnly = false; S._deletedOnly = false; }
+            if (S._failedOnly) { S._modifiedOnly = false; S._addedOnly = false; S._deletedOnly = false; S._markedOnly = false; }
             renderTable();
             if (S._failedOnly && S._viewRows && S._viewRows.length > 0) {
                 S.sel = new Set(S._viewRows);
@@ -37,7 +37,7 @@ function bindToolbar() {
             if (!hasModified) return;
             S._modifiedOnly = !S._modifiedOnly;
             // 互斥：切换仅看修改行时关闭其他筛选
-            if (S._modifiedOnly) { S._failedOnly = false; S._addedOnly = false; S._deletedOnly = false; }
+            if (S._modifiedOnly) { S._failedOnly = false; S._addedOnly = false; S._deletedOnly = false; S._markedOnly = false; }
             // 不要清空 _highlightedCells：_getModifiedRowSet() 依赖它判定修改行，
             // 清空会导致 modifiedOnly 过滤条件失效，且失去单元格级差异高亮
             renderTable();
@@ -56,7 +56,7 @@ function bindToolbar() {
             var hasAdded = !!(S._addedRowSet && S._addedRowSet.size > 0);
             if (!hasAdded) return;
             S._addedOnly = !S._addedOnly;
-            if (S._addedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._deletedOnly = false; }
+            if (S._addedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._deletedOnly = false; S._markedOnly = false; }
             renderTable();
             if (S._addedOnly && S._viewRows && S._viewRows.length > 0) {
                 S.sel = new Set(S._viewRows);
@@ -73,8 +73,25 @@ function bindToolbar() {
             var hasDeleted = !!(S._deletedInfos && S._deletedInfos.length > 0);
             if (!hasDeleted) return;
             S._deletedOnly = !S._deletedOnly;
-            if (S._deletedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._addedOnly = false; }
+            if (S._deletedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._addedOnly = false; S._markedOnly = false; }
             renderTable();
+        });
+    }
+    var markedFilterBtn = document.getElementById('markedFilterBtn');
+    if (markedFilterBtn) {
+        markedFilterBtn.addEventListener('click', function () {
+            if (markedFilterBtn.classList.contains('is-disabled')) return;
+            var hasMarked = (typeof _countMarkedRows === 'function') ? _countMarkedRows() > 0 : false;
+            if (!hasMarked) return;
+            S._markedOnly = !S._markedOnly;
+            if (S._markedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._addedOnly = false; S._deletedOnly = false; }
+            renderTable();
+            if (S._markedOnly && S._viewRows && S._viewRows.length > 0) {
+                S.sel = new Set(S._viewRows);
+                updateRowSelClasses();
+                updateSelectionInfo();
+                updatePushBtn();
+            }
         });
     }
     var openBtn = document.querySelector('[data-action="openTextEditor"]');
@@ -130,6 +147,7 @@ function bindToolbar() {
             S._modifiedOnly = false;
             S._addedOnly = false;
             S._deletedOnly = false;
+            S._markedOnly = false;
             // _deletedInfos 由后端 diff 重新下发，此处不提前清空以免渲染闪烁
             // 关闭可能打开的列筛选弹窗（若存在该函数）
             try { if (typeof closeColFilter === 'function') closeColFilter(); } catch (e) {}

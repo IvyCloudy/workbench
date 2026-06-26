@@ -792,13 +792,15 @@ function getArrayColKind(ci) {
     var t = S.data.columnTypes[name];
     return (t === 'string[]' || t === 'number[]') ? t : null;
 }
-// 生成 RFC4122 v4 UUID（与扩展端 utils.genUuid 实现一致）
+// 生成 MA + hex 格式 UUID（与扩展端 utils.genUuid 实现一致）
 function genUuidV4() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-        var r = (Math.random() * 16) | 0;
-        var v = c === 'x' ? r : (r & 0x3) | 0x8;
-        return v.toString(16);
-    });
+    var arr = new Uint8Array(16);
+    crypto.getRandomValues(arr);
+    var hex = '';
+    for (var i = 0; i < arr.length; i++) {
+        hex += (arr[i] < 16 ? '0' : '') + arr[i].toString(16);
+    }
+    return 'MA' + hex;
 }
 function showToast(msg, type) {
     var t = document.getElementById('toast');

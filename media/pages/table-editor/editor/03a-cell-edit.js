@@ -626,6 +626,13 @@ function insertRow(at) {
         }
         S.rowHeights = nrh;
     }
+    // 同步调整"完全展开"行集合：与 rowHeights 保持一致，避免插入后出现
+    // "行高完整但内容仍被 clamp 截断"的错位现象。
+    if (S._rowExpanded && S._rowExpanded.size > 0) {
+        var nre = new Set();
+        S._rowExpanded.forEach(function (i) { nre.add(i >= at ? i + 1 : i); });
+        S._rowExpanded = nre;
+    }
     // 行结构变化 → 清除单元格矩形选区，避免索引错位
     S.cellSel = null;
     saveFile();
@@ -685,6 +692,15 @@ function deleteRow(ri) {
             nrh[i > ri ? i - 1 : i] = S.rowHeights[rk];
         }
         S.rowHeights = nrh;
+    }
+    // 同步“完全展开”行集合：与 rowHeights 保持一致
+    if (S._rowExpanded && S._rowExpanded.size > 0) {
+        var nre = new Set();
+        S._rowExpanded.forEach(function (i) {
+            if (i === ri) return;
+            nre.add(i > ri ? i - 1 : i);
+        });
+        S._rowExpanded = nre;
     }
     S.cellSel = null;
     saveFile();
@@ -749,6 +765,16 @@ function deleteSelectedRows() {
         var nrh2 = {};
         rhArr.forEach(function (it) { if (!isNaN(it.i)) nrh2[it.i] = it.v; });
         S.rowHeights = nrh2;
+    }
+    // 同步“完全展开”行集合：与 rowHeights 保持一致
+    if (S._rowExpanded && S._rowExpanded.size > 0) {
+        var reArr = Array.from(S._rowExpanded);
+        sorted.forEach(function (delI) {
+            reArr = reArr.filter(function (i) { return i !== delI; }).map(function (i) {
+                return i > delI ? i - 1 : i;
+            });
+        });
+        S._rowExpanded = new Set(reArr);
     }
     S.sel.clear();
     S.cellSel = null;

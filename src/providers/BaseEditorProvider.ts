@@ -562,6 +562,9 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     force: !!force,
                     reason,
                     externalChange: isExternal,
+                    // 文件绝对路径：前端用它作为 UI 状态（列宽/行高/筛选/搜索/滚动）
+                    // 的命名空间隔离 key，避免同 dataType 的不同文件互相串扰。
+                    filePath,
                 };
                 if (highlighted !== undefined) {
                     msgPayload.highlightedCells = highlighted;
@@ -601,6 +604,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                             force: !!force,
                             reason: reason + ':fallback',
                             externalChange: false,
+                            filePath,
                         };
                         log(`📤 push (fallback) rows=${(session.cachedTableData.rows || []).length}`);
                         webviewPanel.webview.postMessage(fallbackPayload);

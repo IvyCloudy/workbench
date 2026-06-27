@@ -52,6 +52,9 @@ var S = {
     dataType: __CFG.dataType,
     msgType: __CFG.msgType,
     data: { headers: [], rows: [] },
+    // 当前文档的绝对路径（由扩展端通过 Data 消息下发），用于 UI 状态命名空间隔离，
+    // 避免同 dataType 的不同文件之间共享列宽/行高/筛选/搜索/滚动位置。
+    filePath: '',
     sel: new Set(),         // 选中的行号集合
     cell: null,             // 当前激活单元格 {r, c}
     clip: null,             // 单元格剪贴板
@@ -59,6 +62,10 @@ var S = {
     mods: new Set(),        // 修改过的单元格 key="r,c"
     colWidths: {},          // 列宽
     rowHeights: {},         // 行高（key=行索引，value=高度像素），仅在内存中保留
+    // "已完全展开"行的索引集合：由双击/拖动触发的 _expandRowToFitContent 写入。
+    // 渲染层（_buildRowHtml / patchCell）会跳过 --xs-clamp 行数限制，让 CSS 默认值（99）
+    // 接管，避免"行高已是多行，但 cell-wrap 还在按 floor(rowH/lineH) 截断"的不一致。
+    _rowExpanded: new Set(),
     vscode: null,
     editing: false,
     _ctxRow: -1,            // 右键当前行
@@ -391,9 +398,13 @@ function init() {
 // ==================== UI 状态持久化 ====================
 // 使用 vscode.getState/setState 保存列宽/行高/筛选/搜索词/滚动位置，
 // 关闭 webview 后重新打开能复原。
-// 按 dataType 进行命名空间隔离（同一 webview 在不同文件类型间不互相干扰）。
+// 按 dataType + filePath 进行命名空间隔离：
+//   - dataType 区分文件类型（testcase / json 等）
+//   - filePath 区分具体文件，避免同一类型不同文件间列宽/行高/筛选/滚动位置串扰
+// 首屏 init 时 S.filePath 还没设置（扩展端 Data 消息尚未到达），此时用 '__pending__'
+// 作占位，等收到第一帧 Data 消息后会重新 loadUiState 用真实文件路径还原一次。
 function _stateKey() {
-    return 'ui:' + (S.dataType || 'default');
+    return 'ui:' + (S.dataType || 'default') + ':' + (S.filePath || '__pending__');
 }
 function loadUiState() {
     try {
@@ -411,6 +422,22 @@ function loadUiState() {
             S.rowHeights = {};
             for (var k2 in snap.rowHeights) {
                 if (snap.rowHeights.hasOwnProperty(k2)) S.rowHeights[k2] = snap.rowHeights[k2];
+            }
+        }
+        // 恢复"已完全展开"行集合：与 rowHeights 成对出现，否则重开文件后会出现
+        // "行高已展开但内容被 --xs-clamp 截断"的不一致。
+        // 兼容老快照：若不含 _rowExpanded 但含 rowHeights，则把所有有自定义高度的行
+        // 均视为完全展开（这与之前版本中双击/拖动造成的现实含义一致）。
+        if (Array.isArray(snap.rowExpanded)) {
+            S._rowExpanded = new Set(snap.rowExpanded.map(function (x) { return parseInt(x, 10); }).filter(function (x) { return !isNaN(x); }));
+        } else {
+            S._rowExpanded = new Set();
+            if (S.rowHeights) {
+                for (var _krk in S.rowHeights) {
+                    if (!S.rowHeights.hasOwnProperty(_krk)) continue;
+                    var _ri = parseInt(_krk, 10);
+                    if (!isNaN(_ri) && S.rowHeights[_krk] > 0) S._rowExpanded.add(_ri);
+                }
             }
         }
         if (snap.colFilters && typeof snap.colFilters === 'object') {
@@ -469,6 +496,7 @@ function persistUiStateNow() {
         raw[_stateKey()] = {
             colWidths: S.colWidths || {},
             rowHeights: S.rowHeights || {},
+            rowExpanded: (S._rowExpanded instanceof Set) ? Array.from(S._rowExpanded) : [],
             colFilters: cf,
             searchKw: S._searchKw || '',
             scrollTop: cont ? cont.scrollTop : 0
@@ -495,6 +523,26 @@ window.addEventListener('message', function (e) {
     var m = e.data;
     if (!m) return;
     if (m.type === S.msgType) {
+        // 文件路径切换检测：扩展端每次推数据都带上 filePath；
+        // 当与当前 S.filePath 不一致时，说明：
+        //   1) 首屏（S.filePath 还是 '__pending__' 占位）
+        //   2) 同一 webview 实例被复用切到了另一个文件（CustomEditor 复用场景）
+        // 都需要先把旧 key 的内存状态清空，再用新 key 重新 loadUiState 还原。
+        // 这样可以彻底解决「同 dataType 的不同文件互相串扰列宽/行高/筛选/滚动位置」的问题。
+        if (typeof m.filePath === 'string' && m.filePath && m.filePath !== S.filePath) {
+            // 切换前先把当前 key 的状态写一次（避免丢失最后一次未持久化的修改）
+            try { if (S.filePath) persistUiStateNow(); } catch (_) { /* ignore */ }
+            S.filePath = m.filePath;
+            // 清空内存里旧文件残留的 UI 状态，避免下面 loadUiState 没命中时残留旧数据
+            S.colWidths = {};
+            S.rowHeights = {};
+            S._rowExpanded = new Set();
+            S._colFilters = {};
+            S._searchKw = '';
+            S._pendingScrollTop = 0;
+            // 用新 key 重新加载该文件自己的 UI 状态（首次打开则全部为空，即默认单行）
+            try { loadUiState(); } catch (_) { /* ignore */ }
+        }
         // 表头中英映射：数据下发时顺带更新（需在 renderTable 之前写入 S，让骨架构造拿到最新映射）
         if (m.headerLabels && typeof m.headerLabels === 'object') {
             S.headerLabels = m.headerLabels;

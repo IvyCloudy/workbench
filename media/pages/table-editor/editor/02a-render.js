@@ -11,9 +11,35 @@
 // 阈值：行数 >= 此值时启用虚拟滚动（仅渲染视口附近行）
 var XS_VIRTUAL_THRESHOLD = 500;
 // 估算行高（无自定义行高时使用），与 .xs-td 默认行高保持一致
-var XS_ROW_EST_HEIGHT = 26;
+// 估算行高（虚拟滚动用）：默认值 36，运行时由 _measureEstRowH 根据真实首行 offsetHeight 校正，
+// 避免与硬编码 26/32 不符导致虚拟滚动累积偏差。
+var XS_ROW_EST_HEIGHT = 36;
 // 上下缓冲行数（视口外预渲染数量），减少滚动时的"白屏"感
 var XS_VIRTUAL_BUFFER = 10;
+
+// 缓存运行时探测到的 .xs-cell-wrap 单行行高（含字体/lineHeight 影响）。
+// 用于把"行高像素"换算为"--xs-clamp 行数"。
+// 取首个 .xs-cell-wrap 的 computed lineHeight；若 normal/读不到则用 fontSize*1.4 兜底；
+// 整张表全失败时回退 18.2（保留旧值兼容）。
+// 缓存键依赖 fontSize+lineHeight 字符串，主题/字号变化时会自动失效。
+var _xsLineHCache = { key: '', val: 18.2 };
+function _xsLineHeight() {
+    try {
+        var w = document.querySelector('.xs-cell-wrap');
+        if (!w) return _xsLineHCache.val;
+        var cs = window.getComputedStyle(w);
+        var key = (cs.fontSize || '') + '|' + (cs.lineHeight || '');
+        if (key === _xsLineHCache.key && _xsLineHCache.val > 0) return _xsLineHCache.val;
+        var lh = parseFloat(cs.lineHeight);
+        if (!isFinite(lh) || lh <= 0) {
+            var fs = parseFloat(cs.fontSize) || 13;
+            lh = fs * 1.4;
+        }
+        _xsLineHCache.key = key;
+        _xsLineHCache.val = lh;
+        return lh;
+    } catch (_e) { return _xsLineHCache.val; }
+}
 
 // 主入口：根据当前数据规模选择渲染策略
 function renderTable() {
@@ -263,11 +289,24 @@ function _buildRowHtml(ri, tsIdColIdx) {
     var rowStyle = (rh && rh > 0) ? ' style="height:' + rh + 'px"' : '';
     // 多行省略号：按当前行高换算可显示行数，写入 CSS 变量 --xs-clamp
     // 行高 - td 上下 padding/border(14px) = wrap 可视高，除以单行高(font-size 13px*line-height 1.4≈18.2px)
-    var clampVar = '';
+    //
+    // 例外：若该行被标记为"完全展开"（双击/拖动 _expandRowToFitContent 设置），
+    //       行高已按真实内容算好，此时不能再用 floor(rowH/lineH) 反推 clamp ——
+    //       简单除法+floor 总会少算 1 行左右，触发 ellipsis 截断；
+    //       所以这种情况下不输出 --xs-clamp，让 CSS 默认 99 行接管，文本完整显示。
+    //
+    // 兜底：S.rowHeights 有自定义高度但 _rowExpanded 未登记的场景（如老快照、
+    //   外部代码直接写入 rowHeights 等）会出现"行高变高但内容仍被截断"的不一致。
+    //   这里在渲染期顺手补登记，让两个状态位最终一致。
     if (rh && rh > 0) {
-        var _wrapH = rh - 14;
-        var _lines = Math.max(1, Math.floor(_wrapH / 18.2));
-        clampVar = '--xs-clamp:' + _lines + ';';
+        if (!S._rowExpanded) S._rowExpanded = new Set();
+        if (!S._rowExpanded.has(ri)) S._rowExpanded.add(ri);
+    }
+    var clampVar = '';
+    var isFullyExpanded = !!(S._rowExpanded && S._rowExpanded.has(ri));
+    var _clampLines = _computeClampLines(rh, isFullyExpanded);
+    if (_clampLines) {
+        clampVar = '--xs-clamp:' + _clampLines + ';';
     }
     var failCls = '';
     var failReason = '';
@@ -290,7 +329,7 @@ function _buildRowHtml(ri, tsIdColIdx) {
     var rowNumTitle = '原始行号: ' + (ri + 1);
     if (failReason) rowNumTitle += ' | 推送失败：' + failReason;
     // 渲染为普通行；不再提供整行 HTML5 拖动排序能力（与矩形拖选、行横扫存在交互冲突）。
-    // 先遍历一次构造所有单元格 inner HTML，检测是否有 <br> 换行
+    // 先遍历一次构造所有单元格 inner HTML，检测是否含真实换行符 \n
     var cells = [];
     var hasBr = false;
     for (var ci = 0; ci < headers.length; ci++) {
@@ -357,30 +396,20 @@ function _buildRowHtml(ri, tsIdColIdx) {
         }
         var colSelCls2 = S.colSel.has(ci) ? ' xs-col-selected' : '';
         var frozenCls2 = (String(headers[ci]) === 'testcase_id') ? ' xs-td-frozen' : '';
-        var isDetail = hasDetailRowsAtCol(ri, ci);
-        var isArrCol = (typeof isArrayCol === 'function') && isArrayCol(ci);
-        var rawText = formatCellValue(v);
-        var inner;
-        var titleAttr;
-        var arrCellCls = '';
-        if (isDetail) {
-            inner = '<span class="xs-detail-link" data-detail-row="' + ri + '" data-detail-col="' + ci + '">' + escapeHtml(rawText) + '</span>';
-            titleAttr = rawText ? ' title="' + escapeHtml(rawText) + '"' : '';
-        } else if (isArrCol) {
-            var arr = Array.isArray(v) ? v : [];
-            inner = _buildArrayChipsHtml(arr);
-            titleAttr = arr.length > 0 ? ' title="' + escapeHtml(rawText) + '"' : '';
-            arrCellCls = ' xs-arr-cell';
-        } else {
-            inner = escapeHtml(rawText).replace(/\\n/g, '<br>').replace(/\n/g, '<br>');
-            titleAttr = rawText ? ' title="' + escapeHtml(rawText) + '"' : '';
-        }
-        if (inner.indexOf('<br>') >= 0) hasBr = true;
+        // 单元格内部 HTML 与相关 cls/title 由 _buildCellInner 统一产出，与 patchCell 复用。
+        var _ci = _buildCellInner(ri, ci, v);
+        var inner = _ci.inner;
+        var isDetail = _ci.isDetail;
+        var arrCellCls = _ci.arrCellCls;
+        var titleAttr = _ci.titleAttr;
+        if (inner.indexOf('\n') >= 0) hasBr = true;
         cells.push({ inner: inner, modCls: modCls, colSelCls2: colSelCls2, frozenCls2: frozenCls2, hiliCls: hiliCls, isDetail: isDetail, arrCellCls: arrCellCls, titleAttr: titleAttr, mkStyle: mkStyle });
     }
-    // 行内任一单元格含 <br> 时，整行 cell-wrap 启用 pre-wrap，使长文本也能换行填充行高
+    // 内容中的换行符 \n 由 CSS white-space 控制：
+    //   - 单行模式（nowrap）下 \n 被视为空格，不会撑高
+    //   - 多行模式（pre-wrap）下 \n 产生真实换行
+    // 故此处无需任何额外内联样式补丁。
     var multilineClamp = clampVar;
-    if (!clampVar && hasBr) multilineClamp = 'white-space:pre-wrap;';
     var html = '<tr data-row="' + ri + '" class="' + (selCls + resizedCls + failCls).trim() + '"' + rowStyle + '>'
         + '<td class="xs-td xs-td-cb xs-td-rownum" data-row="' + ri + '" title="' + escapeHtml(rowNumTitle) + '">'
         +   '<span class="xs-rownum">' + (ri + 1) + '</span>'
@@ -396,6 +425,46 @@ function _buildRowHtml(ri, tsIdColIdx) {
     return html;
 }
 
+// 根据行高计算 --xs-clamp 行数。
+// 在 _buildRowHtml / patchCell 两处重复使用：
+//   - 未设自定义行高 (rh<=0) 返回 ""
+//   - 已完全展开 (isFullyExpanded) 返回 ""（CSS 默认 99 行接管，文本完整显示）
+//   - 其它情况返回可显示行数字符串（供拼接 "--xs-clamp:N;"）
+function _computeClampLines(rh, isFullyExpanded) {
+    if (!(rh && rh > 0) || isFullyExpanded) return '';
+    var wrapH = rh - 14; // td padding+border = 14px
+    var lines = Math.max(1, Math.floor(wrapH / _xsLineHeight()));
+    return String(lines);
+}
+
+// 构造单元格内部 HTML 片段。为 _buildRowHtml / patchCell 共用。
+// 返回：{ inner, isDetail, isArrCol, arrCellCls, titleAttr, rawText }
+function _buildCellInner(ri, ci, v) {
+    var isDetail = (typeof hasDetailRowsAtCol === 'function') && hasDetailRowsAtCol(ri, ci);
+    var isArrCol = (typeof isArrayCol === 'function') && isArrayCol(ci);
+    var rawText = formatCellValue(v);
+    // tooltip 统一计算：把字面 "\n"（两字符）转为真实换行符后再 escapeHtml，
+    // 这样原生 tooltip 的换行表现与单元格多行模式展开后的显示完全一致。
+    var titleAttr = rawText ? ' title="' + escapeHtml(rawText.replace(/\\n/g, '\n')) + '"' : '';
+    var inner;
+    var arrCellCls = '';
+    if (isDetail) {
+        inner = '<span class="xs-detail-link" data-detail-row="' + ri + '" data-detail-col="' + ci + '">' + escapeHtml(rawText) + '</span>';
+    } else if (isArrCol) {
+        var arr = Array.isArray(v) ? v : [];
+        inner = _buildArrayChipsHtml(arr);
+        arrCellCls = ' xs-arr-cell';
+    } else {
+        // 把字面 "\n"（两字符）统一成真实换行符；保留真实换行符 \n（U+000A）。
+        // 由 CSS 控制呈现：
+        //   - 默认 .xs-cell-wrap 为 white-space:nowrap → \n 被视为空格，单元格保持单行不被撑高
+        //   - .xs-tr-resized .xs-cell-wrap 为 white-space:pre-wrap → \n 产生真实换行
+        // 这样无需占位 span，行为最简单稳健。
+        inner = escapeHtml(rawText).replace(/\\n/g, '\n');
+    }
+    return { inner: inner, isDetail: isDetail, isArrCol: isArrCol, arrCellCls: arrCellCls, titleAttr: titleAttr, rawText: rawText };
+}
+
 // 全量渲染（小表格）：把所有 view 行一次写入 tbody
 function _renderAllBody() {
     var tbody = document.getElementById('xsTbody');
@@ -408,9 +477,27 @@ function _renderAllBody() {
     tbody.innerHTML = parts.join('') + _buildGhostRowsHtml(headers);
 }
 
+// 根据当前 DOM 中第一个未自定义高度的行测量真实默认行高，动态校正 XS_ROW_EST_HEIGHT。
+// 避免主题/字体/padding 变化后还用硬编码 36 导致虚拟滚动高度累积偏差。
+function _measureEstRowH() {
+    try {
+        var rows = document.querySelectorAll('tbody tr[data-row]');
+        for (var i = 0; i < rows.length; i++) {
+            var r = rows[i];
+            if (r.classList.contains('xs-tr-resized')) continue;
+            if (r.style && r.style.height) continue;
+            var h = r.offsetHeight || 0;
+            if (h > 0) { XS_ROW_EST_HEIGHT = h; return h; }
+        }
+    } catch (_e) { /* ignore */ }
+    return XS_ROW_EST_HEIGHT;
+}
+
 // 计算每个 view 行的累积偏移表 _rowOffsets[i] = 第 i 行的 top 像素
 // 长度 = view.length + 1，最后一项即总高度。
 function _computeRowOffsets() {
+    // 每次重算偏移前顺手校正一下估算高，只有负担一次 querySelector。
+    _measureEstRowH();
     var view = S._viewRows || [];
     var offs = new Array(view.length + 1);
     var acc = 0;
@@ -558,41 +645,23 @@ function patchCell(ri, ci) {
     var headers = (S.data && S.data.headers) || [];
     var row = (S.data && S.data.rows && S.data.rows[ri]) || [];
     var v = row[ci];
-    var rawText = formatCellValue(v);
-    var isDetail = (typeof hasDetailRowsAtCol === 'function') && hasDetailRowsAtCol(ri, ci);
-    var isArrCol = (typeof isArrayCol === 'function') && isArrayCol(ci);
-    var inner;
-    if (isDetail) {
-        inner = '<span class="xs-detail-link" data-detail-row="' + ri + '" data-detail-col="' + ci + '">' + escapeHtml(rawText) + '</span>';
-    } else if (isArrCol) {
-        var arr = Array.isArray(v) ? v : [];
-        inner = _buildArrayChipsHtml(arr);
-    } else {
-        inner = escapeHtml(rawText).replace(/\\n/g, '<br>').replace(/\n/g, '<br>');
-    }
+    // 与 _buildRowHtml 同源：单元格 HTML / 类名 / tooltip 均由 _buildCellInner 统一产出。
+    var _ci = _buildCellInner(ri, ci, v);
+    var inner = _ci.inner;
+    var isDetail = _ci.isDetail;
+    var isArrCol = _ci.isArrCol;
+    var rawText = _ci.rawText;
     // 保留拖动行高对应的 --xs-clamp 变量（行高已持久化时不能丢失多行省略号配置）
+    // 例外：若该行已被标记为"完全展开"，跳过 --xs-clamp，避免反推行数偏少导致截断。
     var rh2 = S.rowHeights[ri];
     var clampVar2 = '';
-    if (rh2 && rh2 > 0) {
-        var _wrapH2 = rh2 - 14;
-        var _lines2 = Math.max(1, Math.floor(_wrapH2 / 18.2));
-        clampVar2 = ' style="--xs-clamp:' + _lines2 + ';"';
+    var isFullyExpanded2 = !!(S._rowExpanded && S._rowExpanded.has(ri));
+    var _clampLines2 = _computeClampLines(rh2, isFullyExpanded2);
+    if (_clampLines2) {
+        clampVar2 = ' style="--xs-clamp:' + _clampLines2 + ';"';
     }
-    // 本行任意格含换行（\n 字面量或实际换行）且无自定义行高时，
-    // 启用 pre-wrap 使整行长文本也能换行填充行高，与 _buildRowHtml 行为一致
-    if (!clampVar2) {
-        var _anyBr = inner.indexOf('<br>') >= 0;
-        if (!_anyBr) {
-            for (var _j = 0; _j < row.length; _j++) {
-                var _rv = formatCellValue(row[_j]);
-                if (_rv && (_rv.indexOf('\\n') >= 0 || _rv.indexOf('\n') >= 0)) {
-                    _anyBr = true;
-                    break;
-                }
-            }
-        }
-        if (_anyBr) clampVar2 = ' style="white-space:pre-wrap;"';
-    }
+    // 内容中的换行符 \n 由 CSS white-space 控制（nowrap 单行 / pre-wrap 多行），
+    // 无需任何额外内联样式兜底。
     td.innerHTML = '<div class="xs-cell-wrap"' + clampVar2 + '>' + inner + '</div>';
     // class 同步
     if (S.mods.has(ri + ',' + ci)) td.classList.add('modified'); else td.classList.remove('modified');
@@ -670,7 +739,8 @@ function patchCell(ri, ci) {
         td.style.setProperty('background', '', 'important');
         td.style.setProperty('color', '', 'important');
     }
-    // tooltip 同步
-    if (rawText) td.setAttribute('title', rawText); else td.removeAttribute('title');
+    // tooltip 同步：与 _buildRowHtml 一致，字面 "\n" 转换为真实换行符，
+    // 使原生 tooltip 中的换行呈现与单元格展开后一致。
+    if (rawText) td.setAttribute('title', rawText.replace(/\\n/g, '\n')); else td.removeAttribute('title');
     // 注：detail-link click 已在 #tableContainer 上委托，无需在此重新绑定
 }

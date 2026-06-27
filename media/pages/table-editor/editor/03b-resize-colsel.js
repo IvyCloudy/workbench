@@ -360,8 +360,10 @@ function startRowResize(e) {
     var startY = e.clientY;
     var startH = tr.offsetHeight;
     document.body.classList.add('xs-row-resizing');
-    // 拖动开始：清除残留样式，回归 CSS 默认单行
-    tr.classList.remove('xs-tr-resized');
+    // 注意：不在这里立刻 remove xs-tr-resized 类，避免"按下→不动→松开"时
+    //   类被清掉但 tr.style.height 还保留，导致行高大却只显示单行省略号的不一致状态。
+    //   类的清理推迟到 onMove 第一次触发时（确认是真拖动）。
+    var movedOnce = false;
     var rowWraps = tr.querySelectorAll('.xs-cell-wrap');
 
     // td 的 padding+边框占用：padding:6px*2 + border:1px*2 = 14px
@@ -369,8 +371,12 @@ function startRowResize(e) {
     var MIN_SINGLE = 32;
 
     // 探测 cell-wrap 的行高（用于把"行高"换算成"可显示行数"）。
-    // 若读不到（display:-webkit-box 下 lineHeight 为 normal），用 fontSize*1.4 兜底。
+    // 优先复用渲染端的 _xsLineHeight，保证与 --xs-clamp 计算一致；
+    // 渲染端未加载时退回本地探测 + fontSize*1.4 兑底。
     function _probeLineHeight() {
+        if (typeof _xsLineHeight === 'function') {
+            try { var v = _xsLineHeight(); if (v > 0) return v; } catch (_e) {}
+        }
         if (!rowWraps[0]) return 18;
         var cs = window.getComputedStyle(rowWraps[0]);
         var lh = parseFloat(cs.lineHeight);
@@ -382,13 +388,9 @@ function startRowResize(e) {
     }
 
     // ----- 清除 cell-wrap 内联样式（恢复 CSS 控制）-----
+    // 复用模块级 _clearRowWrapStyles，避免与 _collapseRowToSingle / _expandRowToFitContent 三处重复。
     function _clearWraps() {
-        for (var c = 0; c < rowWraps.length; c++) {
-            rowWraps[c].style.whiteSpace = '';
-            rowWraps[c].style.overflow = '';
-            rowWraps[c].style.height = '';
-            rowWraps[c].style.removeProperty('--xs-clamp');
-        }
+        _clearRowWrapStyles(rowWraps);
     }
     // ----- 按行高写入 --xs-clamp（可显示行数），实现"超出可见区域显示 …" -----
     // 关键点：先临时给 tr 加 xs-tr-resized 类，让 CSS 的 -webkit-line-clamp 生效，
@@ -409,9 +411,14 @@ function startRowResize(e) {
         }
     }
 
-    _clearWraps();
-
     function onMove(ev) {
+        // 第一次真正移动时再做清理（清 xs-tr-resized 类 + 清 wrap 残留 + 清 tr 内联高度），
+        // 避免"按下→不动→松开"时把状态破坏。
+        if (!movedOnce) {
+            movedOnce = true;
+            tr.classList.remove('xs-tr-resized');
+            _clearWraps();
+        }
         var h = Math.max(24, startH + (ev.clientY - startY));
         tr.style.height = h + 'px';
         // 超过单行阈值：锁定 cell-wrap 高度 + 换行，跟随拖动实时更新
@@ -425,80 +432,118 @@ function startRowResize(e) {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
         document.body.classList.remove('xs-row-resizing');
-        var finalH = Math.max(24, startH + (ev.clientY - startY));
-        if (finalH > MIN_SINGLE + 4) {
-            tr.classList.add('xs-tr-resized');
-            S.rowHeights[ri] = finalH;
-            tr.style.height = finalH + 'px';
-            _lockWraps(finalH);
-        } else {
-            tr.classList.remove('xs-tr-resized');
-            delete S.rowHeights[ri];
-            tr.style.height = '';
-            _clearWraps();
+        var dy = ev.clientY - startY;
+        // 没真正拖动过（onMove 没触发或位移 < 3px）→ 视为误触/单纯点击
+        // 注意：如果 onMove 已经进入过（movedOnce=true）但位移<3px，那么在 onMove 里
+        // 清掉了 xs-tr-resized 类但可能写入了临时 height/--xs-clamp，需要恢复到
+        // 开始拖动前的状态，避免状态错乱。
+        if (!movedOnce || Math.abs(dy) < 3) {
+            if (movedOnce) {
+                _clearWraps();
+                tr.style.height = '';
+                // 恢复开始拖动前的状态位：若 S.rowHeights[ri] 原本有值，重新应用
+                var prevRh = S.rowHeights[ri];
+                if (prevRh && prevRh > 0) {
+                    tr.style.height = prevRh + 'px';
+                    tr.classList.add('xs-tr-resized');
+                }
+            }
+            return;
         }
+        // 行有拖动 → 行高变为"展示本行数据所有内容"（与双击展开一致）
+        _clearWraps();
+        tr.style.height = '';
+        _expandRowToFitContent(tr, ri);
         // 强制重排：确保样式立即生效
         // eslint-disable-next-line no-unused-expressions
         tr.offsetHeight;
-        if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
     }
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
 }
 
-// 双击行高拖手柄：切换行高（与 Excel 一致）。
-//   - 第奇数次双击（当前为单行）：用离屏量尺测量真实内容高度 → 自适应展开
-//   - 第偶数次双击（当前已展开）：恢复默认单行高度
-// 测量思路与 autoFitColumn 类似：
-//   - 不能直接读 td.scrollHeight —— 在未启用 xs-tr-resized 时单元格是 nowrap+ellipsis，
-//     一行内容只有 ~20px 高，根本读不到"展开后"的真实高度。
-//   - 用离屏量尺：宽度固定为该列内容区宽度（列宽 - padding），
-//     white-space:pre-wrap + word-break:break-word，把内容塞进去后读 offsetHeight，
-//     即为该单元格"展开多行"后的真实渲染高度。
-function resetRowHeight(e) {
-    if (e.target && e.target.tagName === 'INPUT') return;
-    var ct = e.currentTarget;
-    var tr = (ct && ct.closest) ? ct.closest('tr') : (ct && ct.parentElement);
-    if (!tr) return;
-    var ri = parseInt(tr.getAttribute('data-row'), 10);
-    if (isNaN(ri)) return;
-    if (typeof e.preventDefault === 'function') e.preventDefault();
-    if (typeof e.stopPropagation === 'function') e.stopPropagation();
+// ----- 测量真实默认行高 -----
+// 默认行高受主题、字体、padding 影响（实测可能是 32~40）。
+// 取同表中第一个未自定义高度（无 xs-tr-resized 类、无内联 height、且不是当前 tr 自己）的行
+// 的 offsetHeight 作为基准；找不到就退回常量 32。
+// 此函数在 resetRowHeight / _expandRowToFitContent 中用于"是否已展开"的阈值判断。
+function _measureDefaultRowH(curTr) {
+    try {
+        var tbl = curTr && curTr.closest ? curTr.closest('table') : null;
+        var scope = tbl || document;
+        var rows = scope.querySelectorAll('tbody tr[data-row]');
+        for (var i = 0; i < rows.length; i++) {
+            var r = rows[i];
+            if (r === curTr) continue;
+            if (r.classList.contains('xs-tr-resized')) continue;
+            if (r.style && r.style.height) continue;
+            var h = r.offsetHeight || 0;
+            if (h > 0) return h;
+        }
+    } catch (_e) { /* ignore */ }
+    return 32;
+}
 
-    // 若当前已是展开状态 → 恢复默认单行高度（toggle 回单行）
-    if (S.rowHeights[ri] && S.rowHeights[ri] > 0 && tr.classList.contains('xs-tr-resized')) {
-        delete S.rowHeights[ri];
-        tr.style.height = '';
-        tr.classList.remove('xs-tr-resized');
-        // 清除拖动可能残留的内联样式（含 height）
-        var _clrWraps = tr.querySelectorAll('.xs-cell-wrap');
-        for (var _cw = 0; _cw < _clrWraps.length; _cw++) {
-            _clrWraps[_cw].style.whiteSpace = '';
-            _clrWraps[_cw].style.overflow = '';
-            _clrWraps[_cw].style.height = '';
-        }
-        var _clrTds = tr.querySelectorAll('td.xs-editable');
-        for (var _c = 0; _c < _clrTds.length; _c++) { _clrTds[_c].style.whiteSpace = ''; _clrTds[_c].style.overflow = ''; }
-        if (typeof _computeRowOffsets === 'function') {
-            try { _computeRowOffsets(); } catch (e4) { /* ignore */ }
-        }
-        if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
+// ----- 把行恢复为默认单行高度（清状态 + 清类 + 清内联样式）-----
+// 共享给：
+//   1) resetRowHeight 的「toggle 回单行」分支
+//   2) _expandRowToFitContent 测得 finalH ≈ DEFAULT_H 的回归分支
+// 单一职责：彻底清掉自定义行高的所有副作用，确保 CSS 接管。
+// ----- 清除一行所有 .xs-cell-wrap 的内联样式（恢复 CSS 控制） -----
+// 共享给：startRowResize 的 _clearWraps、_collapseRowToSingle、_expandRowToFitContent 起始清理
+// 入参可以是 NodeList（已查询好）或 tr 元素（自动查询）；其它类型一律忽略。
+function _clearRowWrapStyles(wrapsOrTr) {
+    var wraps = null;
+    if (!wrapsOrTr) return;
+    if (wrapsOrTr.querySelectorAll) {
+        // tr 元素
+        wraps = wrapsOrTr.querySelectorAll('.xs-cell-wrap');
+    } else if (typeof wrapsOrTr.length === 'number') {
+        // NodeList / Array
+        wraps = wrapsOrTr;
+    } else {
         return;
     }
-
-    // 自适应展开前，先清除拖动可能残留的 cell-wrap 内联样式
-    var _preClrWraps = tr.querySelectorAll('.xs-cell-wrap');
-    for (var _pw = 0; _pw < _preClrWraps.length; _pw++) {
-        _preClrWraps[_pw].style.whiteSpace = '';
-        _preClrWraps[_pw].style.overflow = '';
-        _preClrWraps[_pw].style.height = '';
+    for (var i = 0; i < wraps.length; i++) {
+        var w = wraps[i];
+        w.style.whiteSpace = '';
+        w.style.overflow = '';
+        w.style.height = '';
+        w.style.removeProperty('--xs-clamp');
     }
+}
+
+function _collapseRowToSingle(tr, ri) {
+    if (!tr) return;
+    if (typeof ri === 'number' && !isNaN(ri)) {
+        delete S.rowHeights[ri];
+        if (S._rowExpanded) S._rowExpanded.delete(ri);
+    }
+    tr.style.height = '';
+    tr.classList.remove('xs-tr-resized');
+    _clearRowWrapStyles(tr);
+    var tds = tr.querySelectorAll('td.xs-editable');
+    for (var j = 0; j < tds.length; j++) {
+        tds[j].style.whiteSpace = '';
+        tds[j].style.overflow = '';
+    }
+}
+
+// ----- 把指定行扩展到"能完整显示所有内容"的高度 -----
+// 共享给：
+//   1) 双击空行（resetRowHeight 第奇数次双击）
+//   2) 鼠标拖动行高结束后（startRowResize 的 onUp）
+// 测量思路：
+//   - 用离屏量尺，宽度固定为该列内容区宽度（列宽 - padding），
+//     white-space:pre-wrap + word-break:break-word，读 offsetHeight 得到展开后的真实高度。
+function _expandRowToFitContent(tr, ri) {
+    if (!tr || isNaN(ri)) return;
+    // 清除拖动可能残留的 cell-wrap 内联样式（与 _collapseRowToSingle 走同一个工具函数）
+    _clearRowWrapStyles(tr);
 
     var headers = (S.data && S.data.headers) || [];
     if (headers.length === 0) {
-        delete S.rowHeights[ri];
-        tr.style.height = '';
-        tr.classList.remove('xs-tr-resized');
+        _collapseRowToSingle(tr, ri);
         return;
     }
 
@@ -521,8 +566,8 @@ function resetRowHeight(e) {
     document.body.appendChild(ruler);
 
     // 单元格 padding(6+6=12) + 边框(1+1=2) = 14px；内容可用宽 = 列宽 - 14
-    var CELL_PAD_V = 14; // 上下 padding+border
-    var CELL_PAD_H = 14; // 左右 padding+border
+    var CELL_PAD_V = 14;
+    var CELL_PAD_H = 14;
     var maxContentH = 0;
     try {
         var tds = tr.querySelectorAll('td.xs-editable');
@@ -534,6 +579,8 @@ function resetRowHeight(e) {
             var contentW = Math.max(20, colW - CELL_PAD_H);
             ruler.style.width = contentW + 'px';
             var wrap = td.querySelector('.xs-cell-wrap');
+            // 量尺 div 已设 white-space:pre-wrap，wrap.innerHTML 中保留的真实换行符 \n
+            // 会自然产生换行，准确测出"完整显示所有内容"所需高度。
             ruler.innerHTML = wrap ? wrap.innerHTML : '';
             var h = ruler.offsetHeight;
             if (h > maxContentH) maxContentH = h;
@@ -542,27 +589,63 @@ function resetRowHeight(e) {
         document.body.removeChild(ruler);
     }
 
-    // 行总高 = 最大内容高 + 单元格上下 padding+border
     var needH = Math.ceil(maxContentH) + CELL_PAD_V;
-    // 默认行高 ≈ 32px（font:13px × line-height:1.4 + padding:12 + border:2）
-    var DEFAULT_H = 32;
+    var DEFAULT_H = _measureDefaultRowH(tr);
     var finalH = Math.max(DEFAULT_H, Math.min(600, needH));
 
-    // 若结果接近默认行高（差异 ≤ 3px），视为单行内容，回归默认（不写自定义高度）
+    // 若结果接近默认行高（差异 ≤ 3px），视为单行内容，回归默认
     if (finalH - DEFAULT_H <= 3) {
-        delete S.rowHeights[ri];
-        tr.style.height = '';
-        tr.classList.remove('xs-tr-resized');
+        _collapseRowToSingle(tr, ri);
     } else {
         S.rowHeights[ri] = finalH;
+        // 标记该行为"完全展开"——渲染层据此跳过 --xs-clamp 行数限制，
+        // 避免行高足以容纳所有内容但单元格仍按 floor(rowH/lineH) 截断的现象。
+        if (!S._rowExpanded) S._rowExpanded = new Set();
+        S._rowExpanded.add(ri);
         tr.style.height = finalH + 'px';
         tr.classList.add('xs-tr-resized');
     }
 
-    // 行高变了，虚拟滚动的偏移表需要重算
     if (typeof _computeRowOffsets === 'function') {
         try { _computeRowOffsets(); } catch (e2) { /* ignore */ }
     }
-    // 持久化（与列宽一致使用 debounced 保存）
     if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
+}
+
+// 双击行高拖手柄：切换行高（与 Excel 一致）。
+//   - 第奇数次双击（当前为单行）：自适应展开为"完整显示所有内容"
+//   - 第偶数次双击（当前已展开）：恢复默认单行高度
+function resetRowHeight(e) {
+    if (e.target && e.target.tagName === 'INPUT') return;
+    var ct = e.currentTarget;
+    var tr = (ct && ct.closest) ? ct.closest('tr') : (ct && ct.parentElement);
+    if (!tr) return;
+    var ri = parseInt(tr.getAttribute('data-row'), 10);
+    if (isNaN(ri)) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    if (typeof e.stopPropagation === 'function') e.stopPropagation();
+
+    // 判断当前是否已展开：以 hasCustomH 与 hasResizedCls 为权威状态位。
+    //   1) S.rowHeights[ri] 有值 → 已展开
+    //   2) tr 带 xs-tr-resized 类 → 已展开
+    // 注意：之前曾用 curH > DEFAULT_H + 3 做兜底，但默认行高随主题、字体、padding
+    //   及上下行高变化会落在 32~40 之间，常导致最后一行/边界行被误判为已展开，
+    //   从而第一次双击直接走"回单行"分支，无法触发展开测量。
+    //   两个状态位天然由本模块统一维护，不依赖它们之外的兜底反而更稳。
+    var hasCustomH = !!(S.rowHeights[ri] && S.rowHeights[ri] > 0);
+    var hasResizedCls = tr.classList.contains('xs-tr-resized');
+    var isExpanded = hasCustomH || hasResizedCls;
+
+    // 若当前已是展开状态 → 恢复默认单行高度（toggle 回单行）
+    if (isExpanded) {
+        _collapseRowToSingle(tr, ri);
+        if (typeof _computeRowOffsets === 'function') {
+            try { _computeRowOffsets(); } catch (e4) { /* ignore */ }
+        }
+        if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
+        return;
+    }
+
+    // 当前为单行 → 展开为"完整显示所有内容"
+    _expandRowToFitContent(tr, ri);
 }

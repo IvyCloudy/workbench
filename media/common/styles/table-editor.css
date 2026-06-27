@@ -162,7 +162,10 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 .xs-td-cb .xs-row-resizer{position:absolute;left:0;right:0;bottom:0;height:4px;cursor:row-resize;z-index:4}
 tbody tr:hover .xs-td-cb .xs-row-resizer{background:rgba(0,120,212,.25)}
 .xs-cell-wrap{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;word-break:break-word;line-height:1.4}
-/* 行高被人为调大后：单元格内容多行换行 + 多行省略号（行数由 JS 写入 CSS 变量 --xs-clamp） */
+/* 行高被人为调大后：单元格内容多行换行 + 多行省略号（行数由 JS 写入 CSS 变量 --xs-clamp）。
+   单元格文本里的换行符 \n 由 white-space 直接控制：
+     - 默认 nowrap 模式：\n 视为空格，单元格保持单行不会被换行符撑高
+     - .xs-tr-resized 下 pre-wrap 模式：\n 产生真实换行 */
 tbody tr.xs-tr-resized .xs-td{white-space:normal;overflow:hidden}
 tbody tr.xs-tr-resized .xs-cell-wrap{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--xs-clamp,99);line-clamp:var(--xs-clamp,99);white-space:pre-wrap;word-break:break-word;overflow:hidden;text-overflow:ellipsis;line-height:1.4}
 .xs-td-cb:hover{background:rgba(0,120,212,.1)}

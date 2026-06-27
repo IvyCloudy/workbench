@@ -91,6 +91,9 @@ var S = {
     _history: [],           // 过去的快照栈
     _future: [],            // 已撤销可重做的栈
     _HISTORY_LIMIT: 100,
+    // 撤销/重做触发的 saveFile 节流定时器：合并 Cmd+Z/Cmd+Y 连击产生的多次 save，
+    // 避免扩展端处理顺序与 webview 处理顺序错位时旧 Data 帧覆盖新 S.data。
+    _restoreSaveTimer: 0,
     // 列选择（Excel 风格）
     colSel: new Set(),      // 选中的列索引集合
     _colSelAnchor: -1,      // shift 多选锚点列
@@ -128,6 +131,10 @@ var S = {
     headerLabels: {},
     // 用户手动标记高亮：rects 列表 + 渲染用的快速查找 Map/Set
     _userMarks: { rects: [], cellMap: null, rowMap: null, rowSet: null, cellTime: null, rowTime: null },
+    // undo/redo 刚发出 setMarkRects 与 saveFile 后的«标记保护期»终点时间戳（ms）。
+    // 保护期内 webview 拒绝来自扩展端的 userMarks 字段覆盖，避免«并发处理中的 save 消息读到
+    // setMarks 写盘前的旧值»这种竞态将最新的标记状态冲掉。保护期足以覆盖一次事件循环加 fs flush。
+    _markGuardUntil: 0,
     // 高亮操作时间戳（用于按时间顺序决定叠加优先级）
     _highlightedTime: 0,  // _highlightedCells 最近一次设置的时间
     _addedRowTime: 0,     // _addedRowSet 最近一次更新的时间
@@ -289,6 +296,16 @@ function _cloneDetailTables(dts) {
     });
 }
 
+// 浅克隆推送失败映射：tsIds Set + reasons Map + time Map
+// 三者一起入快照，确保撤销/重做严格还原，而不是粗暴清空。
+function _clonePushFailures() {
+    return {
+        ids: S._pushFailedTsIds ? Array.from(S._pushFailedTsIds) : [],
+        reasons: S._pushFailedReasons ? Array.from(S._pushFailedReasons) : [],   // [[k,v],...]
+        time: S._pushFailedTime ? Array.from(S._pushFailedTime) : []             // [[k,ts],...]
+    };
+}
+
 function snapshot() {
     try {
         var d = S.data || {};
@@ -297,8 +314,14 @@ function snapshot() {
             rows: _cloneRows(d.rows),
             mods: Array.from(S.mods),
             addedRowSet: S._addedRowSet ? Array.from(S._addedRowSet) : [],
+            // _highlightedTime / _addedRowTime：用于按时间戳决定推送高亮/新增高亮
+            // 与用户标记之间的叠加优先级；不入快照会让 undo/redo 后优先级判断错乱。
             highlightedTime: S._highlightedTime || 0,
-            addedRowTime: S._addedRowTime || 0
+            addedRowTime: S._addedRowTime || 0,
+            // 用户标记（rects）也参与撤销栈，保证标记/取消标记后 Ctrl+Z 可还原
+            userMarks: _cloneMarkRects((S._userMarks && S._userMarks.rects) || []),
+            // 推送失败标记入快照，避免 undo/redo 误清「与本次操作无关」的失败状态
+            pushFailures: _clonePushFailures()
         };
         // 兼容字段：columnTypes 等若存在则一并保留（浅引用够用，前端不修改）
         if (d.columnTypes) snap.columnTypes = d.columnTypes;
@@ -311,39 +334,114 @@ function snapshot() {
     }
 }
 
-function restoreSnapshot(snap) {
-    if (!snap) return;
-    // 兼容旧格式（snap.data 整体）：若提供了顶层 data 则取它，否则按新格式 headers/rows/columnTypes 平铺读取
+// 浅克隆标记 rects 数组：rects 元素只含基本字段，单层拷贝即可。
+function _cloneMarkRects(rects) {
+    if (!Array.isArray(rects)) return [];
+    var out = new Array(rects.length);
+    for (var i = 0; i < rects.length; i++) {
+        var r = rects[i] || {};
+        out[i] = {
+            r1: r.r1, c1: r.c1, r2: r.r2, c2: r.c2,
+            bgColor: r.bgColor || null,
+            fontColor: r.fontColor || null,
+            timestamp: (r.timestamp != null) ? r.timestamp : 0
+        };
+    }
+    return out;
+}
+
+// ---- restoreSnapshot 内部辅助：拆分以降低单个函数复杂度 ----
+
+// 还原数据主体（headers/rows/columnTypes/detailTables）
+function _restoreData(snap) {
     var d = snap.data ? snap.data : { headers: snap.headers, rows: snap.rows, columnTypes: snap.columnTypes };
     S.data = d || { headers: [], rows: [] };
     if (!S.data.headers) S.data.headers = [];
     if (!S.data.rows) S.data.rows = [];
-    // 从快照恢复明细表数据，确保 undo/redo 后 detailTables 与 rows 长度一致
     if (snap.detailTables) S.data.detailTables = snap.detailTables;
     else if (snap.data && snap.data.detailTables) S.data.detailTables = snap.data.detailTables;
     if (snap.detailTable) S.data.detailTable = snap.detailTable;
     else if (snap.data && snap.data.detailTable) S.data.detailTable = snap.data.detailTable;
     S.mods = new Set(snap.mods || []);
+}
+
+// 清理选区相关状态（行/列/单元格矩形选区/锚点）
+function _restoreClearSel() {
     S.sel.clear();
-    // 撤销/重做：可能发生了行列增删，单元格矩形选区索引已失效，直接清除
+    // 行列增删可能让旧矩形/列选索引失效，统一清除
     S.cellSel = null;
     if (S.colSel) S.colSel.clear();
     S._colSelAnchor = -1;
     S._rowSelAnchor = -1;
-    // 推送失败标记会“穿越”撤销点，行被还原后仍带高亮，语义混乱 → 一并清空
-    if (S._pushFailedTsIds && S._pushFailedTsIds.size) S._pushFailedTsIds = new Set();
-    if (S._pushFailedReasons && S._pushFailedReasons.size) S._pushFailedReasons = new Map();
-    if (S._pushFailedTime && S._pushFailedTime.size) S._pushFailedTime = new Map();
-    if (S._failedOnly) S._failedOnly = false;
+}
+
+// 还原推送失败标记（精确还原，不再粗暴清空）
+function _restorePushFailures(snap) {
+    var pf = snap.pushFailures;
+    if (pf && (pf.ids || pf.reasons || pf.time)) {
+        S._pushFailedTsIds = new Set(pf.ids || []);
+        S._pushFailedReasons = new Map(pf.reasons || []);
+        S._pushFailedTime = new Map(pf.time || []);
+    } else {
+        // 旧快照不含 pushFailures：保持「全清空」的旧行为，避免索引错位污染
+        S._pushFailedTsIds = new Set();
+        S._pushFailedReasons = new Map();
+        S._pushFailedTime = new Map();
+    }
+    if (S._failedOnly && (!S._pushFailedTsIds || S._pushFailedTsIds.size === 0)) S._failedOnly = false;
     if (S._modifiedOnly) S._modifiedOnly = false;
     S._deletedInfos = [];
-    // 撤销/重做时从快照恢复新增行集合，确保 _addedRowSet 与数据状态严格同步。
-    // 旧快照不含 addedRowSet 字段时降级为空集合，避免从过期的 _addedInfos 重建错误索引。
+}
+
+// 还原新增行集合 / 时间戳
+function _restoreAddedAndTimes(snap) {
     S._addedRowSet = new Set(snap.addedRowSet || []);
     S._highlightedTime = snap.highlightedTime || 0;
     S._addedRowTime = snap.addedRowTime || 0;
+}
+
+// 还原用户标记 rects，并通知扩展端持久化
+function _restoreUserMarks(snap) {
+    var _restoredMarks = Array.isArray(snap.userMarks) ? _cloneMarkRects(snap.userMarks) : [];
+    S._userMarks.rects = _restoredMarks;
+    S._userMarks.cellMap = null;
+    S._userMarks.rowMap = null;
+    S._userMarks.rowSet = null;
+    S._userMarks.cellTime = null;
+    S._userMarks.rowTime = null;
+    // «标记保护期»：1500ms内拒绝扩展端«与本地不一致»的 userMarks 覆盖（主要防«save 并发读到旧值»）
+    S._markGuardUntil = Date.now() + 1500;
+    dbg('🔒 markGuard armed for 1500ms, restored rects=' + _restoredMarks.length);
+    try {
+        if (S.vscode) {
+            // setMarkRects 在扩展端：rects.length===0 走 clearMarks，否则走 setMarks，覆盖式持久化。
+            S.vscode.postMessage({ type: 'setMarkRects', rects: _restoredMarks });
+        }
+    } catch (_) { /* ignore */ }
+}
+
+// 节流版 saveFile：100ms 内的多次 restoreSnapshot 只产生一次 save，
+// 避免连击 Cmd+Z/Cmd+Y 时多个 save 在管道里与 Data 帧时序错位、
+// 引发自反弹帧覆盖最新 S.data 的竞态。
+function _scheduleRestoreSave() {
+    if (S._restoreSaveTimer) {
+        try { clearTimeout(S._restoreSaveTimer); } catch (_) {}
+    }
+    S._restoreSaveTimer = setTimeout(function () {
+        S._restoreSaveTimer = 0;
+        try { saveFile(); } catch (_) {}
+    }, 100);
+}
+
+function restoreSnapshot(snap) {
+    if (!snap) return;
+    _restoreData(snap);
+    _restoreClearSel();
+    _restorePushFailures(snap);
+    _restoreAddedAndTimes(snap);
+    _restoreUserMarks(snap);
     renderTable();
-    saveFile();
+    _scheduleRestoreSave();
 }
 
 // 在每次将要发生数据修改之前调用，记录当前快照到 history
@@ -362,23 +460,36 @@ function clearHistory() {
 }
 
 function undo() {
-    if (S.editing || S._detailEditing) return; // 编辑态下交给输入框默认行为
-    if (_isAnyModalOpen()) return;              // 任意弹窗打开时不处理
-    if (S._history.length === 0) { showToast('没有可撤销的操作', 'error'); return; }
+    if (S.editing || S._detailEditing) { dbg('⏭ undo blocked: editing=' + !!S.editing + ' detailEditing=' + !!S._detailEditing); return; }
+    if (_isAnyModalOpen()) { dbg('⏭ undo blocked: modal open'); return; }
+    // 兜底：焦点在原生 input/textarea/contenteditable 中时，由浏览器接管 undo，
+    // 避免与 webview 的 undo 双触发（02b-bind.js 已先做 e.target 判断，这里再保一道）。
+    if (_isFocusInForm()) { dbg('⏭ undo blocked: focus in form'); return; }
+    if (S._history.length === 0) { dbg('⏭ undo: history empty'); showToast('没有可撤销的操作', 'error'); return; }
     var current = snapshot();
     var prev = S._history.pop();
-    if (current) S._future.push(current);
+    if (current) {
+        S._future.push(current);
+        // 镜像 history 的容量限制，避免极端连击导致 future 无限增长占用内存
+        if (S._future.length > S._HISTORY_LIMIT) S._future.shift();
+    }
+    dbg('↩ undo done history=' + S._history.length + ' future=' + S._future.length);
     restoreSnapshot(prev);
     showToast('已撤销', 'success');
 }
 
 function redo() {
-    if (S.editing || S._detailEditing) return;
-    if (_isAnyModalOpen()) return;
-    if (S._future.length === 0) { showToast('没有可重做的操作', 'error'); return; }
+    if (S.editing || S._detailEditing) { dbg('⏭ redo blocked: editing=' + !!S.editing + ' detailEditing=' + !!S._detailEditing); return; }
+    if (_isAnyModalOpen()) { dbg('⏭ redo blocked: modal open'); return; }
+    if (_isFocusInForm()) { dbg('⏭ redo blocked: focus in form'); return; }
+    if (S._future.length === 0) { dbg('⏭ redo: future empty (history=' + S._history.length + ')'); showToast('没有可重做的操作', 'error'); return; }
     var current = snapshot();
     var next = S._future.pop();
-    if (current) S._history.push(current);
+    if (current) {
+        S._history.push(current);
+        if (S._history.length > S._HISTORY_LIMIT) S._history.shift();
+    }
+    dbg('↪ redo done history=' + S._history.length + ' future=' + S._future.length);
     restoreSnapshot(next);
     showToast('已重做', 'success');
 }
@@ -547,7 +658,11 @@ window.addEventListener('message', function (e) {
         if (m.headerLabels && typeof m.headerLabels === 'object') {
             S.headerLabels = m.headerLabels;
         }
-        var hasUserChanges = (S.mods && S.mods.size > 0) || (S._history && S._history.length > 0);
+        // future 也算用户改动：连续 Cmd+Z 把 history 撤光后，future 仍代表「可被重做的修改」，
+        // 若不计入 hasUserChanges，扩展端 force=false 的自反弹帧会走 full-data 分支用 _newData 覆盖 S.data。
+        var hasUserChanges = (S.mods && S.mods.size > 0)
+            || (S._history && S._history.length > 0)
+            || (S._future && S._future.length > 0);
         var alreadyRendered = !!(S.data && Array.isArray(S.data.headers) && S.data.headers.length > 0);
         var _curRowsLen0 = (S.data && S.data.rows && S.data.rows.length) || 0;
         dbg('📨 recv ' + m.type
@@ -618,7 +733,14 @@ window.addEventListener('message', function (e) {
                 }
             }
             // 用户标记更新
-            if ('userMarks' in m) {
+            // 跳过条件：
+            //   1) reason='saveHighlight'/'pushSuccess'：扩展端同一文件的 save 与 setMarkRects handler 并发执行，
+            //      Data 帧中的 userMarks 可能是«setMarks 写盘之前»的旧快照，会覆盖 redo/mark 后的最新状态。
+            //   2) «标记保护期»未过期（undo/redo 刚触发）：同样避免丢弃最新状态。
+            // 真正可靠的 marks 最终会通过 'userMarksUpdated' 消息抵达。
+            var _inGuard0 = (S._markGuardUntil && Date.now() < S._markGuardUntil);
+            var _skipReason0 = (m.reason === 'saveHighlight' || m.reason === 'pushSuccess');
+            if ('userMarks' in m && !_skipReason0 && !_inGuard0) {
                 var um2 = m.userMarks;
                 if (um2 && Array.isArray(um2)) {
                     S._userMarks.rects = um2;
@@ -630,6 +752,8 @@ window.addEventListener('message', function (e) {
                 S._userMarks.rowSet = null;
                 S._userMarks.cellTime = null;
                 S._userMarks.rowTime = null;
+            } else if ('userMarks' in m && (_skipReason0 || _inGuard0)) {
+                dbg('⏭ skip userMarks override (skip-data) reason=' + (m.reason || '') + ' inGuard=' + !!_inGuard0 + ' incoming=' + ((m.userMarks && m.userMarks.length) || 0) + ' local=' + ((S._userMarks && S._userMarks.rects && S._userMarks.rects.length) || 0));
             }
             renderTable();
             return;
@@ -649,8 +773,13 @@ window.addEventListener('message', function (e) {
         S.data = _newData;
         dbg('🎨 render rows=' + S.data.rows.length + ' force=' + !!m.force + ' reason=' + (m.reason || ''));
         S.sel.clear();
-        S.mods.clear();
-        S._detailModCellKeys.clear();
+        // 仅在数据真正被外部重置/重载时清空 mods；saveHighlight / pushSuccess 这种自反弹场景
+        // 数据其实未变，mods 是 webview 端的权威状态（undo/redo 后由 restoreSnapshot 写入），不要被清。
+        var _selfReboundReasons = (m.reason === 'saveHighlight' || m.reason === 'pushSuccess');
+        if (!_selfReboundReasons) {
+            S.mods.clear();
+            S._detailModCellKeys.clear();
+        }
         // 数据重装载：仅当列结构发生变化时才清空列筛选（避免抹掉持久化恢复的筛选）
         var _newHeadSig = (S.data.headers || []).join('\u0001');
         if (S._lastHeadSig !== _newHeadSig) {
@@ -755,7 +884,9 @@ window.addEventListener('message', function (e) {
             }
         }
         // 用户标记高亮（持久化数据）
-        if ('userMarks' in m) {
+        var _inGuard1 = (S._markGuardUntil && Date.now() < S._markGuardUntil);
+        var _skipReason1 = (m.reason === 'saveHighlight' || m.reason === 'pushSuccess');
+        if ('userMarks' in m && !_skipReason1 && !_inGuard1) {
             var um = m.userMarks;
             if (um && Array.isArray(um)) {
                 S._userMarks.rects = um;
@@ -767,8 +898,24 @@ window.addEventListener('message', function (e) {
             S._userMarks.rowSet = null;
             S._userMarks.cellTime = null;
             S._userMarks.rowTime = null;
+        } else if ('userMarks' in m && (_skipReason1 || _inGuard1)) {
+            dbg('⏭ skip userMarks override (full-data) reason=' + (m.reason || '') + ' inGuard=' + !!_inGuard1 + ' incoming=' + ((m.userMarks && m.userMarks.length) || 0) + ' local=' + ((S._userMarks && S._userMarks.rects && S._userMarks.rects.length) || 0));
         }
-        clearHistory();
+        // ⚠ 关键修复：clearHistory() 不能无条件执行。
+        // 走到这个 full-data 分支的 Data 帧也包括 webview 自身 save 触发的 'saveHighlight' 自反弹
+        // （此时 hasUserChanges=false：因为 undo/redo 后 history.length 可能为 0、mods 也已 clear）。
+        // 这种自反弹帧里的数据其实就是 webview 刚发出的 S.data，不是真正的"外部数据重置"，
+        // 一旦 clearHistory() 会把 undo 后压入 _future 的快照清空，导致紧接的 Cmd+Y/Ctrl+Y 找不到 future
+        // 直接 toast "没有可重做的操作"，看上去像 redo 失效。
+        // 仅在「真正的数据重置场景」清空撤销栈：init / 外部变更 / 推送成功 / 重置刷新。
+        var _resetReasons = ['init', 'reload', 'pushSuccess'];
+        var _isExternal = (typeof m.reason === 'string') && (m.reason.indexOf('externalChange') === 0);
+        if (_resetReasons.indexOf(m.reason) >= 0 || _isExternal) {
+            clearHistory();
+            dbg('🧹 clearHistory by reason=' + (m.reason || ''));
+        } else {
+            dbg('🛡 keep history/future (reason=' + (m.reason || '') + ' history=' + S._history.length + ' future=' + S._future.length + ')');
+        }
         renderTable();
         // 用户主动点击 “重置筛选并获取最新数据” 时，给出明确的成功反馈
         if (m.reason === 'reload' && typeof showToast === 'function') {
@@ -792,7 +939,18 @@ window.addEventListener('message', function (e) {
             try { renderTable(); } catch (_) { /* ignore */ }
         }
     } else if (m.type === 'userMarksUpdated') {
-        // 用户标记更新：从扩展端推送最新的标记列表
+        // 用户标记更新：从扩展端推送最新的标记列表。
+        // 在「标记保护期」内，如果收到「从非空变空」的覆盖事件，极可能是 setMarks([])/clearMarks
+        // 与后续 setMarks(有标记) 写盘事件错位返馆，干脆在此期间保留本地状态（本地是 restoreSnapshot
+        // 同步写入的权威值）。真正的最新值仍可由后续到达的 userMarksUpdated 覆盖。
+        var _inGuard2 = (S._markGuardUntil && Date.now() < S._markGuardUntil);
+        var _incomingLen = (m.userMarks && Array.isArray(m.userMarks)) ? m.userMarks.length : 0;
+        var _localLen = (S._userMarks && S._userMarks.rects) ? S._userMarks.rects.length : 0;
+        if (_inGuard2 && _incomingLen === 0 && _localLen > 0) {
+            dbg('⏭ skip userMarksUpdated empty during guard (local=' + _localLen + ')');
+            try { renderTable(); } catch (_) { /* ignore */ }
+            return;
+        }
         var um = m.userMarks;
         if (um && Array.isArray(um)) {
             S._userMarks.rects = um;
@@ -804,6 +962,7 @@ window.addEventListener('message', function (e) {
         S._userMarks.rowSet = null;
         S._userMarks.cellTime = null;
         S._userMarks.rowTime = null;
+        dbg('🖍 userMarksUpdated applied len=' + _incomingLen + ' inGuard=' + !!_inGuard2);
         try { renderTable(); } catch (_) { /* ignore */ }
     } else if (m.type === 'pushDone') {
         // 推送流程结束钩子（隐藏 loading 等）。

@@ -130,21 +130,95 @@ function startEdit(e) {
     input.value = valStr;
     // 基于列宽精确计算所需行数（替代固定字符数估算）
     var lineCount = _calcTextLines(valStr, td, ci);
-    input.rows = Math.max(1, Math.min(lineCount, 25));
     // 行高被拖大或内容本身多行时，启用多行编辑模式（Enter 换行，Ctrl/Cmd+Enter 提交）
     var tr = td.parentElement;
     var multiline = !!(tr && tr.classList && tr.classList.contains('xs-tr-resized')) || lineCount > 1;
+    // multiline 模式仅设标记和样式类，真正的高度计算放到 appendChild 之后做（依赖真实 line-height）
+    var _isFloating = false; // 是否使用 body 浮窗模式（多行编辑专用，彻底脱离 td/tr CSS 干扰）
     if (multiline) {
         input.classList.add('xs-cell-input-multi');
-        input.style.height = 'auto';
-        // 设置 min-height 保证编辑区不小于内容行数
-        input.style.minHeight = (lineCount * 18 + 12) + 'px';
+        // ⚠ 历史踩坑：之前尝试用 absolute 定位 + 改 right/bottom=auto 仍被 CSS 多重规则限制
+        // （.xs-td textarea.xs-cell-input{height:100%;...} + tr/td 的 overflow/clip 都可能裁切）。
+        // 终极方案：**把 textarea 挂到 document.body 上用 fixed 定位**，彻底脱离表格 DOM/CSS 影响，
+        // 关闭编辑时（commit）remove 即可，无副作用。
+        _isFloating = true;
+        var rect = td.getBoundingClientRect();
+        // 列宽：优先自定义列宽，否则取 td 实际宽度
+        var _w = (S.colWidths && S.colWidths[ci] && S.colWidths[ci] > 0) ? S.colWidths[ci] : rect.width;
+        input.style.position = 'fixed';
+        input.style.left = rect.left + 'px';
+        input.style.top = rect.top + 'px';
+        input.style.width = _w + 'px';
+        input.style.zIndex = '9999';
+        input.style.boxShadow = '0 2px 12px rgba(0,0,0,0.2)';
+        input.style.background = 'var(--vscode-input-background, #fff)';
+        input.style.color = 'var(--vscode-input-foreground, inherit)';
+        input.style.border = '1px solid var(--vscode-focusBorder, #2188ff)';
+        input.style.padding = '4px 6px';
+        input.style.margin = '0';
+        input.style.boxSizing = 'border-box';
+        input.style.resize = 'vertical';
+        input.style.overflow = 'hidden';
+        input.style.lineHeight = '18px';
+        input.style.fontFamily = getComputedStyle(td).fontFamily;
+        input.style.fontSize = getComputedStyle(td).fontSize;
+        input.style.whiteSpace = 'pre-wrap';
+        input.style.wordBreak = 'break-word';
+        input.style.display = 'block';
     }
     td.innerHTML = '';
     td.classList.add('xs-editing');
-    td.appendChild(input);
+    if (_isFloating) {
+        // 浮窗模式：textarea 挂到 body，td 内放一个占位（保持 editing 视觉状态）
+        document.body.appendChild(input);
+    } else {
+        td.appendChild(input);
+    }
+
+    // ⚠ 必须在 appendChild 之后基于实测 line-height 计算确定高度
+    if (multiline) {
+        // 实测当前 textarea 的 line-height（fallback 18）
+        var _lh = 18;
+        try {
+            var _cs = getComputedStyle(input);
+            var _lhParsed = parseFloat(_cs.lineHeight);
+            if (!isNaN(_lhParsed) && _lhParsed > 0) _lh = _lhParsed;
+        } catch (_) { /* ignore */ }
+        // padding(上下各 4) + border(上下各 1) ≈ 10px 缓冲
+        var _fixedH = Math.ceil(lineCount * _lh) + 10;
+        var _minH2 = Math.max(td.offsetHeight, _fixedH);
+        input.style.height = _minH2 + 'px';
+        // 用户继续输入时同步增长高度
+        input.addEventListener('input', function () {
+            input.style.height = 'auto';
+            var h = Math.max(_minH2, input.scrollHeight);
+            input.style.height = h + 'px';
+        });
+        // 浮窗模式：滚动表格/窗口时同步浮窗位置
+        if (_isFloating) {
+            var _scroller = td.closest('.xs-table-scroller') || td.closest('.xs-table-wrap') || window;
+            var _syncPos = function () {
+                try {
+                    var r = td.getBoundingClientRect();
+                    input.style.left = r.left + 'px';
+                    input.style.top = r.top + 'px';
+                } catch (_) {}
+            };
+            input._syncPos = _syncPos;
+            input._scroller = _scroller;
+            try { _scroller.addEventListener('scroll', _syncPos, true); } catch (_) {}
+            try { window.addEventListener('resize', _syncPos); } catch (_) {}
+        }
+    }
+
     input.focus();
-    input.select();
+    // 进入编辑即全选（Excel 风格）+ 滚到顶部，避免 select() 把多行 textarea 滚到末尾导致只露最后几行
+    try { input.setSelectionRange(0, input.value.length); } catch (_) { input.select(); }
+    if (multiline) {
+        input.scrollTop = 0;
+        // 双保险：下一帧再纠正一次（应对某些主题下 focus 后浏览器二次滚动）
+        requestAnimationFrame(function () { try { input.scrollTop = 0; } catch (_) {} });
+    }
     S.editing = true;
 
     // 批量输入：进入编辑时若存在矩形选区且当前 active cell 处于选区内部，
@@ -161,6 +235,16 @@ function startEdit(e) {
     function commit(save) {
         if (!S.editing) return;
         S.editing = false;
+        // 浮窗模式：先把挂在 body 上的 textarea 移除 + 解绑 scroll/resize 监听，避免泄漏
+        if (_isFloating) {
+            try {
+                if (input._scroller && input._syncPos) {
+                    input._scroller.removeEventListener('scroll', input._syncPos, true);
+                }
+            } catch (_) {}
+            try { window.removeEventListener('resize', input._syncPos); } catch (_) {}
+            try { if (input.parentNode) input.parentNode.removeChild(input); } catch (_) {}
+        }
         // 二次防御：commit 时单元格可能因外部操作（删除行/列、重渲染）已失效
         var row = (S.data && Array.isArray(S.data.rows)) ? S.data.rows[ri] : undefined;
         if (!row || isNaN(ri) || isNaN(ci)) {
@@ -1456,6 +1540,9 @@ function unmarkSelected() {
         return;
     }
 
+    // 取消标记动作纳入 undo 栈：必须在改动发生前压入当前快照（含旧的 _userMarks.rects）
+    if (typeof pushHistory === 'function') pushHistory();
+
     // 更新本地状态 + 重绘
     S._userMarks.rects = newRects;
     S._userMarks.cellMap = null;
@@ -1474,6 +1561,8 @@ function unmarkSelected() {
 function applyMarkWithColors(bgColor, fontColor) {
     if (!_markPendingRects || _markPendingRects.length === 0) return;
     if (!S.vscode) return;
+    // 标记动作纳入 undo 栈：必须在改动发生前压入当前快照（含旧的 _userMarks.rects）
+    if (typeof pushHistory === 'function') pushHistory();
     S.vscode.postMessage({ type: 'mark', rects: _markPendingRects, bgColor: bgColor, fontColor: fontColor });
     _markPendingRects = null;
     showToast('已标记', 'success');

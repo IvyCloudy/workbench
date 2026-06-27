@@ -572,11 +572,15 @@ function bindDocument() {
             openFindPanel();
         }
         // 撤销 / 重做：Ctrl/Cmd+Z 撤销；Ctrl+Y 或 Ctrl/Cmd+Shift+Z 重做
+        // ⚠ macOS 推荐使用 Cmd+Shift+Z 进行重做（部分中文输入法/系统快捷键会拦截 Cmd+Y）。
         if ((e.ctrlKey || e.metaKey) && !e.altKey) {
             var k = (e.key || '').toLowerCase();
             if (k === 'z' && !e.shiftKey) {
                 if (typeof _isAnyModalOpen === 'function' && _isAnyModalOpen()) return;
                 if (S.editing || S._detailEditing) return;
+                // 焦点在原生 input/textarea/contenteditable 中：交给浏览器默认 undo，
+                // 避免与 webview 表格级 undo 双触发。
+                if (typeof _isFocusInForm === 'function' && _isFocusInForm()) return;
                 e.preventDefault();
                 undo();
                 return;
@@ -584,6 +588,7 @@ function bindDocument() {
             if (k === 'y' || (k === 'z' && e.shiftKey)) {
                 if (typeof _isAnyModalOpen === 'function' && _isAnyModalOpen()) return;
                 if (S.editing || S._detailEditing) return;
+                if (typeof _isFocusInForm === 'function' && _isFocusInForm()) return;
                 e.preventDefault();
                 redo();
                 return;

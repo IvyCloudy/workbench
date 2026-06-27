@@ -583,7 +583,16 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     msgPayload.addedInfos = added;
                 }
                 // 用户手动标记高亮（持久化，随 Data 消息下发）
-                try { msgPayload.userMarks = getMarks(filePath); } catch { /* ignore */ }
+                // 注意：saveHighlight / pushSuccess 等"由 webview 主动 save 触发的内部回推"
+                // 与 webview 同步发出的 setMarkRects 在扩展端是【并发处理】的，
+                // 此时 getMarks() 可能读到 setMarks 写盘前的旧值，进而把 userMarks=旧值
+                // 推回 webview 覆盖最新的 redo/mark 状态。
+                // 这两类 reason 下 webview 端已持有最新 marks，无需扩展端再推回；
+                // 真正的标记变化由独立的 userMarksUpdated 消息可靠投递。
+                const _skipUserMarksReasons = new Set(['saveHighlight', 'pushSuccess']);
+                if (!_skipUserMarksReasons.has(reason)) {
+                    try { msgPayload.userMarks = getMarks(filePath); } catch { /* ignore */ }
+                }
                 // 表头中英映射（仅用于显示，不写回数据；每次下发都带上以保证刚打开/可见性切换时也能拿到）
                 try { msgPayload.headerLabels = getHeaderLabels(); } catch { /* ignore */ }
                 session.deletedInfos = undefined;

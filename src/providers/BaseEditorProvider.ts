@@ -931,12 +931,17 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         //   03a-cell-edit       —— 单元格编辑（双击进入编辑 / 提交 / 批量写入）
         //   03b-resize-colsel   —— 列宽拖动 / 列选择（Excel 风格） / 行高拖动
         //   03c-context-menu    —— 右键菜单（构造 / 显示 / 隐藏）
-        //   03d-row-col-ops     —— 行/列数据操作（增删/复制粘贴/清空/推送）
+        //   03d-row-ops         —— 行操作（增 / 删 / 复制 / 推送）
         //   03e-mark            —— 用户标记 / 取消标记 / 颜色选择器
+        //   03f-col-ops         —— 列操作（增 / 删 / 重命名）
+        //   03g-clipboard       —— 单元格剪贴板 / 清空 / 批量填充
+        //   03h-detail-helpers  —— 明细列辅助函数（_inferDetailColKind 等）
         //   04-push-find        —— 推送/保存、查找替换面板、Excel 风格列筛选
         //   05a-push-result     —— 推送结果弹窗（成功/失败明细 + 行联动）
         //   05b-prompt-confirm  —— 通用 Prompt / Confirm 弹窗（替代 sandbox 受限 API）
-        //   05c-detail-modal    —— 明细弹窗 + 数组列编辑器，并在末尾调用 init()
+        //   05c-detail-modal    —— 明细弹窗（v2 双栏）主体 + 渲染
+        //   05d-detail-write    —— 明细弹窗（v2）写操作（增删 step / 字段写入 / 保存）
+        //   05e-array-editor    —— 数组列编辑器，并在末尾调用 init()
         const editorScriptFiles = [
             'editor/01-core.js',
             'editor/02a-render.js',
@@ -946,12 +951,17 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             'editor/03a-cell-edit.js',
             'editor/03b-resize-colsel.js',
             'editor/03c-context-menu.js',
-            'editor/03d-row-col-ops.js',
+            'editor/03d-row-ops.js',
             'editor/03e-mark.js',
+            'editor/03f-col-ops.js',
+            'editor/03g-clipboard.js',
+            'editor/03h-detail-helpers.js',
             'editor/04-push-find.js',
             'editor/05a-push-result.js',
             'editor/05b-prompt-confirm.js',
-            'editor/05c-detail-modal.js'
+            'editor/05c-detail-modal.js',
+            'editor/05d-detail-write.js',
+            'editor/05e-array-editor.js'
         ];
         const editorScriptsHtml = editorScriptFiles.map((rel) => {
             const uri = webviewPanel.webview.asWebviewUri(

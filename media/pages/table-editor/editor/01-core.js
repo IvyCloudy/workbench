@@ -123,7 +123,9 @@ var S = {
     _userMarks: { rects: [], cellMap: null, rowMap: null, rowSet: null, cellTime: null, rowTime: null },
     // 高亮操作时间戳（用于按时间顺序决定叠加优先级）
     _highlightedTime: 0,  // _highlightedCells 最近一次设置的时间
-    _addedRowTime: 0      // _addedRowSet 最近一次更新的时间
+    _addedRowTime: 0,     // _addedRowSet 最近一次更新的时间
+    // 推送失败 tsId -> 失败时间戳（ms）；用于和用户标记/推送高亮按时间戳竞争优先级
+    _pushFailedTime: new Map()
 };
 
 // 统一判断「是否有任何弹窗/输入控件正在打开」，供全局快捷键拦截使用。
@@ -324,6 +326,7 @@ function restoreSnapshot(snap) {
     // 推送失败标记会“穿越”撤销点，行被还原后仍带高亮，语义混乱 → 一并清空
     if (S._pushFailedTsIds && S._pushFailedTsIds.size) S._pushFailedTsIds = new Set();
     if (S._pushFailedReasons && S._pushFailedReasons.size) S._pushFailedReasons = new Map();
+    if (S._pushFailedTime && S._pushFailedTime.size) S._pushFailedTime = new Map();
     if (S._failedOnly) S._failedOnly = false;
     if (S._modifiedOnly) S._modifiedOnly = false;
     S._deletedInfos = [];
@@ -610,6 +613,7 @@ window.addEventListener('message', function (e) {
             S.rowHeights = {};
             S._pushFailedTsIds = new Set();
             S._pushFailedReasons = new Map();
+            S._pushFailedTime = new Map();
             S._lastPushBatchTsIds = new Set();
             S._failedOnly = false;
             S._modifiedOnly = false;
@@ -642,21 +646,34 @@ window.addEventListener('message', function (e) {
         }
         // 推送失败标记：从扩展端持久化文件（push-failures.json）下发，按 testcase_id 关联。
         // 字段存在则覆盖恢复整套失败映射；不存在则保留前端现有内存集合。
+        // 新版 entry value 为 { reason, timestamp }；旧版可能为字符串 reason，做兼容。
         if ('pushFailures' in m) {
             if (m.pushFailures && typeof m.pushFailures === 'object') {
                 var pf = m.pushFailures;
                 S._pushFailedTsIds = new Set();
                 S._pushFailedReasons = new Map();
+                if (!S._pushFailedTime) S._pushFailedTime = new Map();
+                else S._pushFailedTime.clear();
                 for (var _pfk in pf) {
                     if (!Object.prototype.hasOwnProperty.call(pf, _pfk)) continue;
                     var _kStr = String(_pfk);
                     if (!_kStr) continue;
                     S._pushFailedTsIds.add(_kStr);
-                    if (pf[_pfk]) S._pushFailedReasons.set(_kStr, String(pf[_pfk]));
+                    var _pv = pf[_pfk];
+                    if (_pv && typeof _pv === 'object') {
+                        if (_pv.reason) S._pushFailedReasons.set(_kStr, String(_pv.reason));
+                        var _pts = (typeof _pv.timestamp === 'number' && isFinite(_pv.timestamp)) ? _pv.timestamp : 0;
+                        S._pushFailedTime.set(_kStr, _pts);
+                    } else if (typeof _pv === 'string') {
+                        // 兼容旧格式：纯字符串 reason，timestamp 视为 0
+                        if (_pv) S._pushFailedReasons.set(_kStr, String(_pv));
+                        S._pushFailedTime.set(_kStr, 0);
+                    }
                 }
             } else {
                 S._pushFailedTsIds = new Set();
                 S._pushFailedReasons = new Map();
+                if (S._pushFailedTime) S._pushFailedTime.clear(); else S._pushFailedTime = new Map();
                 if (S._failedOnly) S._failedOnly = false;
             }
         }

@@ -150,6 +150,7 @@ function showPushResultModal(payload) {
     //   3) 本批中失败的 tsId 写入/更新到失败集合，并刷新原因
     if (!S._pushFailedTsIds) S._pushFailedTsIds = new Set();
     if (!S._pushFailedReasons) S._pushFailedReasons = new Map();
+    if (!S._pushFailedTime) S._pushFailedTime = new Map();
 
     // 收集本次失败 tsId
     var nowFailedSet = new Set();
@@ -169,6 +170,7 @@ function showPushResultModal(payload) {
             if (!nowFailedSet.has(ts)) {
                 if (S._pushFailedTsIds.delete(ts)) clearedCount++;
                 S._pushFailedReasons.delete(ts);
+                if (S._pushFailedTime) S._pushFailedTime.delete(ts);
             }
         });
     }
@@ -180,15 +182,18 @@ function showPushResultModal(payload) {
         var k = String(t);
         if (S._pushFailedTsIds.delete(k)) clearedCount++;
         S._pushFailedReasons.delete(k);
+        if (S._pushFailedTime) S._pushFailedTime.delete(k);
     });
 
-    // 写入/更新本次失败 tsId 与原因
+    // 写入/更新本次失败 tsId 与原因，并打上当前时间戳供后续渲染按时间优先级比较
+    var _failNow = Date.now();
     failures.forEach(function (f) {
         if (f && f.tsId !== undefined && f.tsId !== null && f.tsId !== '') {
             var key = String(f.tsId);
             S._pushFailedTsIds.add(key);
             if (f.reason) S._pushFailedReasons.set(key, String(f.reason));
             else S._pushFailedReasons.delete(key); // 无原因则清掉旧原因，避免误导
+            if (S._pushFailedTime) S._pushFailedTime.set(key, _failNow);
         }
     });
 

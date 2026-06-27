@@ -271,6 +271,7 @@ function _buildRowHtml(ri, tsIdColIdx) {
     }
     var failCls = '';
     var failReason = '';
+    var rowFailTime = 0;  // 该行的推送失败时间戳；若不在失败集合中则为 0
     if (S._pushFailedTsIds && S._pushFailedTsIds.size > 0 && tsIdColIdx >= 0) {
         var rowTsId = row[tsIdColIdx];
         if (rowTsId !== undefined && rowTsId !== null && rowTsId !== '' && S._pushFailedTsIds.has(String(rowTsId))) {
@@ -278,6 +279,10 @@ function _buildRowHtml(ri, tsIdColIdx) {
             if (S._pushFailedReasons) {
                 var _r = S._pushFailedReasons.get(String(rowTsId));
                 if (_r) failReason = String(_r);
+            }
+            if (S._pushFailedTime) {
+                var _ft = S._pushFailedTime.get(String(rowTsId));
+                if (typeof _ft === 'number') rowFailTime = _ft;
             }
         }
     }
@@ -298,24 +303,27 @@ function _buildRowHtml(ri, tsIdColIdx) {
         var bestInlineStyle = '';
         var bestMkInfo = null; // {bgColor, fontColor}
 
-        // 1) 推送单元格级变更高亮
-        if (S._highlightedCells && S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
-            var t = S._highlightedTime || 0;
-            if (t >= bestTime) { bestTime = t; bestClass = ' xs-td-push-updated'; bestMkInfo = null; }
-        }
-        // 2) 推送整行级变更高亮
-        if (S._highlightedCells && S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)) {
-            if (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci) {
-                var t = S._highlightedTime || 0;
-                if (t >= bestTime) { bestTime = t; bestClass = ' xs-td-push-updated-row'; bestMkInfo = null; }
+        // 1) 推送变更高亮（行级橙 + 单元格级黄）：作为一组同时间戳的整体参与竞争
+        //    同一次推送内，单元格级（黄）优先于行级（橙），保留"内层套外层"语义
+        var pushUpdCls = '';
+        if (S._highlightedCells) {
+            if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
+                pushUpdCls = ' xs-td-push-updated'; // 单元格级：黄色
+            } else if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)
+                && (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci)) {
+                pushUpdCls = ' xs-td-push-updated-row'; // 行级：橙色
             }
         }
-        // 3) 新增行高亮
+        if (pushUpdCls) {
+            var t = S._highlightedTime || 0;
+            if (t >= bestTime) { bestTime = t; bestClass = pushUpdCls; bestMkInfo = null; }
+        }
+        // 2) 新增行高亮
         if (S._addedRowSet && S._addedRowSet.has(ri)) {
             var t = S._addedRowTime || 0;
             if (t >= bestTime) { bestTime = t; bestClass = ' xs-td-push-added'; modCls = ''; bestMkInfo = null; }
         }
-        // 4) 用户手动标记高亮
+        // 3) 用户手动标记高亮
         if (typeof isUserMarked === 'function') {
             var mkInfo = isUserMarked(ri, ci);
             if (mkInfo) {
@@ -323,13 +331,28 @@ function _buildRowHtml(ri, tsIdColIdx) {
                 if (t >= bestTime) { bestTime = t; bestClass = ' xs-td-user-marked'; bestMkInfo = mkInfo; modCls = (bestClass === ' xs-td-push-added') ? '' : modCls; }
             }
         }
+        // 5) 推送失败高亮：作为单元格级"红底"候选项参与时间竞争
+        //    - 若失败时间 >= 其他高亮时间：失败色覆盖（清除 user-marked 内联色，加 xs-td-push-failed）
+        //    - 否则：标记为 xs-td-overrides-fail，让 CSS 保留原高亮色（避免被 tr.xs-tr-push-failed 红底吞掉）
+        var failOverridden = false;
+        if (rowFailTime > 0) {
+            if (rowFailTime >= bestTime) {
+                bestTime = rowFailTime;
+                bestClass = ' xs-td-push-failed';
+                bestMkInfo = null;          // 清除可能已挂上的用户标记色，让失败红底完全生效
+                modCls = '';
+            } else {
+                failOverridden = true;       // 其他高亮时间更新 → 让其覆盖失败色
+            }
+        }
 
-        var hiliCls = bestClass;
+        var hiliCls = bestClass + (failOverridden ? ' xs-td-overrides-fail' : '');
         var mkStyle = '';
         if (bestMkInfo) {
             var st = '';
-            if (bestMkInfo.bgColor) st += 'background:' + bestMkInfo.bgColor + ';';
-            if (bestMkInfo.fontColor) st += 'color:' + bestMkInfo.fontColor + ';';
+            // 加 !important 确保在失败行场景下也能盖过 CSS 规则中的 !important 默认色
+            if (bestMkInfo.bgColor) st += 'background:' + bestMkInfo.bgColor + ' !important;';
+            if (bestMkInfo.fontColor) st += 'color:' + bestMkInfo.fontColor + ' !important;';
             if (st) mkStyle = ' style="' + st + '"';
         }
         var colSelCls2 = S.colSel.has(ci) ? ' xs-col-selected' : '';
@@ -582,33 +605,61 @@ function patchCell(ri, ci) {
     var _bestClass = '';
     var _bestMkInfo = null;
 
-    // 1) 推送单元格级变更高亮
-    if (S._highlightedCells && S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
-        var _t1 = S._highlightedTime || 0;
-        if (_t1 >= _bestTime) { _bestTime = _t1; _bestClass = 'xs-td-push-updated'; _bestMkInfo = null; }
-    }
-    // 2) 推送整行级变更高亮
-    if (S._highlightedCells && S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)) {
-        if (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci) {
-            var _t2 = S._highlightedTime || 0;
-            if (_t2 >= _bestTime) { _bestTime = _t2; _bestClass = 'xs-td-push-updated-row'; _bestMkInfo = null; }
+    // 1) 推送变更高亮（行级橙 + 单元格级黄）：作为一组同时间戳的整体参与竞争
+    //    同一次推送内，单元格级（黄）优先于行级（橙）
+    var _pushUpdCls = '';
+    if (S._highlightedCells) {
+        if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
+            _pushUpdCls = 'xs-td-push-updated';
+        } else if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)
+            && (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci)) {
+            _pushUpdCls = 'xs-td-push-updated-row';
         }
     }
-    // 3) 新增行高亮
+    if (_pushUpdCls) {
+        var _t1 = S._highlightedTime || 0;
+        if (_t1 >= _bestTime) { _bestTime = _t1; _bestClass = _pushUpdCls; _bestMkInfo = null; }
+    }
+    // 2) 新增行高亮
     if (S._addedRowSet && S._addedRowSet.has(ri)) {
         var _t3 = S._addedRowTime || 0;
         if (_t3 >= _bestTime) { _bestTime = _t3; _bestClass = 'xs-td-push-added'; _bestMkInfo = null; }
     }
-    // 4) 用户手动标记高亮
+    // 3) 用户手动标记高亮
     var _mkInfo = (typeof isUserMarked === 'function') ? isUserMarked(ri, ci) : null;
     if (_mkInfo) {
         var _t4 = _mkInfo.timestamp || 0;
         if (_t4 >= _bestTime) { _bestTime = _t4; _bestClass = 'xs-td-user-marked'; _bestMkInfo = _mkInfo; }
     }
+    // 5) 推送失败高亮（行级失败时间）：作为另一候选项参与时间竞争
+    var _rowFailTime = 0;
+    if (S._pushFailedTsIds && S._pushFailedTsIds.size > 0) {
+        var _tsIdColIdx2 = (S.data && S.data.headers) ? S.data.headers.indexOf('testcase_id') : -1;
+        if (_tsIdColIdx2 >= 0) {
+            var _tid = (S.data.rows[ri] || [])[_tsIdColIdx2];
+            if (_tid !== undefined && _tid !== null && _tid !== '' && S._pushFailedTsIds.has(String(_tid))) {
+                if (S._pushFailedTime) {
+                    var _ftv = S._pushFailedTime.get(String(_tid));
+                    if (typeof _ftv === 'number') _rowFailTime = _ftv;
+                }
+            }
+        }
+    }
+    var _failOverridden = false;
+    if (_rowFailTime > 0) {
+        if (_rowFailTime >= _bestTime) {
+            _bestTime = _rowFailTime;
+            _bestClass = 'xs-td-push-failed';
+            _bestMkInfo = null;
+        } else {
+            _failOverridden = true;
+        }
+    }
 
     // 清除所有高亮 class
-    td.classList.remove('xs-td-push-updated', 'xs-td-push-updated-row', 'xs-td-push-added', 'xs-td-user-marked');
+    td.classList.remove('xs-td-push-updated', 'xs-td-push-updated-row', 'xs-td-push-added', 'xs-td-user-marked', 'xs-td-push-failed', 'xs-td-overrides-fail');
     if (_bestClass) td.classList.add(_bestClass);
+    if (_failOverridden) td.classList.add('xs-td-overrides-fail');
     // 应用标记颜色（仅当标记是最新操作时）
     if (_bestMkInfo) {
         if (_bestMkInfo.bgColor) td.style.setProperty('background', _bestMkInfo.bgColor, 'important');

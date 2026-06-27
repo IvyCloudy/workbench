@@ -130,21 +130,95 @@ function startEdit(e) {
     input.value = valStr;
     // 基于列宽精确计算所需行数（替代固定字符数估算）
     var lineCount = _calcTextLines(valStr, td, ci);
-    input.rows = Math.max(1, Math.min(lineCount, 25));
     // 行高被拖大或内容本身多行时，启用多行编辑模式（Enter 换行，Ctrl/Cmd+Enter 提交）
     var tr = td.parentElement;
     var multiline = !!(tr && tr.classList && tr.classList.contains('xs-tr-resized')) || lineCount > 1;
+    // multiline 模式仅设标记和样式类，真正的高度计算放到 appendChild 之后做（依赖真实 line-height）
+    var _isFloating = false; // 是否使用 body 浮窗模式（多行编辑专用，彻底脱离 td/tr CSS 干扰）
     if (multiline) {
         input.classList.add('xs-cell-input-multi');
-        input.style.height = 'auto';
-        // 设置 min-height 保证编辑区不小于内容行数
-        input.style.minHeight = (lineCount * 18 + 12) + 'px';
+        // ⚠ 历史踩坑：之前尝试用 absolute 定位 + 改 right/bottom=auto 仍被 CSS 多重规则限制
+        // （.xs-td textarea.xs-cell-input{height:100%;...} + tr/td 的 overflow/clip 都可能裁切）。
+        // 终极方案：**把 textarea 挂到 document.body 上用 fixed 定位**，彻底脱离表格 DOM/CSS 影响，
+        // 关闭编辑时（commit）remove 即可，无副作用。
+        _isFloating = true;
+        var rect = td.getBoundingClientRect();
+        // 列宽：优先自定义列宽，否则取 td 实际宽度
+        var _w = (S.colWidths && S.colWidths[ci] && S.colWidths[ci] > 0) ? S.colWidths[ci] : rect.width;
+        input.style.position = 'fixed';
+        input.style.left = rect.left + 'px';
+        input.style.top = rect.top + 'px';
+        input.style.width = _w + 'px';
+        input.style.zIndex = '9999';
+        input.style.boxShadow = '0 2px 12px rgba(0,0,0,0.2)';
+        input.style.background = 'var(--vscode-input-background, #fff)';
+        input.style.color = 'var(--vscode-input-foreground, inherit)';
+        input.style.border = '1px solid var(--vscode-focusBorder, #2188ff)';
+        input.style.padding = '4px 6px';
+        input.style.margin = '0';
+        input.style.boxSizing = 'border-box';
+        input.style.resize = 'vertical';
+        input.style.overflow = 'hidden';
+        input.style.lineHeight = '18px';
+        input.style.fontFamily = getComputedStyle(td).fontFamily;
+        input.style.fontSize = getComputedStyle(td).fontSize;
+        input.style.whiteSpace = 'pre-wrap';
+        input.style.wordBreak = 'break-word';
+        input.style.display = 'block';
     }
     td.innerHTML = '';
     td.classList.add('xs-editing');
-    td.appendChild(input);
+    if (_isFloating) {
+        // 浮窗模式：textarea 挂到 body，td 内放一个占位（保持 editing 视觉状态）
+        document.body.appendChild(input);
+    } else {
+        td.appendChild(input);
+    }
+
+    // ⚠ 必须在 appendChild 之后基于实测 line-height 计算确定高度
+    if (multiline) {
+        // 实测当前 textarea 的 line-height（fallback 18）
+        var _lh = 18;
+        try {
+            var _cs = getComputedStyle(input);
+            var _lhParsed = parseFloat(_cs.lineHeight);
+            if (!isNaN(_lhParsed) && _lhParsed > 0) _lh = _lhParsed;
+        } catch (_) { /* ignore */ }
+        // padding(上下各 4) + border(上下各 1) ≈ 10px 缓冲
+        var _fixedH = Math.ceil(lineCount * _lh) + 10;
+        var _minH2 = Math.max(td.offsetHeight, _fixedH);
+        input.style.height = _minH2 + 'px';
+        // 用户继续输入时同步增长高度
+        input.addEventListener('input', function () {
+            input.style.height = 'auto';
+            var h = Math.max(_minH2, input.scrollHeight);
+            input.style.height = h + 'px';
+        });
+        // 浮窗模式：滚动表格/窗口时同步浮窗位置
+        if (_isFloating) {
+            var _scroller = td.closest('.xs-table-scroller') || td.closest('.xs-table-wrap') || window;
+            var _syncPos = function () {
+                try {
+                    var r = td.getBoundingClientRect();
+                    input.style.left = r.left + 'px';
+                    input.style.top = r.top + 'px';
+                } catch (_) {}
+            };
+            input._syncPos = _syncPos;
+            input._scroller = _scroller;
+            try { _scroller.addEventListener('scroll', _syncPos, true); } catch (_) {}
+            try { window.addEventListener('resize', _syncPos); } catch (_) {}
+        }
+    }
+
     input.focus();
-    input.select();
+    // 进入编辑即全选（Excel 风格）+ 滚到顶部，避免 select() 把多行 textarea 滚到末尾导致只露最后几行
+    try { input.setSelectionRange(0, input.value.length); } catch (_) { input.select(); }
+    if (multiline) {
+        input.scrollTop = 0;
+        // 双保险：下一帧再纠正一次（应对某些主题下 focus 后浏览器二次滚动）
+        requestAnimationFrame(function () { try { input.scrollTop = 0; } catch (_) {} });
+    }
     S.editing = true;
 
     // 批量输入：进入编辑时若存在矩形选区且当前 active cell 处于选区内部，
@@ -161,6 +235,16 @@ function startEdit(e) {
     function commit(save) {
         if (!S.editing) return;
         S.editing = false;
+        // 浮窗模式：先把挂在 body 上的 textarea 移除 + 解绑 scroll/resize 监听，避免泄漏
+        if (_isFloating) {
+            try {
+                if (input._scroller && input._syncPos) {
+                    input._scroller.removeEventListener('scroll', input._syncPos, true);
+                }
+            } catch (_) {}
+            try { window.removeEventListener('resize', input._syncPos); } catch (_) {}
+            try { if (input.parentNode) input.parentNode.removeChild(input); } catch (_) {}
+        }
         // 二次防御：commit 时单元格可能因外部操作（删除行/列、重渲染）已失效
         var row = (S.data && Array.isArray(S.data.rows)) ? S.data.rows[ri] : undefined;
         if (!row || isNaN(ri) || isNaN(ci)) {
@@ -345,8 +429,22 @@ function showContextMenu(e) {
         }
         items.push({ divider: true });
         items.push({ label: '在下方复制此行', action: copyRowInline, disabled: S._ctxRow < 0 });
+        var _selRows = (typeof getPushTargetRows === 'function') ? getPushTargetRows() : [];
+        if (_selRows.length > 1) {
+            items.push({ label: '复制选中行 (' + _selRows.length + ')', action: copySelectedRows });
+        }
         items.push({ label: '在上方插入行', action: function () { insertRow(S._ctxRow); }, disabled: S._ctxRow < 0 });
         items.push({ label: '在下方插入行', action: function () { insertRow(S._ctxRow + 1); }, disabled: S._ctxRow < 0 });
+        // 标记 / 取消标记
+        var _markRects = collectMarkRects();
+        if (_markRects.length > 0) {
+            var _markedCount = countMarkedInRects(_markRects);
+            items.push({ divider: true });
+            items.push({ label: '标记 (' + _markRects.length + ')', action: markSelected });
+            if (_markedCount > 0) {
+                items.push({ label: '取消标记 (' + _markedCount + ')', action: unmarkSelected });
+            }
+        }
         items.push({ divider: true });
         items.push({ label: '插入列（左侧）', action: function () { insertCol(S._ctxCol); }, disabled: S._ctxCol < 0 });
         items.push({ label: '插入列（右侧）', action: function () { insertCol(S._ctxCol + 1); }, disabled: S._ctxCol < 0 });
@@ -612,6 +710,13 @@ function insertRow(at) {
         }
         S.rowHeights = nrh;
     }
+    // 同步调整"完全展开"行集合：与 rowHeights 保持一致，避免插入后出现
+    // "行高完整但内容仍被 clamp 截断"的错位现象。
+    if (S._rowExpanded && S._rowExpanded.size > 0) {
+        var nre = new Set();
+        S._rowExpanded.forEach(function (i) { nre.add(i >= at ? i + 1 : i); });
+        S._rowExpanded = nre;
+    }
     // 行结构变化 → 清除单元格矩形选区，避免索引错位
     S.cellSel = null;
     saveFile();
@@ -671,6 +776,15 @@ function deleteRow(ri) {
             nrh[i > ri ? i - 1 : i] = S.rowHeights[rk];
         }
         S.rowHeights = nrh;
+    }
+    // 同步“完全展开”行集合：与 rowHeights 保持一致
+    if (S._rowExpanded && S._rowExpanded.size > 0) {
+        var nre = new Set();
+        S._rowExpanded.forEach(function (i) {
+            if (i === ri) return;
+            nre.add(i > ri ? i - 1 : i);
+        });
+        S._rowExpanded = nre;
     }
     S.cellSel = null;
     saveFile();
@@ -735,6 +849,16 @@ function deleteSelectedRows() {
         var nrh2 = {};
         rhArr.forEach(function (it) { if (!isNaN(it.i)) nrh2[it.i] = it.v; });
         S.rowHeights = nrh2;
+    }
+    // 同步“完全展开”行集合：与 rowHeights 保持一致
+    if (S._rowExpanded && S._rowExpanded.size > 0) {
+        var reArr = Array.from(S._rowExpanded);
+        sorted.forEach(function (delI) {
+            reArr = reArr.filter(function (i) { return i !== delI; }).map(function (i) {
+                return i > delI ? i - 1 : i;
+            });
+        });
+        S._rowExpanded = new Set(reArr);
     }
     S.sel.clear();
     S.cellSel = null;
@@ -1188,6 +1312,55 @@ function copyRowInline() {
     showToast('已在下方复制一行', 'success');
 }
 
+// 复制多行：在每行下方依次插入副本（从后往前插入以保持索引正确）
+function copySelectedRows() {
+    var selRows = (typeof getPushTargetRows === 'function') ? getPushTargetRows() : [];
+    if (selRows.length <= 1) return;
+    pushHistory();
+    // 降序排列，从后往前插入，避免索引偏移
+    selRows.sort(function (a, b) { return b - a; });
+    var headers0 = S.data.headers || [];
+    var tsCol0 = headers0.indexOf('testcase_id');
+    var tcCol0 = headers0.indexOf('testCaseNo');
+    var dts = getDetailTables();
+    selRows.forEach(function (rowIdx) {
+        var src = S.data.rows[rowIdx] || [];
+        var newRow = src.map(function (v) { return Array.isArray(v) ? v.slice() : v; });
+        if (tsCol0 >= 0) newRow[tsCol0] = genUuidV4();
+        if (tcCol0 >= 0) newRow[tcCol0] = '';
+        var at = rowIdx + 1;
+        S.data.rows.splice(at, 0, newRow);
+        // 同步复制明细表
+        dts.forEach(function (dt) {
+            if (!dt || !dt.rowGroups) return;
+            var srcDetail = (dt.rowGroups[rowIdx] || []).map(function (dr) { return dr.slice(); });
+            var srcRaw = (dt.rawRowGroups && dt.rawRowGroups[rowIdx])
+                ? JSON.parse(JSON.stringify(dt.rawRowGroups[rowIdx])) : [];
+            dt.rowGroups.splice(at, 0, srcDetail);
+            if (dt.rawRowGroups) dt.rawRowGroups.splice(at, 0, srcRaw);
+            if (dt.rawRowTypes) {
+                var srcType = dt.rawRowTypes[rowIdx] || 'none';
+                dt.rawRowTypes.splice(at, 0, srcType);
+            }
+        });
+    });
+    // 重建选中集：原索引 r → r + (选中行中 < r 的个数)
+    if (S.sel && S.sel.size > 0) {
+        var newSel = new Set();
+        var asc = selRows.slice().sort(function (a, b) { return a - b; });
+        S.sel.forEach(function (r) {
+            var shift = 0;
+            for (var j = 0; j < asc.length; j++) { if (asc[j] < r) shift++; }
+            newSel.add(r + shift);
+        });
+        S.sel = newSel;
+    }
+    S.cellSel = null;
+    saveFile();
+    renderTable();
+    showToast('已复制 ' + selRows.length + ' 行', 'success');
+}
+
 function pushFromContextMenu() {
     // 防重复点击（与 pushChanges 行为一致）
     if (S._pushing) {
@@ -1248,4 +1421,247 @@ function pushFromContextMenu() {
         }
     }, 30000);
     S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap, pushIndexToRow: pushIndexToRow });
+}
+
+// ==================== 用户标记 / 取消标记 ====================
+
+// 收集当前选区对应的 MarkRect 列表
+function collectMarkRects() {
+    var rects = [];
+    // 优先行选（整行标记，c1=-1）
+    if (S.sel && S.sel.size > 0) {
+        S.sel.forEach(function (r) {
+            rects.push({ r1: r, c1: -1, r2: r, c2: -1 });
+        });
+    } else if (typeof getCellSelRect === 'function') {
+        // 单元格矩形选区：保持原选区范围，不转换为整行
+        var rc = getCellSelRect();
+        if (rc) {
+            rects.push({ r1: rc.r1, c1: rc.c1, r2: rc.r2, c2: rc.c2 });
+        } else if (S._ctxRow >= 0 && S._ctxCol >= 0) {
+            // 右键点单个单元格
+            rects.push({ r1: S._ctxRow, c1: S._ctxCol, r2: S._ctxRow, c2: S._ctxCol });
+        }
+    } else if (S._ctxRow >= 0 && S._ctxCol >= 0) {
+        rects.push({ r1: S._ctxRow, c1: S._ctxCol, r2: S._ctxRow, c2: S._ctxCol });
+    }
+    return rects;
+}
+
+// 统计当前选区内已被标记的单元格数量（通过 isUserMarked 逐格查询）
+function countMarkedInRects(rects) {
+    if (typeof isUserMarked !== 'function') return 0;
+    var count = 0;
+    rects.forEach(function (rc) {
+        var c1 = rc.c1 === -1 ? 0 : rc.c1;
+        var c2 = rc.c1 === -1 ? (S.data.headers ? S.data.headers.length - 1 : 0) : rc.c2;
+        for (var r = rc.r1; r <= rc.r2; r++) {
+            for (var c = c1; c <= c2; c++) {
+                if (isUserMarked(r, c)) count++;
+            }
+        }
+    });
+    return count;
+}
+
+// 标记选中区域（弹出颜色选择器）
+var _markPendingRects = null;
+function markSelected() {
+    var rects = collectMarkRects();
+    if (rects.length === 0) return;
+    _markPendingRects = rects;
+    showMarkColorPicker();
+}
+
+// 取消标记选中区域（cell-by-cell 减法，支持选区与已存储矩形不完全重合的场景）
+function unmarkSelected() {
+    var rects = collectMarkRects();
+    if (rects.length === 0) return;
+    if (!S.vscode) return;
+
+    var headersLen = (S.data.headers && S.data.headers.length) || 0;
+    var existing = (S._userMarks && S._userMarks.rects) || [];
+
+    if (existing.length === 0) {
+        showToast('当前无标记', 'info');
+        return;
+    }
+
+    // 展开选区矩形为 cell key 集合
+    var selSet = {};
+    rects.forEach(function (rc) {
+        var c1 = rc.c1 === -1 ? 0 : rc.c1;
+        var c2 = rc.c1 === -1 ? headersLen - 1 : rc.c2;
+        for (var r = rc.r1; r <= rc.r2; r++) {
+            for (var c = c1; c <= c2 && c < headersLen; c++) {
+                selSet[r + ':' + c] = true;
+            }
+        }
+    });
+
+    // 逐个已存储矩形：保留未落在选区内的单元格
+    var newRects = [];
+    var removedCount = 0;
+    existing.forEach(function (er) {
+        var bg = er.bgColor || null;
+        var fg = er.fontColor || null;
+        var erC1 = er.c1 === -1 ? 0 : er.c1;
+        var erC2 = er.c1 === -1 ? headersLen - 1 : er.c2;
+
+        // 收集不被选区覆盖的单元格
+        var cells = [];
+        for (var r = er.r1; r <= er.r2; r++) {
+            for (var c = erC1; c <= erC2 && c < headersLen; c++) {
+                if (selSet[r + ':' + c]) {
+                    removedCount++;
+                } else {
+                    cells.push([r, c]);
+                }
+            }
+        }
+
+        // 按行聚合成"水平连续段"矩形
+        cells.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+        for (var i = 0; i < cells.length;) {
+            var r0 = cells[i][0], c0 = cells[i][1];
+            var cEnd = c0;
+            var j = i + 1;
+            while (j < cells.length && cells[j][0] === r0 && cells[j][1] === cEnd + 1) {
+                cEnd = cells[j][1];
+                j++;
+            }
+            newRects.push({ r1: r0, c1: c0, r2: r0, c2: cEnd, bgColor: bg, fontColor: fg, timestamp: er.timestamp });
+            i = j;
+        }
+    });
+
+    if (removedCount === 0) {
+        showToast('选区内无标记', 'info');
+        return;
+    }
+
+    // 取消标记动作纳入 undo 栈：必须在改动发生前压入当前快照（含旧的 _userMarks.rects）
+    if (typeof pushHistory === 'function') pushHistory();
+
+    // 更新本地状态 + 重绘
+    S._userMarks.rects = newRects;
+    S._userMarks.cellMap = null;
+    S._userMarks.rowMap = null;
+    S._userMarks.rowSet = null;
+    S._userMarks.cellTime = null;
+    S._userMarks.rowTime = null;
+
+    // 将完整结果发回扩展端持久化
+    S.vscode.postMessage({ type: 'setMarkRects', rects: newRects });
+    showToast('已取消标记 ' + removedCount + ' 个单元格', 'success');
+    renderTable();
+}
+
+// 应用标记（带颜色）
+function applyMarkWithColors(bgColor, fontColor) {
+    if (!_markPendingRects || _markPendingRects.length === 0) return;
+    if (!S.vscode) return;
+    // 标记动作纳入 undo 栈：必须在改动发生前压入当前快照（含旧的 _userMarks.rects）
+    if (typeof pushHistory === 'function') pushHistory();
+    S.vscode.postMessage({ type: 'mark', rects: _markPendingRects, bgColor: bgColor, fontColor: fontColor });
+    _markPendingRects = null;
+    showToast('已标记', 'success');
+}
+
+// ==================== 颜色选择器 ====================
+var _markPaletteBgColors = [
+    ['#ffffff','#e3f2fd','#fff3e0','#e8f5e9','#fce4ec','#f3e5f5','#e0f7fa','#fffde7','#efebe9','#eceff1'],
+    ['#bbdefb','#ffe0b2','#c8e6c9','#f8bbd0','#e1bee7','#80deea','#fff9c4','#d7ccc8','#cfd8dc','#b0bec5'],
+    ['#90caf9','#ffcc80','#a5d6a7','#f48fb1','#ce93d8','#4dd0e1','#fff176','#bcaaa4','#90a4ae','#78909c'],
+    ['#64b5f6','#ffb74d','#81c784','#f06292','#ba68c8','#00bcd4','#ffee58','#a1887f','#78909c','#546e7a'],
+    ['#42a5f5','#ffa726','#66bb6a','#ec407a','#ab47bc','#00acc1','#fdd835','#8d6e63','#607d8b','#455a64'],
+    ['#ffcdd2','#f44336','#e91e63','#9c27b0','#673ab7','#3f51b5','#2196f3','#00bcd4','#4caf50','#ff9800']
+];
+
+var _markPaletteFontColors = [
+    ['#000000','#d32f2f','#c62828','#6a1b9a','#283593','#1565c0','#00695c','#2e7d32','#e65100','#4e342e'],
+    ['#424242','#f44336','#e91e63','#9c27b0','#3f51b5','#2196f3','#0097a7','#4caf50','#ff9800','#795548'],
+    ['#757575','#ffffff','#fff3e0','#e8f5e9','#e3f2fd','#f3e5f5','#fce4ec','#e0f2f1','#fffde7','#efebe9']
+];
+
+var _markCurBg = '#e3f2fd';
+var _markCurFont = '';
+
+function showMarkColorPicker() {
+    hideMarkColorPicker();
+    var panel = document.createElement('div');
+    panel.id = 'markColorPicker';
+    panel.className = 'xs-mark-picker';
+    // 背景色区
+    var bgHtml = '<div class="xs-mp-title">背景色</div><div class="xs-mp-row">';
+    _markPaletteBgColors.forEach(function (row) {
+        row.forEach(function (c) {
+            var sel = (c === _markCurBg ? ' xs-mp-sel' : '');
+            bgHtml += '<span class="xs-mp-swatch' + sel + '" style="background:' + c + '" data-bg="' + c + '" title="' + c + '"></span>';
+        });
+        bgHtml += '</div><div class="xs-mp-row">';
+    });
+    bgHtml += '</div>';
+    // 分隔
+    bgHtml += '<div class="xs-div"></div>';
+    // 字体色区
+    var fgHtml = '<div class="xs-mp-title">字体色</div><div class="xs-mp-row">';
+    _markPaletteFontColors.forEach(function (row) {
+        row.forEach(function (c) {
+            var sel = (c === _markCurFont ? ' xs-mp-sel' : '');
+            var borderCol = (c === '#ffffff' ? 'border:1px solid #ccc;' : '');
+            fgHtml += '<span class="xs-mp-swatch' + sel + '" style="background:' + c + ';' + borderCol + '" data-fg="' + c + '" title="' + c + '"></span>';
+        });
+        fgHtml += '</div><div class="xs-mp-row">';
+    });
+    fgHtml += '</div>';
+    // 预览 & 操作按钮
+    var previewHtml = '<div class="xs-mp-footer"><span class="xs-mp-preview" id="mpPreview" style="background:' + (_markCurBg || '#fff') + ';color:' + (_markCurFont || '#000') + '">Aa</span>';
+    previewHtml += '<button id="mpApply" class="xs-mp-btn">标记</button>';
+    previewHtml += '<button id="mpCancel" class="xs-mp-btn xs-mp-btn-cancel">取消</button></div>';
+    panel.innerHTML = bgHtml + fgHtml + previewHtml;
+    document.body.appendChild(panel);
+    // 居中定位
+    var w = panel.offsetWidth, h = panel.offsetHeight;
+    panel.style.left = Math.max(8, (window.innerWidth - w) / 2) + 'px';
+    panel.style.top = Math.max(48, (window.innerHeight - h) / 2) + 'px';
+    // 事件绑定
+    panel.addEventListener('click', function (e) {
+        var t = e.target;
+        if (t.classList.contains('xs-mp-swatch')) {
+            var bg = t.getAttribute('data-bg');
+            var fg = t.getAttribute('data-fg');
+            if (bg !== null) _markCurBg = (_markCurBg === bg ? '' : bg);
+            if (fg !== null) _markCurFont = (_markCurFont === fg ? '' : fg);
+            // 更新所有 swatch 选中态
+            panel.querySelectorAll('.xs-mp-swatch[data-bg]').forEach(function (s) {
+                s.classList.toggle('xs-mp-sel', s.getAttribute('data-bg') === _markCurBg);
+            });
+            panel.querySelectorAll('.xs-mp-swatch[data-fg]').forEach(function (s) {
+                s.classList.toggle('xs-mp-sel', s.getAttribute('data-fg') === _markCurFont);
+            });
+            var pv = document.getElementById('mpPreview');
+            if (pv) { pv.style.background = (_markCurBg || '#fff'); pv.style.color = (_markCurFont || '#000'); }
+        }
+        if (t.id === 'mpApply') {
+            hideMarkColorPicker();
+            applyMarkWithColors(_markCurBg || null, _markCurFont || null);
+        }
+        if (t.id === 'mpCancel') { hideMarkColorPicker(); _markPendingRects = null; }
+    });
+    // 点击外部关闭
+    setTimeout(function () {
+        document.addEventListener('click', _onDocClickHidePicker);
+    }, 10);
+}
+
+function hideMarkColorPicker() {
+    var panel = document.getElementById('markColorPicker');
+    if (panel) panel.remove();
+    document.removeEventListener('click', _onDocClickHidePicker);
+}
+
+function _onDocClickHidePicker(e) {
+    var panel = document.getElementById('markColorPicker');
+    if (panel && !panel.contains(e.target)) { hideMarkColorPicker(); _markPendingRects = null; }
 }

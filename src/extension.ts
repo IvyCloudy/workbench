@@ -35,7 +35,8 @@ import { ensureBindingsFile } from './utils/taskInfoStore';
 import { normalizePushData } from './utils/headerLabels';
 import { TS_ID_COLUMN } from './services/utils';
 import { ensureDeletedRowsFile, syncDeletedRows, refreshAndGetDeletedRows, getPendingDeletedRows, markDeletedRows } from './utils/deletedRowsStore';
-import { initTelemetry, sendTelemetryEvent, sendTelemetryErrorEvent } from './utils/telemetry';
+import { ensureMarkFile } from './utils/markStore';
+import { initTelemetry, sendTelemetryEvent, sendTelemetryErrorEvent, sendTelemetryException } from './utils/telemetry';
 import { stackHead } from './services/utils';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
@@ -815,6 +816,11 @@ export async function activate(context: vscode.ExtensionContext) {
     await ensureDeletedRowsFile(context).catch(err => {
         console.error('[Extension] 初始化删除行存储文件失败:', err?.message || err);
         sendTelemetryErrorEvent('deletedRows.initFailed', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+    });
+
+    // 初始化用户标记存储文件（持久化手动高亮标记）
+    await ensureMarkFile(context).catch(err => {
+        console.error('[Extension] 初始化标记存储文件失败:', err?.message || err);
     });
 
     // 注册绑定任务相关功能（装饰器 + TreeView + revealBoundTask 命令 + 监听）

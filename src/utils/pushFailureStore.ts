@@ -23,8 +23,14 @@ import * as path from 'path';
 // 类型定义
 // ============================================
 
+/** 单条失败记录：reason 为失败原因，timestamp 为失败时间戳（ms） */
+export interface PushFailureItem {
+    reason: string;
+    timestamp: number;
+}
+
 export interface PushFailureEntry {
-    [tsId: string]: string; // tsId -> reason
+    [tsId: string]: PushFailureItem; // tsId -> { reason, timestamp }
 }
 
 interface PushFailureStoreData {
@@ -38,6 +44,28 @@ interface PushFailureStoreData {
 let resolvedFilePath: string | null = null;
 let cachedStore: PushFailureStoreData | null = null;
 let cachedMtimeMs = 0;
+
+/**
+ * 旧格式兼容：早期版本 entry value 为纯字符串 reason，
+ * 新版升级为 { reason, timestamp } 对象。读取时统一规范化，
+ * 旧格式 timestamp 视为 0（最旧），渲染时不会"晚于"任何用户标记。
+ */
+function normalizeEntry(raw: any): PushFailureEntry {
+    const out: PushFailureEntry = {};
+    if (!raw || typeof raw !== 'object') return out;
+    for (const k of Object.keys(raw)) {
+        const v = raw[k];
+        if (v == null) continue;
+        if (typeof v === 'string') {
+            out[k] = { reason: v, timestamp: 0 };
+        } else if (typeof v === 'object') {
+            const reason = (v.reason != null) ? String(v.reason) : '';
+            const ts = (typeof v.timestamp === 'number' && isFinite(v.timestamp)) ? v.timestamp : 0;
+            out[k] = { reason, timestamp: ts };
+        }
+    }
+    return out;
+}
 
 // ============================================
 // 公共接口
@@ -82,7 +110,12 @@ function loadStore(): PushFailureStoreData {
             console.warn('[PushFailureStore] 文件格式异常，返回空');
             cachedStore = {};
         } else {
-            cachedStore = parsed as PushFailureStoreData;
+            // 兼容旧格式：每个文件下的 entry 内若 value 仍是字符串，统一升级为对象
+            const normalized: PushFailureStoreData = {};
+            for (const fp of Object.keys(parsed as any)) {
+                normalized[fp] = normalizeEntry((parsed as any)[fp]);
+            }
+            cachedStore = normalized;
         }
         cachedMtimeMs = stat.mtimeMs;
         return cachedStore;
@@ -113,7 +146,7 @@ async function saveStore(store: PushFailureStoreData): Promise<void> {
 }
 
 /**
- * 查询指定文件的失败映射（tsId → reason）。无记录返回空对象。
+ * 查询指定文件的失败映射（tsId → { reason, timestamp }）。无记录返回空对象。
  */
 export function getFailures(filePath: string): PushFailureEntry {
     if (!filePath) return {};
@@ -123,9 +156,9 @@ export function getFailures(filePath: string): PushFailureEntry {
 }
 
 /**
- * 合并写入：先清除"本批参与的 tsId"的旧失败标记，再写入本次失败 tsId→reason。
+ * 合并写入：先清除"本批参与的 tsId"的旧失败标记，再写入本次失败 tsId→{reason,timestamp}。
  *   - batchTsIds：本次推送参与的所有 tsId（用于差集，让本批中已成功的 tsId 清掉旧失败标记）
- *   - failures：本次失败的 tsId→reason 映射
+ *   - failures：本次失败的 tsId→reason 映射（reason 为字符串，时间戳由本函数统一打 Date.now()）
  *   - successTsIds：扩展端额外回传的明确成功 tsId（兜底，可为空）
  *
  * 未参与本批的历史失败标记保持不变。
@@ -133,7 +166,7 @@ export function getFailures(filePath: string): PushFailureEntry {
 export async function mergeFailures(
     filePath: string,
     batchTsIds: string[],
-    failures: PushFailureEntry,
+    failures: { [tsId: string]: string },
     successTsIds?: string[]
 ): Promise<void> {
     if (!filePath) return;
@@ -156,11 +189,12 @@ export async function mergeFailures(
             }
         }
     }
-    // 3) 写入本次失败
+    // 3) 写入本次失败：统一打当前时间戳，便于前端按"高亮时间"决定优先级
+    const now = Date.now();
     if (failures && typeof failures === 'object') {
         for (const k of Object.keys(failures)) {
             if (k && failures[k] !== undefined && failures[k] !== null) {
-                entry[k] = String(failures[k] || '');
+                entry[k] = { reason: String(failures[k] || ''), timestamp: now };
             }
         }
     }

@@ -32,7 +32,7 @@ import { createParser, ensureTrackingColumns, applyTestCaseNos, type FileParser,
 import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
 import { getHeaderLabels, onHeaderLabelsChange, normalizePushData } from '../utils/headerLabels';
 import { stackHead } from '../services/utils';
-import { filterTemplateExampleRows, TEMPLATE_EXAMPLE_TS_ID } from '../utils/fileIdentifier';
+import { filterTemplateExampleRows, TEMPLATE_EXAMPLE_TS_ID, isCreatedByCommand } from '../utils/fileIdentifier';
 
 // 重新导出工具，便于子类使用
 export { isInQualifiedDir, FILE_PATTERNS };
@@ -103,7 +103,7 @@ export class PushViaHttpClient implements PushStrategy {
         }
         const taskInfo = {
             testTaskNo: currentTask.taskInfo.testTaskNo || '',
-            subTestTaskName: currentTask.taskInfo.subTestTaskName || '',
+            subTestTaskId: currentTask.taskInfo.subTestTaskId || '',
         };
 
         // 重新解析文件获取原始结构化数据。
@@ -159,7 +159,8 @@ export class PushViaHttpClient implements PushStrategy {
             });
         }
 
-        const result = await pushTestCase(extensionContext, normalizePushData(pushData), taskInfo, path.basename(ctx.filePath));
+        const pushSource = isCreatedByCommand(ctx.filePath) ? 'testAgentMa' : 'testAgent';
+        const result = await pushTestCase(extensionContext, normalizePushData(pushData), taskInfo, path.basename(ctx.filePath), pushSource);
         if (result.returnCode !== 'SUC0000') {
             showPushErrorModal(webviewPanel, path.basename(ctx.filePath), result.errorMsg || '推送失败');
             webviewPanel.webview.postMessage({ type: 'pushError', message: result.errorMsg || '推送失败' });

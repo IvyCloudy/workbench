@@ -101,6 +101,7 @@ export interface CurrentTaskInfo {
     testTaskNo: string;
     testTaskName: string;
     subTestTaskName: string;
+    subTestTaskId: string;
 }
 
 /** getCurrentTaskInfo 返回格式：bind 标记 + taskInfo 对象（未绑定时 taskInfo 为空）。 */
@@ -135,6 +136,7 @@ export async function getCurrentTaskInfo(fullPath: string): Promise<CurrentTask>
             testTaskNo: entry.taskInfo.testTaskNo || '',
             testTaskName: entry.taskInfo.testTaskName || '',
             subTestTaskName: entry.taskInfo.subTestTaskName || '',
+            subTestTaskId: entry.taskInfo.subTestTaskId != null ? String(entry.taskInfo.subTestTaskId) : '',
         },
     };
 }

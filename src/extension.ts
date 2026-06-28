@@ -146,7 +146,7 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
 
     const taskInfo = {
         testTaskNo: currentTask.taskInfo.testTaskNo || '',
-        subTestTaskName: currentTask.taskInfo.subTestTaskName || '',
+        subTestTaskId: currentTask.taskInfo.subTestTaskId || '',
     };
 
     let rows = await parseFileToRows(filePath);
@@ -180,7 +180,8 @@ async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionCo
     console.log(`[推送] 文件: ${filePath}, ${rows.length} 行`);
     sendTelemetryEvent('explorerPush.start', { ext: fileExt, totalRows: String(rows.length) });
     const pushData = normalizePushData(rows);
-    const pushResult = await pushTestCase(context, pushData, taskInfo, path.basename(filePath));
+    const pushSource = isCreatedByCommand(filePath) ? 'testAgentMa' : 'testAgent';
+    const pushResult = await pushTestCase(context, pushData, taskInfo, path.basename(filePath), pushSource);
     if (pushResult.returnCode !== 'SUC0000') {
         showPushErrorModal(panel, baseName, `后端返回失败: ${pushResult.errorMsg || '未知错误'}`);
         vscode.window.showErrorMessage(`推送失败: ${pushResult.errorMsg || '未知错误'}`);
@@ -452,12 +453,12 @@ async function handleCreateNewTestCase(targets: vscode.Uri[], context: vscode.Ex
     
     try {
         if (chosenExt === '.csv') {
-            // CSV 模板独立文件，中文表头，与 case_example.csv 保持一致
-            const csvTemplatePath = path.join(context.extensionUri.fsPath, 'case_example.csv');
+            // CSV 模板独立文件，中文表头，与 examples/case_example.csv 保持一致
+            const csvTemplatePath = path.join(context.extensionUri.fsPath, 'examples', 'case_example.csv');
             templateContent = await fs.promises.readFile(csvTemplatePath, 'utf-8');
         } else {
-            // YAML 使用 case_example.yaml 模板
-            const yamlTemplatePath = path.join(context.extensionUri.fsPath, 'case_example.yaml');
+            // YAML 使用 examples/case_example.yaml 模板
+            const yamlTemplatePath = path.join(context.extensionUri.fsPath, 'examples', 'case_example.yaml');
             templateContent = await fs.promises.readFile(yamlTemplatePath, 'utf-8');
         }
     } catch (err: any) {
@@ -549,7 +550,7 @@ async function handleCreateNewTestPoint(targets: vscode.Uri[], context: vscode.E
     }
 
     // 读取模板文件
-    const templatePath = path.join(context.extensionUri.fsPath, 'point_example.md');
+    const templatePath = path.join(context.extensionUri.fsPath, 'examples', 'point_example.md');
     let templateContent: string;
 
     try {

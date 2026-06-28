@@ -187,22 +187,31 @@ var server = http.createServer(function (req, res) {
             var payload = {};
             try { payload = JSON.parse(body); } catch (e) { payload = {}; }
 
-            // 兼容两种格式：
-            //   1) { testTaskNo, subTestTaskName, data: [...] }  ← 新格式
-            //   2) [...]                                         ← 旧格式（向后兼容）
+            // 兼容三种格式：
+            //   1) { testTaskNo, subTestTaskId, artifactId, caseList: [...] } ← 当前线上契约
+            //   2) { testTaskNo, subTestTaskName, data: [...] }              ← 历史格式
+            //   3) [...]                                                    ← 旧格式（向后兼容）
             var testTaskNo = '';
             var subTestTaskName = '';
+            var subTestTaskId = '';
+            var artifactId = '';
             var data = [];
             if (Array.isArray(payload)) {
                 data = payload;
             } else if (payload && typeof payload === 'object') {
                 testTaskNo = payload.testTaskNo || '';
                 subTestTaskName = payload.subTestTaskName || '';
-                data = Array.isArray(payload.data) ? payload.data : [];
+                subTestTaskId = payload.subTestTaskId || '';
+                artifactId = payload.artifactId || '';
+                if (Array.isArray(payload.caseList)) {
+                    data = payload.caseList;
+                } else if (Array.isArray(payload.data)) {
+                    data = payload.data;
+                }
             }
 
-            console.log('收到推送测试案例请求 testTaskNo=%s subTestTaskName=%s 共 %d 条',
-                testTaskNo || '(未提供)', subTestTaskName || '(未提供)', data.length);
+            console.log('收到推送测试案例请求 testTaskNo=%s subTestTaskId=%s subTestTaskName=%s artifactId=%s 共 %d 条',
+                testTaskNo || '(未提供)', subTestTaskId || '(未提供)', subTestTaskName || '(未提供)', artifactId || '(未提供)', data.length);
             if (data.length > 0) {
                 console.log('数据示例:', JSON.stringify(data[0], null, 2));
             }
@@ -215,7 +224,13 @@ var server = http.createServer(function (req, res) {
             var FAIL_RATIO = 0.5;
             var failCount = 0;
             var resultBody = data.map(function (rec, i) {
-                var tsId = rec && rec.testcase_id ? String(rec.testcase_id) : '';
+                // 当前契约：caseList 项中已有 sourceId（值即客户端的 testcase_id）；
+                // 兼容历史 data 数组直接传 testcase_id 的情况
+                var tsId = '';
+                if (rec) {
+                    if (rec.sourceId != null && String(rec.sourceId) !== '') tsId = String(rec.sourceId);
+                    else if (rec.testcase_id != null) tsId = String(rec.testcase_id);
+                }
                 var shouldFail = (data.length === 1)
                     ? (FAIL_RATIO > 0)               // 单条时：按 FAIL_RATIO 决定
                     : (i % Math.round(1 / FAIL_RATIO || 2) !== 0); // 多条时：按比例失败

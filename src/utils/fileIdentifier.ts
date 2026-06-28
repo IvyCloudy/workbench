@@ -207,7 +207,7 @@ export function showCreationInfoInStatusBar(filePath: string): vscode.StatusBarI
 /** 测试案例 id 列名（与 services/utils.ts 中 TS_ID_COLUMN 保持一致） */
 const TS_ID_COLUMN = 'testcase_id';
 
-/** 模板示例行的 testcase_id 占位文案（与 case_example.yaml 模板保持一致） */
+/** 模板示例行的 testcase_id 占位文案（与 examples/case_example.yaml 模板保持一致） */
 export const TEMPLATE_EXAMPLE_TS_ID = '案例唯一标识，不可修改';
 
 /**

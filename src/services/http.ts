@@ -20,6 +20,7 @@ import * as https from 'https';
 import { readConfig } from './storage';
 import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
 import { stackHead } from './utils';
+import { mapRowToCaseItem } from '../utils/pushDataMapper';
 import type { AppConfig, ApiResponse, QueryOptions } from '../types';
 
 // ============================================
@@ -239,19 +240,25 @@ export async function batchImportData(
  * @param artifactId   推送的文件名（如 testcases.csv）
  * @param taskInfo     必填，从文件路径解析得到的任务信息
  *                     目录格式：测试任务/<testTaskNo>_<subTestTaskName>/测试案例/<file>
+ *
+ * 注：所有推送都会按 mapRowToCaseItem 进行字段映射（其内部按行表头自动选择
+ *     中文 CSV / YAML 结构化分支），保证 caseList[] 始终符合后端契约。
  */
 export async function pushTestCase(
     context: vscode.ExtensionContext,
     data: any[],
-    taskInfo: { testTaskNo: string; subTestTaskName: string },
-    artifactId: string
+    taskInfo: { testTaskNo: string; subTestTaskId: string },
+    artifactId: string,
+    sourcePlatform: string = 'testAgent'
 ): Promise<ApiResponse> {
     const url = `${await getApiBaseUrl(context)}/test-task/push-testcase`;
+    const caseList = data.map(mapRowToCaseItem);
     const body = {
         testTaskNo: taskInfo.testTaskNo,
-        subTestTaskName: taskInfo.subTestTaskName,
+        subTestTaskId: taskInfo.subTestTaskId,
         artifactId,
-        data
+        sourcePlatform,
+        caseList
     };
 
     // 打印完整请求（headers 中的敏感字段做脱敏）

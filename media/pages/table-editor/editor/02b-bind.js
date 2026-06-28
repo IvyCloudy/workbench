@@ -658,6 +658,21 @@ function bindTable() {
         // 双击行号格（非拖手柄区域）→ 重置行高
         var cbTd = t.closest && t.closest('td.xs-td-cb');
         if (cbTd) { resetRowHeight(_pseudoEvt(e, cbTd)); return; }
+        // 双击列头（非漏斗按钮区域、非角格）→ 自适应列宽（toggle）
+        // 与 Excel 体验一致：列头空白处或文字处双击均可触发，不必精确命中右侧 8px 拖手柄
+        var thHit = t.closest && t.closest('th.xs-th');
+        if (thHit && thHit.hasAttribute('data-col')) {
+            // 排除：漏斗按钮（避免与筛选交互冲突）
+            var inFilter = t.closest && t.closest('.xs-th-filter');
+            if (!inFilter && typeof autoFitColumn === 'function') {
+                // autoFitColumn 内部以 e.currentTarget 的 data-col 为准；
+                // 用列头自身的 .xs-resizer 作为 currentTarget 以拿到 data-col；
+                // 若不存在 resizer，则用 th 本身（th 上同样含 data-col）。
+                var rzInTh = thHit.querySelector('.xs-resizer') || thHit;
+                autoFitColumn(_pseudoEvt(e, rzInTh));
+            }
+            return;
+        }
         // 单元格双击 → 编辑
         var cellEl = t.closest && t.closest('.xs-editable');
         if (cellEl) { onCellDblClick(_pseudoEvt(e, cellEl)); return; }

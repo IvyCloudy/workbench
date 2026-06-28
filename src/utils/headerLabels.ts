@@ -81,7 +81,19 @@ export function getReverseHeaderLabels(): HeaderLabels {
 /**
  * 将 push 数据对象的 key 从中文映射回英文。
  * 仅当对象中包含中文 key（即数据文件使用中文表头）时才执行转换。
+ *
+ * 例外：若行内出现典型「中文 CSV 模板」表头键
+ * （案例步骤/案例名称/预期结果/路径/前置条件/案例类型/描述/优先级），
+ * 说明这是 examples/case_example.csv 风格的中文 CSV，
+ * 下游 mapChineseRowToCaseItem 会按中文键直接做语义化映射
+ * （如「案例步骤」→ description 数组、「预期结果」→ expected 数组），
+ * 该映射与 headerReverseLabels 的简单 key 改名语义并不一致
+ * （如「案例步骤」反向映射成 description 字符串会与「描述」语义重叠，
+ * 且让 mapper 误判中文分支后取不到值），
+ * 因此这里直接保留原始中文键，跳过反向映射，交由 mapper 处理。
  */
+const CSV_ZH_HEADER_KEYS = ['案例步骤', '案例名称', '预期结果', '路径', '前置条件', '案例类型', '描述', '优先级'];
+
 export function normalizePushData(data: any[]): any[] {
     if (!Array.isArray(data) || data.length === 0) return data;
     // 快速判断：首行是否有中文 key
@@ -90,6 +102,10 @@ export function normalizePushData(data: any[]): any[] {
     const keys = Object.keys(first);
     const hasChineseKey = keys.some(k => /[\u4e00-\u9fff]/.test(k));
     if (!hasChineseKey) return data;
+
+    // 中文 CSV 模板行：原样返回，由 mapChineseRowToCaseItem 处理
+    const isChineseCsvRow = keys.some(k => CSV_ZH_HEADER_KEYS.includes(k));
+    if (isChineseCsvRow) return data;
 
     const reverse = getReverseHeaderLabels();
     return data.map((rec: any) => {

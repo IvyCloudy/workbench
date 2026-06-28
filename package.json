@@ -167,8 +167,8 @@
           "type": "object",
           "default": {
             "testcase_id": "案例唯一标识",
-            "testCaseNo": "用例编号",
-            "name": "测试名称",
+            "testCaseNo": "案例编号",
+            "name": "案例名称",
             "path": "路径",
             "priority": "优先级",
             "type": "案例类型",
@@ -178,20 +178,16 @@
             "status": "状态",
             "preconditions": "前置条件",
             "steps": "步骤",
-            "step": "步骤",
-            "operation": "操作",
+            "operation": "步骤名称",
+            "tags": "标签",
             "data": "数据",
             "expected": "预期结果",
-            "ui-expected": "UI预期",
-            "api-expected": "接口预期",
-            "db-expected": "数据库预期",
-            "result": "结果",
-            "remark": "备注",
-            "testCaseDesc": "描述",
-            "createTime": "创建时间",
-            "updateTime": "更新时间",
+            "ui_expected": "UI检查",
+            "api_expected": "接口检查",
+            "db_expected": "数据检查",
+            "testCaseDesc": "案例描述",
             "description":"步骤描述",
-            "testType": "执行方式"
+            "test_type": "执行方式"
           },
           "additionalProperties": { "type": "string" },
           "markdownDescription": "测试案例编辑器表头**英→中**映射（仅用于显示，不会写入数据文件）。\n\n- key 为数据文件中的英文字段名，value 为中文显示名。\n- 优先级（高 → 低）：**工作区设置 > 用户设置 > 插件内置默认值**。\n- 同名 key 在高优先级中出现会覆盖低优先级；未配置的字段表头只显示英文 key。\n- 插件已内置常见字段（如 `testcase_id`、`path`、`priority`、`steps` 等），可直接覆盖或扩展。\n\n示例：\n```json\n{\n  \"testcase_id\": \"用例ID\",\n  \"path\": \"路径\"\n}\n```"
@@ -200,19 +196,19 @@
           "type": "object",
           "default": {
             "案例唯一标识": "testcase_id",
-            "用例编号": "testCaseNo",
-            "测试名称": "name",
+            "案例编号": "testCaseNo",
+            "案例名称": "name",
             "路径": "path",
             "优先级": "priority",
             "案例类型": "type",
-            "描述": "description",
+            "案例描述": "testCaseDesc",
             "前置条件": "preconditions",
             "预期结果": "expected",
-            "步骤描述": "step_description",
+            "案例步骤": "description",
             "执行方式": "test_type"
           },
           "additionalProperties": { "type": "string" },
-          "markdownDescription": "推送时**中→英**反向映射（中文表头还原为英文字段名）。\n\n- key 为 CSV 模板/case_example.csv 中的中文表头名，value 为推送给后端接口时所使用的英文字段名。\n- 优先级（高 → 低）：**工作区设置 > 用户设置 > 插件内置默认值**。\n- 推送时若数据的 key 匹配到此映射，自动替换为对应英文 key；未匹配到的 key 保持原样。\n- 若 CSV 模板新增了中文表头，在此处补充一条映射即可，无需修改代码重编译。\n\n示例：\n```json\n{\n  \"优先级\": \"priority\",\n  \"前置条件\": \"preconditions\"\n}\n```"
+          "markdownDescription": "推送时**中→英**反向映射（中文表头还原为英文字段名）。\n\n- key 为 CSV 模板/examples/case_example.csv 中的中文表头名，value 为推送给后端接口时所使用的英文字段名。\n- 优先级（高 → 低）：**工作区设置 > 用户设置 > 插件内置默认值**。\n- 推送时若数据的 key 匹配到此映射，自动替换为对应英文 key；未匹配到的 key 保持原样。\n- 若 CSV 模板新增了中文表头，在此处补充一条映射即可，无需修改代码重编译。\n\n示例：\n```json\n{\n  \"优先级\": \"priority\",\n  \"前置条件\": \"preconditions\"\n}\n```"
         }
       }
     }

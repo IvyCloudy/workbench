@@ -992,15 +992,25 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         );
         // 表格编辑器脚本已按职能拆分到 editor/ 子目录下，按顺序加载等价于原 editor.js 单文件。
         // 注意：因函数声明在每个 <script> 内部独立提升（不跨脚本），文件加载顺序必须保持。
-        //   01-core            —— 全局状态 S、日志、撤销/重做、init 入口、消息分发、通用工具
-        //   02a-render         —— renderTable + 虚拟滚动 + 单元格 patchCell
-        //   02b-bind           —— 工具栏 / 全局快捷键 / 表格事件委托绑定
-        //   02c-row-cell-sel   —— 行号格 mousedown / 单元格 mousedown（行选 / 单元格矩形拖选）
-        //   02d-sel-utils      —— 选区辅助、信息统计、推送按钮 / 仅看失败按钮 状态同步
-        //   03a-cell-edit      —— 单元格编辑、右键菜单、行/列数据增删改/复制粘贴/清空
-        //   03b-resize-colsel  —— 列宽拖动 / 列选择（Excel 风格） / 行高拖动
-        //   04-push-find       —— 推送/保存、查找替换面板、Excel 风格列筛选
-        //   05-modals          —— 推送结果弹窗、通用 prompt/confirm、明细弹窗，并在末尾调用 init()
+        //   01-core             —— 全局状态 S、日志、撤销/重做、init 入口、消息分发、通用工具
+        //   02a-render          —— renderTable + 虚拟滚动 + 单元格 patchCell
+        //   02b-bind            —— 工具栏 / 全局快捷键 / 表格事件委托绑定
+        //   02c-row-cell-sel    —— 行号格 mousedown / 单元格 mousedown（行选 / 单元格矩形拖选）
+        //   02d-sel-utils       —— 选区辅助、信息统计、推送按钮 / 仅看失败按钮 状态同步
+        //   03a-cell-edit       —— 单元格编辑（双击进入编辑 / 提交 / 批量写入）
+        //   03b-resize-colsel   —— 列宽拖动 / 列选择（Excel 风格） / 行高拖动
+        //   03c-context-menu    —— 右键菜单（构造 / 显示 / 隐藏）
+        //   03d-row-ops         —— 行操作（增 / 删 / 复制 / 推送）
+        //   03e-mark            —— 用户标记 / 取消标记 / 颜色选择器
+        //   03f-col-ops         —— 列操作（增 / 删 / 重命名）
+        //   03g-clipboard       —— 单元格剪贴板 / 清空 / 批量填充
+        //   03h-detail-helpers  —— 明细列辅助函数（_inferDetailColKind 等）
+        //   04-push-find        —— 推送/保存、查找替换面板、Excel 风格列筛选
+        //   05a-push-result     —— 推送结果弹窗（成功/失败明细 + 行联动）
+        //   05b-prompt-confirm  —— 通用 Prompt / Confirm 弹窗（替代 sandbox 受限 API）
+        //   05c-detail-modal    —— 明细弹窗（v2 双栏）主体 + 渲染
+        //   05d-detail-write    —— 明细弹窗（v2）写操作（增删 step / 字段写入 / 保存）
+        //   05e-array-editor    —— 数组列编辑器，并在末尾调用 init()
         const editorScriptFiles = [
             'editor/01-core.js',
             'editor/02a-render.js',
@@ -1009,8 +1019,18 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             'editor/02d-sel-utils.js',
             'editor/03a-cell-edit.js',
             'editor/03b-resize-colsel.js',
+            'editor/03c-context-menu.js',
+            'editor/03d-row-ops.js',
+            'editor/03e-mark.js',
+            'editor/03f-col-ops.js',
+            'editor/03g-clipboard.js',
+            'editor/03h-detail-helpers.js',
             'editor/04-push-find.js',
-            'editor/05-modals.js'
+            'editor/05a-push-result.js',
+            'editor/05b-prompt-confirm.js',
+            'editor/05c-detail-modal.js',
+            'editor/05d-detail-write.js',
+            'editor/05e-array-editor.js'
         ];
         const editorScriptsHtml = editorScriptFiles.map((rel) => {
             const uri = webviewPanel.webview.asWebviewUri(

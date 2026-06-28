@@ -224,7 +224,6 @@
             "preconditions": "前置条件",
             "steps": "步骤",
             "operation": "步骤名称",
-            "tags": "标签",
             "data": "数据",
             "expected": "预期结果",
             "ui_expected": "UI检查",

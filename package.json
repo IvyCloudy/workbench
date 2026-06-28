@@ -103,22 +103,22 @@
         },
         {
           "submenu": "testcaseViewer.newCase",
-          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例(?:[\\/]|$)/i && resourceExtname == ''",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例(?:[\\/]|$)/i",
           "group": "2_workspace@1"
         },
         {
           "submenu": "testcaseViewer.newCase",
-          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例[\\/].+\\.(csv|yaml|yml|json)$/i && resourceExtname != ''",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例[\\/].+\\.(csv|yaml|yml|json)$/i",
           "group": "2_workspace@2"
         },
         {
           "command": "testcaseViewer.createNewTestPoint",
-          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试大纲(?:[\\/]|$)/i && resourceExtname == ''",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试大纲(?:[\\/]|$)/i",
           "group": "2_workspace@1"
         },
         {
           "command": "testcaseViewer.createNewTestPoint",
-          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试大纲[\\/].+\\.(md|yaml|yml|csv)$/i && resourceExtname != ''",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试大纲[\\/].+\\.(md|yaml|yml|csv)$/i",
           "group": "2_workspace@2"
         }
       ],

@@ -1,0 +1,505 @@
+- testcase_id: TC_DEEP_NEST_001
+  testCaseNo: TT17826550093371000
+  path: 深层功能/嵌套场景/
+  name: 多类型字段综合测试案例
+  type: 功能测试
+  preconditions:
+    - 用户已登录系统
+    - 测试环境已部署最新版本
+    - 数据库初始化完成
+  priority: 高
+  steps:
+    - id: 1
+      operation: 提交包含多种数据类型的表单
+      data:
+        - 普通字符串
+        - 12345
+        - 3.1415926
+        - true
+        - false
+        - null
+        - "包含特殊字符: @#￥%……&*()"
+        - 中英文混合 mixed text
+        - 2026-06-28T21:00:00+08:00
+        - username: tester01
+          age: 28
+          vip: true
+        - - 1
+          - 2
+          - 3
+          - 4
+          - 5
+        - nested:
+            level1:
+              level2: 深层嵌套值
+      ui_expected:
+        - 提交按钮变为loading状态
+        - 页面顶部显示"提交成功"提示
+        - 进度条显示100%
+        - 倒计时数字: 3
+        - 表单是否清空: true
+        - 错误提示是否显示: false
+        - toast_color: green
+          duration_ms: 3000
+        - - 字段1校验通过
+          - 字段2校验通过
+          - 字段3校验通过
+      api_expected:
+        - HTTP状态码: 200
+        - 响应字段success为true
+        - 响应字段code为0
+        - 响应字段message为"OK"
+        - 响应字段data不为null
+        - code: 0
+          message: OK
+          data:
+            id: 1001
+            status: ACTIVE
+        - - trace_id存在
+          - request_id存在
+          - 耗时<500ms
+        - 接口耗时: 235.6
+      db_expected:
+        - t_user表新增一条记录
+        - t_user.status = 1
+        - t_user.create_time 不为空
+        - t_user.is_deleted = false
+        - table: t_user
+          count: 1
+          condition: username='tester01'
+        - - t_log表新增日志
+          - t_audit表新增审计记录
+        - 影响行数: 1
+    - id: 2
+      operation: 查询并校验多类型返回结果
+      data:
+        - 查询条件1
+        - page: 1
+          page_size: 20
+          keyword: ""
+        - - 101
+          - 102
+          - 103
+        - ""
+        - 0
+      ui_expected:
+        - 列表显示3条数据
+        - 分页组件显示总数: 3
+        - 空状态是否展示: false
+      api_expected:
+        - 返回数组长度为3
+        - total: 3
+          list:
+            - id: 101
+            - id: 102
+            - id: 103
+      db_expected:
+        - 查询结果与数据库一致
+        - select count(*) from t_user where status=1 结果为3
+    - id: 3
+      operation: 边界值与异常输入校验
+      data:
+        - -1
+        - 9999999999
+        - 1e-7
+        - "   "
+        - <script>alert(1)</script>
+        - "'; DROP TABLE users; --"
+      ui_expected:
+        - 弹出错误提示框
+        - 错误文案: 输入参数不合法
+      api_expected:
+        - HTTP状态码: 400
+        - code: 40001
+          message: 参数校验失败
+      db_expected:
+        - 数据库无新增记录
+        - 影响行数: 0
+- testcase_id: TC_DEEP_NEST_002
+  testCaseNo: TT17826550143091000
+  path: 深层功能/嵌套场景/登录鉴权/
+  name: 用户登录鉴权流程
+  type: 功能测试
+  preconditions:
+    - 测试账号已创建
+    - 验证码服务可用
+  priority: 高
+  steps:
+    - id: 1
+      operation: 输入合法用户名和密码登录
+      data:
+        - username: admin
+          password: Admin@123
+        - 验证码: "8521"
+        - 记住我: true
+      ui_expected:
+        - 跳转到首页
+        - 顶部显示用户头像
+        - 欢迎语: 欢迎回来, admin
+      api_expected:
+        - HTTP状态码: 200
+        - code: 0
+          token_type: Bearer
+          expires_in: 7200
+        - 返回字段access_token不为空
+      db_expected:
+        - t_login_log新增登录记录
+        - t_user.last_login_time 已更新
+    - id: 2
+      operation: 错误密码登录3次后账号锁定
+      data:
+        - username: admin
+          password: wrong1
+        - username: admin
+          password: wrong2
+        - username: admin
+          password: wrong3
+      ui_expected:
+        - 第3次提示: 账号已被锁定，请30分钟后再试
+        - 登录按钮置灰
+      api_expected:
+        - HTTP状态码: 423
+        - code: 42301
+          message: Account Locked
+      db_expected:
+        - t_user.locked = true
+        - t_user.lock_until 不为空
+- testcase_id: TC_DEEP_NEST_003
+  testCaseNo: TT17826550093371002
+  path: 深层功能/嵌套场景/列表查询/
+  name: 列表分页排序与筛选
+  type: 功能测试
+  preconditions:
+    - 数据库已存在不少于100条业务数据
+  priority: 中
+  steps:
+    - id: 1
+      operation: 默认分页查询第一页
+      data:
+        - page: 1
+          page_size: 10
+      ui_expected:
+        - 列表渲染10行
+        - 分页器显示总页数: 10
+        - 当前页高亮: 1
+      api_expected:
+        - total: 100
+          page: 1
+          page_size: 10
+        - 列表长度: 10
+      db_expected:
+        - SQL包含 LIMIT 10 OFFSET 0
+    - id: 2
+      operation: 按创建时间倒序+状态筛选
+      data:
+        - sort: create_time
+          order: desc
+          status:
+            - ACTIVE
+            - PENDING
+      ui_expected:
+        - 排序图标: ▼
+        - 筛选标签数: 2
+      api_expected:
+        - 第一条记录的create_time > 第二条
+        - filter_count: 2
+      db_expected:
+        - SQL包含 ORDER BY create_time DESC
+        - SQL包含 status IN ('ACTIVE','PENDING')
+    - id: 3
+      operation: 关键字搜索-空结果
+      data:
+        - keyword: 不存在的关键字_xyz_999
+      ui_expected:
+        - 显示空状态插画
+        - 文案: 暂无数据
+      api_expected:
+        - total: 0
+          list: []
+      db_expected:
+        - 影响行数: 0
+- testcase_id: TC_DEEP_NEST_004
+  testCaseNo: TT17826550220821000
+  path: 深层功能/嵌套场景/文件上传/
+  name: 多类型文件上传校验
+  type: 功能测试
+  preconditions:
+    - 文件存储服务COS可访问
+    - 用户具有上传权限
+  priority: 中
+  steps:
+    - id: 1
+      operation: 上传合法图片(jpg/png/gif)
+      data:
+        - filename: avatar.jpg
+          size_kb: 256
+          mime: image/jpeg
+        - filename: logo.png
+          size_kb: 80
+          mime: image/png
+        - filename: anim.gif
+          size_kb: 1024
+          mime: image/gif
+      ui_expected:
+        - 进度条: 100
+        - 缩略图预览展示
+        - 上传成功提示
+      api_expected:
+        - HTTP状态码: 200
+        - url_list:
+            - https://cos.example.com/a.jpg
+            - https://cos.example.com/b.png
+            - https://cos.example.com/c.gif
+      db_expected:
+        - t_file新增3条记录
+    - id: 2
+      operation: 上传超大文件(>50MB)
+      data:
+        - filename: huge.zip
+          size_mb: 60
+      ui_expected:
+        - 错误弹窗: 单个文件不能超过50MB
+      api_expected:
+        - HTTP状态码: 413
+        - code: 41301
+      db_expected:
+        - 数据库无新增
+    - id: 3
+      operation: 上传非法格式(.exe)
+      data:
+        - filename: virus.exe
+          mime: application/x-msdownload
+      ui_expected:
+        - 错误提示: 不支持的文件类型
+      api_expected:
+        - HTTP状态码: 415
+      db_expected:
+        - 数据库无新增
+- testcase_id: TC_DEEP_NEST_005
+  testCaseNo: TT17826550093371004
+  path: 深层功能/嵌套场景/权限/
+  name: 角色权限与越权访问
+  type: 安全测试
+  preconditions:
+    - 系统已配置 admin / user / guest 三种角色
+  priority: 高
+  steps:
+    - id: 1
+      operation: guest访问admin专属接口
+      data:
+        - role: guest
+          api: /api/admin/users/delete
+      ui_expected:
+        - 提示: 无权限访问
+        - 自动跳转到403页面
+      api_expected:
+        - HTTP状态码: 403
+        - code: 40301
+          message: Forbidden
+      db_expected:
+        - t_audit_log新增越权访问记录
+    - id: 2
+      operation: 普通用户尝试修改他人数据
+      data:
+        - current_user_id: 1001
+          target_user_id: 1002
+          action: update
+      ui_expected:
+        - 操作按钮置灰不可点
+      api_expected:
+        - HTTP状态码: 403
+      db_expected:
+        - 目标记录未被修改
+- testcase_id: TC_DEEP_NEST_006
+  testCaseNo: TT17826550143091002
+  path: 深层功能/嵌套场景/并发/
+  name: 并发下单与幂等性
+  type: 性能/稳定性测试
+  preconditions:
+    - 库存表初始化为100
+    - 幂等key机制已开启
+  priority: 高
+  steps:
+    - id: 1
+      operation: 100个用户同时下单同一商品
+      data:
+        - concurrency: 100
+          product_id: P_1001
+          stock: 100
+      ui_expected:
+        - 成功用户提示: 下单成功
+        - 失败用户提示: 库存不足
+      api_expected:
+        - 成功响应数: 100
+        - 失败响应数: 0
+        - avg_rt_ms: 180.5
+          p99_rt_ms: 450
+      db_expected:
+        - t_stock.remain = 0
+        - t_order新增100条
+        - 不存在超卖
+    - id: 2
+      operation: 同一幂等key重复提交
+      data:
+        - idempotent_key: abc-123
+          retry_times: 5
+      ui_expected:
+        - 仅第1次成功提示，其余无新订单
+      api_expected:
+        - 5次响应均返回相同 order_id
+      db_expected:
+        - t_order仅新增1条
+- testcase_id: TC_DEEP_NEST_007
+  testCaseNo: TT17826550093371006
+  path: 深层功能/嵌套场景/性能/
+  name: 接口性能压测
+  type: 性能测试
+  preconditions:
+    - "压测环境硬件配置: 8C16G"
+    - "压测工具: jmeter"
+  priority: 中
+  steps:
+    - id: 1
+      operation: 持续压测查询接口5分钟
+      data:
+        - tps: 500
+          duration_min: 5
+          ramp_up_sec: 30
+      ui_expected:
+        - 监控面板曲线平稳
+      api_expected:
+        - 平均RT(ms): 120
+        - P95(ms): 250
+        - P99(ms): 480
+        - 错误率: 0.001
+      db_expected:
+        - 慢SQL数量: 0
+        - 连接池使用率<80%
+- testcase_id: TC_DEEP_NEST_008
+  testCaseNo: ""
+  path: 深层功能/嵌套场景/UI兼容/
+  name: 多浏览器与多分辨率兼容
+  type: UI兼容性测试
+  preconditions:
+    - 测试机覆盖 Chrome/Edge/Safari/Firefox
+  priority: 低
+  steps:
+    - id: 1
+      operation: 在不同浏览器打开首页
+      data:
+        - - Chrome 120
+          - Edge 120
+          - Safari 17
+          - Firefox 121
+        - resolutions:
+            - 1920x1080
+            - 1440x900
+            - 1366x768
+            - 375x812
+      ui_expected:
+        - 布局无错乱
+        - 字体渲染一致
+        - 关键按钮可点击
+      api_expected:
+        - 所有静态资源200
+      db_expected:
+        - 不涉及
+- testcase_id: TC_DEEP_NEST_009
+  testCaseNo: TT17826550093371008
+  path: 深层功能/嵌套场景/国际化/
+  name: 多语言切换与文案校验
+  type: 国际化测试
+  preconditions:
+    - 已配置 zh-CN / en-US / ja-JP / zh-TW 四种语言包
+  priority: 低
+  steps:
+    - id: 1
+      operation: 依次切换4种语言
+      data:
+        - - zh-CN
+          - en-US
+          - ja-JP
+          - zh-TW
+      ui_expected:
+        - 标题文案分别为:
+            - 首页
+            - Home
+            - ホーム
+            - 首頁
+        - 日期格式分别为:
+            - 2026/06/28
+            - 06/28/2026
+            - 2026年06月28日
+            - 2026/06/28
+        - 货币符号分别为:
+            - ¥
+            - $
+            - ¥
+            - NT$
+      api_expected:
+        - 请求头 Accept-Language 正确传递
+      db_expected:
+        - 不涉及
+- testcase_id: TC_DEEP_NEST_010
+  testCaseNo: TT17826550143091004
+  path: 深层功能/嵌套场景/安全/
+  name: 安全注入与XSS防护
+  type: 安全测试
+  preconditions:
+    - WAF已开启
+  priority: 高
+  steps:
+    - id: 1
+      operation: 提交SQL注入payload
+      data:
+        - "' OR 1=1 --"
+        - admin'--
+        - 1; DROP TABLE users
+      ui_expected:
+        - 输入校验失败提示
+      api_expected:
+        - HTTP状态码: 400
+        - code: 40002
+          message: 非法字符
+      db_expected:
+        - 数据表未受影响
+    - id: 2
+      operation: 提交XSS payload
+      data:
+        - <script>alert('xss')</script>
+        - <img src=x onerror=alert(1)>
+        - javascript:alert(1)
+      ui_expected:
+        - 渲染时被转义为纯文本
+        - 不触发alert弹窗
+      api_expected:
+        - 响应内容已转义
+      db_expected:
+        - 存储内容已转义保存
+- testcase_id: TC_DEEP_NEST_011
+  testCaseNo: TT17826550093371010
+  path: 深层功能/嵌套场景/事务/
+  name: 跨表事务回滚
+  type: 功能测试
+  preconditions:
+    - 数据库支持事务
+  priority: 中
+  steps:
+    - id: 1
+      operation: 业务执行中第二步抛异常
+      data:
+        - steps:
+            - table: t_order
+              op: insert
+            - table: t_stock
+              op: update
+              will_fail: true
+      ui_expected:
+        - 提示: 操作失败，请重试
+      api_expected:
+        - HTTP状态码: 500
+        - code: 50001
+      db_expected:
+        - t_order无新增
+        - t_stock无变化
+        - 事务已回滚

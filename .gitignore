@@ -31,3 +31,4 @@ Thumbs.db
 /telemetry-server/plugins/*.jar
 /telemetry-server/plugins/*.db.mv.db
 /telemetry-server/metabase/data/
+/test.json

@@ -13,18 +13,31 @@
 // ==================== 用户标记 / 取消标记 ====================
 
 // 收集当前选区对应的 MarkRect 列表
+// 关键：在搜索 / 列筛选 / 仅看失败 等过滤模式下，必须把矩形按"实际可见行"
+// 拆分逐行下发，避免把被隐藏的行号一起标记上（取消筛选后会暴露成连续行标记）。
 function collectMarkRects() {
     var rects = [];
-    // 优先行选（整行标记，c1=-1）
+    // 优先行选（整行标记，c1=-1）。S.sel 已由 02c 保证只含可见行，无需再过滤。
     if (S.sel && S.sel.size > 0) {
         S.sel.forEach(function (r) {
             rects.push({ r1: r, c1: -1, r2: r, c2: -1 });
         });
     } else if (typeof getCellSelRect === 'function') {
-        // 单元格矩形选区：保持原选区范围，不转换为整行
+        // 单元格矩形选区：用 getSelRectRows() 拿到"过滤后可见的行号列表"，
+        // 再按行号逐条下发，确保被隐藏的行号不会被标记。
         var rc = getCellSelRect();
         if (rc) {
-            rects.push({ r1: rc.r1, c1: rc.c1, r2: rc.r2, c2: rc.c2 });
+            var visibleRows = (typeof getSelRectRows === 'function')
+                ? getSelRectRows()
+                : null;
+            if (!visibleRows || visibleRows.length === 0) {
+                // 兜底：getSelRectRows 不可用或没有可见行 → 退化为原矩形（极端兼容）
+                rects.push({ r1: rc.r1, c1: rc.c1, r2: rc.r2, c2: rc.c2 });
+            } else {
+                visibleRows.forEach(function (r) {
+                    rects.push({ r1: r, c1: rc.c1, r2: r, c2: rc.c2 });
+                });
+            }
         } else if (S._ctxRow >= 0 && S._ctxCol >= 0) {
             // 右键点单个单元格
             rects.push({ r1: S._ctxRow, c1: S._ctxCol, r2: S._ctxRow, c2: S._ctxCol });

@@ -14,9 +14,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { getAllBoundItems, getAllBoundFolderPaths, clearBindingsCache } from '../utils/taskInfoStore';
+import { getAllBoundItems, getAllBoundFolderPaths, clearBindingsCache, type CurrentTask } from '../utils/taskInfoStore';
 import { sendTelemetryEvent } from '../utils/telemetry';
-import { stackHead } from '../services/utils';
 
 // ============================================
 // 全局上下文引用
@@ -44,6 +43,27 @@ function findAnyFileInDir(dirPath: string): string | undefined {
     return undefined;
 }
 
+/** 获取当前工作区根目录列表 */
+function getWorkspaceRoots(): string[] {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) return [];
+    return folders.map(f => f.uri.fsPath.replace(/\\/g, '/'));
+}
+
+/**
+ * 过滤绑定项，只保留 rootPath 位于当前工作区内的项。
+ * 若无工作区或 rootPath 不在任何工作区内，则排除该项。
+ */
+function filterBoundItemsByWorkspace(items: CurrentTask[]): CurrentTask[] {
+    const roots = getWorkspaceRoots();
+    if (roots.length === 0) return items; // 无工作区时不过滤
+    return items.filter(item => {
+        if (!item.taskInfo || !item.taskInfo.rootPath) return false;
+        const itemRoot = item.taskInfo.rootPath.replace(/\\/g, '/');
+        return roots.some(r => itemRoot.startsWith(r + '/') || itemRoot === r);
+    });
+}
+
 // ============================================
 // 任务文件夹装饰器（资源管理器图标覆盖）
 // ============================================
@@ -61,11 +81,18 @@ class TaskFolderDecorationProvider implements vscode.FileDecorationProvider {
         const fsPath = uri.fsPath;
         if (!fsPath) return undefined;
 
-        const boundPaths = getAllBoundFolderPaths(effectiveContext!);        const fsPathNorm = fsPath.replace(/\\/g, '/');
+        const boundPaths = getAllBoundFolderPaths(effectiveContext!);
+        // 只保留当前工作区内的绑定路径
+        const roots = getWorkspaceRoots();
+        const workspaceBoundPaths = roots.length === 0
+            ? boundPaths
+            : boundPaths.filter(bp => roots.some(r => bp.startsWith(r + '/') || bp === r));
 
-        // 找到 exaxt 匹配的绑定文件夹路径
+        const fsPathNorm = fsPath.replace(/\\/g, '/');
+
+        // 找到 exact 匹配的绑定文件夹路径
         let matchedPath = '';
-        for (const bp of boundPaths) {
+        for (const bp of workspaceBoundPaths) {
             if (fsPathNorm === bp) {
                 matchedPath = bp;
                 break;
@@ -106,7 +133,7 @@ class BindTasksTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
     }
 
     getChildren(): vscode.TreeItem[] {
-        const items = getAllBoundItems(effectiveContext!);
+        const items = filterBoundItemsByWorkspace(getAllBoundItems(effectiveContext!));
         return items.map(entry => {
             const info = entry.taskInfo!;
             const testTaskName = info.testTaskName || '';
@@ -163,8 +190,6 @@ function registerRevealBoundTaskCommand(): vscode.Disposable {
                 ? vscode.Uri.file(fileToReveal)
                 : vscode.Uri.file(fullPath);
 
-            await vscode.commands.executeCommand('workbench.view.explorer');
-            await new Promise(r => setTimeout(r, 300));
             await vscode.commands.executeCommand('revealInExplorer', targetUri);
 
             console.log('[revealBoundTask] done');

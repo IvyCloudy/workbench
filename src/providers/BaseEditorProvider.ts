@@ -26,12 +26,13 @@ import { setHighlight, clearHighlight } from '../utils/highlightStore';
 import { getFailures, mergeFailures } from '../utils/pushFailureStore';
 import { savePushSnapshot, diffPushSnapshot, type RowDiff, type DiffResult, type DeletedRowInfo, type AddedRowInfo } from '../utils/pushSnapshotStore';
 import { markDeletedRows } from '../utils/deletedRowsStore';
+import { getMarks, setMarks, clearMarks } from '../utils/markStore';
 import { pushTestCase } from '../services/http';
 import { createParser, ensureTrackingColumns, applyTestCaseNos, type FileParser, type FileType } from '../parsers';
 import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
-import { getHeaderLabels, onHeaderLabelsChange } from '../utils/headerLabels';
+import { getHeaderLabels, onHeaderLabelsChange, normalizePushData } from '../utils/headerLabels';
 import { stackHead } from '../services/utils';
-import { filterTemplateExampleRows, TEMPLATE_EXAMPLE_TS_ID } from '../utils/fileIdentifier';
+import { filterTemplateExampleRows, TEMPLATE_EXAMPLE_TS_ID, isCreatedByCommand } from '../utils/fileIdentifier';
 
 // 重新导出工具，便于子类使用
 export { isInQualifiedDir, FILE_PATTERNS };
@@ -102,7 +103,7 @@ export class PushViaHttpClient implements PushStrategy {
         }
         const taskInfo = {
             testTaskNo: currentTask.taskInfo.testTaskNo || '',
-            subTestTaskName: currentTask.taskInfo.subTestTaskName || '',
+            subTestTaskId: currentTask.taskInfo.subTestTaskId || '',
         };
 
         // 重新解析文件获取原始结构化数据。
@@ -158,7 +159,8 @@ export class PushViaHttpClient implements PushStrategy {
             });
         }
 
-        const result = await pushTestCase(extensionContext, pushData, taskInfo, path.basename(ctx.filePath));
+        const pushSource = isCreatedByCommand(ctx.filePath) ? 'testAgentMa' : 'testAgent';
+        const result = await pushTestCase(extensionContext, normalizePushData(pushData), taskInfo, path.basename(ctx.filePath), pushSource);
         if (result.returnCode !== 'SUC0000') {
             showPushErrorModal(webviewPanel, path.basename(ctx.filePath), result.errorMsg || '推送失败');
             webviewPanel.webview.postMessage({ type: 'pushError', message: result.errorMsg || '推送失败' });
@@ -617,6 +619,9 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     force: !!force,
                     reason,
                     externalChange: isExternal,
+                    // 文件绝对路径：前端用它作为 UI 状态（列宽/行高/筛选/搜索/滚动）
+                    // 的命名空间隔离 key，避免同 dataType 的不同文件互相串扰。
+                    filePath,
                 };
                 if (highlighted !== undefined) {
                     msgPayload.highlightedCells = highlighted;
@@ -633,6 +638,17 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 const added = session.addedInfos;
                 if (added !== undefined) {
                     msgPayload.addedInfos = added;
+                }
+                // 用户手动标记高亮（持久化，随 Data 消息下发）
+                // 注意：saveHighlight / pushSuccess 等"由 webview 主动 save 触发的内部回推"
+                // 与 webview 同步发出的 setMarkRects 在扩展端是【并发处理】的，
+                // 此时 getMarks() 可能读到 setMarks 写盘前的旧值，进而把 userMarks=旧值
+                // 推回 webview 覆盖最新的 redo/mark 状态。
+                // 这两类 reason 下 webview 端已持有最新 marks，无需扩展端再推回；
+                // 真正的标记变化由独立的 userMarksUpdated 消息可靠投递。
+                const _skipUserMarksReasons = new Set(['saveHighlight', 'pushSuccess']);
+                if (!_skipUserMarksReasons.has(reason)) {
+                    try { msgPayload.userMarks = getMarks(filePath); } catch { /* ignore */ }
                 }
                 // 表头中英映射（仅用于显示，不写回数据；每次下发都带上以保证刚打开/可见性切换时也能拿到）
                 try { msgPayload.headerLabels = getHeaderLabels(); } catch { /* ignore */ }
@@ -654,6 +670,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                             force: !!force,
                             reason: reason + ':fallback',
                             externalChange: false,
+                            filePath,
                         };
                         log(`📤 push (fallback) rows=${(session.cachedTableData.rows || []).length}`);
                         webviewPanel.webview.postMessage(fallbackPayload);
@@ -866,7 +883,54 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     session.cachedTableData = null;
                     await pushDataToWebview(true, 'reload', true);
                     sendTelemetryEvent('editor.reloaded', { fileFormat: session.type });
-                }
+                } else if (msg?.type === 'mark' && Array.isArray(msg?.rects)) {
+                    // 用户手动标记：追加标记区域（含颜色）并持久化
+                    log(`📌 mark ${msg.rects.length} rects`);
+                    const existing = getMarks(filePath);
+                    const now = Date.now();
+                    const newRects = msg.rects.filter((r: any) => r && typeof r.r1 === 'number').map((r: any) => {
+                        const entry: any = { r1: r.r1, c1: r.c1, r2: r.r2, c2: r.c2, timestamp: now };
+                        if (msg.bgColor) entry.bgColor = msg.bgColor;
+                        if (msg.fontColor) entry.fontColor = msg.fontColor;
+                        return entry;
+                    });
+                    await setMarks(filePath, [...existing, ...newRects]);
+                    webviewPanel.webview.postMessage({ type: 'userMarksUpdated', userMarks: getMarks(filePath) });
+                    sendTelemetryEvent('editor.marked', { fileFormat: session.type, count: String(newRects.length) });
+                } else if (msg?.type === 'unmark' && Array.isArray(msg?.rects)) {
+                    // 用户取消标记：移除匹配的标记区域并持久化
+                    log(`🗑  unmark ${msg.rects.length} rects`);
+                    const existing = getMarks(filePath);
+                    const toRemove = msg.rects.filter((r: any) => r && typeof r.r1 === 'number');
+                    const kept = existing.filter((er: any) => {
+                        return !toRemove.some((tr: any) =>
+                            tr.r1 === er.r1 && tr.c1 === er.c1 && tr.r2 === er.r2 && tr.c2 === er.c2
+                        );
+                    });
+                    if (kept.length === 0) {
+                        await clearMarks(filePath);
+                    } else {
+                        await setMarks(filePath, kept);
+                    }
+                    webviewPanel.webview.postMessage({ type: 'userMarksUpdated', userMarks: getMarks(filePath) });
+                    sendTelemetryEvent('editor.unmarked', { fileFormat: session.type, count: String(toRemove.length) });
+				} else if (msg?.type === 'setMarkRects' && Array.isArray(msg?.rects)) {
+					// 前端取消标记后发回完整矩形列表（已做 cell-by-cell 减法）
+					log(`🔄 setMarkRects ${msg.rects.length} rects`);
+					if (msg.rects.length === 0) {
+						await clearMarks(filePath);
+					} else {
+						await setMarks(filePath, msg.rects);
+					}
+					webviewPanel.webview.postMessage({ type: 'userMarksUpdated', userMarks: getMarks(filePath) });
+					sendTelemetryEvent('editor.unmarked', { fileFormat: session.type, count: String(msg.rects.length) });
+				} else if (msg?.type === 'clearAllMarks') {
+					// 清除所有标记
+					log('🧹 clearAllMarks');
+					await clearMarks(filePath);
+					webviewPanel.webview.postMessage({ type: 'userMarksUpdated', userMarks: [] });
+					sendTelemetryEvent('editor.clearAllMarks', { fileFormat: session.type });
+				}
             } catch (err: any) {
                 const errMsg = err?.message || String(err) || '操作失败';
             sendTelemetryErrorEvent('editor.message.error', { messageKind: msg?.type || '', fileFormat: session.type, errorMessage: errMsg.slice(0, 500), stackHead: stackHead(err) });
@@ -929,15 +993,25 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         );
         // 表格编辑器脚本已按职能拆分到 editor/ 子目录下，按顺序加载等价于原 editor.js 单文件。
         // 注意：因函数声明在每个 <script> 内部独立提升（不跨脚本），文件加载顺序必须保持。
-        //   01-core            —— 全局状态 S、日志、撤销/重做、init 入口、消息分发、通用工具
-        //   02a-render         —— renderTable + 虚拟滚动 + 单元格 patchCell
-        //   02b-bind           —— 工具栏 / 全局快捷键 / 表格事件委托绑定
-        //   02c-row-cell-sel   —— 行号格 mousedown / 单元格 mousedown（行选 / 单元格矩形拖选）
-        //   02d-sel-utils      —— 选区辅助、信息统计、推送按钮 / 仅看失败按钮 状态同步
-        //   03a-cell-edit      —— 单元格编辑、右键菜单、行/列数据增删改/复制粘贴/清空
-        //   03b-resize-colsel  —— 列宽拖动 / 列选择（Excel 风格） / 行高拖动
-        //   04-push-find       —— 推送/保存、查找替换面板、Excel 风格列筛选
-        //   05-modals          —— 推送结果弹窗、通用 prompt/confirm、明细弹窗，并在末尾调用 init()
+        //   01-core             —— 全局状态 S、日志、撤销/重做、init 入口、消息分发、通用工具
+        //   02a-render          —— renderTable + 虚拟滚动 + 单元格 patchCell
+        //   02b-bind            —— 工具栏 / 全局快捷键 / 表格事件委托绑定
+        //   02c-row-cell-sel    —— 行号格 mousedown / 单元格 mousedown（行选 / 单元格矩形拖选）
+        //   02d-sel-utils       —— 选区辅助、信息统计、推送按钮 / 仅看失败按钮 状态同步
+        //   03a-cell-edit       —— 单元格编辑（双击进入编辑 / 提交 / 批量写入）
+        //   03b-resize-colsel   —— 列宽拖动 / 列选择（Excel 风格） / 行高拖动
+        //   03c-context-menu    —— 右键菜单（构造 / 显示 / 隐藏）
+        //   03d-row-ops         —— 行操作（增 / 删 / 复制 / 推送）
+        //   03e-mark            —— 用户标记 / 取消标记 / 颜色选择器
+        //   03f-col-ops         —— 列操作（增 / 删 / 重命名）
+        //   03g-clipboard       —— 单元格剪贴板 / 清空 / 批量填充
+        //   03h-detail-helpers  —— 明细列辅助函数（_inferDetailColKind 等）
+        //   04-push-find        —— 推送/保存、查找替换面板、Excel 风格列筛选
+        //   05a-push-result     —— 推送结果弹窗（成功/失败明细 + 行联动）
+        //   05b-prompt-confirm  —— 通用 Prompt / Confirm 弹窗（替代 sandbox 受限 API）
+        //   05c-detail-modal    —— 明细弹窗（v2 双栏）主体 + 渲染
+        //   05d-detail-write    —— 明细弹窗（v2）写操作（增删 step / 字段写入 / 保存）
+        //   05e-array-editor    —— 数组列编辑器，并在末尾调用 init()
         const editorScriptFiles = [
             'editor/01-core.js',
             'editor/02a-render.js',
@@ -946,8 +1020,18 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             'editor/02d-sel-utils.js',
             'editor/03a-cell-edit.js',
             'editor/03b-resize-colsel.js',
+            'editor/03c-context-menu.js',
+            'editor/03d-row-ops.js',
+            'editor/03e-mark.js',
+            'editor/03f-col-ops.js',
+            'editor/03g-clipboard.js',
+            'editor/03h-detail-helpers.js',
             'editor/04-push-find.js',
-            'editor/05-modals.js'
+            'editor/05a-push-result.js',
+            'editor/05b-prompt-confirm.js',
+            'editor/05c-detail-modal.js',
+            'editor/05d-detail-write.js',
+            'editor/05e-array-editor.js'
         ];
         const editorScriptsHtml = editorScriptFiles.map((rel) => {
             const uri = webviewPanel.webview.asWebviewUri(

@@ -11,9 +11,35 @@
 // 阈值：行数 >= 此值时启用虚拟滚动（仅渲染视口附近行）
 var XS_VIRTUAL_THRESHOLD = 500;
 // 估算行高（无自定义行高时使用），与 .xs-td 默认行高保持一致
-var XS_ROW_EST_HEIGHT = 26;
+// 估算行高（虚拟滚动用）：默认值 36，运行时由 _measureEstRowH 根据真实首行 offsetHeight 校正，
+// 避免与硬编码 26/32 不符导致虚拟滚动累积偏差。
+var XS_ROW_EST_HEIGHT = 36;
 // 上下缓冲行数（视口外预渲染数量），减少滚动时的"白屏"感
 var XS_VIRTUAL_BUFFER = 10;
+
+// 缓存运行时探测到的 .xs-cell-wrap 单行行高（含字体/lineHeight 影响）。
+// 用于把"行高像素"换算为"--xs-clamp 行数"。
+// 取首个 .xs-cell-wrap 的 computed lineHeight；若 normal/读不到则用 fontSize*1.4 兜底；
+// 整张表全失败时回退 18.2（保留旧值兼容）。
+// 缓存键依赖 fontSize+lineHeight 字符串，主题/字号变化时会自动失效。
+var _xsLineHCache = { key: '', val: 18.2 };
+function _xsLineHeight() {
+    try {
+        var w = document.querySelector('.xs-cell-wrap');
+        if (!w) return _xsLineHCache.val;
+        var cs = window.getComputedStyle(w);
+        var key = (cs.fontSize || '') + '|' + (cs.lineHeight || '');
+        if (key === _xsLineHCache.key && _xsLineHCache.val > 0) return _xsLineHCache.val;
+        var lh = parseFloat(cs.lineHeight);
+        if (!isFinite(lh) || lh <= 0) {
+            var fs = parseFloat(cs.fontSize) || 13;
+            lh = fs * 1.4;
+        }
+        _xsLineHCache.key = key;
+        _xsLineHCache.val = lh;
+        return lh;
+    } catch (_e) { return _xsLineHCache.val; }
+}
 
 // 主入口：根据当前数据规模选择渲染策略
 function renderTable() {
@@ -57,6 +83,7 @@ function renderTable() {
     if (typeof updateModifiedFilterBtn === 'function') updateModifiedFilterBtn();
     if (typeof updateAddedFilterBtn === 'function') updateAddedFilterBtn();
     if (typeof updateDeletedFilterBtn === 'function') updateDeletedFilterBtn();
+    if (typeof updateMarkedFilterBtn === 'function') updateMarkedFilterBtn();
     updateSearchClear();
     if (typeof updateColSelClasses === 'function') updateColSelClasses();
     if (typeof updateCellSelClasses === 'function') updateCellSelClasses();
@@ -95,11 +122,13 @@ function _computeViewRows() {
     var addedOnly = !!(S._addedOnly && S._addedRowSet && S._addedRowSet.size > 0);
     // 仅看已删除行：展示 ghost 行，隐藏所有常规行
     var deletedOnly = !!(S._deletedOnly && S._deletedInfos && S._deletedInfos.length > 0);
+    // 仅看已标记行：基于用户手动标记（含行标记和单元格标记）
+    var markedOnly = !!(S._markedOnly);
     if (deletedOnly) {
         // 仅看已删除行时，常规行全部隐藏，只展示 ghost 区域
         return [];
     }
-    if (!skw && !hasColFilters && !failedOnly && !modifiedOnly && !addedOnly) {
+    if (!skw && !hasColFilters && !failedOnly && !modifiedOnly && !addedOnly && !markedOnly) {
         // 直接整段：避免大数组 push 开销
         var arr = new Array(rows.length);
         for (var i = 0; i < rows.length; i++) arr[i] = i;
@@ -147,6 +176,9 @@ function _computeViewRows() {
         }
         if (addedOnly) {
             if (!S._addedRowSet.has(ri)) continue;
+        }
+        if (markedOnly) {
+            if (!_isRowMarked(ri)) continue;
         }
         out.push(ri);
     }
@@ -257,14 +289,28 @@ function _buildRowHtml(ri, tsIdColIdx) {
     var rowStyle = (rh && rh > 0) ? ' style="height:' + rh + 'px"' : '';
     // 多行省略号：按当前行高换算可显示行数，写入 CSS 变量 --xs-clamp
     // 行高 - td 上下 padding/border(14px) = wrap 可视高，除以单行高(font-size 13px*line-height 1.4≈18.2px)
-    var clampVar = '';
+    //
+    // 例外：若该行被标记为"完全展开"（双击/拖动 _expandRowToFitContent 设置），
+    //       行高已按真实内容算好，此时不能再用 floor(rowH/lineH) 反推 clamp ——
+    //       简单除法+floor 总会少算 1 行左右，触发 ellipsis 截断；
+    //       所以这种情况下不输出 --xs-clamp，让 CSS 默认 99 行接管，文本完整显示。
+    //
+    // 兜底：S.rowHeights 有自定义高度但 _rowExpanded 未登记的场景（如老快照、
+    //   外部代码直接写入 rowHeights 等）会出现"行高变高但内容仍被截断"的不一致。
+    //   这里在渲染期顺手补登记，让两个状态位最终一致。
     if (rh && rh > 0) {
-        var _wrapH = rh - 14;
-        var _lines = Math.max(1, Math.floor(_wrapH / 18.2));
-        clampVar = '--xs-clamp:' + _lines + ';';
+        if (!S._rowExpanded) S._rowExpanded = new Set();
+        if (!S._rowExpanded.has(ri)) S._rowExpanded.add(ri);
+    }
+    var clampVar = '';
+    var isFullyExpanded = !!(S._rowExpanded && S._rowExpanded.has(ri));
+    var _clampLines = _computeClampLines(rh, isFullyExpanded);
+    if (_clampLines) {
+        clampVar = '--xs-clamp:' + _clampLines + ';';
     }
     var failCls = '';
     var failReason = '';
+    var rowFailTime = 0;  // 该行的推送失败时间戳；若不在失败集合中则为 0
     if (S._pushFailedTsIds && S._pushFailedTsIds.size > 0 && tsIdColIdx >= 0) {
         var rowTsId = row[tsIdColIdx];
         if (rowTsId !== undefined && rowTsId !== null && rowTsId !== '' && S._pushFailedTsIds.has(String(rowTsId))) {
@@ -273,64 +319,150 @@ function _buildRowHtml(ri, tsIdColIdx) {
                 var _r = S._pushFailedReasons.get(String(rowTsId));
                 if (_r) failReason = String(_r);
             }
+            if (S._pushFailedTime) {
+                var _ft = S._pushFailedTime.get(String(rowTsId));
+                if (typeof _ft === 'number') rowFailTime = _ft;
+            }
         }
     }
     // 行号格 title：失败行显示「原始行号: N | 推送失败：<原因>」，便于鼠标悬停查看失败原因。
     var rowNumTitle = '原始行号: ' + (ri + 1);
     if (failReason) rowNumTitle += ' | 推送失败：' + failReason;
     // 渲染为普通行；不再提供整行 HTML5 拖动排序能力（与矩形拖选、行横扫存在交互冲突）。
+    // 先遍历一次构造所有单元格 inner HTML，检测是否含真实换行符 \n
+    var cells = [];
+    var hasBr = false;
+    for (var ci = 0; ci < headers.length; ci++) {
+        var v = row[ci];
+        var modCls = (S.mods.has(ri + ',' + ci) || (S._detailModCellKeys && S._detailModCellKeys.has(ri + ',' + ci))) ? ' modified' : '';
+        // 按时间顺序选择高亮：最新操作的类型优先显示
+        // bestTime 和 bestClass/bestStyle 记录当前生效的高亮
+        var bestTime = 0;
+        var bestClass = '';
+        var bestInlineStyle = '';
+        var bestMkInfo = null; // {bgColor, fontColor}
+
+        // 1) 推送变更高亮（行级橙 + 单元格级黄）：作为一组同时间戳的整体参与竞争
+        //    同一次推送内，单元格级（黄）优先于行级（橙），保留"内层套外层"语义
+        var pushUpdCls = '';
+        if (S._highlightedCells) {
+            if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
+                pushUpdCls = ' xs-td-push-updated'; // 单元格级：黄色
+            } else if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)
+                && (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci)) {
+                pushUpdCls = ' xs-td-push-updated-row'; // 行级：橙色
+            }
+        }
+        if (pushUpdCls) {
+            var t = S._highlightedTime || 0;
+            if (t >= bestTime) { bestTime = t; bestClass = pushUpdCls; bestMkInfo = null; }
+        }
+        // 2) 新增行高亮
+        if (S._addedRowSet && S._addedRowSet.has(ri)) {
+            var t = S._addedRowTime || 0;
+            if (t >= bestTime) { bestTime = t; bestClass = ' xs-td-push-added'; modCls = ''; bestMkInfo = null; }
+        }
+        // 3) 用户手动标记高亮
+        if (typeof isUserMarked === 'function') {
+            var mkInfo = isUserMarked(ri, ci);
+            if (mkInfo) {
+                var t = mkInfo.timestamp || 0;
+                if (t >= bestTime) { bestTime = t; bestClass = ' xs-td-user-marked'; bestMkInfo = mkInfo; modCls = (bestClass === ' xs-td-push-added') ? '' : modCls; }
+            }
+        }
+        // 5) 推送失败高亮：作为单元格级"红底"候选项参与时间竞争
+        //    - 若失败时间 >= 其他高亮时间：失败色覆盖（清除 user-marked 内联色，加 xs-td-push-failed）
+        //    - 否则：标记为 xs-td-overrides-fail，让 CSS 保留原高亮色（避免被 tr.xs-tr-push-failed 红底吞掉）
+        var failOverridden = false;
+        if (rowFailTime > 0) {
+            if (rowFailTime >= bestTime) {
+                bestTime = rowFailTime;
+                bestClass = ' xs-td-push-failed';
+                bestMkInfo = null;          // 清除可能已挂上的用户标记色，让失败红底完全生效
+                modCls = '';
+            } else {
+                failOverridden = true;       // 其他高亮时间更新 → 让其覆盖失败色
+            }
+        }
+
+        var hiliCls = bestClass + (failOverridden ? ' xs-td-overrides-fail' : '');
+        var mkStyle = '';
+        if (bestMkInfo) {
+            var st = '';
+            // 加 !important 确保在失败行场景下也能盖过 CSS 规则中的 !important 默认色
+            if (bestMkInfo.bgColor) st += 'background:' + bestMkInfo.bgColor + ' !important;';
+            if (bestMkInfo.fontColor) st += 'color:' + bestMkInfo.fontColor + ' !important;';
+            if (st) mkStyle = ' style="' + st + '"';
+        }
+        var colSelCls2 = S.colSel.has(ci) ? ' xs-col-selected' : '';
+        var frozenCls2 = (String(headers[ci]) === 'testcase_id') ? ' xs-td-frozen' : '';
+        // 单元格内部 HTML 与相关 cls/title 由 _buildCellInner 统一产出，与 patchCell 复用。
+        var _ci = _buildCellInner(ri, ci, v);
+        var inner = _ci.inner;
+        var isDetail = _ci.isDetail;
+        var arrCellCls = _ci.arrCellCls;
+        var titleAttr = _ci.titleAttr;
+        if (inner.indexOf('\n') >= 0) hasBr = true;
+        cells.push({ inner: inner, modCls: modCls, colSelCls2: colSelCls2, frozenCls2: frozenCls2, hiliCls: hiliCls, isDetail: isDetail, arrCellCls: arrCellCls, titleAttr: titleAttr, mkStyle: mkStyle });
+    }
+    // 内容中的换行符 \n 由 CSS white-space 控制：
+    //   - 单行模式（nowrap）下 \n 被视为空格，不会撑高
+    //   - 多行模式（pre-wrap）下 \n 产生真实换行
+    // 故此处无需任何额外内联样式补丁。
+    var multilineClamp = clampVar;
     var html = '<tr data-row="' + ri + '" class="' + (selCls + resizedCls + failCls).trim() + '"' + rowStyle + '>'
         + '<td class="xs-td xs-td-cb xs-td-rownum" data-row="' + ri + '" title="' + escapeHtml(rowNumTitle) + '">'
         +   '<span class="xs-rownum">' + (ri + 1) + '</span>'
         +   '<div class="xs-row-resizer" data-row="' + ri + '" title="拖动调整行高；双击自适应内容"></div>'
         + '</td>';
-    for (var ci = 0; ci < headers.length; ci++) {
-        var v = row[ci];
-        var modCls = (S.mods.has(ri + ',' + ci) || (S._detailModCellKeys && S._detailModCellKeys.has(ri + ',' + ci))) ? ' modified' : '';
-        var hiliCls = '';
-        if (S._highlightedCells) {
-            // 精确逐格高亮优先（编辑保存场景）→ 绿色
-            if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
-                hiliCls = ' xs-td-push-updated';
-            } else if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)) {
-                // colIdx === -1 表示整行任意列变化，高亮该行所有单元格 → 橙色
-                if (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci) {
-                    hiliCls = ' xs-td-push-updated-row';
-                }
-            }
-        }
-        // 新增行高亮 → 绿色，优先级高于修改高亮（同时是新增+修改时以新增为准）
-        if (S._addedRowSet && S._addedRowSet.has(ri)) {
-            hiliCls = ' xs-td-push-added';
-            // 新增行的 modCls 应移除，避免与前端的 modified 标记混淆
-            modCls = '';
-        }
-        var colSelCls2 = S.colSel.has(ci) ? ' xs-col-selected' : '';
-        var frozenCls2 = (String(headers[ci]) === 'testcase_id') ? ' xs-td-frozen' : '';
-        var isDetail = hasDetailRowsAtCol(ri, ci);
-        var isArrCol = (typeof isArrayCol === 'function') && isArrayCol(ci);
-        var rawText = formatCellValue(v);
-        var inner;
-        var titleAttr;
-        var arrCellCls = '';
-        if (isDetail) {
-            inner = '<span class="xs-detail-link" data-detail-row="' + ri + '" data-detail-col="' + ci + '">' + escapeHtml(rawText) + '</span>';
-            titleAttr = rawText ? ' title="' + escapeHtml(rawText) + '"' : '';
-        } else if (isArrCol) {
-            var arr = Array.isArray(v) ? v : [];
-            inner = _buildArrayChipsHtml(arr);
-            titleAttr = arr.length > 0 ? ' title="' + escapeHtml(rawText) + '"' : '';
-            arrCellCls = ' xs-arr-cell';
-        } else {
-            inner = escapeHtml(rawText);
-            titleAttr = rawText ? ' title="' + escapeHtml(rawText) + '"' : '';
-        }
-        var wrapStyleAttr = clampVar ? ' style="' + clampVar + '"' : '';
-        html += '<td class="xs-td xs-editable' + modCls + colSelCls2 + frozenCls2 + hiliCls + (isDetail ? ' xs-detail-cell' : '') + arrCellCls + '" data-row="' + ri + '" data-col="' + ci + '"' + titleAttr + '>'
-            + '<div class="xs-cell-wrap"' + wrapStyleAttr + '>' + inner + '</div></td>';
+    for (var ci2 = 0; ci2 < cells.length; ci2++) {
+        var c = cells[ci2];
+        var wrapStyleAttr = multilineClamp ? ' style="' + multilineClamp + '"' : '';
+        html += '<td class="xs-td xs-editable' + c.modCls + c.colSelCls2 + c.frozenCls2 + c.hiliCls + (c.isDetail ? ' xs-detail-cell' : '') + c.arrCellCls + '" data-row="' + ri + '" data-col="' + ci2 + '"' + c.titleAttr + c.mkStyle + '>'
+            + '<div class="xs-cell-wrap"' + wrapStyleAttr + '>' + c.inner + '</div></td>';
     }
     html += '</tr>';
     return html;
+}
+
+// 根据行高计算 --xs-clamp 行数。
+// 在 _buildRowHtml / patchCell 两处重复使用：
+//   - 未设自定义行高 (rh<=0) 返回 ""
+//   - 已完全展开 (isFullyExpanded) 返回 ""（CSS 默认 99 行接管，文本完整显示）
+//   - 其它情况返回可显示行数字符串（供拼接 "--xs-clamp:N;"）
+function _computeClampLines(rh, isFullyExpanded) {
+    if (!(rh && rh > 0) || isFullyExpanded) return '';
+    var wrapH = rh - 14; // td padding+border = 14px
+    var lines = Math.max(1, Math.floor(wrapH / _xsLineHeight()));
+    return String(lines);
+}
+
+// 构造单元格内部 HTML 片段。为 _buildRowHtml / patchCell 共用。
+// 返回：{ inner, isDetail, isArrCol, arrCellCls, titleAttr, rawText }
+function _buildCellInner(ri, ci, v) {
+    var isDetail = (typeof hasDetailRowsAtCol === 'function') && hasDetailRowsAtCol(ri, ci);
+    var isArrCol = (typeof isArrayCol === 'function') && isArrayCol(ci);
+    var rawText = formatCellValue(v);
+    // tooltip 统一计算：把字面 "\n"（两字符）转为真实换行符后再 escapeHtml，
+    // 这样原生 tooltip 的换行表现与单元格多行模式展开后的显示完全一致。
+    var titleAttr = rawText ? ' title="' + escapeHtml(rawText.replace(/\\n/g, '\n')) + '"' : '';
+    var inner;
+    var arrCellCls = '';
+    if (isDetail) {
+        inner = '<span class="xs-detail-link" data-detail-row="' + ri + '" data-detail-col="' + ci + '">' + escapeHtml(rawText) + '</span>';
+    } else if (isArrCol) {
+        var arr = Array.isArray(v) ? v : [];
+        inner = _buildArrayChipsHtml(arr);
+        arrCellCls = ' xs-arr-cell';
+    } else {
+        // 把字面 "\n"（两字符）统一成真实换行符；保留真实换行符 \n（U+000A）。
+        // 由 CSS 控制呈现：
+        //   - 默认 .xs-cell-wrap 为 white-space:nowrap → \n 被视为空格，单元格保持单行不被撑高
+        //   - .xs-tr-resized .xs-cell-wrap 为 white-space:pre-wrap → \n 产生真实换行
+        // 这样无需占位 span，行为最简单稳健。
+        inner = escapeHtml(rawText).replace(/\\n/g, '\n');
+    }
+    return { inner: inner, isDetail: isDetail, isArrCol: isArrCol, arrCellCls: arrCellCls, titleAttr: titleAttr, rawText: rawText };
 }
 
 // 全量渲染（小表格）：把所有 view 行一次写入 tbody
@@ -345,9 +477,27 @@ function _renderAllBody() {
     tbody.innerHTML = parts.join('') + _buildGhostRowsHtml(headers);
 }
 
+// 根据当前 DOM 中第一个未自定义高度的行测量真实默认行高，动态校正 XS_ROW_EST_HEIGHT。
+// 避免主题/字体/padding 变化后还用硬编码 36 导致虚拟滚动高度累积偏差。
+function _measureEstRowH() {
+    try {
+        var rows = document.querySelectorAll('tbody tr[data-row]');
+        for (var i = 0; i < rows.length; i++) {
+            var r = rows[i];
+            if (r.classList.contains('xs-tr-resized')) continue;
+            if (r.style && r.style.height) continue;
+            var h = r.offsetHeight || 0;
+            if (h > 0) { XS_ROW_EST_HEIGHT = h; return h; }
+        }
+    } catch (_e) { /* ignore */ }
+    return XS_ROW_EST_HEIGHT;
+}
+
 // 计算每个 view 行的累积偏移表 _rowOffsets[i] = 第 i 行的 top 像素
 // 长度 = view.length + 1，最后一项即总高度。
 function _computeRowOffsets() {
+    // 每次重算偏移前顺手校正一下估算高，只有负担一次 querySelector。
+    _measureEstRowH();
     var view = S._viewRows || [];
     var offs = new Array(view.length + 1);
     var acc = 0;
@@ -495,26 +645,23 @@ function patchCell(ri, ci) {
     var headers = (S.data && S.data.headers) || [];
     var row = (S.data && S.data.rows && S.data.rows[ri]) || [];
     var v = row[ci];
-    var rawText = formatCellValue(v);
-    var isDetail = (typeof hasDetailRowsAtCol === 'function') && hasDetailRowsAtCol(ri, ci);
-    var isArrCol = (typeof isArrayCol === 'function') && isArrayCol(ci);
-    var inner;
-    if (isDetail) {
-        inner = '<span class="xs-detail-link" data-detail-row="' + ri + '" data-detail-col="' + ci + '">' + escapeHtml(rawText) + '</span>';
-    } else if (isArrCol) {
-        var arr = Array.isArray(v) ? v : [];
-        inner = _buildArrayChipsHtml(arr);
-    } else {
-        inner = escapeHtml(rawText);
-    }
+    // 与 _buildRowHtml 同源：单元格 HTML / 类名 / tooltip 均由 _buildCellInner 统一产出。
+    var _ci = _buildCellInner(ri, ci, v);
+    var inner = _ci.inner;
+    var isDetail = _ci.isDetail;
+    var isArrCol = _ci.isArrCol;
+    var rawText = _ci.rawText;
     // 保留拖动行高对应的 --xs-clamp 变量（行高已持久化时不能丢失多行省略号配置）
+    // 例外：若该行已被标记为"完全展开"，跳过 --xs-clamp，避免反推行数偏少导致截断。
     var rh2 = S.rowHeights[ri];
     var clampVar2 = '';
-    if (rh2 && rh2 > 0) {
-        var _wrapH2 = rh2 - 14;
-        var _lines2 = Math.max(1, Math.floor(_wrapH2 / 18.2));
-        clampVar2 = ' style="--xs-clamp:' + _lines2 + ';"';
+    var isFullyExpanded2 = !!(S._rowExpanded && S._rowExpanded.has(ri));
+    var _clampLines2 = _computeClampLines(rh2, isFullyExpanded2);
+    if (_clampLines2) {
+        clampVar2 = ' style="--xs-clamp:' + _clampLines2 + ';"';
     }
+    // 内容中的换行符 \n 由 CSS white-space 控制（nowrap 单行 / pre-wrap 多行），
+    // 无需任何额外内联样式兜底。
     td.innerHTML = '<div class="xs-cell-wrap"' + clampVar2 + '>' + inner + '</div>';
     // class 同步
     if (S.mods.has(ri + ',' + ci)) td.classList.add('modified'); else td.classList.remove('modified');
@@ -522,29 +669,78 @@ function patchCell(ri, ci) {
     if (isArrCol) td.classList.add('xs-arr-cell'); else td.classList.remove('xs-arr-cell');
     var frozen = (String(headers[ci]) === 'testcase_id');
     if (frozen) td.classList.add('xs-td-frozen'); else td.classList.remove('xs-td-frozen');
-    // 新增行高亮（绿底）
-    if (S._addedRowSet && S._addedRowSet.has(ri)) {
-        td.classList.add('xs-td-push-added');
-    } else {
-        td.classList.remove('xs-td-push-added');
-    }
-    // 推送变更高亮
+    // 按时间顺序选择高亮：最新操作的类型优先显示（与 _buildRowHtml 一致）
+    var _bestTime = 0;
+    var _bestClass = '';
+    var _bestMkInfo = null;
+
+    // 1) 推送变更高亮（行级橙 + 单元格级黄）：作为一组同时间戳的整体参与竞争
+    //    同一次推送内，单元格级（黄）优先于行级（橙）
+    var _pushUpdCls = '';
     if (S._highlightedCells) {
         if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
-            td.classList.add('xs-td-push-updated');
-        } else {
-            td.classList.remove('xs-td-push-updated');
-        }
-        if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)
+            _pushUpdCls = 'xs-td-push-updated';
+        } else if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)
             && (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci)) {
-            td.classList.add('xs-td-push-updated-row');
-        } else {
-            td.classList.remove('xs-td-push-updated-row');
+            _pushUpdCls = 'xs-td-push-updated-row';
         }
-    } else {
-        td.classList.remove('xs-td-push-updated', 'xs-td-push-updated-row');
     }
-    // tooltip 同步
-    if (rawText) td.setAttribute('title', rawText); else td.removeAttribute('title');
+    if (_pushUpdCls) {
+        var _t1 = S._highlightedTime || 0;
+        if (_t1 >= _bestTime) { _bestTime = _t1; _bestClass = _pushUpdCls; _bestMkInfo = null; }
+    }
+    // 2) 新增行高亮
+    if (S._addedRowSet && S._addedRowSet.has(ri)) {
+        var _t3 = S._addedRowTime || 0;
+        if (_t3 >= _bestTime) { _bestTime = _t3; _bestClass = 'xs-td-push-added'; _bestMkInfo = null; }
+    }
+    // 3) 用户手动标记高亮
+    var _mkInfo = (typeof isUserMarked === 'function') ? isUserMarked(ri, ci) : null;
+    if (_mkInfo) {
+        var _t4 = _mkInfo.timestamp || 0;
+        if (_t4 >= _bestTime) { _bestTime = _t4; _bestClass = 'xs-td-user-marked'; _bestMkInfo = _mkInfo; }
+    }
+    // 5) 推送失败高亮（行级失败时间）：作为另一候选项参与时间竞争
+    var _rowFailTime = 0;
+    if (S._pushFailedTsIds && S._pushFailedTsIds.size > 0) {
+        var _tsIdColIdx2 = (S.data && S.data.headers) ? S.data.headers.indexOf('testcase_id') : -1;
+        if (_tsIdColIdx2 >= 0) {
+            var _tid = (S.data.rows[ri] || [])[_tsIdColIdx2];
+            if (_tid !== undefined && _tid !== null && _tid !== '' && S._pushFailedTsIds.has(String(_tid))) {
+                if (S._pushFailedTime) {
+                    var _ftv = S._pushFailedTime.get(String(_tid));
+                    if (typeof _ftv === 'number') _rowFailTime = _ftv;
+                }
+            }
+        }
+    }
+    var _failOverridden = false;
+    if (_rowFailTime > 0) {
+        if (_rowFailTime >= _bestTime) {
+            _bestTime = _rowFailTime;
+            _bestClass = 'xs-td-push-failed';
+            _bestMkInfo = null;
+        } else {
+            _failOverridden = true;
+        }
+    }
+
+    // 清除所有高亮 class
+    td.classList.remove('xs-td-push-updated', 'xs-td-push-updated-row', 'xs-td-push-added', 'xs-td-user-marked', 'xs-td-push-failed', 'xs-td-overrides-fail');
+    if (_bestClass) td.classList.add(_bestClass);
+    if (_failOverridden) td.classList.add('xs-td-overrides-fail');
+    // 应用标记颜色（仅当标记是最新操作时）
+    if (_bestMkInfo) {
+        if (_bestMkInfo.bgColor) td.style.setProperty('background', _bestMkInfo.bgColor, 'important');
+        else td.style.setProperty('background', '', 'important');
+        if (_bestMkInfo.fontColor) td.style.setProperty('color', _bestMkInfo.fontColor, 'important');
+        else td.style.setProperty('color', '', 'important');
+    } else {
+        td.style.setProperty('background', '', 'important');
+        td.style.setProperty('color', '', 'important');
+    }
+    // tooltip 同步：与 _buildRowHtml 一致，字面 "\n" 转换为真实换行符，
+    // 使原生 tooltip 中的换行呈现与单元格展开后一致。
+    if (rawText) td.setAttribute('title', rawText.replace(/\\n/g, '\n')); else td.removeAttribute('title');
     // 注：detail-link click 已在 #tableContainer 上委托，无需在此重新绑定
 }

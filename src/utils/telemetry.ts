@@ -4,7 +4,7 @@
  *  轻量埋点封装
  * ----------------------------------------------------------------------------
  *  职责：
- *    1. 统一对外暴露 sendTelemetryEvent / sendTelemetryErrorEvent / trackTiming 三个方法
+ *    1. 统一对外暴露 trackEvent / trackError / trackTiming / trackException 四个方法
  *    2. 自动注入通用上下文（插件版本、VSCode 版本、平台、机器ID、会话ID）
  *    3. 严格遵循 vscode.env.isTelemetryEnabled —— 用户关闭遥测时全部静默丢弃
  *    4. 失败容错：埋点不影响主流程，永远不向上抛错
@@ -68,7 +68,6 @@ interface TelemetryEvent {
 
 let _context: vscode.ExtensionContext | undefined;
 let _sessionId = '';
-let _sessionStartMs = 0;
 let _commonProps: TelemetryEventProperties = {};
 let _queue: TelemetryEvent[] = [];
 let _flushTimer: NodeJS.Timeout | undefined;
@@ -243,7 +242,6 @@ function enqueue(ev: TelemetryEvent): void {
 export async function initTelemetry(context: vscode.ExtensionContext): Promise<void> {
     _context = context;
     _sessionId = genSessionId();
-    _sessionStartMs = Date.now();
 
     const pkg = (context.extension && context.extension.packageJSON) || {};
     _commonProps = {
@@ -273,9 +271,7 @@ export async function initTelemetry(context: vscode.ExtensionContext): Promise<v
     sendTelemetryEvent('extension.activated');
     context.subscriptions.push({
         dispose: () => {
-            sendTelemetryEvent('extension.deactivated', {
-                sessionMs: String(Date.now() - _sessionStartMs),
-            });
+            sendTelemetryEvent('extension.deactivated');
             // 尽力一次性 flush
             const remaining = _queue.splice(0, _queue.length);
             if (remaining.length) postBatch(remaining).catch(() => { /* ignore */ });
@@ -326,8 +322,13 @@ export function sendTelemetryEvent(eventName: string, props?: StringGenerateProp
     _sendTelemetryEvent(eventName, props);
 }
 
-/** 上报一个错误/异常事件（业务可预期错误、接口失败、未捕获异常等统一入口） */
+/** 上报一个错误事件（业务可预期错误，例如接口返回失败） */
 export function sendTelemetryErrorEvent(eventName: string, props?: StringGenerateProperties): void {
+    _sendTelemetryErrorEvent(eventName, props);
+}
+
+/** 上报一个异常事件（内部自动提取 errorMessage + stackHead 到 properties） */
+export function sendTelemetryException(eventName: string, props?: StringGenerateProperties): void {
     _sendTelemetryErrorEvent(eventName, props);
 }
 
@@ -347,7 +348,7 @@ export async function trackTiming<T>(
         _sendTelemetryEvent(eventName, { ...properties, execResult: 'success' }, { costMs: Date.now() - start });
         return ret;
     } catch (err: any) {
-        sendTelemetryErrorEvent(eventName, { ...properties, execResult: 'error', errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+        sendTelemetryException(eventName, { ...properties, execResult: 'error', errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
         // 仍然抛出，由调用方决定如何处理
         throw err;
     }

@@ -187,44 +187,70 @@ var server = http.createServer(function (req, res) {
             var payload = {};
             try { payload = JSON.parse(body); } catch (e) { payload = {}; }
 
-            // 兼容两种格式：
-            //   1) { testTaskNo, subTestTaskName, data: [...] }  ← 新格式
-            //   2) [...]                                         ← 旧格式（向后兼容）
+            // 兼容三种格式：
+            //   1) { testTaskNo, subTestTaskId, artifactId, caseList: [...] } ← 当前线上契约
+            //   2) { testTaskNo, subTestTaskName, data: [...] }              ← 历史格式
+            //   3) [...]                                                    ← 旧格式（向后兼容）
             var testTaskNo = '';
             var subTestTaskName = '';
+            var subTestTaskId = '';
+            var artifactId = '';
             var data = [];
             if (Array.isArray(payload)) {
                 data = payload;
             } else if (payload && typeof payload === 'object') {
                 testTaskNo = payload.testTaskNo || '';
                 subTestTaskName = payload.subTestTaskName || '';
-                data = Array.isArray(payload.data) ? payload.data : [];
+                subTestTaskId = payload.subTestTaskId || '';
+                artifactId = payload.artifactId || '';
+                if (Array.isArray(payload.caseList)) {
+                    data = payload.caseList;
+                } else if (Array.isArray(payload.data)) {
+                    data = payload.data;
+                }
             }
 
-            console.log('收到推送测试案例请求 testTaskNo=%s subTestTaskName=%s 共 %d 条',
-                testTaskNo || '(未提供)', subTestTaskName || '(未提供)', data.length);
+            console.log('收到推送测试案例请求 testTaskNo=%s subTestTaskId=%s subTestTaskName=%s artifactId=%s 共 %d 条',
+                testTaskNo || '(未提供)', subTestTaskId || '(未提供)', subTestTaskName || '(未提供)', artifactId || '(未提供)', data.length);
             if (data.length > 0) {
                 console.log('数据示例:', JSON.stringify(data[0], null, 2));
             }
 
             // 按 tsId 逐条返回处理结果。
-            // 调试约定：第偶数条（索引为偶数：第 1、3、5... 条用户看到的行）模拟成功，
-            // 其余模拟失败，用于联调"成功回写 + 失败弹窗"全链路。
+            // 调试约定：
+            //   - type:'1' = 成功，type:'2' = 失败
+            //   - 失败比例通过 FAIL_RATIO 控制（0~1，默认 0.5 即一半失败）
+            //   - 临时调试可设为 1.0（全部失败）或 0.0（全部成功）
+            var FAIL_RATIO = 0.5;
+            var failCount = 0;
             var resultBody = data.map(function (rec, i) {
-                var tsId = rec && rec.testcase_id ? String(rec.testcase_id) : '';
-                if (i % 2 === 0) {
+                // 当前契约：caseList 项中已有 sourceId（值即客户端的 testcase_id）；
+                // 兼容历史 data 数组直接传 testcase_id 的情况
+                var tsId = '';
+                if (rec) {
+                    if (rec.sourceId != null && String(rec.sourceId) !== '') tsId = String(rec.sourceId);
+                    else if (rec.testcase_id != null) tsId = String(rec.testcase_id);
+                }
+                var shouldFail = (data.length === 1)
+                    ? (FAIL_RATIO > 0)               // 单条时：按 FAIL_RATIO 决定
+                    : (i % Math.round(1 / FAIL_RATIO || 2) !== 0); // 多条时：按比例失败
+                if (!shouldFail) {
                     return {
                         data: 'TT' + Date.now() + (1000 + i),
                         sourceId: tsId,
                         type: '1'
                     };
                 }
+                failCount++;
                 return {
                     data: '无效的案例类型',
                     sourceId: tsId,
                     type: '2'
                 };
             });
+            if (failCount > 0) {
+                console.log('  模拟失败: %d / %d 条 (FAIL_RATIO=%s)', failCount, data.length, FAIL_RATIO);
+            }
 
             res.writeHead(200, {
                 'Content-Type': 'application/json',

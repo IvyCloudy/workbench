@@ -32,3 +32,4 @@ Thumbs.db
 /telemetry-server/plugins/*.db.mv.db
 /telemetry-server/metabase/data/
 /test.json
+/测试案例/

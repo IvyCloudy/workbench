@@ -1,10 +1,9 @@
 - testcase_id: 案例唯一标识，不可修改
   path: 功能条目/测试要点/
   name: 案例名称
-  type: 案例类型
+  description: 案例描述
   preconditions:
     - 案例前置条件
-  priority: 低
   steps:
     - id: 1
       operation: 步骤名称1
@@ -33,3 +32,6 @@
       db_expected:
         - 数据库检查点1
         - 数据库检查点2
+  type: 功能点类/流程类/界面类...
+  test_type: 手工/自动化
+  priority: 高/中/低

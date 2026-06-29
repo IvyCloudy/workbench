@@ -11,7 +11,7 @@
  *  其他平台请保持原始数据透传。
  *
  *  映射入口 mapRowToCaseItem 会自动识别行的表头风格：
- *    - 含任一中文键（案例名称/案例步骤/预期结果/路径/前置条件/案例类型）→ 中文 CSV 分支
+ *    - 含任一中文键（名称/步骤描述/预期结果/路径/前置条件/案例类型）→ 中文 CSV 分支
  *    - 否则                                                          → YAML 结构化分支
  *
  *  ── YAML 结构化字段映射 ─────────────────────────────────
@@ -20,14 +20,14 @@
  *    testCasePath      ← path
  *    testCaseName      ← name              （案例名称）
  *    testCaseDes       ← description       （案例描述）
- *    testType          ← test_type         （无该字段时默认 '手工'）
+ *    testType          ← test_type / 执行方式（空或'手工' → '手工'；其他 → '自动化'）
  *    type              ← 固定 '功能点类'
  *    priority          ← priority
  *    preCondition      ← preconditions     （数组按 \n 拼为字符串）
  *    description(接口) ← 每个 step 拼为 operation + <br> + data
  *                        （data 多行用 <br> 连接，data 为空时仅输出 operation）
  *                        注：operation 必填，为空将抛错由上层提示
- *    expected(接口)    ← 每个 step 拼为「【UI检查】/【接口检查】/【数据检查】」三段
+ *    expected(接口)    ← 每个 step 拼为「【UI检查】/【接口调用 】/【数据检查】」三段
  *                        任一段为空则跳过对应标题；三段都为空时输出 '' 占位
  *    description 与 expected 数组长度均等于 steps.length，按 step 顺序一一对应
  *
@@ -35,14 +35,15 @@
  *    接口字段           ← 中文表头
  *    sourceId          ← testcase_id
  *    testCasePath      ← 路径
- *    testCaseName      ← 案例名称
- *    testCaseDes       ← 描述
- *    testType          ← 默认 '手工'
+ *    testCaseName      ← 名称
+ *    testCaseDes       ← 案例描述
+ *    testType          ← 执行方式（空或'手工' → '手工'；其他 → '自动化'）
  *    type              ← 案例类型（空 → '功能点类'）
  *    priority          ← 优先级
  *    preCondition      ← 前置条件
- *    description(接口) ← 案例步骤（按 \n 拆为字符串数组；为空抛错）
- *    expected(接口)    ← 预期结果（整段作为单元素数组；为空 ['']）
+ *    description(接口) ← 步骤描述（按 # + 换行 拆分为数组；为空抛错）
+ *    expected(接口)    ← 预期结果（按 # + 换行 拆分为数组；为空 ['']）
+ *    description 与 expected 数组长度相等，按顺序一一对应
  *
  *  ── 通用规则 ─────────────────────────────────────────
  *    1. sourceId（即 testcase_id）必填，缺失时抛错。
@@ -102,7 +103,7 @@ function joinLines(v: any): string {
 /** 中文表头识别：只要行里出现任一中文关键键即视为 CSV 中文风格 */
 function isChineseHeaderRow(row: Record<string, any>): boolean {
     if (!row || typeof row !== 'object') return false;
-    const ZH_KEYS = ['案例名称', '案例步骤', '预期结果', '路径', '前置条件', '案例类型', '描述', '优先级'];
+    const ZH_KEYS = ['名称', '步骤描述', '预期结果', '路径', '前置条件', '案例类型', '优先级'];
     return ZH_KEYS.some((k) => Object.prototype.hasOwnProperty.call(row, k));
 }
 
@@ -118,26 +119,35 @@ function unescapeCsvCell(v: any): string {
 /** 中文 CSV 行 → 接口 caseList[] 项 */
 function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> {
     const sourceId = toStr(row['testcase_id']).trim();
-    const caseTag = sourceId || toStr(row['案例名称']) || '(未命名案例)';
+    const caseTag = sourceId || toStr(row['名称']) || '(未命名案例)';
 
     // sourceId（testcase_id）必填
     if (sourceId === '') {
         throw new Error(`案例 [${caseTag}] 缺少 testcase_id，请补全后再推送。`);
     }
 
-    // description：案例步骤 按 \n 拆为字符串数组；为空抛错
-    const stepsText = unescapeCsvCell(row['案例步骤']);
+    // description：步骤描述 按 # + 换行 拆为字符串数组；为空抛错
+    const stepsText = unescapeCsvCell(row['步骤描述']);
     const description: string[] = stepsText
-        .split(/\r?\n/)
+        .split(/#\r?\n/)
         .map((s) => s.trim())
         .filter((s) => s !== '');
     if (description.length === 0) {
-        throw new Error(`案例 [${caseTag}] 缺少「案例步骤」内容，请补全后再推送。`);
+        throw new Error(`案例 [${caseTag}] 缺少「步骤描述」内容，请补全后再推送。`);
     }
 
-    // expected：预期结果 整段作为单元素数组；为空 ['']
+    // expected：预期结果 按 # + 换行 拆分为数组，每个 # 开头段落为一个元素
     const expectedText = unescapeCsvCell(row['预期结果']);
-    const expected: string[] = expectedText.trim() === '' ? [''] : [expectedText];
+    const expected: string[] = expectedText.trim() === ''
+        ? ['']
+        : expectedText
+            .split(/#\r?\n/)
+            .map((s) => s.trim())
+            .filter((s) => s !== '');
+
+    // testType：执行方式 → 空或'手工' → '手工'；其他 → '自动化'
+    const execMethod = toStr(row['执行方式']).trim();
+    const testType = (!execMethod || execMethod === '手工') ? '手工' : '自动化';
 
     // type：案例类型 → 空兜底为「功能点类」
     const typeStr = toStr(row['案例类型']).trim();
@@ -145,9 +155,9 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
     return {
         sourceId,
         testCasePath: toStr(row['路径']),
-        testCaseName: toStr(row['案例名称']),
-        testCaseDes:  unescapeCsvCell(row['描述']),
-        testType:     '手工',
+        testCaseName: toStr(row['名称']),
+        testCaseDes:  unescapeCsvCell(row['案例描述']),
+        testType,
         type:         typeStr || '功能点类',
         priority:     toStr(row['优先级']),
         preCondition: unescapeCsvCell(row['前置条件']),
@@ -194,15 +204,16 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
         const api = toLines(s && s.api_expected).filter((l) => l.trim() !== '');
         const db = toLines(s && s.db_expected).filter((l) => l.trim() !== '');
         if (ui.length) segs.push('【UI检查】\n' + ui.join('\n'));
-        if (api.length) segs.push('【接口检查】\n' + api.join('\n'));
+        if (api.length) segs.push('【接口调用】\n' + api.join('\n'));
         if (db.length) segs.push('【数据检查】\n' + db.join('\n'));
         return segs.join('\n');
     });
 
-    // testType：缺省为「手工」
-    const testType = row['test_type'] != null && String(row['test_type']).trim() !== ''
-        ? String(row['test_type'])
-        : '手工';
+    // testType：执行方式 → 空或'手工' → '手工'；其他 → '自动化'
+    const testTypeRaw = row['test_type'] != null && String(row['test_type']).trim() !== ''
+        ? String(row['test_type']).trim()
+        : '';
+    const testType = (!testTypeRaw || testTypeRaw === '手工') ? '手工' : '自动化';
 
     return {
         sourceId,

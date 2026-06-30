@@ -216,12 +216,23 @@ var server = http.createServer(function (req, res) {
                 console.log('数据示例:', JSON.stringify(data[0], null, 2));
             }
 
+            // 数据为空时生成 3 条模拟结果，方便前端联调
+            if (!data || data.length === 0) {
+                var now = Date.now();
+                data = [
+                    { sourceId: 'CASE_001', testCaseName: '模拟案例-正常登录' },
+                    { sourceId: 'CASE_002', testCaseName: '模拟案例-密码错误' },
+                    { sourceId: 'CASE_003', testCaseName: '模拟案例-账号锁定' }
+                ];
+                console.log('  请求 data 为空，使用模拟数据 | 共 %d 条', data.length);
+            }
+
             // 按 tsId 逐条返回处理结果。
             // 调试约定：
             //   - type:'1' = 成功，type:'2' = 失败
-            //   - 失败比例通过 FAIL_RATIO 控制（0~1，默认 0.5 即一半失败）
-            //   - 临时调试可设为 1.0（全部失败）或 0.0（全部成功）
-            var FAIL_RATIO = 0.5;
+            //   - 失败比例通过 FAIL_RATIO 控制（0~1，默认 0 即全部成功）
+            //   - 临时调试可设为 1.0（全部失败）或 0.5（一半失败）
+            var FAIL_RATIO = 0;
             var failCount = 0;
             var resultBody = data.map(function (rec, i) {
                 // 当前契约：caseList 项中已有 sourceId（值即客户端的 testcase_id）；
@@ -233,7 +244,7 @@ var server = http.createServer(function (req, res) {
                 }
                 var shouldFail = (data.length === 1)
                     ? (FAIL_RATIO > 0)               // 单条时：按 FAIL_RATIO 决定
-                    : (i % Math.round(1 / FAIL_RATIO || 2) !== 0); // 多条时：按比例失败
+                    : (i % Math.round(1 / FAIL_RATIO || 1) !== 0); // 多条时：按比例失败
                 if (!shouldFail) {
                     return {
                         data: 'TT' + Date.now() + (1000 + i),

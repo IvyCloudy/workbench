@@ -18,6 +18,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { TS_ID_COLUMN } from '../services/utils';
 
 // ============================================
 // 类型定义
@@ -209,6 +210,39 @@ export async function mergeFailures(
     }
     store[filePath] = entry;
     await saveStore(store);
+}
+
+/**
+ * 便捷方法：从推送数据行和失败列表构造 mergeFailures 所需参数并持久化。
+ * 消除 pushHandler / BaseEditorProvider 中完全重复的 batchTsIds/failuresMap/successTsIds 整理逻辑。
+ *
+ * @param filePath        文件路径
+ * @param rows            参与推送的行数据数组
+ * @param failures        失败项列表（来自 parsePushResponse）
+ * @param successMappings 成功项列表（来自 parsePushResponse）
+ */
+export async function persistPushFailures(
+    filePath: string,
+    rows: any[],
+    failures: Array<{ tsId: string; reason: string }>,
+    successMappings: Array<{ tsId: string; testCaseNo: string }>,
+): Promise<void> {
+    const batchTsIds: string[] = [];
+    for (const rec of rows) {
+        const id = rec && (rec as any)[TS_ID_COLUMN] != null ? String((rec as any)[TS_ID_COLUMN]) : '';
+        if (id) batchTsIds.push(id);
+    }
+    const failuresMap: { [tsId: string]: string } = {};
+    failures.forEach(f => {
+        if (f && f.tsId !== undefined && f.tsId !== null && f.tsId !== '') {
+            failuresMap[String(f.tsId)] = String(f.reason || '');
+        }
+    });
+    const successTsIds: string[] = successMappings
+        .map(s => s && s.tsId)
+        .filter((t: any) => t !== undefined && t !== null && t !== '')
+        .map((t: any) => String(t));
+    await mergeFailures(filePath, batchTsIds, failuresMap, successTsIds);
 }
 
 /**

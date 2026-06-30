@@ -23,11 +23,12 @@ import { getNonce, isInQualifiedDir, buildErrorHtml, FILE_PATTERNS, TS_ID_COLUMN
 import { getCurrentTaskInfo, type CurrentTask } from '../utils/commands';
 import { showPushErrorModal, showPushResult, showPushDone, showSaveResult } from '../utils/message';
 import { setHighlight, clearHighlight } from '../utils/highlightStore';
-import { getFailures, mergeFailures } from '../utils/pushFailureStore';
+import { getFailures, persistPushFailures } from '../utils/pushFailureStore';
 import { savePushSnapshot, diffPushSnapshot, type RowDiff, type DiffResult, type DeletedRowInfo, type AddedRowInfo } from '../utils/pushSnapshotStore';
 import { markDeletedRows } from '../utils/deletedRowsStore';
 import { getMarks, setMarks, clearMarks } from '../utils/markStore';
 import { pushTestCase } from '../services/http';
+import { parsePushResponse } from '../utils/pushResponse';
 import { createParser, ensureTrackingColumns, applyTestCaseNos, type FileParser, type FileType } from '../parsers';
 import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
 import { getHeaderLabels, onHeaderLabelsChange, normalizePushData } from '../utils/headerLabels';
@@ -174,23 +175,9 @@ export class PushViaHttpClient implements PushStrategy {
         }
 
         // 解析后端返回：type=1 成功，data 即新的 testCaseNo；type=2 失败，data 为错误原因
-        const body: any[] = Array.isArray(result.body) ? result.body : [];
-        const successMappings: Array<{ tsId: string; testCaseNo: string }> = [];
+        const { successMappings, failures: rawFailures } = parsePushResponse(result.body, pushData);
         // failures 同时记下在 body 中的索引，用于兜底按 pushIndexToRow / pushData 顺序定位行号
-        const failures: Array<{ tsId: string; reason: string; bodyIndex: number }> = [];
-        body.forEach((item, bi) => {
-            if (!item) return;
-            const t = String(item.type == null ? '' : item.type);
-            let sid = String(item.sourceId == null ? '' : item.sourceId);
-            // 后端可能对失败行不返回 sourceId（实测 mock 返回 sourceId=""），按 bodyIndex 从 pushData 反查 testcase_id 兜底
-            if (!sid && Array.isArray(pushData) && pushData[bi]) {
-                const fallback = pushData[bi][TS_ID_COLUMN];
-                if (fallback != null && fallback !== '') sid = String(fallback);
-            }
-            const dataField = item.data == null ? '' : String(item.data);
-            if (t === '1') successMappings.push({ tsId: sid, testCaseNo: dataField });
-            else if (t === '2') failures.push({ tsId: sid, reason: dataField, bodyIndex: bi });
-        });
+        const failures: Array<{ tsId: string; reason: string; bodyIndex: number }> = rawFailures;
 
         // 防御埋点：样例行按设计不应进入后端推送结果。一旦在 successMappings/failures 中出现样例 tsId，
         // 说明过滤逻辑被绕过（文件标识丢失 / 上下文变量异常等），需以该事件快速定位问题。
@@ -301,30 +288,8 @@ export class PushViaHttpClient implements PushStrategy {
 
         // 持久化推送失败标记：以 testcase_id（行稳定唯一标识）为 key，关闭/重开文件后高亮恢复
         try {
-            const batchTsIds: string[] = [];
-            if (Array.isArray(pushData)) {
-                for (const rec of pushData) {
-                    const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
-                    if (id) batchTsIds.push(id);
-                }
-            }
-            const failuresMap: { [tsId: string]: string } = {};
-            failures.forEach(f => {
-                if (f && f.tsId !== undefined && f.tsId !== null && f.tsId !== '') {
-                    failuresMap[String(f.tsId)] = String(f.reason || '');
-                }
-            });
-            const successTsIds: string[] = successMappings
-                .map(s => s && s.tsId)
-                .filter((t: any) => t !== undefined && t !== null && t !== '')
-                .map((t: any) => String(t));
-            console.log('[推送/失败持久化] filePath=' + ctx.filePath
-                + ' batchTsIds=' + batchTsIds.length
-                + ' successTsIds=' + successTsIds.length
-                + ' failureCount=' + Object.keys(failuresMap).length
-                + ' sample=' + JSON.stringify(failuresMap).slice(0, 200));
-            await mergeFailures(ctx.filePath, batchTsIds, failuresMap, successTsIds);
-            console.log('[推送/失败持久化] 已写入 push-failures.json');
+            const rows = Array.isArray(pushData) ? pushData : [];
+            await persistPushFailures(ctx.filePath, rows, failures, successMappings);
         } catch (err: any) {
             console.error('[推送] 持久化失败标记失败:', err?.message || err);
         }

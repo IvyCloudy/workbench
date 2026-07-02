@@ -179,7 +179,7 @@ export class PushViaHttpClient implements PushStrategy {
             }
         }
 
-        const pushSource = isCreatedByCommand(ctx.filePath) ? 'testAgentMa' : 'testAgent';
+        const pushSource = isCreatedByCommand(ctx.filePath) ? 'testAgentMA' : 'testAgent';
         const result = await pushTestCase(extensionContext, normalizePushData(pushData), taskInfo, path.basename(ctx.filePath), pushSource);
         if (result.returnCode !== 'SUC0000') {
             showPushErrorModal(webviewPanel, path.basename(ctx.filePath), result.errorMsg || '推送失败');

@@ -7,7 +7,7 @@
  *    将 YAML/CSV 解析后的数据行映射为后端「推送测试案例」接口
  *    所要求的 caseList[] 字段格式。
  *
- *  仅在「新增测试案例文件」场景（sourcePlatform === 'testAgentMa'）使用，
+ *  仅在「新增测试案例文件」场景（sourcePlatform === 'testAgentMA'）使用，
  *  其他平台请保持原始数据透传。
  *
  *  映射入口 mapRowToCaseItem 会自动识别行的表头风格：

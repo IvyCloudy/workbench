@@ -125,7 +125,7 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
     console.log(`[推送] 文件: ${filePath}, ${rows.length} 行`);
     sendTelemetryEvent('explorerPush.start', { ext: fileExt, totalRows: String(rows.length) });
     const pushData = normalizePushData(rows);
-    const pushSource = isCreatedByCommand(filePath) ? 'testAgentMa' : 'testAgent';
+    const pushSource = isCreatedByCommand(filePath) ? 'testAgentMA' : 'testAgent';
     const pushResult = await pushTestCase(context, pushData, taskInfo, path.basename(filePath), pushSource);
     if (pushResult.returnCode !== 'SUC0000') {
         showPushErrorModal(panel, baseName, `后端返回失败: ${pushResult.errorMsg || '未知错误'}`);

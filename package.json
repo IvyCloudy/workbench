@@ -97,19 +97,19 @@
       ],
       "explorer/context": [
         {
-          "command": "testcaseViewer.pushTestCaseFromExplorer",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i",
-          "group": "2_workspace"
-        },
-        {
           "submenu": "testcaseViewer.newCase",
           "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例(?:[\\\\/]|$)/i || resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i",
-          "group": "2_workspace"
+          "group": "2_workspace@1"
         },
         {
           "command": "testcaseViewer.createNewTestPoint",
           "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试大纲(?:[\\\\/]|$)/i || resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试大纲[\\\\/].+\\.(md|yaml|yml|csv)$/i",
-          "group": "2_workspace"
+          "group": "2_workspace@2"
+        },
+        {
+          "command": "testcaseViewer.pushTestCaseFromExplorer",
+          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i",
+          "group": "2_workspace@3"
         }
       ],
       "commandPalette": [

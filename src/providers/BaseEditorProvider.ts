@@ -160,6 +160,25 @@ export class PushViaHttpClient implements PushStrategy {
             });
         }
 
+        // 校验：testcase_id 为占位值 TESTCASE_ID 时不允许推送
+        if (Array.isArray(pushData)) {
+            const placeholderIds: Array<{ rowIndex: number; value: string }> = [];
+            pushData.forEach((rec: any, i: number) => {
+                const tsId = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]).trim() : '';
+                if (tsId.toUpperCase() === 'TESTCASE_ID') {
+                    placeholderIds.push({ rowIndex: i + 1, value: tsId });
+                }
+            });
+            if (placeholderIds.length > 0) {
+                const lines = placeholderIds.map(item => `  第 ${item.rowIndex} 行: ${item.value}`).join('\n');
+                const baseName = path.basename(ctx.filePath);
+                sendTelemetryEvent('editorPush.aborted', { reason: 'placeholderTestcaseId', ext: _ext, count: String(placeholderIds.length) });
+                showPushErrorModal(webviewPanel, baseName, `testcase_id 为占位值不允许推送\n\n以下行的 testcase_id 值为 TESTCASE_ID，请修改为真实的案例 ID 后再推送：\n${lines}`);
+                webviewPanel.webview.postMessage({ type: 'pushError', message: 'testcase_id 为占位值 TESTCASE_ID，不允许推送' });
+                return;
+            }
+        }
+
         const pushSource = isCreatedByCommand(ctx.filePath) ? 'testAgentMa' : 'testAgent';
         const result = await pushTestCase(extensionContext, normalizePushData(pushData), taskInfo, path.basename(ctx.filePath), pushSource);
         if (result.returnCode !== 'SUC0000') {

@@ -102,6 +102,20 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         sendTelemetryEvent('explorerPush.skipTemplateExample', { ext: fileExt, skipped: String(beforeFilterLen - rows.length) });
     }
 
+    // 校验：testcase_id 为占位值 TESTCASE_ID 时不允许推送
+    const placeholderTestcaseIds = rows
+        .map((rec: any, i: number) => {
+            const tsId = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]).trim() : '';
+            return tsId.toUpperCase() === 'TESTCASE_ID' ? { rowIndex: i + 1, value: tsId } : null;
+        })
+        .filter(Boolean);
+    if (placeholderTestcaseIds.length > 0) {
+        const lines = placeholderTestcaseIds.map((item: any) => `  第 ${item!.rowIndex} 行: ${item!.value}`).join('\n');
+        sendTelemetryEvent('explorerPush.aborted', { reason: 'placeholderTestcaseId', ext: fileExt, count: String(placeholderTestcaseIds.length) });
+        showPushErrorModal(panel, baseName, `testcase_id 为占位值不允许推送\n\n以下行的 testcase_id 值为 TESTCASE_ID，请修改为真实的案例 ID 后再推送：\n${lines}`);
+        return;
+    }
+
     if (!panel) {
         try {
             panel = await ensureOpenedInTestcaseEditor(target);

@@ -60,11 +60,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // 初始化各存储文件
     const storageInits: Array<{ label: string; eventName: string; fn: () => Promise<void> }> = [
-        { label: '绑定文件', eventName: 'bindings', fn: () => ensureBindingsFile(context) },
-        { label: '高亮存储', eventName: 'highlight', fn: () => ensureHighlightFile(context) },
-        { label: '推送失败存储', eventName: 'pushFailure', fn: () => ensurePushFailureFile(context) },
-        { label: '快照存储', eventName: 'snapshot', fn: () => ensureSnapshotFile(context) },
-        { label: '删除行存储', eventName: 'deletedRows', fn: () => ensureDeletedRowsFile(context) },
+        { label: '绑定文件', eventName: 'bindings', fn: async () => { await ensureBindingsFile(context); } },
+        { label: '高亮存储', eventName: 'highlight', fn: async () => { await ensureHighlightFile(context); } },
+        { label: '推送失败存储', eventName: 'pushFailure', fn: async () => { await ensurePushFailureFile(context); } },
+        { label: '快照存储', eventName: 'snapshot', fn: async () => { await ensureSnapshotFile(context); } },
+        { label: '删除行存储', eventName: 'deletedRows', fn: async () => { await ensureDeletedRowsFile(context); } },
     ];
     for (const s of storageInits) {
         await s.fn().catch(err => {

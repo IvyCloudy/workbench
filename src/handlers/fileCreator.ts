@@ -21,24 +21,27 @@ async function createFileAndTriggerRename(
     extraAction?.(filePath);
 
     const newFileUri = vscode.Uri.file(filePath);
+
+    // 文件已创建，立刻触发完成回调（打开编辑器），不等重命名
+    await onComplete(newFileUri);
+
+    // 触发重命名（inline edit），让用户直接修改文件名
     await vscode.commands.executeCommand('revealInExplorer', newFileUri);
     await new Promise(resolve => setTimeout(resolve, 100));
     await vscode.commands.executeCommand('renameFile');
 
-    const renameDisposable = vscode.workspace.onDidRenameFiles(async (event) => {
+    // 重命名监听仅用于清理本地标记（extension.ts 全局 onDidRenameFiles 已处理 panelMap 同步）
+    const renameDisposable = vscode.workspace.onDidRenameFiles((event) => {
         for (const file of event.files) {
             if (file.oldUri.fsPath === filePath) {
                 renameDisposable.dispose();
-                await onComplete(file.newUri);
                 break;
             }
         }
     });
 
-    setTimeout(async () => {
-        if (fs.existsSync(filePath)) {
-            await onComplete(newFileUri);
-        }
+    // 超时兜底：30 秒后释放监听器
+    setTimeout(() => {
         renameDisposable.dispose();
     }, 30000);
 }
@@ -51,7 +54,6 @@ async function openWithPluginEditor(fileUri: vscode.Uri, _originalFileName: stri
         await vscode.commands.executeCommand('vscode.openWith', fileUri, TESTCASE_EDITOR_VIEWTYPE);
 
         const fileName = path.basename(fileUri.fsPath);
-        showToast(undefined, 'success', `测试案例 ${fileName} 创建成功`);
         sendTelemetryEvent('createNewTestCase.success', {
             fileName: fileName,
             fileType: path.extname(fileName)

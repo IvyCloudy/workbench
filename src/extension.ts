@@ -24,7 +24,7 @@ import { BaseEditorProvider } from './providers/BaseEditorProvider';
 import { registerBindTaskFeatures } from './providers/BindTaskProvider';
 import { getCurrentTaskInfo } from './utils/commands';
 import { showPushErrorModal, showToast } from './utils/message';
-import { markAsCreatedByCommand, unmarkAsCreatedByCommand, isCreatedByCommand } from './utils/fileIdentifier';
+import { markAsCreatedByCommand, unmarkAsCreatedByCommand, isCreatedByCommand, cleanupRecords } from './utils/fileIdentifier';
 import { ensureHighlightFile } from './utils/highlightStore';
 import { ensurePushFailureFile } from './utils/pushFailureStore';
 import { ensureSnapshotFile } from './utils/pushSnapshotStore';
@@ -76,6 +76,13 @@ export async function activate(context: vscode.ExtensionContext) {
     await ensureMarkFile(context).catch(err => {
         console.error('[Extension] 初始化标记存储文件失败:', err?.message || err);
     });
+
+    // 清理已删除文件的 created-files.json 记录（兜底 onDidDeleteFiles 未触发的场景）
+    try {
+        cleanupRecords();
+    } catch (err: any) {
+        console.error('[Extension] 清理已删除文件记录失败:', err?.message || err);
+    }
 
     const bindTaskDisposables = registerBindTaskFeatures(context);
 

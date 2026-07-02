@@ -398,6 +398,18 @@ export function diffPushSnapshot(
 /**
  * 清除指定文件的推送快照。
  */
+/**
+ * 删除指定文件的全部推送快照记录（文件被删除时调用）。
+ */
+export async function removeSnapshotFile(filePath: string): Promise<void> {
+    if (!filePath) return;
+    const store = loadStore();
+    if (store[filePath]) {
+        delete store[filePath];
+        await saveStore(store);
+    }
+}
+
 export async function clearPushSnapshot(filePath: string): Promise<void> {
     if (!filePath) return;
     const store = loadStore();
@@ -405,6 +417,21 @@ export async function clearPushSnapshot(filePath: string): Promise<void> {
         delete store[filePath];
         await saveStore(store);
     }
+}
+
+/**
+ * 清理已不存在的文件的孤儿推送快照记录。
+ */
+export async function cleanupOrphanedSnapshots(): Promise<void> {
+    const store = loadStore();
+    let changed = false;
+    for (const fp of Object.keys(store)) {
+        if (!require('fs').existsSync(fp)) {
+            delete store[fp];
+            changed = true;
+        }
+    }
+    if (changed) await saveStore(store);
 }
 
 /**

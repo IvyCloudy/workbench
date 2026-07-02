@@ -232,6 +232,33 @@ export async function syncDeletedRows(
 /**
  * 清除指定文件的所有删除行追踪记录（不清除 push-snapshot）。
  */
+/**
+ * 删除指定文件的全部删除行追踪记录（文件被删除时调用）。
+ */
+export async function removeDeletedRowsFile(filePath: string): Promise<void> {
+    if (!filePath) return;
+    const store = cachedStore || loadStore();
+    if (store[filePath]) {
+        delete store[filePath];
+        await saveStore(store);
+    }
+}
+
+/**
+ * 清理已不存在的文件的孤儿删除行追踪记录。
+ */
+export async function cleanupOrphanedDeletedRows(): Promise<void> {
+    const store = cachedStore || loadStore();
+    let changed = false;
+    for (const fp of Object.keys(store)) {
+        if (!require('fs').existsSync(fp)) {
+            delete store[fp];
+            changed = true;
+        }
+    }
+    if (changed) await saveStore(store);
+}
+
 export async function clearDeletedRowsTracking(filePath: string): Promise<void> {
     if (!filePath) return;
     const store = loadStore();

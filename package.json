@@ -85,6 +85,12 @@
         "title": "新增测试要点",
         "icon": "$(add)",
         "category": "测试案例"
+      },
+      {
+        "command": "testcaseViewer.clearHighlight",
+        "title": "清理文件高亮",
+        "icon": "$(clear-all)",
+        "category": "测试案例"
       }
     ],
     "menus": {

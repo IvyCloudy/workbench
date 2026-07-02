@@ -8,10 +8,13 @@
  *    2. 决定哪些命令在哪些场景启用（通过 setContext 控制图标显隐）。
  *
  *  较大处理逻辑已拆分至：
- *    - handlers/pushHandler.ts     文件推送
- *    - handlers/fileCreator.ts     文件创建（测试案例 / 测试要点）
- *    - handlers/editorCommands.ts  编辑器切换命令
- *    - utils/extensionHelpers.ts   公共工具函数
+ *    - handlers/pushHandler.ts       文件推送
+ *    - handlers/fileCreator.ts       文件创建（测试案例 / 测试要点）
+ *    - handlers/editorCommands.ts    编辑器切换命令
+ *    - handlers/workspaceListeners.ts 工作区文件变化监听（重命名、删除）
+ *    - handlers/deletedRowsHandler.ts 已删除行同步
+ *    - utils/storageInitializer.ts   存储初始化与孤儿记录清理
+ *    - utils/extensionHelpers.ts     公共工具函数
  * ============================================================================
  */
 import * as vscode from 'vscode';
@@ -19,30 +22,21 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { TableBrowserProvider } from './providers/TableBrowserProvider';
 import { TestCaseProvider } from './providers/TestCaseProvider';
-import { UnifiedEditorProvider, FileTypeChecker } from './providers/UnifiedEditorProvider';
-import { BaseEditorProvider } from './providers/BaseEditorProvider';
+import { UnifiedEditorProvider } from './providers/UnifiedEditorProvider';
 import { registerBindTaskFeatures } from './providers/BindTaskProvider';
-import { getCurrentTaskInfo } from './utils/commands';
 import { showPushErrorModal, showToast } from './utils/message';
-import { markAsCreatedByCommand, unmarkAsCreatedByCommand, isCreatedByCommand, cleanupRecords } from './utils/fileIdentifier';
-import { ensureHighlightFile } from './utils/highlightStore';
-import { ensurePushFailureFile } from './utils/pushFailureStore';
-import { ensureSnapshotFile } from './utils/pushSnapshotStore';
-import { ensureBindingsFile } from './utils/taskInfoStore';
-import { ensureDeletedRowsFile } from './utils/deletedRowsStore';
-import { ensureMarkFile } from './utils/markStore';
+import { BaseEditorProvider } from './providers/BaseEditorProvider';
 import { initTelemetry, sendTelemetryEvent, sendTelemetryErrorEvent } from './utils/telemetry';
 import { getActiveFileUri, isTestCaseFile, updateShowIcon, telemetryErrProps } from './utils/extensionHelpers';
 import { registerEditorCommands } from './handlers/editorCommands';
 import { handleFilePush } from './handlers/pushHandler';
 import { handleCreateNewTestCase, handleCreateNewTestPoint } from './handlers/fileCreator';
 import { handleSyncDeletedRows } from './handlers/deletedRowsHandler';
+import { registerWorkspaceListeners } from './handlers/workspaceListeners';
+import { handleClearHighlight } from './handlers/clearHighlightHandler';
+import { initializeStorages, cleanupOrphanedRecords } from './utils/storageInitializer';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
-
-// ============================================
-// 激活
-// ============================================
 
 export async function activate(context: vscode.ExtensionContext) {
     const _activateStart = Date.now();
@@ -58,42 +52,32 @@ export async function activate(context: vscode.ExtensionContext) {
         try { sendTelemetryErrorEvent('extension.unhandledRejection', telemetryErrProps(reason)); } catch (_) { /* ignore */ }
     });
 
-    // 初始化各存储文件
-    const storageInits: Array<{ label: string; eventName: string; fn: () => Promise<void> }> = [
-        { label: '绑定文件', eventName: 'bindings', fn: async () => { await ensureBindingsFile(context); } },
-        { label: '高亮存储', eventName: 'highlight', fn: async () => { await ensureHighlightFile(context); } },
-        { label: '推送失败存储', eventName: 'pushFailure', fn: async () => { await ensurePushFailureFile(context); } },
-        { label: '快照存储', eventName: 'snapshot', fn: async () => { await ensureSnapshotFile(context); } },
-        { label: '删除行存储', eventName: 'deletedRows', fn: async () => { await ensureDeletedRowsFile(context); } },
-    ];
-    for (const s of storageInits) {
-        await s.fn().catch(err => {
-            console.error(`[Extension] 初始化${s.label}失败:`, err?.message || err);
-            sendTelemetryErrorEvent(`${s.eventName}.initFailed`, telemetryErrProps(err));
-        });
-    }
-
-    await ensureMarkFile(context).catch(err => {
-        console.error('[Extension] 初始化标记存储文件失败:', err?.message || err);
-    });
-
-    // 清理已删除文件的 created-files.json 记录（兜底 onDidDeleteFiles 未触发的场景）
+    // 初始化各存储文件 + 清理孤儿记录
+    await initializeStorages(context);
     try {
-        cleanupRecords();
+        await cleanupOrphanedRecords();
     } catch (err: any) {
         console.error('[Extension] 清理已删除文件记录失败:', err?.message || err);
     }
 
+    // 注册核心功能
     const bindTaskDisposables = registerBindTaskFeatures(context);
-
     const tableBrowserProvider = new TableBrowserProvider(context.extensionUri, context);
     const testCaseProvider = new TestCaseProvider(context.extensionUri, context);
     const unifiedEditorProvider = new UnifiedEditorProvider(context.extensionUri, context);
 
+    // 工作区监听器
+    const workspaceListeners = registerWorkspaceListeners();
+
+    // Tab 切换监听
+    const tabChangeListener = vscode.window.tabGroups.onDidChangeTabs(() => updateShowIcon());
+
     context.subscriptions.push(
         ...bindTaskDisposables,
+        ...workspaceListeners,
+        tabChangeListener,
 
-        // 自定义编辑器
+        // ---- 自定义编辑器 ----
         vscode.window.registerCustomEditorProvider(
             TESTCASE_EDITOR_VIEWTYPE,
             unifiedEditorProvider,
@@ -103,7 +87,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         ),
 
-        // 全局命令
+        // ---- 全局命令 ----
         vscode.commands.registerCommand('tableBrowser.open', () => {
             sendTelemetryEvent('command.executed', { command: 'tableBrowser.open' });
             try {
@@ -113,6 +97,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 throw err;
             }
         }),
+
         vscode.commands.registerCommand('testcaseViewer.viewOnline', async () => {
             const uri = getActiveFileUri();
             if (!uri) {
@@ -132,10 +117,10 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         }),
 
-        // 编辑器切换命令
+        // ---- 编辑器切换命令 ----
         ...registerEditorCommands(context, /\.(csv|ya?ml|json)$/i),
 
-        // 推送命令
+        // ---- 推送命令 ----
         vscode.commands.registerCommand(
             'testcaseViewer.pushTestCaseFromExplorer',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
@@ -152,7 +137,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         ),
 
-        // 新增测试案例（右键子菜单 - CSV）
+        // ---- 新增测试案例（右键子菜单 - CSV） ----
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestCaseCsv',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
@@ -166,7 +151,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         ),
 
-        // 新增测试案例（右键子菜单 - YAML）
+        // ---- 新增测试案例（右键子菜单 - YAML） ----
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestCaseYaml',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
@@ -180,7 +165,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         ),
 
-        // 新增测试案例（命令面板入口）
+        // ---- 新增测试案例（命令面板入口） ----
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestCase',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
@@ -195,7 +180,15 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         ),
 
-        // 快速创建测试案例（命令面板）
+        // ---- 清理文件高亮（含失败标记、快照、删除行追踪、手动标记） ----
+        vscode.commands.registerCommand(
+            'testcaseViewer.clearHighlight',
+            async (uri: vscode.Uri) => {
+                await handleClearHighlight(uri);
+            }
+        ),
+
+        // ---- 快速创建测试案例（命令面板） ----
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestCaseQuick',
             async () => {
@@ -229,7 +222,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         ),
 
-        // 新增测试要点
+        // ---- 新增测试要点 ----
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestPoint',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
@@ -243,40 +236,13 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         ),
 
-        // 已删除行同步
+        // ---- 已删除行同步 ----
         vscode.commands.registerCommand(
             'workbench.syncDeletedRows',
             async () => {
                 await handleSyncDeletedRows();
             }
         ),
-
-        // 监听标签页激活变化，更新图标显示
-        vscode.window.tabGroups.onDidChangeTabs(() => updateShowIcon()),
-
-        // 监听文件重命名，同步更新记录
-        vscode.workspace.onDidRenameFiles((event) => {
-            for (const file of event.files) {
-                const oldPath = file.oldUri.fsPath;
-                const newPath = file.newUri.fsPath;
-
-                if (isCreatedByCommand(oldPath)) {
-                    unmarkAsCreatedByCommand(oldPath);
-                    markAsCreatedByCommand(newPath);
-                }
-
-                BaseEditorProvider.updatePanelMapKey(oldPath, newPath);
-            }
-        }),
-
-        // 监听文件删除，同步清理记录
-        vscode.workspace.onDidDeleteFiles((event) => {
-            for (const file of event.files) {
-                if (isCreatedByCommand(file.fsPath)) {
-                    unmarkAsCreatedByCommand(file.fsPath);
-                }
-            }
-        }),
     );
 
     updateShowIcon();

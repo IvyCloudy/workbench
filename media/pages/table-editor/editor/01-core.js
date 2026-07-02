@@ -1076,6 +1076,26 @@ window.addEventListener('message', function (e) {
         showToast('推送失败: ' + (m.message || ''), 'error');
     } else if (m.type === 'showModal') {
         showXsInfoModal(m.modalType || 'info', m.title || '', m.message || '');
+    } else if (m.type === 'clearAllHighlights') {
+        // 清除所有高亮状态：编辑变更高亮、推送失败标记、新增行标记、删除行信息、用户标记
+        S._highlightedCells = null;
+        S._highlightedTime = 0;
+        S._pushFailedTsIds = new Set();
+        S._pushFailedReasons = new Map();
+        S._pushFailedTime = new Map();
+        S._lastPushBatchTsIds = new Set();
+        S._addedRowSet = null;
+        S._addedRowSet = new Set();
+        S._addedInfos = [];
+        S._deletedInfos = [];
+        S._userMarks.rects = [];
+        S._userMarks.cellMap = null;
+        S._userMarks.rowMap = null;
+        S._userMarks.rowSet = null;
+        S._userMarks.cellTime = null;
+        S._userMarks.rowTime = null;
+        if (S._detailModCellKeys) S._detailModCellKeys.clear();
+        try { renderTable(); } catch (_) {}
     }
 });
 

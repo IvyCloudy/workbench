@@ -164,6 +164,33 @@ export function getFailures(filePath: string): PushFailureEntry {
  *
  * 未参与本批的历史失败标记保持不变。
  */
+/**
+ * 删除指定文件的全部推送失败记录（文件被删除时调用）。
+ */
+export async function removeFailureFile(filePath: string): Promise<void> {
+    if (!filePath) return;
+    const store = loadStore();
+    if (store[filePath]) {
+        delete store[filePath];
+        await saveStore(store);
+    }
+}
+
+/**
+ * 清理已不存在的文件的孤儿推送失败记录。
+ */
+export async function cleanupOrphanedFailures(): Promise<void> {
+    const store = loadStore();
+    let changed = false;
+    for (const fp of Object.keys(store)) {
+        if (!require('fs').existsSync(fp)) {
+            delete store[fp];
+            changed = true;
+        }
+    }
+    if (changed) await saveStore(store);
+}
+
 export async function mergeFailures(
     filePath: string,
     batchTsIds: string[],

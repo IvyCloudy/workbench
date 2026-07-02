@@ -153,3 +153,25 @@ export async function clearMarks(filePath: string): Promise<void> {
         await saveStore(store);
     }
 }
+
+/**
+ * 删除指定文件的全部标记记录（文件被删除时调用）。
+ */
+export async function removeMarkFile(filePath: string): Promise<void> {
+    await clearMarks(filePath);
+}
+
+/**
+ * 清理已不存在的文件的孤儿标记记录。
+ */
+export async function cleanupOrphanedMarks(): Promise<void> {
+    const store = loadStore();
+    let changed = false;
+    for (const fp of Object.keys(store)) {
+        if (!require('fs').existsSync(fp)) {
+            delete store[fp];
+            changed = true;
+        }
+    }
+    if (changed) await saveStore(store);
+}

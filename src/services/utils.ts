@@ -14,6 +14,7 @@
  *      getTaskInfoByFilePath 基于 task-bindings.json 提供。
  * ============================================================================
  */
+import * as crypto from 'crypto';
 import * as path from 'path';
 
 // ============================================
@@ -181,14 +182,10 @@ export const TS_ID_COLUMN = 'testcase_id';
 export const TEST_CASE_NO_COLUMN = 'testCaseNo';
 
 /**
- * 生成 RFC4122 v4 UUID（无外部依赖，浏览器/Node 通用）
+ * 生成 MA + hex 格式 UUID（Node 端用 crypto.randomBytes）
  */
 export function genUuid(): string {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-        const r = (Math.random() * 16) | 0;
-        const v = c === 'x' ? r : (r & 0x3) | 0x8;
-        return v.toString(16);
-    });
+    return 'MA' + crypto.randomBytes(16).toString('hex');
 }
 
 // ============================================

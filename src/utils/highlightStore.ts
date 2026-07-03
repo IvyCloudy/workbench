@@ -147,3 +147,25 @@ export async function clearHighlight(filePath: string): Promise<void> {
         await saveStore(store);
     }
 }
+
+/**
+ * 删除指定文件的全部高亮记录（文件被删除时调用）。
+ */
+export async function removeHighlightFile(filePath: string): Promise<void> {
+    await clearHighlight(filePath);
+}
+
+/**
+ * 清理已不存在的文件的孤儿高亮记录。
+ */
+export async function cleanupOrphanedHighlights(): Promise<void> {
+    const store = loadStore();
+    let changed = false;
+    for (const fp of Object.keys(store)) {
+        if (!require('fs').existsSync(fp)) {
+            delete store[fp];
+            changed = true;
+        }
+    }
+    if (changed) await saveStore(store);
+}

@@ -18,7 +18,7 @@ import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider'
 import { writeParams } from '../services/storage';
 import { queryTestCases, fetchTaskTree } from '../services/http';
 import { getTaskInfoByFilePath } from '../utils/commands';
-import { sendTelemetryEvent, sendTelemetryErrorEvent, sendTelemetryException } from '../services/telemetry';
+import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
 import { stackHead } from '../services/utils';
 import type { WebviewMessage } from '../types';
 
@@ -209,11 +209,17 @@ export class TestCaseProvider extends BaseWebviewProvider {
                     sendTelemetryEvent('testCase.query.endOfData', {});
                     this.postMessage({ command: 'endOfData' });
                 } else {
+                    const _list: any[] = Array.isArray(result.data?.list) ? result.data.list
+                        : (Array.isArray(result.data) ? result.data : []);
+                    sendTelemetryEvent('testCase.query.success', {
+                        currentPage: String(msg.currentPage || 1),
+                        rows: String(_list.length),
+                    });
                     this.postMessage({ command: 'showData', data: result.data });
                 }
             }
         } catch (err: any) {
-            sendTelemetryException('testCase.message.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                sendTelemetryErrorEvent('testCase.message.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
             this.postMessage({
                 command: 'showError',
                 message: `消息处理失败: ${err?.message || err}`,

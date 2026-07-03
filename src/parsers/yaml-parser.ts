@@ -29,8 +29,23 @@ interface YamlData {
      * 用于列类型推断与数组列原值还原；sourceData 顶层可能是包裹对象时两者不一致。
      */
     rowsSource?: any[];
+    /**
+     * 原始 YAML 文件顶层形态：
+     *   - true  → 顶层是数组 (例如 `- testcase_id: ...`)
+     *   - false → 顶层是单条对象 (例如 `testcase_id: ...`)
+     * save 时按该标记决定是否包数组，避免文件被默默改写格式。
+     */
+    topLevelIsArray?: boolean;
     detailTable?: DetailTableData;
     detailTables?: DetailTableData[];
+}
+
+// 在 TableData 上挂载顶层形态标记（save 时读取）。声明合并，避免污染 types/index.ts。
+declare module '../types' {
+    interface TableData {
+        /** YAML 顶层形态：true=数组、false=单对象。仅 yaml-parser 自用。 */
+        __yamlTopLevelIsArray?: boolean;
+    }
 }
 
 // ============================================
@@ -93,7 +108,9 @@ export class YamlFileParser implements FileParser {
                 rows,
                 detailTable: data.detailTable,
                 detailTables: data.detailTables,
-                columnTypes
+                columnTypes,
+                // 透传顶层形态标记，save 时读取以保留原文件结构
+                __yamlTopLevelIsArray: data.topLevelIsArray
             },
             sourceData
         };
@@ -214,7 +231,27 @@ export class YamlFileParser implements FileParser {
             return record;
         });
 
-        const yamlContent = YAML.stringify(records.length === 1 ? records[0] : records);
+        // 顶层形态决定输出包装方式：
+        //   - 原文件顶层是数组（含 "- testcase_id: ..." 这种单元素数组）→ 输出仍包装为数组
+        //   - 原文件顶层是单对象 → 输出单对象
+        //   - 历史/未知（无标记）→ 维持旧行为：单条则输出对象，多条则输出数组
+        const topLevelIsArray = (data as any).__yamlTopLevelIsArray;
+        let toWrite: any;
+        if (topLevelIsArray === true) {
+            toWrite = records;
+        } else if (topLevelIsArray === false) {
+            toWrite = records.length === 1 ? records[0] : records;
+        } else {
+            toWrite = records.length === 1 ? records[0] : records;
+        }
+
+        // 多行字符串（含 \n）自动用块标量 |- 输出，避免 \n 字面量替换破坏 SQL/期望结果可读性。
+        const yamlContent = YAML.stringify(toWrite, {
+            lineWidth: 0,
+            defaultStringType: 'PLAIN',
+            defaultKeyType: 'PLAIN',
+            blockQuote: 'literal'
+        } as any);
         await fs.promises.writeFile(filePath, yamlContent, 'utf-8');
     }
 
@@ -236,23 +273,30 @@ export class YamlFileParser implements FileParser {
 
         let parsed: any = null;
         let sourceData: any = null;
+        let topLevelIsArray: boolean | undefined = undefined;
         try {
             const docs = YAML.parseAllDocuments(cleanContent);
             for (const doc of docs) {
                 const value = doc.toJSON();
                 if (value !== null && value !== undefined) {
                     sourceData = value;
+                    if (topLevelIsArray === undefined) {
+                        topLevelIsArray = Array.isArray(value);
+                    }
                     parsed = this.findArrayData(value);
                     if (parsed) break;
                 }
             }
         } catch {
             sourceData = YAML.parse(cleanContent);
+            if (topLevelIsArray === undefined) {
+                topLevelIsArray = Array.isArray(sourceData);
+            }
             parsed = this.findArrayData(sourceData);
         }
 
         if (!parsed) {
-            return { sheets: [{ name: 'Sheet1', rows: {} }], sourceData };
+            return { sheets: [{ name: 'Sheet1', rows: {} }], sourceData, topLevelIsArray };
         }
 
         const sheet = this.toSheet(parsed);
@@ -262,6 +306,7 @@ export class YamlFileParser implements FileParser {
             sheets: [sheet],
             sourceData,
             rowsSource: parsed,
+            topLevelIsArray,
             detailTable: detailTables[0],
             detailTables: detailTables.length > 0 ? detailTables : undefined
         };
@@ -283,10 +328,40 @@ export class YamlFileParser implements FileParser {
     private findArrayData(data: any): any[] | null {
         if (Array.isArray(data) && data.length > 0) return data;
         if (typeof data === 'object' && data !== null) {
-            for (const key of Object.keys(data)) {
-                if (Array.isArray(data[key]) && data[key].length > 0) return data[key];
+            // 仅当顶层对象"看起来像纯容器"（所有字段都是对象数组，没有任何标量字段）
+            // 时，才尝试在嵌套字段里寻找记录数组；否则一律将顶层对象视为单条记录 [data]。
+            //
+            // 这样可以同时兼容：
+            //   - 顶层为对象数组：     - testcase_id: ...      → 直接命中外层数组分支
+            //   - 顶层为单条记录对象： testcase_id: ...        → 走 [data] 分支（关键修复点）
+            //   - 包裹容器：           { records: [{...}, ...] }→ 走嵌套对象数组分支
+            //
+            // 修复 bug：当顶层是单条记录对象（含 preconditions/steps 等嵌套数组字段）时，
+            // 旧实现会误把第一个非空嵌套数组（如 preconditions: ["CES"] / steps: [{...}]）
+            // 当成主表数据，导致 headers 解析为空、保存时整条记录被丢光，仅留 testcase_id。
+            const keys = Object.keys(data);
+            let hasScalarOrPlainObject = false;
+            const arrayCandidates: any[][] = [];
+            for (const key of keys) {
+                const v = data[key];
+                if (Array.isArray(v)) {
+                    if (v.length > 0) arrayCandidates.push(v);
+                } else {
+                    // 任意非数组字段（标量、null、嵌套对象等）→ 顶层不是纯容器
+                    hasScalarOrPlainObject = true;
+                    break;
+                }
             }
-            if (Object.keys(data).length > 0) return [data];
+            if (!hasScalarOrPlainObject) {
+                // 纯容器：选择第一个"元素都是对象"的数组作为主表
+                for (const arr of arrayCandidates) {
+                    const allObjectRecords = arr.every(item =>
+                        item !== null && typeof item === 'object' && !Array.isArray(item)
+                    );
+                    if (allObjectRecords) return arr;
+                }
+            }
+            if (keys.length > 0) return [data];
         }
         return null;
     }

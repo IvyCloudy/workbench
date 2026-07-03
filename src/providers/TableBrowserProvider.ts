@@ -18,7 +18,7 @@ import { CsvFileParser } from '../parsers/csv-parser';
 import { batchImportData } from '../services/http';
 import { FileTreeService } from './common/FileTreeService';
 import { showToast, showModal } from '../utils/message';
-import { sendTelemetryEvent, sendTelemetryErrorEvent, sendTelemetryException } from '../services/telemetry';
+import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
 import { stackHead } from '../services/utils';
 import type { WebviewMessage } from '../types';
 
@@ -95,7 +95,7 @@ export class TableBrowserProvider extends BaseWebviewProvider {
             });
             console.log('[TableBrowser] CSV 数据已发送，rows:', tableData.rows.length, 'headers:', tableData.headers.length);
         } catch (e: any) {
-            sendTelemetryException('tableBrowser.csv.readFailed', { errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
+                sendTelemetryErrorEvent('tableBrowser.csv.readFailed', { errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
             this.postMessage({ command: 'csvData', data: null, error: e.message || '读取文件失败' });
         }
     }
@@ -123,7 +123,7 @@ export class TableBrowserProvider extends BaseWebviewProvider {
                 showToast(this.panel, 'error', result.errorMsg || '发送失败');
             }
         } catch (e: any) {
-            sendTelemetryException('tableBrowser.send.error', { errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
+            sendTelemetryErrorEvent('tableBrowser.send.error', { errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
             this.postMessage({ command: 'sendResult', success: false, message: e.message || '发送失败' });
             showToast(this.panel, 'error', e.message || '发送失败');
         }

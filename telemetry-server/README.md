@@ -162,7 +162,7 @@ kubectl run telemetry-migrate --rm -it --restart=Never \
 
 ### 4. 客户端接入
 
-VSCode 插件侧已在 [src/services/telemetry.ts](../src/services/telemetry.ts) 实现批量上报、退避、脱敏，
+VSCode 插件侧已在 [src/utils/telemetry.ts](../src/utils/telemetry.ts) 实现批量上报、退避、脱敏，
 仅需在用户配置中追加：
 
 ```jsonc

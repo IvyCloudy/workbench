@@ -19,7 +19,7 @@ function bindToolbar() {
             var hasFailed = !!(S._pushFailedTsIds && S._pushFailedTsIds.size > 0);
             if (!hasFailed) return;
             S._failedOnly = !S._failedOnly;
-            if (S._failedOnly) { S._modifiedOnly = false; S._addedOnly = false; S._deletedOnly = false; }
+            if (S._failedOnly) { S._modifiedOnly = false; S._addedOnly = false; S._deletedOnly = false; S._markedOnly = false; }
             renderTable();
             if (S._failedOnly && S._viewRows && S._viewRows.length > 0) {
                 S.sel = new Set(S._viewRows);
@@ -37,7 +37,7 @@ function bindToolbar() {
             if (!hasModified) return;
             S._modifiedOnly = !S._modifiedOnly;
             // 互斥：切换仅看修改行时关闭其他筛选
-            if (S._modifiedOnly) { S._failedOnly = false; S._addedOnly = false; S._deletedOnly = false; }
+            if (S._modifiedOnly) { S._failedOnly = false; S._addedOnly = false; S._deletedOnly = false; S._markedOnly = false; }
             // 不要清空 _highlightedCells：_getModifiedRowSet() 依赖它判定修改行，
             // 清空会导致 modifiedOnly 过滤条件失效，且失去单元格级差异高亮
             renderTable();
@@ -56,7 +56,7 @@ function bindToolbar() {
             var hasAdded = !!(S._addedRowSet && S._addedRowSet.size > 0);
             if (!hasAdded) return;
             S._addedOnly = !S._addedOnly;
-            if (S._addedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._deletedOnly = false; }
+            if (S._addedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._deletedOnly = false; S._markedOnly = false; }
             renderTable();
             if (S._addedOnly && S._viewRows && S._viewRows.length > 0) {
                 S.sel = new Set(S._viewRows);
@@ -73,8 +73,25 @@ function bindToolbar() {
             var hasDeleted = !!(S._deletedInfos && S._deletedInfos.length > 0);
             if (!hasDeleted) return;
             S._deletedOnly = !S._deletedOnly;
-            if (S._deletedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._addedOnly = false; }
+            if (S._deletedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._addedOnly = false; S._markedOnly = false; }
             renderTable();
+        });
+    }
+    var markedFilterBtn = document.getElementById('markedFilterBtn');
+    if (markedFilterBtn) {
+        markedFilterBtn.addEventListener('click', function () {
+            if (markedFilterBtn.classList.contains('is-disabled')) return;
+            var hasMarked = (typeof _countMarkedRows === 'function') ? _countMarkedRows() > 0 : false;
+            if (!hasMarked) return;
+            S._markedOnly = !S._markedOnly;
+            if (S._markedOnly) { S._failedOnly = false; S._modifiedOnly = false; S._addedOnly = false; S._deletedOnly = false; }
+            renderTable();
+            if (S._markedOnly && S._viewRows && S._viewRows.length > 0) {
+                S.sel = new Set(S._viewRows);
+                updateRowSelClasses();
+                updateSelectionInfo();
+                updatePushBtn();
+            }
         });
     }
     var openBtn = document.querySelector('[data-action="openTextEditor"]');
@@ -130,6 +147,7 @@ function bindToolbar() {
             S._modifiedOnly = false;
             S._addedOnly = false;
             S._deletedOnly = false;
+            S._markedOnly = false;
             // _deletedInfos 由后端 diff 重新下发，此处不提前清空以免渲染闪烁
             // 关闭可能打开的列筛选弹窗（若存在该函数）
             try { if (typeof closeColFilter === 'function') closeColFilter(); } catch (e) {}
@@ -264,9 +282,23 @@ function bindDocument() {
                         var _v = (_rowsAll[_r] && _rowsAll[_r][_c] !== undefined) ? _rowsAll[_r][_c] : '';
                         var _s;
                         if (Array.isArray(_v)) {
-                            _s = (typeof formatCellValue === 'function') ? formatCellValue(_v) : _v.join('; ');
+                            // 对象数组：每个元素 JSON 序列化后以 ;\u00A0 拼接，避免 [object Object]
+                            var _hasObjV = false;
+                            for (var _voi = 0; _voi < _v.length; _voi++) { if (_v[_voi] && typeof _v[_voi] === 'object') { _hasObjV = true; break; } }
+                            if (_hasObjV) {
+                                _s = _v.map(function (_xx) {
+                                    if (_xx === null || _xx === undefined) return '';
+                                    if (typeof _xx === 'object') { try { return JSON.stringify(_xx); } catch (_e3) { return ''; } }
+                                    return String(_xx);
+                                }).join('; ');
+                            } else {
+                                _s = (typeof formatCellValue === 'function') ? formatCellValue(_v) : _v.join('; ');
+                            }
                         } else if (_v === null || _v === undefined) {
                             _s = '';
+                        } else if (typeof _v === 'object') {
+                            // 普通对象：序列化为 JSON 字符串
+                            try { _s = JSON.stringify(_v); } catch (_e4) { _s = ''; }
                         } else {
                             _s = String(_v);
                         }
@@ -387,11 +419,35 @@ function bindDocument() {
                         for (var cc = _rcPaste.c1; cc <= _rcPaste.c2; cc++) {
                             if (isFrozenCol(cc)) { skippedTsId = true; continue; }
                             var isArrT = typeof isArrayCol === 'function' && isArrayCol(cc);
+                            // 尝试将 src0 解析为对象 / 对象数组（支持表内 Ctrl+C / 外部粘贴 JSON）
+                            var _parsed0;
+                            var _strSrc0 = (src0 == null) ? '' : String(src0);
+                            if (_strSrc0 && (_strSrc0.charAt(0) === '{' || _strSrc0.charAt(0) === '[')) {
+                                try { _parsed0 = JSON.parse(_strSrc0); } catch (_ep0) { _parsed0 = undefined; }
+                            }
+                            // detail 列：若解析出对象 / 对象数组，写入 detail 表
+                            var _isDetailT = (typeof isDetailColumn === 'function') && isDetailColumn(cc);
+                            if (_isDetailT && _parsed0 && (Array.isArray(_parsed0) || typeof _parsed0 === 'object')) {
+                                var _hasObjP = false;
+                                if (Array.isArray(_parsed0)) {
+                                    for (var _xpi = 0; _xpi < _parsed0.length; _xpi++) { if (_parsed0[_xpi] && typeof _parsed0[_xpi] === 'object') { _hasObjP = true; break; } }
+                                } else { _hasObjP = true; }
+                                if (_hasObjP && typeof _writeDetailCellFromRaw === 'function' && _writeDetailCellFromRaw(rr, cc, _parsed0)) {
+                                    changed++;
+                                    continue;
+                                }
+                            }
                             var nv;
                             if (isArrT) {
-                                nv = (src0 === '' || src0 == null) ? [] : String(src0).split(/;\s*|\n+/).map(function (x) { return x.trim(); }).filter(function (x) { return x !== ''; });
+                                if (Array.isArray(_parsed0)) {
+                                    nv = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(_parsed0) : _parsed0;
+                                } else {
+                                    nv = (src0 === '' || src0 == null) ? [] : _strSrc0.split(/;\s*|\n+/).map(function (x) { return x.trim(); }).filter(function (x) { return x !== ''; });
+                                }
+                            } else if (_parsed0 && typeof _parsed0 === 'object') {
+                                nv = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(_parsed0) : _parsed0;
                             } else {
-                                nv = (src0 == null) ? '' : String(src0);
+                                nv = (src0 == null) ? '' : _strSrc0;
                             }
                             rowR[cc] = nv;
                             S.mods.add(rr + ',' + cc);
@@ -435,11 +491,35 @@ function bindDocument() {
                             if (isFrozenCol(cIdx)) { skippedTsId = true; continue; }
                             var isArrT2 = typeof isArrayCol === 'function' && isArrayCol(cIdx);
                             var src = grid[i][j];
+                            // 尝试将 src 解析为对象 / 对象数组
+                            var _parsed;
+                            var _strSrc = (src == null) ? '' : String(src);
+                            if (_strSrc && (_strSrc.charAt(0) === '{' || _strSrc.charAt(0) === '[')) {
+                                try { _parsed = JSON.parse(_strSrc); } catch (_ep) { _parsed = undefined; }
+                            }
+                            // detail 列：写入 detail 表
+                            var _isDetailT2 = (typeof isDetailColumn === 'function') && isDetailColumn(cIdx);
+                            if (_isDetailT2 && _parsed && (Array.isArray(_parsed) || typeof _parsed === 'object')) {
+                                var _hasObjP2 = false;
+                                if (Array.isArray(_parsed)) {
+                                    for (var _xpi2 = 0; _xpi2 < _parsed.length; _xpi2++) { if (_parsed[_xpi2] && typeof _parsed[_xpi2] === 'object') { _hasObjP2 = true; break; } }
+                                } else { _hasObjP2 = true; }
+                                if (_hasObjP2 && typeof _writeDetailCellFromRaw === 'function' && _writeDetailCellFromRaw(rIdx, cIdx, _parsed)) {
+                                    changed++;
+                                    continue;
+                                }
+                            }
                             var nv2;
                             if (isArrT2) {
-                                nv2 = (src === '' || src == null) ? [] : String(src).split(/;\s*|\n+/).map(function (x) { return x.trim(); }).filter(function (x) { return x !== ''; });
+                                if (Array.isArray(_parsed)) {
+                                    nv2 = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(_parsed) : _parsed;
+                                } else {
+                                    nv2 = (src === '' || src == null) ? [] : _strSrc.split(/;\s*|\n+/).map(function (x) { return x.trim(); }).filter(function (x) { return x !== ''; });
+                                }
+                            } else if (_parsed && typeof _parsed === 'object') {
+                                nv2 = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(_parsed) : _parsed;
                             } else {
-                                nv2 = (src == null) ? '' : String(src);
+                                nv2 = (src == null) ? '' : _strSrc;
                             }
                             rowi[cIdx] = nv2;
                             S.mods.add(rIdx + ',' + cIdx);
@@ -492,11 +572,15 @@ function bindDocument() {
             openFindPanel();
         }
         // 撤销 / 重做：Ctrl/Cmd+Z 撤销；Ctrl+Y 或 Ctrl/Cmd+Shift+Z 重做
+        // ⚠ macOS 推荐使用 Cmd+Shift+Z 进行重做（部分中文输入法/系统快捷键会拦截 Cmd+Y）。
         if ((e.ctrlKey || e.metaKey) && !e.altKey) {
             var k = (e.key || '').toLowerCase();
             if (k === 'z' && !e.shiftKey) {
                 if (typeof _isAnyModalOpen === 'function' && _isAnyModalOpen()) return;
                 if (S.editing || S._detailEditing) return;
+                // 焦点在原生 input/textarea/contenteditable 中：交给浏览器默认 undo，
+                // 避免与 webview 表格级 undo 双触发。
+                if (typeof _isFocusInForm === 'function' && _isFocusInForm()) return;
                 e.preventDefault();
                 undo();
                 return;
@@ -504,6 +588,7 @@ function bindDocument() {
             if (k === 'y' || (k === 'z' && e.shiftKey)) {
                 if (typeof _isAnyModalOpen === 'function' && _isAnyModalOpen()) return;
                 if (S.editing || S._detailEditing) return;
+                if (typeof _isFocusInForm === 'function' && _isFocusInForm()) return;
                 e.preventDefault();
                 redo();
                 return;
@@ -573,6 +658,21 @@ function bindTable() {
         // 双击行号格（非拖手柄区域）→ 重置行高
         var cbTd = t.closest && t.closest('td.xs-td-cb');
         if (cbTd) { resetRowHeight(_pseudoEvt(e, cbTd)); return; }
+        // 双击列头（非漏斗按钮区域、非角格）→ 自适应列宽（toggle）
+        // 与 Excel 体验一致：列头空白处或文字处双击均可触发，不必精确命中右侧 8px 拖手柄
+        var thHit = t.closest && t.closest('th.xs-th');
+        if (thHit && thHit.hasAttribute('data-col')) {
+            // 排除：漏斗按钮（避免与筛选交互冲突）
+            var inFilter = t.closest && t.closest('.xs-th-filter');
+            if (!inFilter && typeof autoFitColumn === 'function') {
+                // autoFitColumn 内部以 e.currentTarget 的 data-col 为准；
+                // 用列头自身的 .xs-resizer 作为 currentTarget 以拿到 data-col；
+                // 若不存在 resizer，则用 th 本身（th 上同样含 data-col）。
+                var rzInTh = thHit.querySelector('.xs-resizer') || thHit;
+                autoFitColumn(_pseudoEvt(e, rzInTh));
+            }
+            return;
+        }
         // 单元格双击 → 编辑
         var cellEl = t.closest && t.closest('.xs-editable');
         if (cellEl) { onCellDblClick(_pseudoEvt(e, cellEl)); return; }

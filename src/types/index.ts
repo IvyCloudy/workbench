@@ -50,6 +50,11 @@ export interface DetailTableData {
     fieldDisplay: string;
     headers: string[];
     /**
+     * 每个字段的类型信息，用于前端正确初始化新步骤的字段值。
+     * 例如：{ 'ui_expected': 'array', 'operation': 'scalar' }
+     */
+    fieldTypes?: { [field: string]: 'array' | 'object' | 'scalar' };
+    /**
      * 每个主行对应的明细二维数据：
      * - 对象数组：多子行
      * - 嵌套对象：一行子表（headers 为 key 的并集，rowGroups[ri] 长度为 1）

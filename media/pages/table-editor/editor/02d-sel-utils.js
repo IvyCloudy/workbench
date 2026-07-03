@@ -112,6 +112,11 @@ function updateCellSelClasses() {
         if (!rc) {
             if (debug && td.classList.contains('xs-cell-selected')) leakList.push(td.getAttribute('data-row') + ',' + td.getAttribute('data-col'));
             td.classList.remove('xs-cell-selected');
+            // 选区消失 → 清掉选区边框
+            td.style.removeProperty('border-left');
+            td.style.removeProperty('border-right');
+            td.style.removeProperty('border-top');
+            td.style.removeProperty('border-bottom');
             return;
         }
         var r = parseInt(td.getAttribute('data-row'), 10);
@@ -120,9 +125,23 @@ function updateCellSelClasses() {
         if (inRect) {
             td.classList.add('xs-cell-selected');
             if (debug) marked++;
+            // 选区外侧边缘：2px 蓝色实线（collapse 下相邻格共享同一边）
+            var atLeft  = (c === rc.c1);
+            var atRight = (c === rc.c2);
+            var atTop   = (r === rc.r1);
+            var atBot   = (r === rc.r2);
+            td.style.setProperty('border-left',  atLeft  ? '2px solid #1976d2' : '', 'important');
+            td.style.setProperty('border-right', atRight ? '2px solid #1976d2' : '', 'important');
+            td.style.setProperty('border-top',   atTop   ? '2px solid #1976d2' : '', 'important');
+            td.style.setProperty('border-bottom',atBot   ? '2px solid #1976d2' : '', 'important');
         } else {
             if (debug && td.classList.contains('xs-cell-selected')) leakList.push(r + ',' + c);
             td.classList.remove('xs-cell-selected');
+            // 离开选区 → 清掉选区边框
+            td.style.removeProperty('border-left');
+            td.style.removeProperty('border-right');
+            td.style.removeProperty('border-top');
+            td.style.removeProperty('border-bottom');
         }
     });
     if (!debug) return;
@@ -182,7 +201,7 @@ function updateSelectionInfo() {
         return;
     }
     var hasColFilters = S._colFilters && Object.keys(S._colFilters).length > 0;
-    var hasToggleFilter = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly;
+    var hasToggleFilter = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly || S._markedOnly;
     if (S._searchKw || hasColFilters || hasToggleFilter) {
         var matched = countMatchedRows();
         var visibleSelected = 0;
@@ -200,7 +219,7 @@ function countMatchedRows() {
     var skw = (S._searchKw || '').toLowerCase();
     var h = S.data.headers || [];
     var hasColFilters = S._colFilters && Object.keys(S._colFilters).length > 0;
-    var hasToggleFilter = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly;
+    var hasToggleFilter = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly || S._markedOnly;
     if (!skw && !hasColFilters && !hasToggleFilter) return (S.data.rows || []).length;
     // 仅看已删除行：普通行全部隐藏，计数来自 ghost 行
     if (S._deletedOnly) return (S._deletedInfos && S._deletedInfos.length) || 0;
@@ -210,17 +229,19 @@ function countMatchedRows() {
             if (S._failedOnly && S._pushFailedTsIds) {
                 var hdr = S.data.headers || [];
                 var tsCol = hdr.indexOf('testcase_id');
-                if (tsCol >= 0) {
-                    var tsv = row[tsCol];
-                    if (tsv === undefined || tsv === null || tsv === '') return;
-                    if (!S._pushFailedTsIds.has(String(tsv))) return;
-                }
+                var tsvForCount = (tsCol >= 0) ? row[tsCol] : undefined;
+                var matchedById = (tsvForCount !== undefined && tsvForCount !== null && tsvForCount !== '' &&
+                    S._pushFailedTsIds && S._pushFailedTsIds.has(String(tsvForCount)));
+                if (!matchedById) return;
             }
             if (S._modifiedOnly) {
                 if (!(typeof _getModifiedRowSet === 'function' && _getModifiedRowSet().has(ri))) return;
             }
             if (S._addedOnly && S._addedRowSet) {
                 if (!S._addedRowSet.has(ri)) return;
+            }
+            if (S._markedOnly) {
+                if (!(typeof _isRowMarked === 'function' && _isRowMarked(ri))) return;
             }
         }
         if (skw) {
@@ -411,4 +432,24 @@ function updateDeletedFilterBtn() {
     btn.setAttribute('data-tip', tip);
     btn.setAttribute('title', tip);
     if (S._deletedOnly) btn.classList.add('active'); else btn.classList.remove('active');
+}
+
+// 同步"仅看已标记行"按钮的禁用 / 激活状态与计数 tooltip
+function updateMarkedFilterBtn() {
+    var btn = document.getElementById('markedFilterBtn');
+    if (!btn) return;
+    var n = (typeof _countMarkedRows === 'function') ? _countMarkedRows() : 0;
+    if (n === 0) {
+        btn.classList.add('is-disabled');
+        btn.classList.remove('active');
+        btn.setAttribute('data-tip', '暂无已标记行');
+        btn.setAttribute('title', '暂无已标记行');
+        if (S._markedOnly) S._markedOnly = false;
+        return;
+    }
+    btn.classList.remove('is-disabled');
+    var tip = S._markedOnly ? ('已仅看已标记行 (' + n + ')，点击退出') : ('仅看已标记行 (' + n + ')');
+    btn.setAttribute('data-tip', tip);
+    btn.setAttribute('title', tip);
+    if (S._markedOnly) btn.classList.add('active'); else btn.classList.remove('active');
 }

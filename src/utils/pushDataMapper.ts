@@ -41,9 +41,9 @@
  *    type              ← 案例类型（空 → '功能点类'）
  *    priority          ← 优先级
  *    preCondition      ← 前置条件
- *    description(接口) ← 步骤描述（按 # + 换行 拆分为数组；为空抛错）
- *    expected(接口)    ← 预期结果（按 # + 换行 拆分为数组；为空 ['']）
- *    description 与 expected 数组长度相等，按顺序一一对应
+ *    description(接口) ← 步骤描述（解析「步骤x[:：]\n内容」结构，按步骤号提取）
+ *    expected(接口)    ← 预期结果（同上解析，按 description 步骤号对齐，缺步骤填 ''）
+ *    description 与 expected 数组长度始终相等，按步骤号一一对应
  *
  *  ── 通用规则 ─────────────────────────────────────────
  *    1. sourceId（即 testcase_id）必填，缺失时抛错。
@@ -116,6 +116,34 @@ function unescapeCsvCell(v: any): string {
     return s.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\t/g, '\t');
 }
 
+/**
+ * 从「步骤x[:：]\n内容」格式的文本中解析出 {步骤号, 内容} 数组。
+ * 步骤号用于后续 description 与 expected 按序号对齐。
+ */
+function parseStepBlocks(text: string): Array<{ num: number; content: string }> {
+    const blocks: Array<{ num: number; content: string }> = [];
+    const regex = /步骤(\d+)[:：]\s*\r?\n?/g;
+
+    // 先收集所有分隔符的位置和步骤号
+    const delimiters: Array<{ num: number; start: number; end: number }> = [];
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        delimiters.push({ num: parseInt(match[1]), start: match.index, end: match.index + match[0].length });
+    }
+
+    // 提取每段内容
+    for (let i = 0; i < delimiters.length; i++) {
+        const contentStart = delimiters[i].end;
+        const contentEnd = i + 1 < delimiters.length ? delimiters[i + 1].start : text.length;
+        const content = text.slice(contentStart, contentEnd).trim();
+        if (content !== '') {
+            blocks.push({ num: delimiters[i].num, content });
+        }
+    }
+
+    return blocks;
+}
+
 /** 中文 CSV 行 → 接口 caseList[] 项 */
 function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> {
     const sourceId = toStr(row['testcase_id']).trim();
@@ -126,24 +154,20 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
         throw new Error(`案例 [${caseTag}] 缺少 testcase_id，请补全后再推送。`);
     }
 
-    // description：步骤描述 按 # + 换行 拆为字符串数组；为空抛错
+    // description：解析「步骤x[:：]\n内容」格式，按步骤号排序
     const stepsText = unescapeCsvCell(row['步骤描述']);
-    const description: string[] = stepsText
-        .split(/#\r?\n/)
-        .map((s) => s.trim())
-        .filter((s) => s !== '');
+    const descBlocks = parseStepBlocks(stepsText);
+    const description: string[] = descBlocks.map(b => b.content);
     if (description.length === 0) {
         throw new Error(`案例 [${caseTag}] 缺少「步骤描述」内容，请补全后再推送。`);
     }
 
-    // expected：预期结果 按 # + 换行 拆分为数组，每个 # 开头段落为一个元素
+    // expected：解析同格式文本，按 description 的步骤号顺序对齐，
+    //           缺失的步骤填充空字符串，确保 expected 长度始终等于 description
     const expectedText = unescapeCsvCell(row['预期结果']);
-    const expected: string[] = expectedText.trim() === ''
-        ? ['']
-        : expectedText
-            .split(/#\r?\n/)
-            .map((s) => s.trim())
-            .filter((s) => s !== '');
+    const expBlocks = parseStepBlocks(expectedText);
+    const expMap = new Map(expBlocks.map(b => [b.num, b.content]));
+    const expected: string[] = descBlocks.map(b => expMap.get(b.num) ?? '');
 
     // testType：执行方式 → 空或'手工' → '手工'；其他 → '自动化'
     const execMethod = toStr(row['执行方式']).trim();

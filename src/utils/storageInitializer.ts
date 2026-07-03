@@ -31,11 +31,11 @@ interface StorageInitTask {
  */
 export async function initializeStorages(context: vscode.ExtensionContext): Promise<void> {
     const tasks: StorageInitTask[] = [
-        { label: '绑定文件',     eventName: 'bindings',     fn: () => ensureBindingsFile(context) },
-        { label: '高亮存储',     eventName: 'highlight',    fn: () => ensureHighlightFile(context) },
-        { label: '推送失败存储', eventName: 'pushFailure',  fn: () => ensurePushFailureFile(context) },
-        { label: '快照存储',     eventName: 'snapshot',     fn: () => ensureSnapshotFile(context) },
-        { label: '删除行存储',   eventName: 'deletedRows',  fn: () => ensureDeletedRowsFile(context) },
+        { label: '绑定文件',     eventName: 'bindings',     fn: () => ensureBindingsFile(context).then(() => {}) },
+        { label: '高亮存储',     eventName: 'highlight',    fn: () => ensureHighlightFile(context).then(() => {}) },
+        { label: '推送失败存储', eventName: 'pushFailure',  fn: () => ensurePushFailureFile(context).then(() => {}) },
+        { label: '快照存储',     eventName: 'snapshot',     fn: () => ensureSnapshotFile(context).then(() => {}) },
+        { label: '删除行存储',   eventName: 'deletedRows',  fn: () => ensureDeletedRowsFile(context).then(() => {}) },
     ];
 
     for (const task of tasks) {

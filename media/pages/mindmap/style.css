@@ -1,0 +1,16 @@
+/* ============================================================================
+ * media/pages/mindmap/style.css —— 思维导图 webview 样式入口
+ * ----------------------------------------------------------------------------
+ * 原本 1772 行单文件已按功能拆分到 ./styles/* 下：
+ *   layout.css  全局变量 + 工具栏 + 画布 + 状态栏 + 通用浮层 + Emoji 面板 +
+ *               图片 Lightbox + 右侧浮动工具条 + 节点画布兜底
+ *   panels.css  样式面板（Page Style / Topic Style）+ 颜色/形状选择器 +
+ *               Layout 分组卡片 + Skeleton 卡片 + 独立 Layout 面板
+ *   popups.css  图片对话框 + Link 快捷浮层 + More functions 浮层 +
+ *               隐藏 vendor hover 工具栏
+ * 通过 @import 串起来，保证 webview 注入路径无需改动。
+ * ============================================================================ */
+
+@import url('./styles/layout.css');
+@import url('./styles/panels.css');
+@import url('./styles/popups.css');

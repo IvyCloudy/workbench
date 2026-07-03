@@ -25,6 +25,14 @@
           { "filenamePattern": "**/测试任务/*/测试案例/**/*.json" }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "testcaseViewer.mindmapEditor",
+        "displayName": "测试大纲思维导图",
+        "selector": [
+          { "filenamePattern": "**/测试大纲/**/*.md" }
+        ],
+        "priority": "default"
       }
     ],
     "submenus": [
@@ -91,6 +99,21 @@
         "title": "清理文件高亮",
         "icon": "$(clear-all)",
         "category": "测试案例"
+      },
+      {
+        "command": "testcaseViewer.openMindmap",
+        "title": "用思维导图打开",
+        "category": "测试大纲"
+      },
+      {
+        "command": "testcaseViewer.openMindmapAsText",
+        "title": "用 Text Editor 打开",
+        "category": "测试大纲"
+      },
+      {
+        "command": "testcaseViewer.exportMindmapToXmind",
+        "title": "导出为 .xmind",
+        "category": "测试大纲"
       }
     ],
     "menus": {
@@ -103,19 +126,39 @@
       ],
       "explorer/context": [
         {
+          "command": "testcaseViewer.pushTestCaseFromExplorer",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例[\\/].+\\.(csv|yaml|yml|json)$/i",
+          "group": "2_workspace@3"
+        },
+        {
           "submenu": "testcaseViewer.newCase",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例(?:[\\\\/]|$)/i || resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例(?:[\\/]|$)/i",
+          "group": "2_workspace@1"
+        },
+        {
+          "submenu": "testcaseViewer.newCase",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例[\\/].+\\.(csv|yaml|yml|json)$/i",
+          "group": "2_workspace@2"
+        },
+        {
+          "command": "testcaseViewer.createNewTestPoint",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试大纲(?:[\\/]|$)/i",
           "group": "2_workspace@1"
         },
         {
           "command": "testcaseViewer.createNewTestPoint",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试大纲(?:[\\\\/]|$)/i || resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试大纲[\\\\/].+\\.(md|yaml|yml|csv)$/i",
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试大纲[\\/].+\\.(md|yaml|yml|csv)$/i",
           "group": "2_workspace@2"
         },
         {
-          "command": "testcaseViewer.pushTestCaseFromExplorer",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i",
+          "command": "testcaseViewer.openMindmap",
+          "when": "resourcePath =~ /测试大纲[\\/].+\\.md$/i",
           "group": "2_workspace@3"
+        },
+        {
+          "command": "testcaseViewer.exportMindmapToXmind",
+          "when": "resourcePath =~ /测试大纲[\\/].+\\.md$/i",
+          "group": "2_workspace@4"
         }
       ],
       "commandPalette": [
@@ -129,7 +172,19 @@
         },
         {
           "command": "testcaseViewer.createNewTestCaseQuick",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例(?:[\\\\/]|$)/i"
+          "when": "resourcePath =~ /测试任务[\\/][^\\/]+[\\/]测试案例(?:[\\/]|$)/i"
+        },
+        {
+          "command": "testcaseViewer.openMindmap",
+          "when": "resourcePath =~ /测试大纲[\\/].+\\.md$/i"
+        },
+        {
+          "command": "testcaseViewer.openMindmapAsText",
+          "when": "resourcePath =~ /测试大纲[\\/].+\\.md$/i"
+        },
+        {
+          "command": "testcaseViewer.exportMindmapToXmind",
+          "when": "resourcePath =~ /测试大纲[\\/].+\\.md$/i"
         }
       ],
       "testcaseViewer.newCase": [
@@ -206,9 +261,10 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run build:mindmap-vendor && npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "build:mindmap-vendor": "node scripts/build-mindmap-vendor.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -222,6 +278,8 @@
   "devDependencies": {
     "@types/node": "^20.19.41",
     "@types/vscode": "^1.84.0",
+    "esbuild": "^0.24.2",
+    "simple-mind-map": "^0.14.0-fix.2",
     "typescript": "^5.3.0",
     "vitest": "^2.1.9"
   }

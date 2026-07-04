@@ -776,7 +776,20 @@ window.addEventListener('message', function (e) {
         // 仅在数据真正被外部重置/重载时清空 mods；saveHighlight / pushSuccess 这种自反弹场景
         // 数据其实未变，mods 是 webview 端的权威状态（undo/redo 后由 restoreSnapshot 写入），不要被清。
         var _selfReboundReasons = (m.reason === 'saveHighlight' || m.reason === 'pushSuccess');
-        if (!_selfReboundReasons) {
+        // clearAllMods：由后端在"整文件一次性提交"（如资源管理器右键推送）时显式声明，
+        // 强制清空全量本地修改状态（S.mods / _detailModCellKeys / _history / _future / _addedRowSet /
+        // _lastPushBatch），从源头解决 pushSuccess 帧默认"选择性保留 mods"策略与
+        // "整文件推送"语义之间的冲突，无需再靠外部 clearMods 消息夹住中间帧兜底。
+        if (m.clearAllMods === true) {
+            if (S.mods && S.mods.size > 0) S.mods.clear();
+            if (S._detailModCellKeys && S._detailModCellKeys.size > 0) S._detailModCellKeys.clear();
+            if (Array.isArray(S._history)) S._history.length = 0;
+            if (Array.isArray(S._future)) S._future.length = 0;
+            if (S._lastPushBatchTsIds instanceof Set) S._lastPushBatchTsIds.clear();
+            S._lastPushBatchRowIndices = null;
+            if (S._addedRowSet && S._addedRowSet.size > 0) S._addedRowSet.clear();
+            S._addedInfos = [];
+        } else if (!_selfReboundReasons) {
             S.mods.clear();
             S._detailModCellKeys.clear();
         }

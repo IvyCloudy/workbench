@@ -21,6 +21,7 @@ import * as path from 'path';
 import type { DetailTableData } from '../types';
 import { sendTelemetryErrorEvent } from './telemetry';
 import { stackHead } from '../services/utils';
+import { getFailures } from './pushFailureStore';
 
 // ============================================
 // 常量
@@ -30,9 +31,26 @@ const TS_ID_COLUMN = 'testcase_id';
 const TC_NO_COLUMN = 'testCaseNo';
 
 // 样例行的 testcase_id 占位文案（与 fileIdentifier.ts 中 TEMPLATE_EXAMPLE_TS_ID 保持一致）。
-// 样例行是创建测试案例文件时的模板示例行，仅用于明确表格结构，
-// 不应参与推送，也不应被 diff 误判为"新增行"而高亮为绿色。
+// 说明：这些行不参与推送、也不应被 diff 判定为"新增行"，避免叠加绿色 xs-td-push-added 高亮。
+//   - 中文长版：`案例唯一标识，不可修改`
+//   - 中文短版：`案例唯一标识`
+//   - 英文占位：`TESTCASE_ID`（插件自动填充/复制模板时的默认值，大小写不敏感）
 const TEMPLATE_EXAMPLE_TS_ID = '案例唯一标识，不可修改';
+const TEMPLATE_EXAMPLE_TS_ID_SHORT = '案例唯一标识';
+const TESTCASE_ID_PLACEHOLDER = 'TESTCASE_ID';
+
+/**
+ * 判定 testcase_id 是否为"占位/样例文本"——凡此类 tsId 都不算用户新增行。
+ * 与 fileIdentifier.isSampleTsId 语义对齐，但独立实现避免跨模块循环依赖。
+ */
+function isPlaceholderTsId(id: string): boolean {
+    if (!id) return false;
+    const t = id.trim();
+    if (!t) return false;
+    if (t === TEMPLATE_EXAMPLE_TS_ID || t === TEMPLATE_EXAMPLE_TS_ID_SHORT) return true;
+    if (t.toUpperCase() === TESTCASE_ID_PLACEHOLDER) return true;
+    return false;
+}
 
 // 快照格式版本标记：\x01 分隔主表单元格序列化 与 明细数据签名。
 // 旧格式快照不含 \x01，diffPushSnapshot 可据此做向后兼容处理。
@@ -163,9 +181,17 @@ export async function ensureSnapshotFile(context: vscode.ExtensionContext): Prom
  * - 若提供 pushedTsIds，则仅更新已推送行的快照，其他行保持旧基线不变。
  * - 若未提供 pushedTsIds（全量保存），则覆盖该文件的所有快照。
  * - 明细表数据（detailTables.rawRowGroups）也纳入快照，确保嵌套对象/数组内容变化可被 diff 检测。
+ *
+ * ⚠️ pushedTsIds 增量模式已被弃用（当前无调用方使用，保留仅用于向后兼容 / 未来场景）：
+ *   历史 bug —— 右键推送曾走增量模式仅覆盖成功行 tsId 的快照，导致
+ *   「用户先编辑了失败行 → 触发推送 → 失败行的旧快照残留」，弹窗关闭后
+ *   diff 拿"旧快照 vs 新磁盘"命中"1 行修改"，出现假阳性黄色高亮。
+ *   现两条推送路径均改为全量刷新（等价于"用户认可当前磁盘状态为新基线"），
+ *   失败行的红色高亮由 pushFailures 独立管理。
+ *
  * @param filePath    文件绝对路径
  * @param tableData   当前文件解析后的 { headers, rows, detailTables? }
- * @param pushedTsIds 本次推送成功的 testcase_id 集合（可选，用于增量更新）
+ * @param pushedTsIds 本次推送成功的 testcase_id 集合（@deprecated 详见上文）
  */
 export async function savePushSnapshot(
     filePath: string,
@@ -187,6 +213,10 @@ export async function savePushSnapshot(
     rows.forEach((row, rowIdx) => {
         const id = row[tsIdIdx] != null ? String(row[tsIdIdx]) : '';
         if (!id) return;
+        // 样例/占位行（'案例唯一标识[，不可修改]' / 'TESTCASE_ID'）不参与推送，
+        // 也就不应写入推送快照——否则后续 diff 会把用户修改样例文本判为「变化」触发黄色高亮，
+        // 与「样例行仅显示样例灰底、不参与任何差异高亮」的产品语义相悖。
+        if (isPlaceholderTsId(id)) return;
         // 增量模式：只更新已推送的行，未推送行 skip（保留旧快照）
         if (pushedTsIds && !pushedTsIds.has(id)) return;
         // 标准化行数据：以 headers 长度为准，防止 CSV 解析时尾随空字段导致长度不一致
@@ -198,6 +228,12 @@ export async function savePushSnapshot(
         const detailSig = buildRowDetailSignature(tableData, rowIdx);
         snapshots[id] = cells.join('\x00') + (detailSig ? DETAIL_SEP + detailSig : '');
     });
+
+    // 兜底清理：历史遗留脏数据可能已把样例行的 tsId 写入快照。
+    // 每次保存都顺手把这类残留剔除，避免长期存在导致 diff 一直误报。
+    for (const key of Object.keys(snapshots)) {
+        if (isPlaceholderTsId(key)) delete snapshots[key];
+    }
 
     // 增量模式下，已删除行的快照保留不清理，等待显式同步后再清除
     // （参见 clearDeletedSnapshots / deletedRowsStore）
@@ -261,6 +297,11 @@ export function diffPushSnapshot(
     const tcIdx = headers.indexOf(TC_NO_COLUMN);
     if (tsIdIdx < 0) return null;
 
+    // 加载当前文件的失败 tsId 集合。用于阻断"推送失败的新增行"再次被判定为新增行——
+    // 否则前端会同时叠加红色（xs-tr-push-failed）与绿色（xs-td-push-added）高亮。
+    const failuresMap = getFailures(filePath) || {};
+    const hasFailedRecord = (id: string) => !!(id && Object.prototype.hasOwnProperty.call(failuresMap, id));
+
     // 构建 detail field → colIdx 快速索引
     const detailColIdxByField = new Map<string, number>();
     const detailTables = tableData.detailTables;
@@ -280,16 +321,35 @@ export function diffPushSnapshot(
         const id = row[tsIdIdx] != null ? String(row[tsIdIdx]) : '';
         const tcNo = tcIdx >= 0 && row[tcIdx] != null ? String(row[tcIdx]) : '';
         if (id) currIdSet.add(id);
+        // 样例/占位行不参与任何差异高亮：
+        //   - 不作为 addedInfos（即使快照中不存在，也不算「新增行」）；
+        //   - 不作为 changedRows（即使用户改了样例文本，也不显示黄色单元格高亮）；
+        //   - 也不参与后续的删除判定（因为样例行永远不会被写入快照，见 savePushSnapshot）。
+        // 与 fileIdentifier.isSampleTsId 的产品语义一致：样例行只显示样例灰底，其他高亮全部让位。
+        if (id && isPlaceholderTsId(id)) return;
         // 检测新增行：当前数据中有但快照中不存在的行。
         // 防御 1：已有 testCaseNo 说明已被后端确认并推送过，即使快照中找不到（如快照损坏
         // 或 tsId 被意外重新生成），也不应被标为新增行，避免已推送案例被误标绿。
-        // 防御 2：样例行（testcase_id 为占位文案）从语义上就不是"用户新增"的行，而是文件创建时的
-        // 模板示例，同样不应被标为新增行（它也不会参与推送，快照中不会有其记录）。
-        if (id && !(id in snapshots) && !tcNo && id.trim() !== TEMPLATE_EXAMPLE_TS_ID) {
+        // 防御 2：占位/样例行（testcase_id 为 '案例唯一标识[，不可修改]' 或 'TESTCASE_ID'）
+        // 从语义上就不是"用户新增"的行，而是模板/占位数据，同样不应被标为新增行——
+        // 否则会与 pushFailureStore 的红色失败标记叠加，造成红+绿双色高亮。
+        // 防御 3：该 tsId 已存在推送失败记录（说明它是"已尝试推送但失败"，不是"未推送过的新增"），
+        // 让红色失败标记独占，避免绿色新增高亮清不掉。用户手动修改数据后（触发去失败标记的
+        // 用户流程），该行会重新参与新增判定。
+        if (id && !(id in snapshots) && !tcNo && !isPlaceholderTsId(id) && !hasFailedRecord(id)) {
             addedInfos.push({ rowIndex: ri, tsId: id });
             return;
         }
         if (!id) return;
+
+        // ---- 说明：失败行也参与 changedRows 判定 ----
+        // 早期曾在此处加过一刀切「if (hasFailedRecord(id)) return;」以避免弹窗关闭后
+        // 视觉错乱，但这与前端 02a-render.js 的时间戳竞争机制矛盾：
+        //   - _highlightedTime（save 后打点）一般 >= rowFailTime（推送时打点），
+        //     前端会以黄色（xs-td-push-updated）覆盖红底，符合"用户新的编辑意图应有反馈"；
+        //   - 若时间反过来（推送晚于修改），前端会保留 xs-td-overrides-fail 让红底继续生效。
+        // 因此不在扩展端 diff 阶段剔除失败行，让前端按时间戳自主竞争，避免"失败行改后
+        // 无黄色高亮"的死角。
 
         // 1) 构建当前数据的主表单元格序列化
         const cells = headers.map((_, i) => {
@@ -377,6 +437,8 @@ export function diffPushSnapshot(
     const deletedInfos: DeletedRowInfo[] = [];
     const snapshotIds = Object.keys(snapshots);
     for (const id of snapshotIds) {
+        // 防御历史脏快照：若快照里遗留样例行 tsId，也不判为「删除」，避免误绘幽灵行
+        if (isPlaceholderTsId(id)) continue;
         if (!currIdSet.has(id)) {
             // 新旧格式兼容：先剥离明细签名再取主表单元格，避免末项混入 \x01 后缀
             const raw = snapshots[id];

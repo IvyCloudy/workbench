@@ -21,22 +21,57 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { getNonce, isInQualifiedDir, buildErrorHtml, FILE_PATTERNS, TS_ID_COLUMN, escapeHtml } from '../services/utils';
 import { getCurrentTaskInfo, type CurrentTask } from '../utils/commands';
-import { showPushErrorModal, showPushResult, showPushDone, showSaveResult } from '../utils/message';
+import { showPushErrorModal, showPushResult, showPushDone, showSaveResult, showModal } from '../utils/message';
 import { setHighlight, clearHighlight } from '../utils/highlightStore';
-import { getFailures, persistPushFailures } from '../utils/pushFailureStore';
-import { savePushSnapshot, diffPushSnapshot, type RowDiff, type DiffResult, type DeletedRowInfo, type AddedRowInfo } from '../utils/pushSnapshotStore';
+import { getFailures } from '../utils/pushFailureStore';
+import { diffPushSnapshot, type RowDiff, type DiffResult, type DeletedRowInfo, type AddedRowInfo } from '../utils/pushSnapshotStore';
 import { markDeletedRows } from '../utils/deletedRowsStore';
 import { getMarks, setMarks, clearMarks } from '../utils/markStore';
-import { pushTestCase } from '../services/http';
-import { parsePushResponse } from '../utils/pushResponse';
-import { createParser, ensureTrackingColumns, applyTestCaseNos, type FileParser, type FileType } from '../parsers';
+import { createParser, ensureTrackingColumns, type FileParser, type FileType } from '../parsers';
 import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
-import { getHeaderLabels, onHeaderLabelsChange, normalizePushData } from '../utils/headerLabels';
+import { getHeaderLabels, onHeaderLabelsChange } from '../utils/headerLabels';
 import { stackHead } from '../services/utils';
-import { filterTemplateExampleRows, TEMPLATE_EXAMPLE_TS_ID, isCreatedByCommand, isSampleTsId } from '../utils/fileIdentifier';
+import { runPush } from '../handlers/pushCore';
 
 // 重新导出工具，便于子类使用
 export { isInQualifiedDir, FILE_PATTERNS };
+
+// ============================================
+// 内部工具：把 addedInfos 展开为 (rowIdx, colIdx) 单元格清单
+// ============================================
+/**
+ * 把 diffPushSnapshot 返回的 addedInfos（新增行）展开为逐单元格清单，
+ * 用于把新增行也纳入 highlightedCells.cells，让新增行显示与"修改行"一致的黄色单元格高亮。
+ *
+ * 规则：
+ *   - 跳过 testCaseNo 列（推送后台自动回写，不算用户输入）；
+ *   - 跳过空值单元格（避免整行满行黄底、视觉噪声）；
+ *   - 结果与 changedRows 展开的 flatCells 结构完全一致：Array<[rowIdx, colIdx]>。
+ */
+function expandAddedRowsToCells(
+    addedInfos: AddedRowInfo[],
+    tableData: { headers: string[]; rows: any[][] } | null | undefined,
+): Array<[number, number]> {
+    if (!addedInfos || addedInfos.length === 0 || !tableData) return [];
+    const headers = tableData.headers || [];
+    const rows = tableData.rows || [];
+    const tcIdx = headers.indexOf('testCaseNo');
+    const out: Array<[number, number]> = [];
+    for (const info of addedInfos) {
+        const ri = info.rowIndex;
+        const row = rows[ri];
+        if (!Array.isArray(row)) continue;
+        for (let ci = 0; ci < headers.length; ci++) {
+            if (ci === tcIdx) continue;
+            const v = ci < row.length ? row[ci] : undefined;
+            if (v == null) continue;
+            const s = String(v);
+            if (s === '') continue;
+            out.push([ri, ci]);
+        }
+    }
+    return out;
+}
 
 // ============================================
 // 推送策略
@@ -84,34 +119,14 @@ export class PushViaHttpClient implements PushStrategy {
         extensionContext?: vscode.ExtensionContext
     ): Promise<void> {
         if (!extensionContext) throw new Error('ExtensionContext 不可用，无法推送');
-        const _pushStart = Date.now();
+        const baseName = path.basename(ctx.filePath);
         const _ext = path.extname(ctx.filePath).toLowerCase();
-        const _rowCount = Array.isArray(data) ? data.length : 0;
-        sendTelemetryEvent('editorPush.start', { ext: _ext, totalRows: String(_rowCount) });
 
-        // 任务信息统一由 getCurrentTaskInfo 提供：未绑定一律拒绝推送
-        const currentTask = await getCurrentTaskInfo(ctx.filePath);
-        if (!currentTask.bind) {
-            sendTelemetryErrorEvent('editorPush.failed', {
-                ext: _ext,
-                returnCode: 'UNBOUND',
-                totalRows: String(_rowCount),
-                costMs: String(Date.now() - _pushStart),
-            });
-            showPushErrorModal(webviewPanel, path.basename(ctx.filePath),
-                '未绑定任务，无法推送。请在测试任务插件绑定后再试。');
-            return;
-        }
-        const taskInfo = {
-            testTaskNo: currentTask.taskInfo.testTaskNo || '',
-            subTestTaskId: currentTask.taskInfo.subTestTaskId || '',
-        };
-
-        // 重新解析文件获取原始结构化数据。
+        // ---- 编辑器场景独有：用文件源数据覆盖前端渲染文本 ----
         // 前端 table 中嵌套对象/数组字段被渲染为显示文本（如 "[2 项]"），
         // 但文件落盘时 parser.save 通过 reconstructDetail 保留了正确结构。
         // 此处重新 parse 并用 testcase_id 匹配，确保推送的是原始数据而非显示文本。
-        let pushData: any[] = data;
+        let pushData: any[] = Array.isArray(data) ? data : [];
         try {
             const parsed = await ctx.session.parser.parse(ctx.filePath);
             const sourceRecords: any[] = Array.isArray(parsed.sourceData)
@@ -136,242 +151,102 @@ export class PushViaHttpClient implements PushStrategy {
             }
         } catch (parseErr: any) {
             console.warn('[推送] 重新解析文件失败，使用前端数据兜底:', parseErr?.message || parseErr);
-                            sendTelemetryErrorEvent('editorPush.reparseFailed', { ext: _ext, errorMessage: String(parseErr?.message || String(parseErr)).slice(0, 500), stackHead: stackHead(parseErr) });
+            sendTelemetryErrorEvent('editorPush.reparseFailed', { ext: _ext, errorMessage: String(parseErr?.message || String(parseErr)).slice(0, 500), stackHead: stackHead(parseErr) });
         }
 
-        // 校验：testcase_id 为占位值 TESTCASE_ID 时不允许推送
-        // 注意：编辑器内推送时，pushData 只包含前端选中行（可能是主表任意子集），
-        // 因此不能用 i+1 作为行号；必须使用前端传来的 ctx.pushIndexToRow[i]（
-        // payload 数组下标 -> 主表 1-based 行号），才能对应主表实际显示行号，
-        // 保证弹窗中「第 N 行」点击跳转能落到正确行。
-        // 说明：此处不用 rowIndexMap（tsId->行号），因为占位场景多行 tsId 相同会互相覆盖。
-        // 中文样例占位（'案例唯一标识，不可修改' / '案例唯一标识'）不走此分支，
-        // 由下方 filterTemplateExampleRows 静默过滤；只有全部选中行都是样例时才提示"为样例数据"。
-        if (Array.isArray(pushData)) {
-            const placeholderIds: Array<{ rowIndex: number; value: string }> = [];
-            pushData.forEach((rec: any, i: number) => {
-                const tsId = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]).trim() : '';
-                if (tsId.toUpperCase() === 'TESTCASE_ID') {
-                    // 优先使用前端提供的下标->行号映射，兜底使用 i+1
-                    const mappedRow = (Array.isArray(ctx.pushIndexToRow) && typeof ctx.pushIndexToRow[i] === 'number')
-                        ? ctx.pushIndexToRow[i]
-                        : (i + 1);
-                    placeholderIds.push({ rowIndex: mappedRow, value: tsId });
-                }
-            });
-            if (placeholderIds.length > 0) {
-                const baseName = path.basename(ctx.filePath);
-                sendTelemetryEvent('editorPush.aborted', { reason: 'placeholderTestcaseId', ext: _ext, count: String(placeholderIds.length) });
-                // 构造失败列表：使用 showPushResult 以启用弹窗中"第 N 行"可点击跳转到主表对应行
-                const placeholderFailures = placeholderIds.map(item => ({
-                    tsId: item.value,
-                    reason: 'testcase_id 为占位值 TESTCASE_ID，请修改为真实的案例 ID 后再推送',
-                    rowIndex: item.rowIndex,
-                }));
-                showPushResult(webviewPanel, baseName, 0, placeholderFailures, placeholderIds.length);
-                webviewPanel.webview.postMessage({ type: 'pushError', message: 'testcase_id 为占位值 TESTCASE_ID，不允许推送' });
-                // 持久化失败标记：以 testcase_id 为 key 写盘，确保关闭弹窗/重开文件后失败行仍保持红色高亮
-                // 说明：所有占位行 tsId 均为字面量 'TESTCASE_ID'（大小写归一），前端按 tsId 匹配即可命中所有该值的行
-                try {
-                    const rowsForPersist = Array.isArray(pushData) ? pushData : [];
-                    await persistPushFailures(ctx.filePath, rowsForPersist, placeholderFailures, []);
-                } catch (err: any) {
-                    console.error('[推送] 持久化占位失败标记失败:', err?.message || err);
-                }
-                return;
-            }
-        }
-
-        // 静默过滤中文样例占位行（'案例唯一标识，不可修改' / '案例唯一标识'）：
-        // 无论文件是否通过插件命令创建，这些行都不参与推送，也无需在多选中提示；
-        // 若过滤后仍剩余业务数据，正常推送；若全部选中行都是样例，则提示"为样例数据"，
-        // 并按具体行号列出（弹窗中"第 N 行"可点击跳转到主表对应行）。
-        const beforeFilterLen = Array.isArray(pushData) ? pushData.length : 0;
-        // 先按原始 pushData 顺序收集样例行的主表行号，再执行过滤，保证行号与主表原始行号一致
-        // 编辑器内推送 pushData 只包含选中行，因此不能用 i+1 作为主表行号；
-        // 必须使用前端传来的 ctx.pushIndexToRow[i]（1-based 主表行号），与占位 TESTCASE_ID 校验保持一致
-        const sampleRowIndices: number[] = [];
-        if (Array.isArray(pushData)) {
-            for (let i = 0; i < pushData.length; i++) {
-                const rec: any = pushData[i];
-                const tsId = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]).trim() : '';
-                if (isSampleTsId(tsId)) {
-                    const mappedRow = (Array.isArray(ctx.pushIndexToRow) && typeof ctx.pushIndexToRow[i] === 'number')
-                        ? ctx.pushIndexToRow[i]
-                        : (i + 1);
-                    if (typeof mappedRow === 'number' && mappedRow > 0) sampleRowIndices.push(mappedRow);
-                }
-            }
-        }
-        pushData = filterTemplateExampleRows(ctx.filePath, pushData);
-        const afterFilterLen = Array.isArray(pushData) ? pushData.length : 0;
-        if (beforeFilterLen > 0 && afterFilterLen === 0) {
-            sendTelemetryEvent('editorPush.aborted', { reason: 'onlyTemplateExample', ext: _ext, count: String(sampleRowIndices.length) });
-            const baseName = path.basename(ctx.filePath);
-            // 构造失败列表：每个样例行独立展示，前端弹窗支持"第 N 行"点击跳转到主表对应行
-            const sampleFailures = sampleRowIndices.map(rowIndex => ({
-                tsId: TEMPLATE_EXAMPLE_TS_ID,
-                reason: '为样例数据，不允许推送。请修改"案例唯一标识，不可修改"等占位字段为真实数据后再试',
-                rowIndex,
-            }));
-            showPushResult(webviewPanel, baseName, 0, sampleFailures, sampleRowIndices.length);
-            webviewPanel.webview.postMessage({ type: 'pushError', message: '为样例数据，不允许推送' });
-            return;
-        }
-        if (beforeFilterLen !== afterFilterLen) {
-            console.log(`[推送] 已过滤 ${beforeFilterLen - afterFilterLen} 行模板示例数据`);
-            sendTelemetryEvent('editorPush.skipTemplateExample', {
-                ext: _ext,
-                skipped: String(beforeFilterLen - afterFilterLen),
-            });
-        }
-
-        const pushSource = isCreatedByCommand(ctx.filePath) ? 'testAgentMA' : 'testAgent';
-        const result = await pushTestCase(extensionContext, normalizePushData(pushData), taskInfo, path.basename(ctx.filePath), pushSource);
-        if (result.returnCode !== 'SUC0000') {
-            showPushErrorModal(webviewPanel, path.basename(ctx.filePath), result.errorMsg || '推送失败');
-            webviewPanel.webview.postMessage({ type: 'pushError', message: result.errorMsg || '推送失败' });
-            sendTelemetryErrorEvent('editorPush.failed', {
-                ext: _ext,
-                returnCode: result.returnCode || '',
-                totalRows: String(_rowCount),
-                costMs: String(Date.now() - _pushStart),
-            });
-            return;
-        }
-
-        // 解析后端返回：type=1 成功，data 即新的 testCaseNo；type=2 失败，data 为错误原因
-        const { successMappings, failures: rawFailures } = parsePushResponse(result.body, pushData);
-        // failures 同时记下在 body 中的索引，用于兜底按 pushIndexToRow / pushData 顺序定位行号
-        const failures: Array<{ tsId: string; reason: string; bodyIndex: number }> = rawFailures;
-
-        // 防御埋点：样例行按设计不应进入后端推送结果。一旦在 successMappings/failures 中出现样例 tsId，
-        // 说明过滤逻辑被绕过（文件标识丢失 / 上下文变量异常等），需以该事件快速定位问题。
-        const leakedSuccess = successMappings.filter(m => m && isSampleTsId(m.tsId)).length;
-        const leakedFailure = failures.filter(f => f && isSampleTsId(f.tsId)).length;
-        if (leakedSuccess > 0 || leakedFailure > 0) {
-            sendTelemetryErrorEvent('editorPush.templateExampleLeaked', {
-                ext: _ext,
-                leakedSuccess: String(leakedSuccess),
-                leakedFailure: String(leakedFailure),
-            });
-        }
-
-        // 成功项：扩展端按 testcase_id 回写 testCaseNo 到原文件。
-        // testCaseNo 落盘后刷新前端数据 —— 但有失败项时跳过刷新，
-        // 避免刷新触发的 renderTable() 擦除 showPushResult 设置的失败行高亮。
-        if (successMappings.length > 0) {
-            try {
-                const parsed = await ctx.session.parser.parse(ctx.filePath);
-                ensureTrackingColumns(parsed.tableData, parsed.sourceData);
-                applyTestCaseNos(parsed.tableData, parsed.sourceData, successMappings);
-                // 写盘前后打时间戳，防止 self-save 触发的 fsWatcher 在 pushSuccess 刷新期间覆盖高亮状态
-                ctx.markSelfSave?.();
-                await ctx.session.parser.save(ctx.filePath, parsed.tableData, parsed.sourceData);
-                ctx.markSelfSave?.();
-                // 推送完成后全量更新快照基线（无论成功/失败），
-                // 使下次 diff 不再标记本次推送行为为修改。
-                // 失败行的高亮由 pushFailures 机制独立管理，不依赖快照差异。
-                // 注意：必须全量而非增量更新，否则未推送但已编辑的行会保留旧快照，
-                // 导致下次 diff 误判为"修改"高亮。样例行也会一并写入基线，
-                // 避免被 diff 误判为新增行（绿色高亮）。
-                await savePushSnapshot(ctx.filePath, parsed.tableData);
-                // 快照已是全量基线，旧高亮信息无需保留 → 清空
-                ctx.session.highlightedCells = null;
-                await clearHighlight(ctx.filePath);
-                // 落盘后让缓存失效，下次可见切换 / 手动刷新时自动重读最新文件
-                ctx.session.cachedTableData = null;
-                ctx.session.originalSourceData = parsed.sourceData;
-                if (failures.length === 0) {
-                    await ctx.refresh('pushSuccess');
-                }
-            } catch (err: any) {
-                console.error('[推送] testCaseNo 回写失败:', err?.message || err);
-                sendTelemetryErrorEvent('editorPush.writeBackFailed', { ext: _ext, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
-            }
-        } else if (failures.length > 0) {
-            // 全部推送失败：全量更新快照基线，避免未推送但已编辑的行保留旧快照，
-            // 导致下次 diff 误判为"修改"高亮。失败行高亮由 pushFailures 独立管理。
-            try {
-                const parsed = await ctx.session.parser.parse(ctx.filePath);
-                // 全量更新快照基线（含样例行），避免被 diff 误判为新增行/修改行
-                await savePushSnapshot(ctx.filePath, parsed.tableData);
-                ctx.session.highlightedCells = null;
-                await clearHighlight(ctx.filePath);
-                ctx.session.cachedTableData = null;
-            } catch (err: any) {
-                console.error('[推送] 全部失败，快照更新失败:', err?.message || err);
-                sendTelemetryErrorEvent('editorPush.allFailSnapshotFailed', { ext: _ext, errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
-            }
-        }
-
-        // 失败项按 testcase_id 反查行号，统一通过 webview 弹窗展示（与右键文件推送一致）
-        // 行号定位优先级：
-        //   1) frontRowIndexMap[tsId]：前端基于真实表格 tsId -> 行号 的映射（最准确）
-        //   2) frontPushIndexToRow[bodyIndex]：前端按 payload 数组下标 -> 表格行号（兜底，
-        //      解决 testcase_id 为空时无法用 tsId 反查的场景；依赖后端 body 顺序与 payload 一致）
-        //   3) tsIdToRowIndex[tsId]：扩展端基于 pushData 推送数组下标计算
-        //   4) 都拿不到则 rowIndex=undefined，前端显示 "(无)" 不可跳转
-        const frontRowIndexMap = ctx.rowIndexMap || {};
-        const frontPushIndexToRow: number[] = Array.isArray(ctx.pushIndexToRow) ? ctx.pushIndexToRow : [];
-        const tsIdToRowIndex = new Map<string, number>();
-        if (Array.isArray(pushData)) {
-            pushData.forEach((rec: any, i: number) => {
-                const id = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]) : '';
-                if (id) tsIdToRowIndex.set(id, i);
-            });
-        }
-        const failureItems = failures.map(f => {
-            let rowIndex: number | undefined;
-            const front = frontRowIndexMap[f.tsId];
-            if (typeof front === 'number' && front > 0) {
-                rowIndex = front;
-            } else if (
-                f.bodyIndex >= 0 &&
-                f.bodyIndex < frontPushIndexToRow.length &&
-                typeof frontPushIndexToRow[f.bodyIndex] === 'number' &&
-                frontPushIndexToRow[f.bodyIndex] > 0
-            ) {
-                rowIndex = frontPushIndexToRow[f.bodyIndex];
-            } else if (f.tsId && tsIdToRowIndex.has(f.tsId)) {
-                rowIndex = tsIdToRowIndex.get(f.tsId)! + 1;
-            }
-            return { tsId: f.tsId, reason: f.reason, rowIndex };
+        // 委托给公共核心 handlers/pushCore.ts 的 runPush：
+        // - 校验/过滤/后端调用/回写快照/汇总失败等重合逻辑全部在核心内完成；
+        // - 编辑器场景独有的 UI 反馈（webview postMessage / 高亮清空 / 刷新 webview）通过 hooks 注入。
+        // 编辑器内推送 pushData 仅包含前端选中行，因此 resolveRowIndex 必须使用 ctx.pushIndexToRow[i]（
+        // payload 数组下标 -> 主表 1-based 行号）；缺失时兜底 i+1，与占位 TESTCASE_ID 校验保持一致。
+        await runPush({
+            extensionContext,
+            filePath: ctx.filePath,
+            rows: pushData,
+            resolveRowIndex: (i: number) => {
+                const arr = ctx.pushIndexToRow;
+                if (Array.isArray(arr) && typeof arr[i] === 'number' && arr[i] > 0) return arr[i];
+                return i + 1;
+            },
+            frontRowIndexMap: ctx.rowIndexMap,
+            frontPushIndexToRow: ctx.pushIndexToRow,
+            parser: ctx.session.parser,
+            telemetryPrefix: 'editorPush',
+            hooks: {
+                onUnbound: () => {
+                    showPushErrorModal(webviewPanel, baseName,
+                        '未绑定任务，无法推送。请在测试任务插件绑定后再试。');
+                    webviewPanel.webview.postMessage({ type: 'pushError', message: '未绑定任务，无法推送' });
+                },
+                onPlaceholderTestcaseId: (failures) => {
+                    // 弹窗展示"第 N 行"可点击跳转 + 通知前端解锁按钮 UI
+                    showPushResult(webviewPanel, baseName, 0, failures, failures.length);
+                    webviewPanel.webview.postMessage({ type: 'pushError', message: 'testcase_id 为占位值 TESTCASE_ID，不允许推送' });
+                },
+                onEmptyTestcaseId: (failures) => {
+                    // testcase_id 为空的行：与占位类校验展示一致，仅文案不同
+                    showPushResult(webviewPanel, baseName, 0, failures, failures.length);
+                    webviewPanel.webview.postMessage({ type: 'pushError', message: 'testcase_id 不能为空' });
+                },
+                onOnlySampleRows: (failures) => {
+                    showPushResult(webviewPanel, baseName, 0, failures, failures.length);
+                    webviewPanel.webview.postMessage({ type: 'pushError', message: '为样例数据，不允许推送' });
+                },
+                onTaskInfoFailed: (errorMsg) => {
+                    // taskInfo 拉取异常（网络/后端 5xx）：告知用户并解锁按钮
+                    showPushErrorModal(webviewPanel, baseName, errorMsg);
+                    webviewPanel.webview.postMessage({ type: 'pushError', message: errorMsg });
+                },
+                onBackendError: (errorMsg) => {
+                    showPushErrorModal(webviewPanel, baseName, errorMsg);
+                    webviewPanel.webview.postMessage({ type: 'pushError', message: errorMsg });
+                },
+                onUnexpectedError: (errorMsg) => {
+                    // runPush 顶层未处理异常兜底：确保按钮解锁 + 用户看到失败原因
+                    showPushErrorModal(webviewPanel, baseName, errorMsg);
+                    webviewPanel.webview.postMessage({ type: 'pushError', message: errorMsg });
+                },
+                onWriteBackFailed: (errorMsg) => {
+                    // 后端已成功但 testCaseNo 未能写回：追加一个警告弹窗，避免用户无感知重复推送。
+                    // 注意：此处不发 pushError，避免覆盖后续 onComplete 的成功摘要。
+                    showModal(webviewPanel, 'warning', '案例编号回写失败',
+                        `${baseName}\n\n后端推送已成功，但案例编号未能写回本地文件。请稍后手动刷新或重新打开文件。\n\n错误信息：${errorMsg}`);
+                },
+                markSelfSave: () => ctx.markSelfSave?.(),
+                afterWriteBack: async ({ parsedSourceData, hasFailure }) => {
+                    // 快照已是全量基线，旧高亮信息无需保留 → 清空
+                    ctx.session.highlightedCells = null;
+                    await clearHighlight(ctx.filePath);
+                    // 落盘后让缓存失效，下次可见切换 / 手动刷新时自动重读最新文件
+                    ctx.session.cachedTableData = null;
+                    ctx.session.originalSourceData = parsedSourceData;
+                    // 有失败项时跳过刷新，避免刷新触发的 renderTable() 擦除失败行高亮
+                    if (!hasFailure) {
+                        await ctx.refresh('pushSuccess');
+                    }
+                },
+                onAllFailedSnapshot: async () => {
+                    // 全部推送失败：核心已更新快照基线，此处只需清空前端高亮状态
+                    ctx.session.highlightedCells = null;
+                    await clearHighlight(ctx.filePath);
+                    ctx.session.cachedTableData = null;
+                },
+                onComplete: ({ successCount, failures, total }) => {
+                    // 编辑器内推送：直接复用前端 webview 弹窗（同一个 panel 内嵌）
+                    showPushResult(webviewPanel, baseName, successCount, failures, total);
+                    showPushDone(webviewPanel);
+                    webviewPanel.webview.postMessage({
+                        type: 'pushResult',
+                        fileName: baseName,
+                        successCount,
+                        failures,
+                        total,
+                    });
+                    // 通知前端推送流程已完成（用于隐藏 loading 之类的状态）
+                    webviewPanel.webview.postMessage({ type: 'pushDone' });
+                },
+            },
         });
-
-        const total = Array.isArray(pushData) ? pushData.length : (successMappings.length + failures.length);
-
-        showPushResult(webviewPanel, path.basename(ctx.filePath), successMappings.length, failureItems, total);
-        showPushDone(webviewPanel);
-        // 编辑器内推送：直接复用前端 webview 弹窗（同一个 panel 内嵌），不再调用 showPushResult 走独立 webview
-        webviewPanel.webview.postMessage({
-            type: 'pushResult',
-            fileName: path.basename(ctx.filePath),
-            successCount: successMappings.length,
-            failures: failureItems,
-            total,
-        });
-
-        // 持久化推送失败标记：以 testcase_id（行稳定唯一标识）为 key，关闭/重开文件后高亮恢复
-        try {
-            const rows = Array.isArray(pushData) ? pushData : [];
-            await persistPushFailures(ctx.filePath, rows, failures, successMappings);
-        } catch (err: any) {
-            console.error('[推送] 持久化失败标记失败:', err?.message || err);
-        }
-
-        // 埋点：推送结果汇总
-        sendTelemetryEvent('editorPush.complete', {
-            ext: _ext,
-            pushResult: failures.length === 0 ? 'allSuccess' : (successMappings.length === 0 ? 'allFail' : 'partial'),
-            totalRows: String(total),
-            successRows: String(successMappings.length),
-            failedRows: String(failures.length),
-            costMs: String(Date.now() - _pushStart),
-        });
-
-        // 通知前端推送流程已完成（用于隐藏 loading 之类的状态）
-        webviewPanel.webview.postMessage({ type: 'pushDone' });
     }
 }
 
@@ -384,11 +259,24 @@ export class PushViaHttpClient implements PushStrategy {
  * - panel：webview panel 实例
  * - ready：webview 收到 init 消息后 resolve 的 Promise（前端就绪）
  * - markReady：在 init 消息处理处调用，将 ready resolve
+ * - refresh：由外部（如资源管理器右键推送）触发的重新解析 + 差异比对刷新（等同 pushDataToWebview）
+ * - markSelfSave：由外部（如右键推送写盘前后）打自保存时间戳，避免 fsWatcher 自反弹
+ * - clearHighlightState：由外部（推送成功/全部失败）清空前端高亮基线（session.highlightedCells）
  */
 interface PanelEntry {
     panel: vscode.WebviewPanel;
     ready: Promise<void>;
     markReady: () => void;
+    /**
+     * 主动触发一次数据推送。
+     * @param clearAllMods true 时在 full-data 消息中携带 clearAllMods 标志，前端会
+     *   无条件清空 S.mods / _detailModCellKeys / _history / _future / _addedRowSet /
+     *   _lastPushBatch，用于"整文件一次性提交"语义（如资源管理器右键推送），
+     *   避免与 pushSuccess 帧默认的"选择性保留 mods"策略冲突。
+     */
+    refresh?: (reason: string, force?: boolean, clearAllMods?: boolean) => Promise<void>;
+    markSelfSave?: () => void;
+    clearHighlightState?: () => void;
 }
 
 export abstract class BaseEditorProvider implements vscode.CustomEditorProvider {
@@ -429,6 +317,50 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 }, timeoutMs)
             ),
         ]);
+    }
+
+    /**
+     * 供资源管理器右键推送等外部入口调用：
+     * 推送成功回写 testCaseNo 到磁盘之后，
+     * 通知已打开的 webview panel 清空旧高亮基线并重新走 pushSuccess 差异比对流程。
+     *
+     * 使用时机：
+     *   - 由外部推送流程在写盘 markSelfSave 完成后调用；
+     *   - 若目标文件未被 testcase 编辑器打开（panel 不存在），本函数为 no-op。
+     *
+     * 与编辑器内推送 hooks（afterWriteBack/onAllFailedSnapshot）等价：
+     *   1. 清空 session.highlightedCells 与 highlightStore（避免旧的黄色残留）；
+     *   2. 触发 refresh('pushSuccess')，让 pushDataToWebview 内部重新 diff 快照并下发新高亮，
+     *      同时前端会拿到最新的 pushFailures 进行红色失败标记。
+     *
+     * @param filePath   目标文件绝对路径
+     * @param hasFailure 是否存在推送失败（有失败时也走 pushSuccess，让前端统一按 diff 结果重绘高亮）
+     */
+    static async postExplorerPushRefresh(filePath: string, _hasFailure: boolean): Promise<void> {
+        const entry = BaseEditorProvider.panelMap.get(filePath);
+        if (!entry) return;
+        // 直接走 pushSuccess 通道且携带 clearAllMods=true：
+        //   1) pushDataToWebview 会重新 parse + diffPushSnapshot，并将最新 highlightedCells
+        //      （无差异时为 null）同步到 session、highlightStore 与前端，
+        //      因此无需再手动 clearHighlightState / clearHighlight（这两项会被后续流程覆盖）。
+        //   2) full-data 帧带上 clearAllMods=true 后，前端将无条件清空
+        //      S.mods / _detailModCellKeys / _history / _future / _addedRowSet / _lastPushBatch，
+        //      避免 pushSuccess 帧默认的"选择性保留 mods"策略导致小三角残留，
+        //      根治以往"关闭推送弹窗后修改高亮复现"的时序问题，
+        //      不再需要 pre/post 两次 clearMods 夹住中间帧的兼底写法。
+        //   注意 _pushFailedTsIds / _userMarks 等不受影响，与编辑器内推送成功后的行为一致。
+        try {
+            await entry.refresh?.('pushSuccess', true, true);
+        } catch (e: any) {
+            console.warn('[postExplorerPushRefresh] refresh pushSuccess failed:', e?.message || e);
+        }
+    }
+
+    /** 供外部推送流程在写盘前后调用，避免 fsWatcher 自反弹覆盖高亮状态 */
+    static markPanelSelfSave(filePath: string): void {
+        const entry = BaseEditorProvider.panelMap.get(filePath);
+        if (!entry) return;
+        try { entry.markSelfSave?.(); } catch (_) { /* ignore */ }
     }
 
     constructor(protected extensionUri: vscode.Uri, context?: vscode.ExtensionContext) {
@@ -513,7 +445,10 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         // 注册到 panelMap：右键推送时可定位到该 webview 进行结果展示
         let markReady: () => void = () => {};
         const ready = new Promise<void>((resolve) => { markReady = resolve; });
-        BaseEditorProvider.panelMap.set(filePath, { panel: webviewPanel, ready, markReady });
+        // refresh / markSelfSave / clearHighlightState 三个回调将在下方闭包定义完成后回填，
+        // 用于让 BaseEditorProvider.postExplorerPushRefresh 等外部入口驱动本 panel 刷新高亮。
+        const panelEntry: PanelEntry = { panel: webviewPanel, ready, markReady };
+        BaseEditorProvider.panelMap.set(filePath, panelEntry);
 
         // ⚡ 预解析（Prefetch）：在 webview 脚本加载的同时并行解析文件，
         // 避免出现「webview 加载完 → 发 init → 才开始 parse」的串行等待延迟。
@@ -538,7 +473,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         let lastSelfSaveAt = 0;
         const SELF_SAVE_GUARD_MS = 3000;
 
-        const pushDataToWebview = async (forceReparse: boolean, reason: string, force?: boolean): Promise<void> => {
+        const pushDataToWebview = async (forceReparse: boolean, reason: string, force?: boolean, clearAllMods?: boolean): Promise<void> => {
             try {
                 if (forceReparse || !session.cachedTableData) {
                     // 解析前记录原 cache 的行数，用于识别"读到中间态空文件"的极端情况
@@ -603,15 +538,22 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                         const diffResult = diffPushSnapshot(filePath, ensured.tableData);
                         if (diffResult) {
                             const { changed: changedRows, deletedInfos, addedInfos } = diffResult;
-                            if (changedRows.length > 0) {
-                                const rowIndices = changedRows.map(d => d.rowIndex);
+                            // 新增行也纳入黄色单元格高亮，与"修改行"保持一致的心智模型：
+                            // "任何相对最新推送快照的差异 = 黄色高亮"。避免出现"新增行编辑不显示黄"的割裂感。
+                            const addedFlatCells = expandAddedRowsToCells(addedInfos, ensured.tableData);
+                            if (changedRows.length > 0 || addedFlatCells.length > 0) {
+                                const rowIndicesSet = new Set<number>();
+                                changedRows.forEach(d => rowIndicesSet.add(d.rowIndex));
+                                addedInfos.forEach(a => rowIndicesSet.add(a.rowIndex));
+                                const rowIndices = Array.from(rowIndicesSet);
                                 const flatCells: Array<[number, number]> = [];
                                 for (const d of changedRows) {
                                     for (const ci of d.changedCols) flatCells.push([d.rowIndex, ci]);
                                 }
+                                for (const cell of addedFlatCells) flatCells.push(cell);
                                 session.highlightedCells = { colIdx: -1, rowIndices, cells: flatCells };
                                 await setHighlight(filePath, session.highlightedCells);
-                                log(`🟢 快照差异比对检测到 ${changedRows.length} 行变化 (reason=${reason})`);
+                                log(`🟢 快照差异比对检测到 ${changedRows.length} 行修改 + ${addedInfos.length} 行新增 (reason=${reason})`);
                             } else {
                                 // pushSuccess / reload 时 diff 无变化，显式发送 null 告知前端清空高亮；
                                 // 其他场景设 undefined 以免覆盖前端已有状态（如 visible 场景保留旧高亮）
@@ -656,6 +598,11 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 };
                 if (highlighted !== undefined) {
                     msgPayload.highlightedCells = highlighted;
+                }
+                // clearAllMods：仅在 postExplorerPushRefresh（资源管理器右键推送）时传 true，
+                // 告知前端本帧属于"整文件一次性提交"，需无条件清空全量本地修改状态。
+                if (clearAllMods) {
+                    msgPayload.clearAllMods = true;
                 }
                 // 推送失败标记：从 store 读取，每次推送数据时都下发，
                 // 确保关闭/重开文件后失败行高亮可恢复（按 testcase_id 关联，行号变动也不影响）
@@ -710,6 +657,17 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     log('❌ fallback push also failed:', e2?.message || e2);
                 }
             }
+        };
+
+        // 回填 panelEntry 的外部驱动 hook：
+        //   - refresh：外部（如资源管理器右键推送）可复用编辑器内推送同一套 pushSuccess 差异比对通道；
+        //   - markSelfSave：外部写盘前后打自保存时间戳，避免 fsWatcher 自反弹覆盖高亮；
+        //   - clearHighlightState：外部推送成功/全部失败时清空 session 内的高亮基线。
+        panelEntry.refresh = (reason: string, force?: boolean, clearAllMods?: boolean) => pushDataToWebview(true, reason, force, clearAllMods);
+        panelEntry.markSelfSave = () => { lastSelfSaveAt = Date.now(); };
+        panelEntry.clearHighlightState = () => {
+            session.highlightedCells = null;
+            session.cachedTableData = null;
         };
 
         // 监听 panel 可见性变化：每次切回为可见时都强制重新解析最新文件并静默覆盖前端，
@@ -848,16 +806,23 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                         _addedRows = addedInfos.length;
                         _deletedRows = deletedInfos.length;
                         _modifiedRows = changedRows.length;
-                        if (changedRows.length > 0) {
-                            const rowIndices = changedRows.map(d => d.rowIndex);
+                        // 新增行也纳入黄色单元格高亮，与"修改行"保持一致的心智模型：
+                        // "任何相对最新推送快照的差异 = 黄色高亮"，避免出现"新增行编辑保存后不显示黄"的割裂感。
+                        const addedFlatCells = expandAddedRowsToCells(addedInfos, msg.data);
+                        if (changedRows.length > 0 || addedFlatCells.length > 0) {
+                            const rowIndicesSet = new Set<number>();
+                            changedRows.forEach(d => rowIndicesSet.add(d.rowIndex));
+                            addedInfos.forEach(a => rowIndicesSet.add(a.rowIndex));
+                            const rowIndices = Array.from(rowIndicesSet);
                             const flatCells: Array<[number, number]> = [];
                             for (const d of changedRows) {
                                 for (const ci of d.changedCols) flatCells.push([d.rowIndex, ci]);
                             }
+                            for (const cell of addedFlatCells) flatCells.push(cell);
                             _modifiedCells = flatCells.length;
                             session.highlightedCells = { colIdx: -1, rowIndices, cells: flatCells };
                             await setHighlight(filePath, session.highlightedCells);
-                            log(`🟢 Webview 保存快照差异比对检测到 ${changedRows.length} 行发生 ${flatCells.length} 格变化`);
+                            log(`🟢 Webview 保存快照差异比对检测到 ${changedRows.length} 行修改 + ${addedInfos.length} 行新增，共 ${flatCells.length} 格`);
                         } else {
                             // 使用 null 而非 undefined，确保 pushDataToWebview 将 highlightedCells=null
                             // 显式发送给 webview，让前端清除旧高亮（关键：值恢复到快照基线时需清除残留高亮）

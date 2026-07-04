@@ -210,27 +210,72 @@ const TS_ID_COLUMN = 'testcase_id';
 /** 模板示例行的 testcase_id 占位文案（与 examples/case_example.yaml 模板保持一致） */
 export const TEMPLATE_EXAMPLE_TS_ID = '案例唯一标识，不可修改';
 
+/** 简写形式的样例占位（列名字段的中文注释文案，也可能残留在数据行中） */
+export const TEMPLATE_EXAMPLE_TS_ID_SHORT = '案例唯一标识';
+
+/** 英文占位（模板中 testcase_id 字段的英文占位串，大小写不敏感） */
+export const TEMPLATE_EXAMPLE_TS_ID_EN = 'TESTCASE_ID';
+
 /**
- * 判断给定行记录是否为模板示例行。
+ * 判断给定 testcase_id 值是否为"样例占位"，命中任一即视为不可推送的样例数据：
+ *   - '案例唯一标识，不可修改'
+ *   - '案例唯一标识'
+ *   - 'TESTCASE_ID'（大小写不敏感）
+ *
+ * 与 isCreatedByCommand 无关：**无论文件是否由插件命令创建**，只要行的 testcase_id
+ * 命中占位文案，都应当拒绝推送并提示用户"为样例数据"。
+ *
+ * @param tsId 单元格里的 testcase_id 原始值（任意类型，会先转字符串再 trim）
+ */
+export function isPlaceholderTsId(tsId: any): boolean {
+    if (tsId == null) return false;
+    const s = String(tsId).trim();
+    if (!s) return false;
+    if (s === TEMPLATE_EXAMPLE_TS_ID) return true;
+    if (s === TEMPLATE_EXAMPLE_TS_ID_SHORT) return true;
+    if (s.toUpperCase() === TEMPLATE_EXAMPLE_TS_ID_EN) return true;
+    return false;
+}
+
+/**
+ * 仅判断给定 testcase_id 是否命中"中文样例占位"（不含英文 TESTCASE_ID）：
+ *   - '案例唯一标识，不可修改'
+ *   - '案例唯一标识'
+ *
+ * 用于区分处理策略：
+ *   - 中文样例占位：多选中出现该行时静默过滤；仅剩样例行时提示"为样例数据"。
+ *   - 英文 TESTCASE_ID：始终阻断推送，弹窗列出并支持行号跳转（由外部单独处理）。
+ *
+ * @param tsId 单元格里的 testcase_id 原始值
+ */
+export function isSampleTsId(tsId: any): boolean {
+    if (tsId == null) return false;
+    const s = String(tsId).trim();
+    if (!s) return false;
+    return s === TEMPLATE_EXAMPLE_TS_ID || s === TEMPLATE_EXAMPLE_TS_ID_SHORT;
+}
+
+/**
+ * 判断给定行记录是否为模板示例行（仅按中文样例占位判定）。
+ * 说明：这里不把 'TESTCASE_ID' 计入示例行，避免它被 filterTemplateExampleRows 静默过滤——
+ * 英文占位需要走"阻断 + 弹窗"路径由调用方单独处理。
  * @param record 单条测试案例记录（对象形式）
  */
 export function isTemplateExampleRow(record: any): boolean {
     if (!record || typeof record !== 'object') return false;
-    const tsId = record[TS_ID_COLUMN];
-    if (tsId == null) return false;
-    return String(tsId).trim() === TEMPLATE_EXAMPLE_TS_ID;
+    return isSampleTsId(record[TS_ID_COLUMN]);
 }
 
 /**
- * 过滤推送数据中的模板示例行。
- * 仅当文件由命令创建时才执行过滤；非命令创建的文件原样返回。
- * @param filePath 文件绝对路径
+ * 过滤推送数据中的模板示例行（中文样例占位）。
+ * 无论文件是否由命令创建，只要行的 testcase_id 为中文样例占位，都会被过滤，
+ * 因为这些行本身就是模板示例，不应作为业务数据推送到后端。
+ * @param filePath 文件绝对路径（保留参数用于向后兼容/埋点场景）
  * @param rows 待推送的记录数组
  * @returns 过滤后的记录数组
  */
 export function filterTemplateExampleRows<T = any>(filePath: string, rows: T[]): T[] {
     if (!Array.isArray(rows) || rows.length === 0) return rows;
-    if (!isCreatedByCommand(filePath)) return rows;
     return rows.filter(rec => !isTemplateExampleRow(rec));
 }
 
@@ -247,15 +292,15 @@ export function getTemplateExampleTsIds(
     tableData: { headers: string[]; rows: any[][] } | null | undefined,
 ): Set<string> {
     const result = new Set<string>();
-    if (!tableData || !isCreatedByCommand(filePath)) return result;
+    if (!tableData) return result;
     const headers = tableData.headers || [];
     const rows = tableData.rows || [];
     const tsIdx = headers.indexOf(TS_ID_COLUMN);
     if (tsIdx < 0) return result;
     for (const row of rows) {
         const id = row && row[tsIdx] != null ? String(row[tsIdx]) : '';
-        if (id && id.trim() === TEMPLATE_EXAMPLE_TS_ID) {
-            result.add(id);
+        if (isSampleTsId(id)) {
+            result.add(String(id));
         }
     }
     return result;

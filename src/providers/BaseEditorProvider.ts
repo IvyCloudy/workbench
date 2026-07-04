@@ -33,7 +33,7 @@ import { createParser, ensureTrackingColumns, applyTestCaseNos, type FileParser,
 import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
 import { getHeaderLabels, onHeaderLabelsChange, normalizePushData } from '../utils/headerLabels';
 import { stackHead } from '../services/utils';
-import { filterTemplateExampleRows, TEMPLATE_EXAMPLE_TS_ID, isCreatedByCommand } from '../utils/fileIdentifier';
+import { filterTemplateExampleRows, TEMPLATE_EXAMPLE_TS_ID, isCreatedByCommand, isSampleTsId } from '../utils/fileIdentifier';
 
 // 重新导出工具，便于子类使用
 export { isInQualifiedDir, FILE_PATTERNS };
@@ -139,17 +139,83 @@ export class PushViaHttpClient implements PushStrategy {
                             sendTelemetryErrorEvent('editorPush.reparseFailed', { ext: _ext, errorMessage: String(parseErr?.message || String(parseErr)).slice(0, 500), stackHead: stackHead(parseErr) });
         }
 
-        // 过滤模板示例行：通过"新增测试案例"命令创建的文件首行是结构示例，
-        // 用户未修改 testcase_id（仍为占位文案）时不应推送到后端。
+        // 校验：testcase_id 为占位值 TESTCASE_ID 时不允许推送
+        // 注意：编辑器内推送时，pushData 只包含前端选中行（可能是主表任意子集），
+        // 因此不能用 i+1 作为行号；必须使用前端传来的 ctx.pushIndexToRow[i]（
+        // payload 数组下标 -> 主表 1-based 行号），才能对应主表实际显示行号，
+        // 保证弹窗中「第 N 行」点击跳转能落到正确行。
+        // 说明：此处不用 rowIndexMap（tsId->行号），因为占位场景多行 tsId 相同会互相覆盖。
+        // 中文样例占位（'案例唯一标识，不可修改' / '案例唯一标识'）不走此分支，
+        // 由下方 filterTemplateExampleRows 静默过滤；只有全部选中行都是样例时才提示"为样例数据"。
+        if (Array.isArray(pushData)) {
+            const placeholderIds: Array<{ rowIndex: number; value: string }> = [];
+            pushData.forEach((rec: any, i: number) => {
+                const tsId = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]).trim() : '';
+                if (tsId.toUpperCase() === 'TESTCASE_ID') {
+                    // 优先使用前端提供的下标->行号映射，兜底使用 i+1
+                    const mappedRow = (Array.isArray(ctx.pushIndexToRow) && typeof ctx.pushIndexToRow[i] === 'number')
+                        ? ctx.pushIndexToRow[i]
+                        : (i + 1);
+                    placeholderIds.push({ rowIndex: mappedRow, value: tsId });
+                }
+            });
+            if (placeholderIds.length > 0) {
+                const baseName = path.basename(ctx.filePath);
+                sendTelemetryEvent('editorPush.aborted', { reason: 'placeholderTestcaseId', ext: _ext, count: String(placeholderIds.length) });
+                // 构造失败列表：使用 showPushResult 以启用弹窗中"第 N 行"可点击跳转到主表对应行
+                const placeholderFailures = placeholderIds.map(item => ({
+                    tsId: item.value,
+                    reason: 'testcase_id 为占位值 TESTCASE_ID，请修改为真实的案例 ID 后再推送',
+                    rowIndex: item.rowIndex,
+                }));
+                showPushResult(webviewPanel, baseName, 0, placeholderFailures, placeholderIds.length);
+                webviewPanel.webview.postMessage({ type: 'pushError', message: 'testcase_id 为占位值 TESTCASE_ID，不允许推送' });
+                // 持久化失败标记：以 testcase_id 为 key 写盘，确保关闭弹窗/重开文件后失败行仍保持红色高亮
+                // 说明：所有占位行 tsId 均为字面量 'TESTCASE_ID'（大小写归一），前端按 tsId 匹配即可命中所有该值的行
+                try {
+                    const rowsForPersist = Array.isArray(pushData) ? pushData : [];
+                    await persistPushFailures(ctx.filePath, rowsForPersist, placeholderFailures, []);
+                } catch (err: any) {
+                    console.error('[推送] 持久化占位失败标记失败:', err?.message || err);
+                }
+                return;
+            }
+        }
+
+        // 静默过滤中文样例占位行（'案例唯一标识，不可修改' / '案例唯一标识'）：
+        // 无论文件是否通过插件命令创建，这些行都不参与推送，也无需在多选中提示；
+        // 若过滤后仍剩余业务数据，正常推送；若全部选中行都是样例，则提示"为样例数据"，
+        // 并按具体行号列出（弹窗中"第 N 行"可点击跳转到主表对应行）。
         const beforeFilterLen = Array.isArray(pushData) ? pushData.length : 0;
+        // 先按原始 pushData 顺序收集样例行的主表行号，再执行过滤，保证行号与主表原始行号一致
+        // 编辑器内推送 pushData 只包含选中行，因此不能用 i+1 作为主表行号；
+        // 必须使用前端传来的 ctx.pushIndexToRow[i]（1-based 主表行号），与占位 TESTCASE_ID 校验保持一致
+        const sampleRowIndices: number[] = [];
+        if (Array.isArray(pushData)) {
+            for (let i = 0; i < pushData.length; i++) {
+                const rec: any = pushData[i];
+                const tsId = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]).trim() : '';
+                if (isSampleTsId(tsId)) {
+                    const mappedRow = (Array.isArray(ctx.pushIndexToRow) && typeof ctx.pushIndexToRow[i] === 'number')
+                        ? ctx.pushIndexToRow[i]
+                        : (i + 1);
+                    if (typeof mappedRow === 'number' && mappedRow > 0) sampleRowIndices.push(mappedRow);
+                }
+            }
+        }
         pushData = filterTemplateExampleRows(ctx.filePath, pushData);
         const afterFilterLen = Array.isArray(pushData) ? pushData.length : 0;
         if (beforeFilterLen > 0 && afterFilterLen === 0) {
-            sendTelemetryEvent('editorPush.aborted', { reason: 'onlyTemplateExample', ext: _ext });
+            sendTelemetryEvent('editorPush.aborted', { reason: 'onlyTemplateExample', ext: _ext, count: String(sampleRowIndices.length) });
             const baseName = path.basename(ctx.filePath);
-            showPushErrorModal(webviewPanel, baseName,
-                `${baseName} 仅包含模板示例数据，请先填写真实的测试案例后再推送。\n\n提示：请修改首行的"案例唯一标识，不可修改"等占位字段为真实数据。`);
-            webviewPanel.webview.postMessage({ type: 'pushError', message: '仅包含模板示例数据，已取消推送' });
+            // 构造失败列表：每个样例行独立展示，前端弹窗支持"第 N 行"点击跳转到主表对应行
+            const sampleFailures = sampleRowIndices.map(rowIndex => ({
+                tsId: TEMPLATE_EXAMPLE_TS_ID,
+                reason: '为样例数据，不允许推送。请修改"案例唯一标识，不可修改"等占位字段为真实数据后再试',
+                rowIndex,
+            }));
+            showPushResult(webviewPanel, baseName, 0, sampleFailures, sampleRowIndices.length);
+            webviewPanel.webview.postMessage({ type: 'pushError', message: '为样例数据，不允许推送' });
             return;
         }
         if (beforeFilterLen !== afterFilterLen) {
@@ -158,25 +224,6 @@ export class PushViaHttpClient implements PushStrategy {
                 ext: _ext,
                 skipped: String(beforeFilterLen - afterFilterLen),
             });
-        }
-
-        // 校验：testcase_id 为占位值 TESTCASE_ID 时不允许推送
-        if (Array.isArray(pushData)) {
-            const placeholderIds: Array<{ rowIndex: number; value: string }> = [];
-            pushData.forEach((rec: any, i: number) => {
-                const tsId = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]).trim() : '';
-                if (tsId.toUpperCase() === 'TESTCASE_ID') {
-                    placeholderIds.push({ rowIndex: i + 1, value: tsId });
-                }
-            });
-            if (placeholderIds.length > 0) {
-                const lines = placeholderIds.map(item => `  第 ${item.rowIndex} 行: ${item.value}`).join('\n');
-                const baseName = path.basename(ctx.filePath);
-                sendTelemetryEvent('editorPush.aborted', { reason: 'placeholderTestcaseId', ext: _ext, count: String(placeholderIds.length) });
-                showPushErrorModal(webviewPanel, baseName, `testcase_id 为占位值不允许推送\n\n以下行的 testcase_id 值为 TESTCASE_ID，请修改为真实的案例 ID 后再推送：\n${lines}`);
-                webviewPanel.webview.postMessage({ type: 'pushError', message: 'testcase_id 为占位值 TESTCASE_ID，不允许推送' });
-                return;
-            }
         }
 
         const pushSource = isCreatedByCommand(ctx.filePath) ? 'testAgentMA' : 'testAgent';
@@ -200,8 +247,8 @@ export class PushViaHttpClient implements PushStrategy {
 
         // 防御埋点：样例行按设计不应进入后端推送结果。一旦在 successMappings/failures 中出现样例 tsId，
         // 说明过滤逻辑被绕过（文件标识丢失 / 上下文变量异常等），需以该事件快速定位问题。
-        const leakedSuccess = successMappings.filter(m => m && String(m.tsId).trim() === TEMPLATE_EXAMPLE_TS_ID).length;
-        const leakedFailure = failures.filter(f => f && String(f.tsId).trim() === TEMPLATE_EXAMPLE_TS_ID).length;
+        const leakedSuccess = successMappings.filter(m => m && isSampleTsId(m.tsId)).length;
+        const leakedFailure = failures.filter(f => f && isSampleTsId(f.tsId)).length;
         if (leakedSuccess > 0 || leakedFailure > 0) {
             sendTelemetryErrorEvent('editorPush.templateExampleLeaked', {
                 ext: _ext,

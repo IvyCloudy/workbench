@@ -7,7 +7,7 @@ import { parsePushResponse, PushSuccessMapping, PushResponseFailure } from '../u
 import { applyTestCaseNos, createParser, detectFileType, ensureTrackingColumns, parseFileToRows } from '../parsers';
 import { getCurrentTaskInfo } from '../utils/commands';
 import { showPushErrorModal, showModal, showPushResult } from '../utils/message';
-import { isCreatedByCommand, filterTemplateExampleRows, getTemplateExampleTsIds, TEMPLATE_EXAMPLE_TS_ID } from '../utils/fileIdentifier';
+import { isCreatedByCommand, filterTemplateExampleRows, getTemplateExampleTsIds, TEMPLATE_EXAMPLE_TS_ID, isSampleTsId } from '../utils/fileIdentifier';
 import { persistPushFailures } from '../utils/pushFailureStore';
 import { savePushSnapshot } from '../utils/pushSnapshotStore';
 import { normalizePushData } from '../utils/headerLabels';
@@ -90,30 +90,62 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         return;
     }
 
-    const beforeFilterLen = rows.length;
-    rows = filterTemplateExampleRows(filePath, rows);
-    if (rows.length === 0) {
-        sendTelemetryEvent('explorerPush.aborted', { reason: 'onlyTemplateExample', ext: fileExt });
-        showPushErrorModal(panel, baseName,
-            `${baseName} 仅包含模板示例数据，请先填写真实的测试案例后再推送。\n\n提示：请修改首行的"案例唯一标识，不可修改"等占位字段为真实数据。`);
-        return;
-    }
-    if (rows.length !== beforeFilterLen) {
-        sendTelemetryEvent('explorerPush.skipTemplateExample', { ext: fileExt, skipped: String(beforeFilterLen - rows.length) });
-    }
-
     // 校验：testcase_id 为占位值 TESTCASE_ID 时不允许推送
+    // 注意：此校验必须在 filterTemplateExampleRows 之前执行，
+    // 这样 i+1 才是文件中的原始行号，与主表显示行号一致，弹窗行号跳转才准确。
+    // 说明：中文样例占位（'案例唯一标识，不可修改' / '案例唯一标识'）不走此分支，
+    //      由下方 filterTemplateExampleRows 静默过滤；只有全部行都是样例时才提示"为样例数据"。
     const placeholderTestcaseIds = rows
         .map((rec: any, i: number) => {
             const tsId = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]).trim() : '';
             return tsId.toUpperCase() === 'TESTCASE_ID' ? { rowIndex: i + 1, value: tsId } : null;
         })
-        .filter(Boolean);
+        .filter(Boolean) as Array<{ rowIndex: number; value: string }>;
     if (placeholderTestcaseIds.length > 0) {
-        const lines = placeholderTestcaseIds.map((item: any) => `  第 ${item!.rowIndex} 行: ${item!.value}`).join('\n');
         sendTelemetryEvent('explorerPush.aborted', { reason: 'placeholderTestcaseId', ext: fileExt, count: String(placeholderTestcaseIds.length) });
-        showPushErrorModal(panel, baseName, `testcase_id 为占位值不允许推送\n\n以下行的 testcase_id 值为 TESTCASE_ID，请修改为真实的案例 ID 后再推送：\n${lines}`);
+        // 构造失败列表：使用 showPushResult 以启用弹窗中"第 N 行"可点击跳转到主表对应行
+        const placeholderFailures = placeholderTestcaseIds.map(item => ({
+            tsId: item.value,
+            reason: 'testcase_id 为占位值 TESTCASE_ID，请修改为真实的案例 ID 后再推送',
+            rowIndex: item.rowIndex,
+        }));
+        showPushResult(panel, baseName, 0, placeholderFailures, placeholderTestcaseIds.length);
+        // 持久化失败标记：以 testcase_id 为 key 写盘，确保关闭弹窗/重开文件后失败行仍保持红色高亮
+        // 说明：所有占位行 tsId 均为字面量 'TESTCASE_ID'（大小写归一），前端按 tsId 匹配即可命中所有该值的行
+        try {
+            await persistPushFailures(filePath, rows, placeholderFailures, []);
+        } catch (err: any) {
+            console.error('[推送] 持久化占位失败标记失败:', err?.message || err);
+        }
         return;
+    }
+
+    // 静默过滤中文样例占位行（'案例唯一标识，不可修改' / '案例唯一标识'）：
+    // 无论文件是否通过插件命令创建，这些行都不参与推送；
+    // 若过滤后仍剩余业务数据，正常推送；若全部行都是样例，则提示"为样例数据"，
+    // 并按具体行号列出（弹窗中"第 N 行"可点击跳转到主表对应行）。
+    const beforeFilterLen = rows.length;
+    // 先按原始下标（i+1）收集样例行号，再执行过滤，保证行号与主表原始行号一致
+    const sampleRowIndices: number[] = [];
+    for (let i = 0; i < rows.length; i++) {
+        const rec: any = rows[i];
+        const tsId = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]).trim() : '';
+        if (isSampleTsId(tsId)) sampleRowIndices.push(i + 1);
+    }
+    rows = filterTemplateExampleRows(filePath, rows);
+    if (rows.length === 0) {
+        sendTelemetryEvent('explorerPush.aborted', { reason: 'onlyTemplateExample', ext: fileExt, count: String(sampleRowIndices.length) });
+        // 构造失败列表：每个样例行独立展示，前端弹窗支持"第 N 行"点击跳转到主表对应行
+        const sampleFailures = sampleRowIndices.map(rowIndex => ({
+            tsId: TEMPLATE_EXAMPLE_TS_ID,
+            reason: '为样例数据，不允许推送。请修改"案例唯一标识，不可修改"等占位字段为真实数据后再试',
+            rowIndex,
+        }));
+        showPushResult(panel, baseName, 0, sampleFailures, sampleRowIndices.length);
+        return;
+    }
+    if (rows.length !== beforeFilterLen) {
+        sendTelemetryEvent('explorerPush.skipTemplateExample', { ext: fileExt, skipped: String(beforeFilterLen - rows.length) });
     }
 
     if (!panel) {
@@ -140,8 +172,8 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
 
     const { successMappings, failures } = parsePushResponse(pushResult.body);
 
-    const leakedSuccess = successMappings.filter(m => m && String(m.tsId).trim() === TEMPLATE_EXAMPLE_TS_ID).length;
-    const leakedFailure = failures.filter(f => f && String(f.tsId).trim() === TEMPLATE_EXAMPLE_TS_ID).length;
+    const leakedSuccess = successMappings.filter(m => m && isSampleTsId(m.tsId)).length;
+    const leakedFailure = failures.filter(f => f && isSampleTsId(f.tsId)).length;
     if (leakedSuccess > 0 || leakedFailure > 0) {
         sendTelemetryErrorEvent('explorerPush.templateExampleLeaked', {
             ext: fileExt,

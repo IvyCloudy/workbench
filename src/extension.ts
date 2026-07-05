@@ -23,6 +23,11 @@ import { TestCaseProvider } from './providers/TestCaseProvider';
 import { UnifiedEditorProvider, FileTypeChecker } from './providers/UnifiedEditorProvider';
 import { BaseEditorProvider } from './providers/BaseEditorProvider';
 import { MindmapEditorProvider, MINDMAP_EDITOR_VIEWTYPE, isOutlineMarkdownFile } from './providers/MindmapEditorProvider';
+import {
+    isPointsMarkdownUri,
+    parsePointsMarkdown,
+    generateXMind,
+} from './points';
 import { parseMarkdown } from './utils/markdownMindmap';
 import { buildXmindFile } from './utils/xmindExporter';
 import { registerBindTaskFeatures } from './providers/BindTaskProvider';
@@ -1043,6 +1048,33 @@ export async function activate(context: vscode.ExtensionContext) {
                 }
                 sendTelemetryEvent('command.executed', { command: 'testcaseViewer.exportMindmapToXmind' });
                 try {
+                    const doc = await vscode.workspace.openTextDocument(target);
+                    if (isPointsMarkdownUri(target)) {
+                        const pointsResult = parsePointsMarkdown(doc);
+                        if (pointsResult.features.length > 0) {
+                            const currentTask = await getCurrentTaskInfo(target.fsPath);
+                            const rootTitle = currentTask.bind
+                                ? `${currentTask.taskInfo.testTaskName}/${currentTask.taskInfo.subTestTaskName}`
+                                : undefined;
+                            const defaultUri = vscode.Uri.file(
+                                path.join(
+                                    path.dirname(target.fsPath),
+                                    path.basename(target.fsPath, path.extname(target.fsPath)) + '.xmind',
+                                ),
+                            );
+                            const dest = await vscode.window.showSaveDialog({
+                                defaultUri,
+                                filters: { 'XMind 文件': ['xmind'] },
+                                saveLabel: '导出',
+                                title: '导出为 XMind',
+                            });
+                            if (!dest) return;
+                            await generateXMind(pointsResult, dest.fsPath, rootTitle);
+                            vscode.window.showInformationMessage(`已导出：${path.basename(dest.fsPath)}`);
+                            sendTelemetryEvent('mindmap.exportXmind', { ok: 'true', from: 'explorer', kind: 'points' });
+                            return;
+                        }
+                    }
                     const text = await fs.promises.readFile(target.fsPath, 'utf-8');
                     const tree = parseMarkdown(text);
                     const buf = buildXmindFile(

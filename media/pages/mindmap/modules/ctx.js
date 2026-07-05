@@ -20,6 +20,7 @@ export const ctx = {
     mm: null,                  // simpleMindMap 实例
     currentFileName: '',
     currentFilePath: '',       // 完整 fsPath，仅用于顶部文件名 tooltip 展示与拷贝
+    documentMode: 'outline',   // 'outline' | 'points'
     suppressNextChange: false, // 由 init 触发的 setData 不应回写
     // 最近一次从 mindmapNodeToSmm 读出的节点样式映射，供 node_tree_render_end 钩子补涂
     _pendingNodeStylesMap: null,

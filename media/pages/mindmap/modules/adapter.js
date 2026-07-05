@@ -187,11 +187,24 @@ export function plainToHtml(text) {
  *   - 三者都不存在时，回退为 ''
  * 这样保证序列化回 md 时，富元素仍然可被人类阅读 / 再次打开后还能识别。
  */
+const ROLE_DEFAULT_ICONS = {
+    path: new Set(['flag_purple']),
+    'test-point': new Set(['star_red']),
+};
+
+/** 测试要点模式下的角色图标仅用于展示，不应写入 title（否则会破坏序号解析） */
+function exportIconsForTitle(d) {
+    const icons = Array.isArray(d.icon) ? d.icon : [];
+    const skip = ROLE_DEFAULT_ICONS[d.mmKind];
+    if (!skip) return icons;
+    return icons.filter((it) => !skip.has(it));
+}
+
 function buildTitleFromSmm(d) {
     const parts = [];
 
-    // 1) icons（行首图标 token / emoji）
-    const icons = Array.isArray(d.icon) ? d.icon : [];
+    // 1) icons（行首图标 token / emoji；排除测试要点角色默认图标）
+    const icons = exportIconsForTitle(d);
     if (icons.length) {
         const iconStr = icons.map(it => isIconToken(it) ? `:${it}:` : it).join(' ');
         parts.push(iconStr);
@@ -251,6 +264,8 @@ export async function mindmapNodeToSmm(root) {
     function build(node, path) {
         _builtPaths.push(path);
         const r = extractRichFromTitle(node.title);
+        const defaultIcons = node.kind === 'path' ? ['flag_purple']
+            : node.kind === 'test-point' ? ['star_red'] : [];
         const d = {
             uid: node.id,
             // richText 模式：text 必须是 HTML
@@ -262,7 +277,8 @@ export async function mindmapNodeToSmm(root) {
             // 写入节点身份路径，供后续 collectNodeStyles 回收时使用（保证双向一致）
             mmStylePath: path,
         };
-        if (r.icon.length) d.icon = r.icon;
+        const icons = r.icon.length ? r.icon : defaultIcons;
+        if (icons.length) d.icon = icons;
         // 合并持久化的节点样式（不写入 md，仅在 webview 端还原视觉）
         const saved = stylesMap[path];
         if (saved && typeof saved === 'object') {
@@ -369,9 +385,22 @@ export function reapplyPendingNodeStyles() {
 /**
  * simpleMindMap data → MindmapNode（用于 data_change 后回写 md）
  */
-export function smmToMindmapNode(smm, parentDepth = -1) {
+function inferMmKind(d, depth, parentKind) {
+    if (d.mmKind) return d.mmKind;
+    if (depth === 0) return 'root';
+    if (parentKind === 'test-point') return 'test-desc';
+    const icons = Array.isArray(d.icon) ? d.icon : [];
+    if (icons.includes('star_red')) return 'test-point';
+    if (icons.includes('flag_purple')) return 'path';
+    const plain = htmlToPlain(d.text || '').trim();
+    if (/^([A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)(?:\s+(.+))?$/.test(plain)) return 'test-point';
+    return 'heading';
+}
+
+export function smmToMindmapNode(smm, parentDepth = -1, parentKind) {
     const d = smm.data || {};
     const depth = parentDepth + 1;
+    const kind = inferMmKind(d, depth, parentKind);
     // 还原原始 md 链接/图片路径
     // richText 模式下 d.text 是 HTML，写回 md 前先转纯文本
     const plainText = htmlToPlain(d.text || '');
@@ -384,14 +413,14 @@ export function smmToMindmapNode(smm, parentDepth = -1) {
         imageTitle: d.imageTitle || '',
         attachmentUrl: d.mmAttachmentRaw || d.attachmentUrl || '',
         attachmentName: d.attachmentName || '',
+        mmKind: kind,
     };
     const node = {
         id: d.uid || ('n_' + Math.random().toString(36).slice(2)),
         title: buildTitleFromSmm(dForTitle),
         depth,
-        // mmKind 在 init 时写入；新建的节点没有，按位置推断
-        kind: d.mmKind || (depth === 0 ? 'root' : 'heading'),
-        children: (smm.children || []).map(c => smmToMindmapNode(c, depth)),
+        kind,
+        children: (smm.children || []).map((c) => smmToMindmapNode(c, depth, kind)),
     };
     return node;
 }

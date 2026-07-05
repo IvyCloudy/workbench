@@ -27,7 +27,7 @@ export interface MindmapNode {
      *  - list   ：来自 markdown 列表项 - xxx
      *  - root   ：合成根节点（多个 H1 / 空文档时）
      */
-    kind: 'heading' | 'list' | 'root';
+    kind: 'heading' | 'list' | 'root' | 'path' | 'test-point' | 'test-desc';
     children: MindmapNode[];
 }
 
@@ -114,7 +114,7 @@ export function parseMarkdown(md: string): MindmapNode {
     }
 
     // 第二遍：把 sem 依次挂到树上（基于堆栈的层级管理）
-    interface StackItem { node: MindmapNode; depth: number; kind: 'heading' | 'list' | 'root' }
+    interface StackItem { node: MindmapNode; depth: number; kind: MindmapNode['kind'] }
     const stack: StackItem[] = [{ node: root, depth: 0, kind: root.kind }];
 
     function pushChild(parentItem: StackItem, child: MindmapNode) {

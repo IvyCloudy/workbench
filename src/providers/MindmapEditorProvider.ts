@@ -37,6 +37,17 @@ import {
 } from '../utils/xmindExporter';
 import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
 import { stackHead } from '../services/utils';
+import { showModal } from '../utils/message';
+import {
+    parsePointsMarkdown,
+    parseResultToMindmapNode,
+    mindmapNodeToParseResult,
+    isPointsDocument,
+    resolvePointsRootTitle,
+    patchMarkdownTablesWithEditedResult,
+    buildPathRemap,
+    featurePathKey,
+} from '../points';
 
 /**
  * 富元素（图片/附件）资源目录约定：
@@ -149,13 +160,29 @@ export class MindmapEditorProvider implements vscode.CustomTextEditorProvider {
         };
 
         // ============ 把当前文档同步到 webview ============
-        const pushToWebview = (reason: string) => {
+        const pushToWebview = async (reason: string) => {
             const text = document.getText();
             try {
-                const tree = parseMarkdown(text);
+                let tree: MindmapNode;
+                let mode: 'points' | 'outline' = 'outline';
+
+                if (isPointsDocument(document)) {
+                    const result = parsePointsMarkdown(document);
+                    if (result.features.length > 0) {
+                        const rootTitle = await resolvePointsRootTitle(filePath);
+                        tree = parseResultToMindmapNode(result, rootTitle);
+                        mode = 'points';
+                    } else {
+                        tree = parseMarkdown(text);
+                    }
+                } else {
+                    tree = parseMarkdown(text);
+                }
+
                 lastPushedText = text;
                 webviewPanel.webview.postMessage({
                     type: 'init',
+                    mode,
                     fileName: path.basename(filePath),
                     filePath,
                     tree,
@@ -181,7 +208,7 @@ export class MindmapEditorProvider implements vscode.CustomTextEditorProvider {
             const text = e.document.getText();
             if (Date.now() < suppressUntil && text === lastPushedText) return;
             if (text === lastPushedText) return;
-            pushToWebview('docChange');
+            void pushToWebview('docChange');
         });
 
         // ============ 处理 webview 消息 ============
@@ -189,14 +216,91 @@ export class MindmapEditorProvider implements vscode.CustomTextEditorProvider {
             if (!msg || typeof msg !== 'object') return;
             switch (msg.type) {
                 case 'ready':
-                    pushToWebview('ready');
+                    void pushToWebview('ready');
                     sendTelemetryEvent('mindmap.opened', { ext: '.md' });
                     return;
 
                 case 'update': {
-                    // webview 把整棵树发回，我们序列化为 md 并通过 WorkspaceEdit 写入
                     const tree = msg.tree as MindmapNode | undefined;
                     if (!tree) return;
+
+                    const usePointsMode = msg.mode === 'points' || isPointsDocument(document);
+
+                    if (usePointsMode) {
+                        try {
+                            const parseResult = mindmapNodeToParseResult(tree);
+                            if (parseResult.features.length === 0) {
+                                return;
+                            }
+
+                            const warnings: string[] = [];
+                            for (const feature of parseResult.features) {
+                                const featurePath = feature.path.join('/');
+                                let invalidCount = 0;
+                                for (const group of feature.tableGroups) {
+                                    for (const point of group.testPoints) {
+                                        if (!point.index || !point.index.trim()) {
+                                            invalidCount++;
+                                        }
+                                    }
+                                }
+                                if (invalidCount > 0) {
+                                    warnings.push(
+                                        `功能条目「${featurePath}」中有 ${invalidCount} 个测试点缺少序号，无法回写`
+                                    );
+                                }
+                            }
+
+                            const originalResult = parsePointsMarkdown(document);
+                            const originalPaths = new Set(
+                                originalResult.features.map((f) => featurePathKey(f.path))
+                            );
+                            const pathRemap = buildPathRemap(originalResult, parseResult);
+                            const remappedNewPaths = new Set(pathRemap.values());
+                            for (const feature of parseResult.features) {
+                                const featurePath = featurePathKey(feature.path);
+                                if (originalPaths.has(featurePath)) continue;
+                                if (remappedNewPaths.has(featurePath)) continue;
+                                warnings.push(
+                                    `功能条目「${featurePath}」在原始 Markdown 中未找到，无法回写`
+                                );
+                            }
+
+                            if (warnings.length > 0) {
+                                showModal(
+                                    webviewPanel,
+                                    'warning',
+                                    `回写 Markdown 时发现 ${warnings.length} 个问题`,
+                                    `以下内容无法回写：\n\n${warnings.join('\n')}`
+                                );
+                                return;
+                            }
+
+                            const patched = patchMarkdownTablesWithEditedResult(document, parseResult);
+                            if (patched.updatedFeatures === 0) {
+                                return;
+                            }
+                            const newText = patched.markdown;
+                            if (newText === document.getText()) return;
+
+                            const edit = new vscode.WorkspaceEdit();
+                            const fullRange = new vscode.Range(
+                                document.positionAt(0),
+                                document.positionAt(document.getText().length),
+                            );
+                            edit.replace(document.uri, fullRange, newText);
+                            suppressUntil = Date.now() + 200;
+                            lastPushedText = newText;
+                            await vscode.workspace.applyEdit(edit);
+                        } catch (err: any) {
+                            sendTelemetryErrorEvent('mindmap.pointsWritebackFailed', {
+                                errorMessage: String(err?.message || String(err)).slice(0, 500),
+                                stackHead: stackHead(err),
+                            });
+                        }
+                        return;
+                    }
+
                     let newText: string;
                     try {
                         newText = toMarkdown(tree);

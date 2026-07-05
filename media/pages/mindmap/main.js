@@ -80,6 +80,7 @@ window.addEventListener('message', async (event) => {
                 $('mmEmpty').classList.remove('hidden');
             }
             try {
+                ctx.documentMode = msg.mode || 'outline';
                 await initOrUpdate(msg.tree, msg.fileName, msg.filePath);
             } catch (err) {
                 console.error('[mindmap] init failed', err);

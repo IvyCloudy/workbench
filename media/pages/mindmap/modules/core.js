@@ -258,7 +258,7 @@ function syncToExtension() {
         try { saveNodeStylesMap(collectNodeStyles(data)); } catch (_) {}
         // 2) 结构/文本 → md
         const tree = smmToMindmapNode(data, -1);
-        vscode.postMessage({ type: 'update', tree });
+        vscode.postMessage({ type: 'update', tree, mode: ctx.documentMode || 'outline' });
     } catch (err) {
         console.error('[mindmap] syncToExtension failed', err);
     }

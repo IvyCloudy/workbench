@@ -18,7 +18,7 @@ import { CsvFileParser } from '../parsers/csv-parser';
 import { batchImportData } from '../services/http';
 import { FileTreeService } from './common/FileTreeService';
 import { showToast, showModal } from '../utils/message';
-import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
+import { TelemetryService } from '../utils/telemetry';
 import { stackHead } from '../services/utils';
 import type { WebviewMessage } from '../types';
 
@@ -57,21 +57,21 @@ export class TableBrowserProvider extends BaseWebviewProvider {
     private async handleFetchWorkspaceFiles(): Promise<void> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
-            sendTelemetryEvent('tableBrowser.noWorkspace', {});
+            TelemetryService.sendTelemetryEvent('tableBrowser.noWorkspace', {});
             this.postMessage({ command: 'workspaceFiles', data: [], error: '请先打开一个工作区文件夹' });
             return;
         }
 
         const rootPath = workspaceFolders[0].uri.fsPath;
         const fileTree = this.fileTreeService.buildWorkspaceFileTree(rootPath);
-        sendTelemetryEvent('tableBrowser.workspaceFiles.loaded', { nodeTotal: String(fileTree.length) });
+        TelemetryService.sendTelemetryEvent('tableBrowser.workspaceFiles.loaded', { nodeTotal: String(fileTree.length) });
         this.postMessage({ command: 'workspaceFiles', data: fileTree });
     }
 
     private async handleReadCsvFile(msg: WebviewMessage): Promise<void> {
         const filePath = msg.filePath as string;
         if (!filePath) {
-            sendTelemetryEvent('tableBrowser.csv.invalidPath', {});
+            TelemetryService.sendTelemetryEvent('tableBrowser.csv.invalidPath', {});
             this.postMessage({ command: 'csvData', data: null, error: '文件路径无效' });
             return;
         }
@@ -80,7 +80,7 @@ export class TableBrowserProvider extends BaseWebviewProvider {
             const { tableData } = await this.csvParser.parse(filePath);
 
             if (!tableData.headers.length && !tableData.rows.length) {
-                sendTelemetryEvent('tableBrowser.csv.empty', {});
+                TelemetryService.sendTelemetryEvent('tableBrowser.csv.empty', {});
                 this.postMessage({ command: 'csvData', data: null, error: 'CSV 文件为空' });
                 return;
             }
@@ -95,7 +95,7 @@ export class TableBrowserProvider extends BaseWebviewProvider {
             });
             console.log('[TableBrowser] CSV 数据已发送，rows:', tableData.rows.length, 'headers:', tableData.headers.length);
         } catch (e: any) {
-                sendTelemetryErrorEvent('tableBrowser.csv.readFailed', { errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
+                TelemetryService.sendTelemetryErrorEvent('tableBrowser.csv.readFailed', { errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
             this.postMessage({ command: 'csvData', data: null, error: e.message || '读取文件失败' });
         }
     }
@@ -105,7 +105,7 @@ export class TableBrowserProvider extends BaseWebviewProvider {
         const headers = msg.headers as string[];
 
         if (!selectedRows || selectedRows.length === 0) {
-            sendTelemetryEvent('tableBrowser.send.noSelection', {});
+            TelemetryService.sendTelemetryEvent('tableBrowser.send.noSelection', {});
             showToast(this.panel, 'warning', '请先勾选要发送的数据');
             return;
         }
@@ -114,16 +114,16 @@ export class TableBrowserProvider extends BaseWebviewProvider {
             const result = await batchImportData(this.context, { selectedRows, headers });
 
             if (result.returnCode === 'SUC0000') {
-                sendTelemetryEvent('tableBrowser.send.success', { totalRows: String(selectedRows.length) });
+                TelemetryService.sendTelemetryEvent('tableBrowser.send.success', { totalRows: String(selectedRows.length) });
                 this.postMessage({ command: 'sendResult', success: true, message: '数据发送成功' });
                 showToast(this.panel, 'success', '数据发送成功');
             } else {
-                sendTelemetryErrorEvent('tableBrowser.send.failed', { returnCode: result.returnCode || '' });
+                TelemetryService.sendTelemetryErrorEvent('tableBrowser.send.failed', { returnCode: result.returnCode || '' });
                 this.postMessage({ command: 'sendResult', success: false, message: result.errorMsg || '发送失败' });
                 showToast(this.panel, 'error', result.errorMsg || '发送失败');
             }
         } catch (e: any) {
-            sendTelemetryErrorEvent('tableBrowser.send.error', { errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
+            TelemetryService.sendTelemetryErrorEvent('tableBrowser.send.error', { errorMessage: String(e?.message || String(e)).slice(0, 500), stackHead: stackHead(e) });
             this.postMessage({ command: 'sendResult', success: false, message: e.message || '发送失败' });
             showToast(this.panel, 'error', e.message || '发送失败');
         }

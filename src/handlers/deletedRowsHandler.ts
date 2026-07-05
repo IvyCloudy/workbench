@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { detectFileType, createParser } from '../parsers';
 import { syncDeletedRows, refreshAndGetDeletedRows } from '../utils/deletedRowsStore';
 import { showToast, showModal } from '../utils/message';
-import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
+import { TelemetryService } from '../utils/telemetry';
 import { getActiveFileUri, isTestCaseFile, telemetryErrProps } from '../utils/extensionHelpers';
 
 /**
@@ -12,14 +12,14 @@ import { getActiveFileUri, isTestCaseFile, telemetryErrProps } from '../utils/ex
 export async function handleSyncDeletedRows(): Promise<void> {
     const uri = getActiveFileUri();
     if (!uri || !isTestCaseFile(uri)) {
-        sendTelemetryEvent('syncDeletedRows.aborted', { reason: 'notTestCaseFile' });
+        TelemetryService.sendTelemetryEvent('syncDeletedRows.aborted', { reason: 'notTestCaseFile' });
         showToast(undefined, 'info', '请先打开测试案例文件再执行同步');
         return;
     }
     try {
         const fileType = detectFileType(uri.fsPath);
         if (!fileType) {
-            sendTelemetryEvent('syncDeletedRows.aborted', { reason: 'unsupportedFileType' });
+            TelemetryService.sendTelemetryEvent('syncDeletedRows.aborted', { reason: 'unsupportedFileType' });
             showToast(undefined, 'error', '不支持的文件类型');
             return;
         }
@@ -27,7 +27,7 @@ export async function handleSyncDeletedRows(): Promise<void> {
         const parsed = await parser.parse(uri.fsPath);
         const deletedRows = refreshAndGetDeletedRows(uri.fsPath, parsed.tableData);
         if (deletedRows.length === 0) {
-            sendTelemetryEvent('syncDeletedRows.noPending', {});
+            TelemetryService.sendTelemetryEvent('syncDeletedRows.noPending', {});
             showToast(undefined, 'info', '当前文件无待同步的已删除行');
             return;
         }
@@ -39,13 +39,13 @@ export async function handleSyncDeletedRows(): Promise<void> {
         if (result.synced.length > 0) {
             showToast(undefined, 'success', `已同步 ${result.synced.length} 行删除记录`);
         }
-        sendTelemetryEvent('syncDeletedRows.complete', {
+        TelemetryService.sendTelemetryEvent('syncDeletedRows.complete', {
             syncedTotal: String(result.synced.length),
             failedRows: String(result.failed.length),
         });
     } catch (err: any) {
         console.error('[syncDeletedRows] 失败:', err?.message || err);
         showToast(undefined, 'error', `删除行同步失败: ${err?.message || err}`);
-        sendTelemetryErrorEvent('syncDeletedRows.error', telemetryErrProps(err));
+        TelemetryService.sendTelemetryErrorEvent('syncDeletedRows.error', telemetryErrProps(err));
     }
 }

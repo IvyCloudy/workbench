@@ -6,7 +6,7 @@
  */
 
 import * as vscode from 'vscode';
-import { sendTelemetryErrorEvent } from './telemetry';
+import { TelemetryService } from './telemetry';
 import { telemetryErrProps } from './extensionHelpers';
 import { cleanupRecords } from './fileIdentifier';
 import { ensureBindingsFile } from './taskInfoStore';
@@ -41,7 +41,7 @@ export async function initializeStorages(context: vscode.ExtensionContext): Prom
     for (const task of tasks) {
         await task.fn().catch(err => {
             console.error(`[Storage] 初始化${task.label}失败:`, err?.message || err);
-            sendTelemetryErrorEvent(`${task.eventName}.initFailed`, telemetryErrProps(err));
+            TelemetryService.sendTelemetryErrorEvent(`${task.eventName}.initFailed`, telemetryErrProps(err));
         });
     }
 

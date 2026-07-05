@@ -26,7 +26,7 @@ import { UnifiedEditorProvider } from './providers/UnifiedEditorProvider';
 import { registerBindTaskFeatures } from './providers/BindTaskProvider';
 import { showPushErrorModal, showToast } from './utils/message';
 import { BaseEditorProvider } from './providers/BaseEditorProvider';
-import { initTelemetry, sendTelemetryEvent, sendTelemetryErrorEvent } from './utils/telemetry';
+import { TelemetryService } from './utils/telemetry';
 import { getActiveFileUri, isTestCaseFile, updateShowIcon, telemetryErrProps } from './utils/extensionHelpers';
 import { registerEditorCommands } from './handlers/editorCommands';
 import { handleFilePush } from './handlers/pushHandler';
@@ -43,13 +43,13 @@ export async function activate(context: vscode.ExtensionContext) {
     console.log('[Extension] 插件激活中...');
 
     // 埋点初始化（必须尽早，且尊重用户 telemetry 设置）
-    initTelemetry(context).catch(err => {
+    TelemetryService.init(context).catch(err => {
         console.warn('[Extension] 初始化埋点失败（已忽略）:', err?.message || err);
     });
 
     // 全局未捕获异常上报（兜底）
     process.on('unhandledRejection', (reason: any) => {
-        try { sendTelemetryErrorEvent('extension.unhandledRejection', telemetryErrProps(reason)); } catch (_) { /* ignore */ }
+        try { TelemetryService.sendTelemetryErrorEvent('extension.unhandledRejection', telemetryErrProps(reason)); } catch (_) { /* ignore */ }
     });
 
     // 初始化各存储文件 + 清理孤儿记录
@@ -89,11 +89,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
         // ---- 全局命令 ----
         vscode.commands.registerCommand('tableBrowser.open', () => {
-            sendTelemetryEvent('command.executed', { command: 'tableBrowser.open' });
+            TelemetryService.sendTelemetryEvent('command.executed', { command: 'tableBrowser.open' });
             try {
                 return tableBrowserProvider.show();
             } catch (err: any) {
-                sendTelemetryErrorEvent('command.tableBrowser.open.error', telemetryErrProps(err));
+                TelemetryService.sendTelemetryErrorEvent('command.tableBrowser.open.error', telemetryErrProps(err));
                 throw err;
             }
         }),
@@ -101,18 +101,18 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('testcaseViewer.viewOnline', async () => {
             const uri = getActiveFileUri();
             if (!uri) {
-                sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.viewOnline', reason: 'noActiveFile' });
+                TelemetryService.sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.viewOnline', reason: 'noActiveFile' });
                 return;
             }
             if (!isTestCaseFile(uri)) {
-                sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.viewOnline', reason: 'notTestCaseFile' });
+                TelemetryService.sendTelemetryEvent('command.aborted', { command: 'testcaseViewer.viewOnline', reason: 'notTestCaseFile' });
                 return;
             }
-            sendTelemetryEvent('command.executed', { command: 'testcaseViewer.viewOnline' });
+            TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.viewOnline' });
             try {
                 await testCaseProvider.showWebview(uri);
             } catch (err: any) {
-                sendTelemetryErrorEvent('command.viewOnline.error', telemetryErrProps(err));
+                TelemetryService.sendTelemetryErrorEvent('command.viewOnline.error', telemetryErrProps(err));
                 throw err;
             }
         }),
@@ -125,13 +125,13 @@ export async function activate(context: vscode.ExtensionContext) {
             'testcaseViewer.pushTestCaseFromExplorer',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
                 const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
-                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.pushTestCaseFromExplorer' });
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.pushTestCaseFromExplorer' });
                 try {
                     await handleFilePush(targets, context);
                 } catch (err: any) {
                     const baseName = targets[0] ? path.basename(targets[0].fsPath) : '';
                     const panel = targets[0] ? BaseEditorProvider.getPanel(targets[0].fsPath) : undefined;
-                    sendTelemetryErrorEvent('explorerPush.commandError', telemetryErrProps(err));
+                    TelemetryService.sendTelemetryErrorEvent('explorerPush.commandError', telemetryErrProps(err));
                     showPushErrorModal(panel, baseName, `推送失败: ${err.message || err}`);
                 }
             }
@@ -142,7 +142,7 @@ export async function activate(context: vscode.ExtensionContext) {
             'testcaseViewer.createNewTestCaseCsv',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
                 const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
-                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCaseCsv' });
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCaseCsv' });
                 try {
                     await handleCreateNewTestCase(targets, context, '.csv');
                 } catch (err: any) {
@@ -156,7 +156,7 @@ export async function activate(context: vscode.ExtensionContext) {
             'testcaseViewer.createNewTestCaseYaml',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
                 const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
-                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCaseYaml' });
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCaseYaml' });
                 try {
                     await handleCreateNewTestCase(targets, context, '.yaml');
                 } catch (err: any) {
@@ -170,11 +170,11 @@ export async function activate(context: vscode.ExtensionContext) {
             'testcaseViewer.createNewTestCase',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
                 const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
-                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCase' });
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCase' });
                 try {
                     await handleCreateNewTestCase(targets, context);
                 } catch (err: any) {
-                    sendTelemetryErrorEvent('createNewTestCase.commandError', telemetryErrProps(err));
+                    TelemetryService.sendTelemetryErrorEvent('createNewTestCase.commandError', telemetryErrProps(err));
                     showToast(undefined, 'error', `创建测试案例失败: ${err.message || err}`);
                 }
             }
@@ -192,7 +192,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestCaseQuick',
             async () => {
-                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCaseQuick' });
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCaseQuick' });
 
                 const activeUri = getActiveFileUri();
                 let targetUri: vscode.Uri | undefined;
@@ -216,7 +216,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 try {
                     await handleCreateNewTestCase([targetUri], context);
                 } catch (err: any) {
-                    sendTelemetryErrorEvent('createNewTestCaseQuick.commandError', telemetryErrProps(err));
+                    TelemetryService.sendTelemetryErrorEvent('createNewTestCaseQuick.commandError', telemetryErrProps(err));
                     showToast(undefined, 'error', `创建测试案例失败: ${err.message || err}`);
                 }
             }
@@ -227,7 +227,7 @@ export async function activate(context: vscode.ExtensionContext) {
             'testcaseViewer.createNewTestPoint',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
                 const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
-                sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestPoint' });
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestPoint' });
                 try {
                     await handleCreateNewTestPoint(targets, context);
                 } catch (err: any) {
@@ -247,10 +247,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
     updateShowIcon();
     console.log('[Extension] 插件激活完成');
-    sendTelemetryEvent('extension.activate.done', { activateMs: String(Date.now() - _activateStart) });
+    TelemetryService.sendTelemetryEvent('extension.activate.done', { activateMs: String(Date.now() - _activateStart) });
 }
 
 export function deactivate() {
     console.log('[Extension] 插件已停用');
-    try { sendTelemetryEvent('extension.deactivate', {}); } catch (_) { /* ignore */ }
+    try { TelemetryService.sendTelemetryEvent('extension.deactivate', {}); } catch (_) { /* ignore */ }
 }

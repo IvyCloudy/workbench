@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { markAsCreatedByCommand } from '../utils/fileIdentifier';
-import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
+import { TelemetryService } from '../utils/telemetry';
 import { telemetryErrProps } from '../utils/extensionHelpers';
 import { showToast } from '../utils/message';
 
@@ -54,7 +54,7 @@ async function openWithPluginEditor(fileUri: vscode.Uri, _originalFileName: stri
         await vscode.commands.executeCommand('vscode.openWith', fileUri, TESTCASE_EDITOR_VIEWTYPE);
 
         const fileName = path.basename(fileUri.fsPath);
-        sendTelemetryEvent('createNewTestCase.success', {
+        TelemetryService.sendTelemetryEvent('createNewTestCase.success', {
             fileName: fileName,
             fileType: path.extname(fileName)
         });
@@ -62,7 +62,7 @@ async function openWithPluginEditor(fileUri: vscode.Uri, _originalFileName: stri
         try {
             const document = await vscode.workspace.openTextDocument(fileUri);
             await vscode.window.showTextDocument(document);
-            sendTelemetryErrorEvent('createNewTestCase.openEditor.failed', telemetryErrProps(err));
+            TelemetryService.sendTelemetryErrorEvent('createNewTestCase.openEditor.failed', telemetryErrProps(err));
         } catch (fallbackErr: any) {
             showToast(undefined, 'error', `打开文件失败: ${fallbackErr.message || fallbackErr}`);
         }
@@ -142,7 +142,7 @@ export async function handleCreateNewTestCase(
         );
     } catch (err: any) {
         showToast(undefined, 'error', `创建测试案例失败: ${err.message || err}`);
-        sendTelemetryErrorEvent('createNewTestCase.error', telemetryErrProps(err));
+        TelemetryService.sendTelemetryErrorEvent('createNewTestCase.error', telemetryErrProps(err));
     }
 }
 

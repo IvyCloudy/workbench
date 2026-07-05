@@ -18,7 +18,7 @@ import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
 import { readConfig } from './storage';
-import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
+import { TelemetryService } from '../utils/telemetry';
 import { stackHead } from './utils';
 import { mapRowToCaseItem } from '../utils/pushDataMapper';
 import type { AppConfig, ApiResponse, QueryOptions } from '../types';
@@ -75,7 +75,7 @@ function addSm2Signature(headers: Record<string, string>, appConfig: AppConfig):
         headers['X-Signature'] = sm2.doEncrypt(String(timestamp), publicKey);
     } catch (error) {
         console.error('[http] SM2 签名失败:', error);
-        sendTelemetryErrorEvent('http.sm2.signFailed', { errorMessage: String((error as any)?.message || String(error)).slice(0, 500), stackHead: stackHead(error) });
+        TelemetryService.sendTelemetryErrorEvent('http.sm2.signFailed', { errorMessage: String((error as any)?.message || String(error)).slice(0, 500), stackHead: stackHead(error) });
     }
 }
 
@@ -119,7 +119,7 @@ function makeRequest<T = any>(
         req.on('error', (err: NodeJS.ErrnoException) => {
             const target = `${urlObj.hostname}:${urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80)}`;
             const code = err.code || 'UNKNOWN';
-            sendTelemetryErrorEvent('http.request.error', { errCode: code, target });
+            TelemetryService.sendTelemetryErrorEvent('http.request.error', { errCode: code, target });
             switch (err.code) {
                 case 'ECONNREFUSED':
                     reject(new Error(`无法连接后端服务（${target}），请确认服务已启动`));
@@ -167,16 +167,16 @@ async function post<T = any>(
  */
 export async function fetchTaskTree(context: vscode.ExtensionContext): Promise<any[]> {
     const url = `${await getApiBaseUrl(context)}/test-task/task-tree`;
-    sendTelemetryEvent('api.fetchTaskTree.start', {});
+    TelemetryService.sendTelemetryEvent('api.fetchTaskTree.start', {});
     const _start = Date.now();
     const response = await post<ApiResponse<any[]>>(context, url, {});
     const _costMs = String(Date.now() - _start);
     maybeReportAuthFailure(response.status, 'fetchTaskTree');
     if (response.data.returnCode === 'SUC0000') {
-        sendTelemetryEvent('api.fetchTaskTree.ok', { returnCode: response.data.returnCode, costMs: _costMs });
+        TelemetryService.sendTelemetryEvent('api.fetchTaskTree.ok', { returnCode: response.data.returnCode, costMs: _costMs });
         return response.data.body || [];
     }
-    sendTelemetryErrorEvent('api.fetchTaskTree.fail', { returnCode: response.data.returnCode || '', costMs: _costMs });
+    TelemetryService.sendTelemetryErrorEvent('api.fetchTaskTree.fail', { returnCode: response.data.returnCode || '', costMs: _costMs });
     throw new Error(response.data.errorMsg || '获取任务树失败');
 }
 
@@ -206,7 +206,7 @@ export async function queryTestCases(
     const _start = Date.now();
     const response = await post<ApiResponse>(context, url, body);
     maybeReportAuthFailure(response.status, 'queryTestCases');
-    sendTelemetryEvent('api.queryTestCases.done', {
+    TelemetryService.sendTelemetryEvent('api.queryTestCases.done', {
         returnCode: response.data.returnCode || '',
         currentPage: String(opts.currentPage || 1),
         costMs: String(Date.now() - _start),
@@ -226,7 +226,7 @@ export async function batchImportData(
     const _start = Date.now();
     const response = await post<ApiResponse>(context, url, body);
     maybeReportAuthFailure(response.status, 'batchImport');
-    sendTelemetryEvent('api.batchImport.done', {
+    TelemetryService.sendTelemetryEvent('api.batchImport.done', {
         returnCode: response.data.returnCode || '',
         totalRows: String(opts.selectedRows.length),
         costMs: String(Date.now() - _start),
@@ -283,14 +283,14 @@ export async function pushTestCase(
         const _rc = (response.data as any)?.returnCode || '';
         const _success = _rc === 'SUC0000';
         if (_success) {
-            sendTelemetryEvent('api.pushTestCase.ok', {
+            TelemetryService.sendTelemetryEvent('api.pushTestCase.ok', {
                 httpStatus: String(response.status),
                 totalRows: String(data.length),
                 bytes: String(Buffer.byteLength(bodyStr, 'utf8')),
                 costMs: String(Date.now() - _apiStart),
             });
         } else {
-            sendTelemetryErrorEvent('api.pushTestCase.fail', {
+            TelemetryService.sendTelemetryErrorEvent('api.pushTestCase.fail', {
                 httpStatus: String(response.status),
                 returnCode: _rc,
                 totalRows: String(data.length),
@@ -299,7 +299,7 @@ export async function pushTestCase(
         }
         return response.data;
     } catch (err: any) {
-        sendTelemetryErrorEvent('api.pushTestCase.exception', {
+        TelemetryService.sendTelemetryErrorEvent('api.pushTestCase.exception', {
             totalRows: String(data.length),
             errorMessage: String(err?.message || String(err)).slice(0, 500),
             stackHead: stackHead(err),
@@ -314,7 +314,7 @@ export async function pushTestCase(
  */
 function maybeReportAuthFailure(httpStatus: number, api: string): void {
     if (httpStatus === 401 || httpStatus === 403) {
-        sendTelemetryErrorEvent('api.auth.unauthorized', { api, httpStatus: String(httpStatus) });
+        TelemetryService.sendTelemetryErrorEvent('api.auth.unauthorized', { api, httpStatus: String(httpStatus) });
     }
 }
 

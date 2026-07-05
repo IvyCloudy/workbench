@@ -199,3 +199,34 @@ export function stackHead(err: any, lines = 5): string {
     const stack = err && err.stack ? String(err.stack) : '';
     return stack.split('\n').slice(0, lines).join(' | ').slice(0, 1000);
 }
+
+/**
+ * 从任意 error / thrown value 构造标准埋点错误属性：
+ *   - errorMessage：截断到 500 字符（避免超 payload 上限）
+ *   - stackHead   ：栈头一行（不包含具体路径，便于聚合）
+ * 可通过 extra 附加业务维度（如 fileFormat / apiName / rowIdx 等）；
+ * extra 中同名字段可覆盖默认 errorMessage / stackHead（如已预处理过的错误消息）。
+ * 用法：
+ *   TelemetryService.sendTelemetryErrorEvent('editor.save.error', buildErrorProps(err, { fileFormat }))
+ */
+export function buildErrorProps(err: any, extra?: Record<string, string>): Record<string, string> {
+    const errorMessage = String(err?.message || String(err)).slice(0, 500);
+    return { errorMessage, stackHead: stackHead(err), ...(extra || {}) };
+}
+
+// ============================================
+// 日志时间戳
+// ============================================
+
+/**
+ * 生成 hh:mm:ss.ms 格式的时间戳字符串，用于扩展端日志前缀，方便前后端事件比对时序。
+ * 不含日期部分（VS Code 输出面板日志同一天不会跨天，重启即清空）。
+ * @param d 可选，默认 new Date()
+ */
+export function formatLogTime(d: Date = new Date()): string {
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    const ms = String(d.getMilliseconds()).padStart(3, '0');
+    return `${hh}:${mm}:${ss}.${ms}`;
+}

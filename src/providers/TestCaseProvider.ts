@@ -18,7 +18,7 @@ import { BaseWebviewProvider, type MessageHandler } from './BaseWebviewProvider'
 import { writeParams } from '../services/storage';
 import { queryTestCases, fetchTaskTree } from '../services/http';
 import { getTaskInfoByFilePath } from '../utils/commands';
-import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
+import { TelemetryService } from '../utils/telemetry';
 import { stackHead } from '../services/utils';
 import type { WebviewMessage } from '../types';
 
@@ -137,7 +137,7 @@ export class TestCaseProvider extends BaseWebviewProvider {
 
         let params: TestCaseParams;
         if (result.bind) {
-            sendTelemetryEvent('testCase.viewOnline', { bound: 'true' });
+            TelemetryService.sendTelemetryEvent('testCase.viewOnline', { bound: 'true' });
             const info = result.taskInfo as any;
             params = {
                 testTaskNo: info.testTaskNo,
@@ -145,7 +145,7 @@ export class TestCaseProvider extends BaseWebviewProvider {
                 testPhaseName: info.testPhaseName,
             };
         } else {
-            sendTelemetryEvent('testCase.viewOnline', { bound: 'false' });
+            TelemetryService.sendTelemetryEvent('testCase.viewOnline', { bound: 'false' });
             params = {
                 testTaskNo: '',
                 subTestTaskName: '',
@@ -159,7 +159,7 @@ export class TestCaseProvider extends BaseWebviewProvider {
         this.readyParams = { ...params, apiUrl };
 
         await this.show();
-        sendTelemetryEvent('testCase.webview.shown', {});
+        TelemetryService.sendTelemetryEvent('testCase.webview.shown', {});
         await writeParams(this.context, params);
     }
 
@@ -169,7 +169,7 @@ export class TestCaseProvider extends BaseWebviewProvider {
     protected handleMessage: MessageHandler = async (msg: WebviewMessage) => {
         try {
             if (msg.command === 'ready' && this.readyParams) {
-                sendTelemetryEvent('testCase.webview.ready', {});
+                TelemetryService.sendTelemetryEvent('testCase.webview.ready', {});
                 this.postMessage({
                     command: 'init',
                     ...this.readyParams,
@@ -180,14 +180,14 @@ export class TestCaseProvider extends BaseWebviewProvider {
             }
 
             if (msg.command === 'fetchTaskTree') {
-                sendTelemetryEvent('testCase.taskTree.requested', {});
+                TelemetryService.sendTelemetryEvent('testCase.taskTree.requested', {});
                 const treeData = await this.queryService.getTaskTree();
                 this.postMessage({ command: 'taskTreeData', data: treeData });
                 return;
             }
 
             if (msg.command === 'query') {
-                sendTelemetryEvent('testCase.query.requested', { currentPage: String(msg.currentPage || 1) });
+                TelemetryService.sendTelemetryEvent('testCase.query.requested', { currentPage: String(msg.currentPage || 1) });
                 const result = await this.queryService.queryTestCases({
                     currentPage: msg.currentPage || 1,
                     pageSize: msg.pageSize || '20',
@@ -203,15 +203,15 @@ export class TestCaseProvider extends BaseWebviewProvider {
                 });
 
                 if (!result.success) {
-                    sendTelemetryErrorEvent('testCase.query.error', { queryError: result.error || '查询失败' });
+                    TelemetryService.sendTelemetryErrorEvent('testCase.query.error', { queryError: result.error || '查询失败' });
                     this.postMessage({ command: 'showError', message: result.error || '查询失败' });
                 } else if (result.endOfData) {
-                    sendTelemetryEvent('testCase.query.endOfData', {});
+                    TelemetryService.sendTelemetryEvent('testCase.query.endOfData', {});
                     this.postMessage({ command: 'endOfData' });
                 } else {
                     const _list: any[] = Array.isArray(result.data?.list) ? result.data.list
                         : (Array.isArray(result.data) ? result.data : []);
-                    sendTelemetryEvent('testCase.query.success', {
+                    TelemetryService.sendTelemetryEvent('testCase.query.success', {
                         currentPage: String(msg.currentPage || 1),
                         rows: String(_list.length),
                     });
@@ -219,7 +219,7 @@ export class TestCaseProvider extends BaseWebviewProvider {
                 }
             }
         } catch (err: any) {
-                sendTelemetryErrorEvent('testCase.message.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
+                TelemetryService.sendTelemetryErrorEvent('testCase.message.error', { errorMessage: String(err?.message || String(err)).slice(0, 500), stackHead: stackHead(err) });
             this.postMessage({
                 command: 'showError',
                 message: `消息处理失败: ${err?.message || err}`,

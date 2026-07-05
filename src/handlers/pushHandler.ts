@@ -4,7 +4,7 @@ import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { FileTypeChecker } from '../providers/UnifiedEditorProvider';
 import { parseFileToRows } from '../parsers';
 import { showPushErrorModal, showModal, showPushResult } from '../utils/message';
-import { sendTelemetryEvent } from '../utils/telemetry';
+import { TelemetryService } from '../utils/telemetry';
 import { runPush, buildRowIndexMappings } from './pushCore';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
@@ -57,13 +57,13 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
     }
 
     if (multiFile) {
-        sendTelemetryEvent('explorerPush.aborted', { reason: 'multiFile', ext: '' });
+        TelemetryService.sendTelemetryEvent('explorerPush.aborted', { reason: 'multiFile', ext: '' });
         showModal(panel, 'warning', '多文件推送', '暂不支持多文件推送，请逐个推送。将仅处理首个文件。');
     }
 
     const fileCheck = FileTypeChecker.isQualifiedFile(target);
     if (!fileCheck.qualified) {
-        sendTelemetryEvent('explorerPush.aborted', { reason: 'dirNotQualified', ext: '' });
+        TelemetryService.sendTelemetryEvent('explorerPush.aborted', { reason: 'dirNotQualified', ext: '' });
         showPushErrorModal(panel, baseName, `文件不在合规目录下\n\n请将文件放入 测试任务/<任务文件夹>/测试案例/ 目录结构中。\n当前文件：${baseName}`);
         return;
     }
@@ -139,7 +139,7 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
             onComplete: ({ successCount, failures, total }) => {
                 showPushResult(panel, baseName, successCount, failures, total);
                 if (!panel) {
-                    sendTelemetryEvent('explorerPush.noPanelFallback', {
+                    TelemetryService.sendTelemetryEvent('explorerPush.noPanelFallback', {
                         succ: String(successCount),
                         fail: String(failures.length),
                         ext: path.extname(filePath).toLowerCase(),

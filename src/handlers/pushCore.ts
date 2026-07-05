@@ -41,7 +41,7 @@ import { persistPushFailures } from '../utils/pushFailureStore';
 import { savePushSnapshot } from '../utils/pushSnapshotStore';
 import { normalizePushData } from '../utils/headerLabels';
 import { TS_ID_COLUMN, stackHead } from '../services/utils';
-import { sendTelemetryEvent, sendTelemetryErrorEvent } from '../utils/telemetry';
+import { TelemetryService } from '../utils/telemetry';
 import { telemetryErrProps } from '../utils/extensionHelpers';
 import { createParser, ensureTrackingColumns, applyTestCaseNos, detectFileType, type FileParser } from '../parsers';
 
@@ -507,7 +507,7 @@ export async function writeBackTestCaseNos(opts: WriteBackOptions): Promise<void
         }
     } catch (err: any) {
         console.error(`[推送] 回写 testCaseNo 失败: ${err?.message || err}`);
-        sendTelemetryErrorEvent(`${opts.telemetryPrefix}.writeBackFailed`, {
+        TelemetryService.sendTelemetryErrorEvent(`${opts.telemetryPrefix}.writeBackFailed`, {
             ...opts.telemetryContext,
             ...telemetryErrProps(err),
             errorMessage: String(err?.message || String(err)).slice(0, 500),
@@ -596,13 +596,13 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
     // ---- 0. 任务绑定校验 ----
     const taskInfoResult = await resolveTaskInfoOrNull(filePath);
     if (taskInfoResult.status === 'unbound') {
-        sendTelemetryEvent(`${telemetryPrefix}.aborted`, { reason: 'unbound', ext: fileExt, traceId });
+        TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.aborted`, { reason: 'unbound', ext: fileExt, traceId });
         hooks.onUnbound();
         return;
     }
     if (taskInfoResult.status === 'error') {
         console.error(`[推送][${traceId}] 获取任务信息异常:`, taskInfoResult.errorMessage);
-        sendTelemetryErrorEvent(`${telemetryPrefix}.taskInfoFailed`, {
+        TelemetryService.sendTelemetryErrorEvent(`${telemetryPrefix}.taskInfoFailed`, {
             ext: fileExt,
             traceId,
             ...telemetryErrProps(taskInfoResult.error),
@@ -620,14 +620,14 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
     // ---- 1. 空数据 ----
     let rows: RowLike[] = Array.isArray(originalRows) ? originalRows : [];
     if (rows.length === 0) {
-        sendTelemetryEvent(`${telemetryPrefix}.aborted`, { reason: 'noData', ext: fileExt, traceId });
+        TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.aborted`, { reason: 'noData', ext: fileExt, traceId });
         hooks.onNoData?.();
         return;
     }
 
     // ---- 1.1 行数上限保护（P3-1） ----
     if (rows.length > maxRows) {
-        sendTelemetryEvent(`${telemetryPrefix}.aborted`, {
+        TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.aborted`, {
             reason: 'exceedMaxRows',
             ext: fileExt,
             traceId,
@@ -661,14 +661,14 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         });
         // 埋点：不阻断，只记录预校验剔除数量（区别于旧的 aborted）
         if (placeholderFailures.length > 0) {
-            sendTelemetryEvent(`${telemetryPrefix}.placeholderTestcaseIdSkipped`, {
+            TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.placeholderTestcaseIdSkipped`, {
                 ext: fileExt,
                 traceId,
                 count: String(placeholderFailures.length),
             });
         }
         if (emptyFailures.length > 0) {
-            sendTelemetryEvent(`${telemetryPrefix}.emptyTestcaseIdSkipped`, {
+            TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.emptyTestcaseIdSkipped`, {
                 ext: fileExt,
                 traceId,
                 count: String(emptyFailures.length),
@@ -711,7 +711,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
 
     // 若剔除后已无可推送行 —— 直接由 onComplete 汇总输出，不再调后端
     if (rows.length === 0) {
-        sendTelemetryEvent(`${telemetryPrefix}.aborted`, {
+        TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.aborted`, {
             reason: placeholderFailures.length > 0 && emptyFailures.length > 0
                 ? 'placeholderAndEmptyTestcaseId'
                 : (placeholderFailures.length > 0 ? 'placeholderTestcaseIdOnly' : 'emptyTestcaseIdOnly'),
@@ -736,7 +736,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         //     不能只提示"为样例数据"，需把预校验失败一起在 onComplete 弹窗中展示；
         //   - 否则（纯样例）维持原语义，走 onOnlySampleRows。
         if (preValidationFailures.length > 0) {
-            sendTelemetryEvent(`${telemetryPrefix}.aborted`, {
+            TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.aborted`, {
                 reason: 'onlyTemplateExampleAndPreValidationFailed',
                 ext: fileExt,
                 traceId,
@@ -751,7 +751,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
             try { hooks.onProgress?.('done', { rows: 0 }); } catch (_) { /* 忽略 */ }
             return;
         }
-        sendTelemetryEvent(`${telemetryPrefix}.aborted`, {
+        TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.aborted`, {
             reason: 'onlyTemplateExample',
             ext: fileExt,
             traceId,
@@ -762,7 +762,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
     }
     if (skipped > 0) {
         console.log(`[推送][${traceId}] 已过滤 ${skipped} 行模板示例数据`);
-        sendTelemetryEvent(`${telemetryPrefix}.skipTemplateExample`, {
+        TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.skipTemplateExample`, {
             ext: fileExt,
             traceId,
             skipped: String(skipped),
@@ -772,7 +772,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
 
     // ---- 4. 调用后端推送接口 ----
     console.log(`[推送][${traceId}] 文件: ${filePath}, ${rows.length} 行`);
-    sendTelemetryEvent(`${telemetryPrefix}.start`, { ext: fileExt, traceId, totalRows: String(rows.length) });
+    TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.start`, { ext: fileExt, traceId, totalRows: String(rows.length) });
     // P3-2：进度反馈 —— 让调用方可选提示用户
     try { hooks.onProgress?.('start', { rows: rows.length }); } catch (_) { /* 忽略 */ }
     try { hooks.onProgress?.('pushing', { rows: rows.length }); } catch (_) { /* 忽略 */ }
@@ -785,7 +785,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
     );
     if (pushResult.returnCode !== 'SUC0000') {
         hooks.onBackendError(pushResult.errorMsg || '推送失败');
-        sendTelemetryErrorEvent(`${telemetryPrefix}.failed`, {
+        TelemetryService.sendTelemetryErrorEvent(`${telemetryPrefix}.failed`, {
             ext: fileExt,
             traceId,
             returnCode: pushResult.returnCode || '',
@@ -803,7 +803,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
     const leakedSuccess = successMappings.filter(m => m && isSampleTsId(m.tsId)).length;
     const leakedFailure = failures.filter(f => f && isSampleTsId(f.tsId)).length;
     if (leakedSuccess > 0 || leakedFailure > 0) {
-        sendTelemetryErrorEvent(`${telemetryPrefix}.templateExampleLeaked`, {
+        TelemetryService.sendTelemetryErrorEvent(`${telemetryPrefix}.templateExampleLeaked`, {
             ext: fileExt,
             traceId,
             leakedSuccess: String(leakedSuccess),
@@ -856,7 +856,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
             }
         } catch (err: any) {
             console.error(`[推送][${traceId}] 全部失败，快照更新失败:`, err?.message || err);
-            sendTelemetryErrorEvent(`${telemetryPrefix}.allFailSnapshotFailed`, {
+            TelemetryService.sendTelemetryErrorEvent(`${telemetryPrefix}.allFailSnapshotFailed`, {
                 ext: fileExt,
                 traceId,
                 errorMessage: String(err?.message || String(err)).slice(0, 500),
@@ -889,7 +889,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         console.error(`[推送][${traceId}] 持久化失败标记失败:`, err?.message || err);
     }
 
-    sendTelemetryEvent(`${telemetryPrefix}.complete`, {
+    TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.complete`, {
         ext: fileExt,
         traceId,
         pushResult: mergedFailures.length === 0 ? 'allSuccess' : (successMappings.length === 0 ? 'allFail' : 'partial'),
@@ -907,7 +907,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         // 否则前端推送按钮会永久 loading，用户看不到任何提示。
         const errorMessage = String(err?.message || err || '未知错误');
         console.error(`[推送][${traceId}] runPush 未预期异常:`, errorMessage, err);
-        sendTelemetryErrorEvent(`${telemetryPrefix}.unexpectedError`, {
+        TelemetryService.sendTelemetryErrorEvent(`${telemetryPrefix}.unexpectedError`, {
             ext: fileExt,
             traceId,
             ...telemetryErrProps(err),

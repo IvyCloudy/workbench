@@ -19,7 +19,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { DetailTableData } from '../types';
-import { sendTelemetryErrorEvent } from './telemetry';
+import { TelemetryService } from './telemetry';
 import { stackHead } from '../services/utils';
 import { getFailures } from './pushFailureStore';
 
@@ -87,7 +87,7 @@ function loadStore(): SnapshotStore {
         const parsed = JSON.parse(text);
         if (typeof parsed !== 'object' || Array.isArray(parsed) || !parsed) {
             // 快照文件格式异常（被外部篡改 / 捯坏），需上报便于定位绿色高亮误判类问题
-            sendTelemetryErrorEvent('snapshot.load.invalidFormat', {
+            TelemetryService.sendTelemetryErrorEvent('snapshot.load.invalidFormat', {
                 fileType: typeof parsed,
             });
             return {};
@@ -96,7 +96,7 @@ function loadStore(): SnapshotStore {
         return cachedStore;
     } catch (err: any) {
         // 快照读取 / 反序列化异常：上报以便反查 "diff 异常 / 高亮误判" 问题
-            sendTelemetryErrorEvent('snapshot.load.failed', {
+            TelemetryService.sendTelemetryErrorEvent('snapshot.load.failed', {
             errorMessage: String(err?.message || String(err)).slice(0, 500),
             stackHead: stackHead(err),
         });
@@ -111,7 +111,7 @@ async function saveStore(store: SnapshotStore): Promise<void> {
         cachedStore = store;
     } catch (err: any) {
         // 快照写入异常：磁盘 / 权限 / globalStorage 不可写。后续 diff 将不准确。
-        sendTelemetryErrorEvent('snapshot.save.failed', {
+        TelemetryService.sendTelemetryErrorEvent('snapshot.save.failed', {
             errorMessage: String(err?.message || String(err)).slice(0, 500),
             stackHead: stackHead(err),
         });
@@ -168,7 +168,7 @@ export async function ensureSnapshotFile(context: vscode.ExtensionContext): Prom
         catch { await fs.promises.writeFile(fp, JSON.stringify({}), 'utf-8'); }
     } catch (err: any) {
         console.error('[SnapshotStore] 初始化失败:', err?.message || err);
-        sendTelemetryErrorEvent('snapshot.init.failed', {
+        TelemetryService.sendTelemetryErrorEvent('snapshot.init.failed', {
             errorMessage: String(err?.message || String(err)).slice(0, 500),
             stackHead: stackHead(err),
         });

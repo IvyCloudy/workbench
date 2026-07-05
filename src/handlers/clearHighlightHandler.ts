@@ -7,7 +7,7 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { sendTelemetryEvent } from '../utils/telemetry';
+import { TelemetryService } from '../utils/telemetry';
 import { getActiveFileUri } from '../utils/extensionHelpers';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { clearHighlight } from '../utils/highlightStore';
@@ -21,7 +21,7 @@ import { removeMarkFile } from '../utils/markStore';
  * @param uri 可选，要清理的文件 URI。若不传，则使用当前激活的文件
  */
 export async function handleClearHighlight(uri?: vscode.Uri): Promise<void> {
-    sendTelemetryEvent('command.executed', { command: 'testcaseViewer.clearHighlight' });
+    TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.clearHighlight' });
 
     const targetUri = uri || getActiveFileUri();
     if (!targetUri) {

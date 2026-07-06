@@ -575,12 +575,12 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         const currentTask = this.context
             ? await getCurrentTaskInfo(filePath)
             : { bind: false, taskInfo: {} as Record<string, never> };
-        const info = currentTask.taskInfo as { testTaskNo?: string; testTaskName?: string; subTestTaskName?: string };
+            
         const taskInfoForWebView = {
             bind: currentTask.bind,
-            testTaskNo: info?.testTaskNo || '',
-            testTaskName: info?.testTaskName || '',
-            subTestTaskName: info?.subTestTaskName || ''
+            testTaskNo: currentTask.taskInfo?.testTaskNo || '',
+            testTaskName: currentTask.taskInfo?.testTaskName || '',
+            subTestTaskName: currentTask.taskInfo?.subTestTaskName || ''
         }
         webviewPanel.webview.html = await this.buildEditorHtml(nonce, webviewPanel, session.type, taskInfoForWebView);
         log('✅ html ready');

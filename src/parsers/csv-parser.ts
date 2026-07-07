@@ -19,7 +19,8 @@ import type { FileParser, FileParseResult } from './file-parser';
 export class CsvFileParser implements FileParser {
     async parse(filePath: string): Promise<FileParseResult> {
         try {
-            const content = await fs.promises.readFile(filePath, 'utf-8');
+            const buffer = await fs.promises.readFile(filePath);
+            let content = this.decodeBuffer(buffer);
             const result = this.parseCsvContent(content);
             return {
                 tableData: result || { headers: [], rows: [] },
@@ -28,6 +29,62 @@ export class CsvFileParser implements FileParser {
         } catch (e: any) {
             throw new Error(`CSV 解析失败: ${e.message}`);
         }
+    }
+
+    /**
+     * 多编码兼容解码器：覆盖常见中文 CSV 编码格式
+     *
+     * 决策优先级：
+     *   1. BOM 检测：EF BB BF → UTF-8 / FF FE → UTF-16 LE / FE FF → UTF-16 BE
+     *   2. 无 BOM 时先尝试 UTF-8，检测替换字符 � 占比 > 5% 则认为解码失败
+     *   3. 回退到 GBK（国内最常见的 CSV 编码）
+     *   4. 最终去除字符串前导 BOM 字符 (\uFEFF)
+     */
+    private decodeBuffer(buffer: Buffer): string {
+        const stripBom = (str: string): string => {
+            if (str.charCodeAt(0) === 0xFEFF) { return str.slice(1); }
+            return str;
+        };
+
+        // ── 1. BOM 检测：根据前两个/三个字节直接确定编码 ──
+        if (buffer.length >= 2) {
+            const b0 = buffer[0];
+            const b1 = buffer[1];
+            if (b0 === 0xFF && b1 === 0xFE) {
+                // UTF-16 LE
+                return stripBom(buffer.toString('utf16le'));
+            }
+            if (b0 === 0xFE && b1 === 0xFF) {
+                // UTF-16 BE
+                return stripBom(buffer.swap16().toString('utf16le'));
+            }
+            if (buffer.length >= 3 && b0 === 0xEF && b1 === 0xBB && buffer[2] === 0xBF) {
+                // UTF-8 BOM
+                return buffer.toString('utf-8').replace(/^\uFEFF/, '');
+            }
+        }
+
+        // ── 2. 无 BOM：UTF-8 优先，质量检测 ──
+        const utf8 = buffer.toString('utf-8');
+        const replacementCount = (utf8.match(/\uFFFD/g) || []).length;
+        const totalChars = utf8.length || 1;
+        if (replacementCount / totalChars < 0.05) {
+            return utf8; // UTF-8 解码质量合格
+        }
+
+        // ── 3. UTF-8 质量差 → 回退到 GBK ──
+        try {
+            const iconv = require('iconv-lite');
+            const gbk = iconv.decode(buffer, 'gbk');
+            // 验证 GBK 解码质量
+            const gbkReplacement = (gbk.match(/\uFFFD/g) || []).length;
+            if (gbkReplacement / totalChars < 0.5) {
+                return gbk;
+            }
+        } catch { /* iconv-lite 不可用时兜底 */ }
+
+        // ── 4. 所有方案均失败，返回 UTF-8 兜底 ──
+        return utf8;
     }
 
     async save(filePath: string, data: TableData): Promise<void> {
@@ -77,7 +134,9 @@ export class CsvFileParser implements FileParser {
     }
 
     private parseCsvContent(content: string): { headers: string[]; rows: string[][] } | null {
-        const lines = content.split('\n').filter(line => line.trim());
+        // 统一换行符：\r\n 或 \r → \n
+        const normalized = content.replace(/\r\n?/g, '\n');
+        const lines = normalized.split('\n').filter(line => line.trim());
         if (lines.length === 0) return null;
         const delimiter = this.detectDelimiter(lines[0]);
         const headers = this.parseCsvLine(lines[0], delimiter);

@@ -114,34 +114,83 @@ export class CsvFileParser implements FileParser {
         return best ? best.delim : ',';
     }
 
-    private parseCsvLine(line: string, delimiter: string = ','): string[] {
-        const result: string[] = [];
-        let current = '';
-        let inQuotes = false;
-        for (let i = 0; i < line.length; i++) {
-            const ch = line[i];
-            if (ch === '"') {
-                inQuotes = !inQuotes;
-            } else if (ch === delimiter && !inQuotes) {
-                result.push(current.trim());
-                current = '';
-            } else {
-                current += ch;
-            }
-        }
-        result.push(current.trim());
-        return result;
-    }
-
+    /**
+     * 解析 CSV 内容（RFC 4180 兼容）：
+     *   - 逐字符遍历，追踪引号状态
+     *   - 引号内 "" → 转义为一个 "
+     *   - 引号内换行符 → 保留为字段值的一部分（多行字段）
+     *   - 引号外换行符 → 行分隔符
+     *   - 先用第一行检测分隔符，再全文解析
+     */
     private parseCsvContent(content: string): { headers: string[]; rows: string[][] } | null {
         // 统一换行符：\r\n 或 \r → \n
         const normalized = content.replace(/\r\n?/g, '\n');
-        const lines = normalized.split('\n').filter(line => line.trim());
-        if (lines.length === 0) return null;
-        const delimiter = this.detectDelimiter(lines[0]);
-        const headers = this.parseCsvLine(lines[0], delimiter);
-        const rows = lines.slice(1).map(line => this.parseCsvLine(line, delimiter));
+        if (normalized.trim().length === 0) return null;
+
+        // 取第一行（到首个 \n 为止）检测分隔符；注意第一行不会含嵌入换行
+        const firstNewline = normalized.indexOf('\n');
+        const firstLine = firstNewline >= 0 ? normalized.substring(0, firstNewline) : normalized;
+        const delimiter = this.detectDelimiter(firstLine);
+
+        const allRows = this.parseCsvRows(normalized, delimiter);
+        if (allRows.length === 0) return null;
+
+        const headers = allRows[0];
+        const rows = allRows.slice(1);
         return { headers, rows };
+    }
+
+    /**
+     * 将 CSV 内容按分隔符拆分为二维数组，正确处理引号多行字段
+     */
+    private parseCsvRows(content: string, delimiter: string): string[][] {
+        const rows: string[][] = [];
+        let row: string[] = [];
+        let field = '';
+        let inQuotes = false;
+
+        for (let i = 0; i < content.length; i++) {
+            const ch = content[i];
+            const nextCh = i + 1 < content.length ? content[i + 1] : '';
+
+            if (inQuotes) {
+                if (ch === '"') {
+                    if (nextCh === '"') {
+                        // 转义引号："" → "
+                        field += '"';
+                        i++;
+                    } else {
+                        // 引号字段结束
+                        inQuotes = false;
+                    }
+                } else {
+                    // 引号内所有字符（包括换行）都保留
+                    field += ch;
+                }
+            } else {
+                if (ch === '"' && field.trim() === '') {
+                    // 字段头部的引号 → 进入引号模式（去除前导空白后的引号开头）
+                    inQuotes = true;
+                } else if (ch === delimiter) {
+                    row.push(field.trim());
+                    field = '';
+                } else if (ch === '\n') {
+                    row.push(field.trim());
+                    field = '';
+                    rows.push(row);
+                    row = [];
+                } else {
+                    field += ch;
+                }
+            }
+        }
+
+        // 收尾：最后一个字段和最后一行
+        row.push(field.trim());
+        rows.push(row);
+
+        // 过滤全空行（所有字段均为空串）
+        return rows.filter(r => r.length > 0 && r.some(f => f !== ''));
     }
 
     private escapeCsvField(value: string, delimiter: string): string {

@@ -35,6 +35,7 @@ import { handleSyncDeletedRows } from './handlers/deletedRowsHandler';
 import { registerWorkspaceListeners } from './handlers/workspaceListeners';
 import { handleClearHighlight } from './handlers/clearHighlightHandler';
 import { initializeStorages, cleanupOrphanedRecords } from './utils/storageInitializer';
+import { openOrCreateHeaderLabelsSettings } from './utils/headerLabels';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
@@ -185,6 +186,20 @@ export async function activate(context: vscode.ExtensionContext) {
             'testcaseViewer.clearHighlight',
             async (uri: vscode.Uri) => {
                 await handleClearHighlight(uri);
+            }
+        ),
+
+        // ---- 配置表头中英映射 ----
+        vscode.commands.registerCommand(
+            'testcaseViewer.configureHeaderLabels',
+            async () => {
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.configureHeaderLabels' });
+                try {
+                    await openOrCreateHeaderLabelsSettings();
+                } catch (err: any) {
+                    TelemetryService.sendTelemetryErrorEvent('configureHeaderLabels.error', telemetryErrProps(err));
+                    showToast(undefined, 'error', `配置失败: ${err.message || err}`);
+                }
             }
         ),
 

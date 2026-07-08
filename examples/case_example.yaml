@@ -32,6 +32,7 @@
       db_expected:
         - 数据库检查点1
         - 数据库检查点2
+  tags: 案例标签
   type: 功能点类/流程类/界面类...
   test_type: 手工/自动化
   priority: 高/中/低

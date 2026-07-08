@@ -91,6 +91,12 @@
         "title": "清理文件高亮",
         "icon": "$(clear-all)",
         "category": "测试案例"
+      },
+      {
+        "command": "testcaseViewer.configureHeaderLabels",
+        "title": "配置表头中英映射",
+        "icon": "$(symbol-keyword)",
+        "category": "测试案例"
       }
     ],
     "menus": {

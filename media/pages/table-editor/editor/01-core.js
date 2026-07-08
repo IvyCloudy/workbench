@@ -946,7 +946,7 @@ window.addEventListener('message', function (e) {
         dbg('📨 recv saveError: ' + (m.message || ''));
         showToast('保存失败: ' + (m.message || ''), 'error');
     } else if (m.type === 'headerLabelsUpdated') {
-        // 配置项 / 工作区 .vscode/headerLabels.json 变更后热更新表头别名
+        // 配置项 / 工作区 .plugin/.tms/headerLabels.json 变更后热更新表头别名
         if (m.headerLabels && typeof m.headerLabels === 'object') {
             S.headerLabels = m.headerLabels;
             try { renderTable(); } catch (_) { /* ignore */ }

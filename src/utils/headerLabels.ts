@@ -4,27 +4,64 @@
  *  表头「英文 key → 中文别名」映射加载工具
  * ----------------------------------------------------------------------------
  *  来源（合并优先级，从低到高）：
- *    1. 插件内置默认值（package.json 的 default 字段，覆盖常见字段如 testcase_id/path/steps 等）
+ *    1. 插件内置默认值（package.json 的 default 字段）
  *    2. 用户设置 `testcaseViewer.headerLabels`
- *    3. 工作区设置 `testcaseViewer.headerLabels`（最高优先级）
- *  以上三层由 VSCode 自动合并，调用 getConfiguration().get() 直接拿到合并后结果。
+ *    3. 工作区设置 `testcaseViewer.headerLabels`
+ *    4. 工作区文件 `.plugin/.tms/headerLabels.json`（最高优先级，{ key: value } 平铺对象）
+ *  前三层由 VSCode 自动合并；第 4 层由本模块手动读取并覆盖。
  *  未配置且不在内置默认中的字段，表头只显示英文 key。
  *
  *  设计原则：
  *    - 中文别名仅用于 webview 表头展示，绝不会写回原始数据文件。
  *    - 配置非法格式时静默降级为空对象，不影响编辑器正常打开。
- *    - 提供 onDidChange 监听，前端可在配置变更时实时刷新表头。
+ *    - 监听 VSCode 配置变更 + 文件系统变更，前端可实时刷新表头。
  * ============================================================================
  */
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as fs from 'fs';
 
 const CONFIG_KEY = 'testcaseViewer.headerLabels';
 const REVERSE_CONFIG_KEY = 'testcaseViewer.headerReverseLabels';
+const HLABELS_REL_PATH = path.join('.plugin', '.tms', 'headerLabels.json');
 
 export type HeaderLabels = { [key: string]: string };
 
-/** 读取表头中英映射（默认值 + 用户/工作区设置由 VSCode 自动合并） */
+// ── 辅助：定位/读取 .plugin/.tms/headerLabels.json ──────────────────────────
+
+/** 获取当前工作区 .plugin/.tms/headerLabels.json 的绝对路径（无工作区返回 null） */
+function getHeaderLabelsJsonPath(): string | null {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) return null;
+    return path.join(folders[0].uri.fsPath, HLABELS_REL_PATH);
+}
+
+/** 从 .plugin/.tms/headerLabels.json 读取 { key: value } 映射（失败返回 {}） */
+function readHeaderLabelsJson(): HeaderLabels {
+    const result: HeaderLabels = {};
+    try {
+        const jsonPath = getHeaderLabelsJsonPath();
+        if (jsonPath && fs.existsSync(jsonPath)) {
+            const raw = fs.readFileSync(jsonPath, 'utf-8');
+            const obj = JSON.parse(raw);
+            if (obj && typeof obj === 'object') {
+                for (const k in obj) {
+                    if (Object.prototype.hasOwnProperty.call(obj, k)) {
+                        const v = (obj as any)[k];
+                        if (typeof v === 'string') result[k] = v;
+                    }
+                }
+            }
+        }
+    } catch { /* ignore */ }
+    return result;
+}
+
+// ── 主要读取函数 ────────────────────────────────────────────────────────────
+
+/** 读取表头中英映射（默认值 + 用户/工作区设置由 VSCode 自动合并，再以 .plugin/.tms/headerLabels.json 最高优先级覆盖） */
 export function getHeaderLabels(): HeaderLabels {
+    // 1. VSCode 配置系统（内置默认 + 用户设置 + 工作区 settings.json）
     const merged: HeaderLabels = {};
     try {
         const cfg = vscode.workspace.getConfiguration().get<HeaderLabels>(CONFIG_KEY);
@@ -37,6 +74,15 @@ export function getHeaderLabels(): HeaderLabels {
             }
         }
     } catch { /* ignore */ }
+
+    // 2. .plugin/.tms/headerLabels.json 最高优先级覆盖
+    const fileLabels = readHeaderLabelsJson();
+    for (const k in fileLabels) {
+        if (Object.prototype.hasOwnProperty.call(fileLabels, k)) {
+            merged[k] = fileLabels[k];
+        }
+    }
+
     return merged;
 }
 
@@ -120,11 +166,13 @@ export function normalizePushData(data: any[]): any[] {
 }
 
 /**
- * 监听表头映射变更（仅设置项变更）。
+ * 监听表头映射变更（VSCode 设置项变更 + .plugin/.tms/headerLabels.json 文件变更）。
  * 返回 Disposable 数组，调用方负责注册到 context.subscriptions 或 panel.onDidDispose。
  */
 export function onHeaderLabelsChange(handler: () => void): vscode.Disposable[] {
     const disposables: vscode.Disposable[] = [];
+
+    // 1. VSCode 配置系统变更（用户设置 / 工作区 settings.json）
     disposables.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
             if (e.affectsConfiguration(CONFIG_KEY) || e.affectsConfiguration(REVERSE_CONFIG_KEY)) {
@@ -132,5 +180,82 @@ export function onHeaderLabelsChange(handler: () => void): vscode.Disposable[] {
             }
         })
     );
+
+    // 2. .plugin/.tms/headerLabels.json 文件系统变更监听
+    const jsonPath = getHeaderLabelsJsonPath();
+    if (jsonPath) {
+        try {
+            const watcher = vscode.workspace.createFileSystemWatcher(
+                new vscode.RelativePattern(
+                    path.dirname(jsonPath),
+                    'headerLabels.json'
+                )
+            );
+            const onFileChange = () => { try { handler(); } catch { /* ignore */ } };
+            disposables.push(
+                watcher,
+                watcher.onDidChange(onFileChange),
+                watcher.onDidCreate(onFileChange),
+                watcher.onDidDelete(onFileChange),
+            );
+        } catch { /* ignore */ }
+    }
+
     return disposables;
+}
+
+// ============================================================================
+// 配置表头中英映射：若不存在则创建 .plugin/.tms/headerLabels.json，否则打开现有文件
+// ----------------------------------------------------------------------------
+// 流程：
+//   1. 找到当前工作区第一个文件夹
+//   2. 拼接 `.plugin/.tms/headerLabels.json` 路径
+//   3. 文件不存在 → 读取当前合并后的 headerLabels 默认值，写入 headerLabels.json 模板
+//   4. 文件存在   → 直接打开
+//   5. 用 VS Code 文本编辑器打开文件，光标定位到 headerLabels 行
+// ============================================================================
+
+/**
+ * 打开或创建工作区级 headerLabels.json，帮助用户配置表头中英映射。
+ *
+ * - 若 .plugin/.tms/headerLabels.json 已存在 → 直接打开，并定位到 headerLabels 行
+ * - 若不存在 → 读取当前插件内置默认 headerLabels，生成模板文件后打开
+ */
+export async function openOrCreateHeaderLabelsSettings(): Promise<void> {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) {
+        vscode.window.showWarningMessage('请先打开一个工作区文件夹。');
+        return;
+    }
+
+    const workspaceRoot = folders[0].uri.fsPath;
+    const pluginDir = path.join(workspaceRoot, '.plugin', '.tms');
+    const configPath = path.join(pluginDir, 'headerLabels.json');
+
+    if (!fs.existsSync(configPath)) {
+        // 读取当前合并后的 headerLabels 默认值（内置 + 用户设置）
+        const defaults = getHeaderLabels();
+
+        // 创建 .plugin/.tms 目录（如不存在）
+        if (!fs.existsSync(pluginDir)) {
+            fs.mkdirSync(pluginDir, { recursive: true });
+        }
+
+        // 写入模板文件
+        fs.writeFileSync(
+            configPath,
+            JSON.stringify(defaults, null, 4) + '\n',
+            'utf-8'
+        );
+
+        vscode.window.showInformationMessage('已在工作区创建 .plugin/.tms/headerLabels.json，表头映射模板已生成。');
+    }
+
+    // 打开文件
+    const doc = await vscode.workspace.openTextDocument(configPath);
+    const editor = await vscode.window.showTextDocument(doc);
+
+    // 将光标定位到文件开头
+    editor.selection = new vscode.Selection(0, 0, 0, 0);
+    editor.revealRange(new vscode.Range(0, 0, 0, 0));
 }

@@ -64,6 +64,11 @@ function toStr(v: any): string {
     return String(v);
 }
 
+/** 将字符串中的换行符 \n 替换为 <br>，用于推送时的步骤描述格式化 */
+function nl2br(v: any): string {
+    return toStr(v).replace(/\n/g, '<br>');
+}
+
 /**
  * 将任意值规整为字符串数组（按行）。
  * - null / undefined / '' → []
@@ -157,7 +162,7 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
     // description：解析「步骤x[:：]\n内容」格式，按步骤号排序
     const stepsText = unescapeCsvCell(row['步骤描述']);
     const descBlocks = parseStepBlocks(stepsText);
-    const description: string[] = descBlocks.map(b => b.content);
+    const description: string[] = descBlocks.map(b => nl2br(b.content));
     if (description.length === 0) {
         throw new Error(`案例 [${caseTag}] 缺少「步骤描述」内容，请补全后再推送。`);
     }
@@ -184,7 +189,7 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
         testType,
         type:         typeStr || '功能点类',
         priority:     toStr(row['优先级']),
-        preCondition: unescapeCsvCell(row['前置条件']),
+        preCondition: nl2br(unescapeCsvCell(row['前置条件'])),
         description,
         expected,
     };
@@ -218,7 +223,7 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
             throw new Error(`案例 [${caseTag}] 的第 ${idx + 1} 个步骤缺少 operation（操作步骤），请补全后再推送。`);
         }
         const dataLines = toLines(s && s.data).filter((l) => l.trim() !== '');
-        return dataLines.length ? `${op}<br>${dataLines.join('<br>')}` : op;
+        return dataLines.length ? `${nl2br(op)}<br>${dataLines.join('<br>')}` : nl2br(op);
     });
 
     // expected：每个 step 拼成「【UI检查】/【接口检查】/【数据检查】」三段，空段不拼接；三段都为空时保留 '' 占位；与 steps 一一对应
@@ -247,7 +252,7 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
         testType,
         type:         '功能点类',
         priority:     toStr(row['priority']),
-        preCondition: joinLines(row['preconditions']),
+        preCondition: nl2br(joinLines(row['preconditions'])),
         description,
         expected,
     };

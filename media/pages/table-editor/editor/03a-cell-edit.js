@@ -248,7 +248,8 @@ function startEdit(e) {
             return;
         }
         if (save) {
-            var newVal = input.value.replace(/\n/g, '\\n');
+            // 保留真实换行符（不再转为字面量 \n），由后端 escapeCsvField 负责引号包裹
+            var newVal = input.value;
             if (newVal !== oldVal) {
                 pushHistory();
                 if (bulkRect) {

@@ -3,7 +3,7 @@
  *  utils/fileIdentifier.ts
  *  文件标识工具：检测文件是否通过"新增测试案例"命令创建
  * ----------------------------------------------------------------------------
- *  新方案：使用 .vscode/testcase-viewer/created-files.json 记录
+ *  新方案：使用 .plugin/.tms/testcase-viewer/created-files.json 记录
  *  
  *  优点：
  *    1. 完全不影响原文件内容和解析逻辑
@@ -19,7 +19,7 @@ import { TelemetryService } from '../utils/telemetry';
 import { stackHead } from '../services/utils';
 
 // 记录文件的相对路径（相对于工作区根目录）
-const RECORD_DIR = '.vscode/testcase-viewer';
+const RECORD_DIR = '.plugin/.tms/testcase-viewer';
 const RECORD_FILE = 'created-files.json';
 
 /**
@@ -126,6 +126,34 @@ export function isCreatedByCommand(filePath: string): boolean {
 export function getFileCreationInfo(filePath: string): { createdAt: string; version: string } | null {
     const records = readRecordFile();
     return records[filePath] || null;
+}
+
+// ============================================================================
+// 推送来源判定
+// ----------------------------------------------------------------------------
+// 根据文件来源和数据特征，判定案例推送的平台来源（testAgent / testAgentMA）。
+// 规则（优先级从高到低）：
+//   1. 插件创建的案例文件 → testAgentMA
+//   2. 所选案例中任意 testcase_id 以 TC 开头 → testAgent
+//   3. 否则 → testAgentMA
+// ============================================================================
+
+/** 推送来源平台类型 */
+export type PushSource = 'testAgent' | 'testAgentMA';
+
+/**
+ * 判定推送来源平台
+ * @param filePath 案例文件绝对路径
+ * @param rows     待推送的案例行数组（至少包含 testcase_id 字段）
+ * @returns 推送来源平台标识
+ */
+export function getPushSource(filePath: string, rows: any[]): PushSource {
+    if (isCreatedByCommand(filePath)) return 'testAgentMA';
+    const hasTcId = rows.some(row => {
+        const tid = row && typeof row === 'object' ? (row as any).testcase_id : undefined;
+        return typeof tid === 'string' && tid.startsWith('TC');
+    });
+    return hasTcId ? 'testAgent' : 'testAgentMA';
 }
 
 /**

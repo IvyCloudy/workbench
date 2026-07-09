@@ -32,7 +32,7 @@ import { pushTestCase } from '../services/http';
 import { parsePushResponse, PushSuccessMapping, PushResponseFailure } from '../utils/pushResponse';
 import { getCurrentTaskInfo } from '../utils/commands';
 import {
-    isCreatedByCommand,
+    getPushSource,
     filterTemplateExampleRows,
     TEMPLATE_EXAMPLE_TS_ID,
     isSampleTsId,
@@ -585,9 +585,6 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
     const pushStart = Date.now();
     // P2-1：贯穿本次流程的 traceId，全部埋点都会带上，方便定位同一次推送
     const traceId = newPushTraceId();
-    // P2-3：fileMeta 提前算一次，避免下游多处重复 IO
-    const createdByCommand = isCreatedByCommand(filePath);
-    const pushSource = createdByCommand ? 'testAgentMA' : 'testAgent';
     // P3-1：行数上限（防御用户全选大文件）
     const maxRows = typeof opts.maxRows === 'number' && opts.maxRows > 0 ? opts.maxRows : DEFAULT_MAX_PUSH_ROWS;
 
@@ -624,6 +621,9 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         hooks.onNoData?.();
         return;
     }
+
+    // 判定推送来源：插件文件 → testAgentMA；含 TC 前缀 → testAgent；否则 → testAgentMA
+    const pushSource = getPushSource(filePath, rows);
 
     // ---- 1.1 行数上限保护（P3-1） ----
     if (rows.length > maxRows) {

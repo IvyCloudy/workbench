@@ -36,6 +36,8 @@ import { registerWorkspaceListeners } from './handlers/workspaceListeners';
 import { handleClearHighlight } from './handlers/clearHighlightHandler';
 import { initializeStorages, cleanupOrphanedRecords } from './utils/storageInitializer';
 import { openOrCreateHeaderLabelsSettings } from './utils/headerLabels';
+import { initYamlDiagnostics } from './utils/yamlValidator';
+import { registerYamlValidation, disposeYamlValidation } from './handlers/yamlValidationHandler';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
@@ -55,6 +57,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // 初始化各存储文件 + 清理孤儿记录
     await initializeStorages(context);
+
+    // 初始化 YAML 格式校对 DiagnosticCollection
+    initYamlDiagnostics(context);
     try {
         await cleanupOrphanedRecords();
     } catch (err: any) {
@@ -77,6 +82,7 @@ export async function activate(context: vscode.ExtensionContext) {
         ...bindTaskDisposables,
         ...workspaceListeners,
         tabChangeListener,
+        ...registerYamlValidation(),
 
         // ---- 自定义编辑器 ----
         vscode.window.registerCustomEditorProvider(
@@ -261,11 +267,13 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     updateShowIcon();
+
     console.log('[Extension] 插件激活完成');
     TelemetryService.sendTelemetryEvent('extension.activate.done', { activateMs: String(Date.now() - _activateStart) });
 }
 
 export function deactivate() {
     console.log('[Extension] 插件已停用');
+    disposeYamlValidation();
     try { TelemetryService.sendTelemetryEvent('extension.deactivate', {}); } catch (_) { /* ignore */ }
 }

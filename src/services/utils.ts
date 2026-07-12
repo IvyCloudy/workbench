@@ -108,7 +108,7 @@ document.querySelectorAll('button[data-act]').forEach(b => {
             max-width: 520px;
         }
         .msg h3 { color: #e34d59; margin: 0 0 12px; }
-        .msg p { color: #666; font-size: 14px; margin: 0 0 20px; line-height: 1.6; }
+        .msg p { color: #666; font-size: 14px; margin: 0 0 20px; line-height: 1.6; white-space: pre-line; text-align: left; }
         .actions { display: flex; gap: 8px; justify-content: center; }
         .btn {
             padding: 6px 16px; font-size: 13px; cursor: pointer;

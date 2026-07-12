@@ -1,11 +1,14 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { FileTypeChecker } from '../providers/UnifiedEditorProvider';
 import { parseFileToRows } from '../parsers';
 import { showPushErrorModal, showModal, showPushResult } from '../utils/message';
 import { TelemetryService } from '../utils/telemetry';
 import { runPush, buildRowIndexMappings } from './pushCore';
+import { validateYamlContent, publishYamlDiagnostics } from '../utils/yamlValidator';
+import { YAML_CMD_FIX_ALL } from '../utils/yamlConstants';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
@@ -66,6 +69,73 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         TelemetryService.sendTelemetryEvent('explorerPush.aborted', { reason: 'dirNotQualified', ext: '' });
         showPushErrorModal(panel, baseName, `文件不在合规目录下\n\n请将文件放入 测试任务/<任务文件夹>/测试案例/ 目录结构中。\n当前文件：${baseName}`);
         return;
+    }
+
+    // ─── YAML 格式校验前置拦截 ───────────────────────────────────────────────
+    // 目的：YAML 语法错误（未闭合引号 / mapping 崩坏 / anchor 冲突等）会让 parser.parse
+    //      抛异常并冒泡到 onUnexpectedError，用户只能看到一段技术性错误摘要，
+    //      且推送并未真正发起——用户可能误以为"推送出错"而重复点击。
+    // 做法：与 CustomEditor 兜底逻辑同源，跑 validateYamlContent + publishYamlDiagnostics，
+    //      Problems 面板即刻同步；发现 error 则立刻弹窗中断推送，引导修复。
+    if (/\.ya?ml$/i.test(filePath)) {
+        let yamlText = '';
+        try {
+            const openedDoc = vscode.workspace.textDocuments.find(
+                (d) => d.uri.fsPath === filePath || d.uri.toString() === target.toString(),
+            );
+            yamlText = openedDoc ? openedDoc.getText() : fs.readFileSync(filePath, 'utf-8');
+        } catch (readErr: any) {
+            console.warn('[推送] YAML 校验读文件失败:', readErr?.message || readErr);
+        }
+        if (yamlText) {
+            try {
+                const issues = validateYamlContent(yamlText);
+                publishYamlDiagnostics(target, issues);
+                const errIssues = issues
+                    .filter((iss) => iss.severity === 'error')
+                    .sort((a, b) => a.line - b.line);
+                if (errIssues.length > 0) {
+                    const first = errIssues[0];
+                    const errSummary = first.message
+                        .replace(/^YAML (解析|格式)错误 \(第 \d+ 行\): /, '')
+                        .split('\n')[0]
+                        .slice(0, 240);
+                    const countHint = errIssues.length > 1 ? `，共 ${errIssues.length} 处错误` : '';
+                    TelemetryService.sendTelemetryEvent('explorerPush.aborted', {
+                        reason: 'yamlSyntaxError',
+                        ext: 'yaml',
+                        errorLine: String(first.line),
+                    });
+                    // 引导性弹窗：不复用 showPushErrorModal 的"推送失败"标题，
+                    // 用一个更清晰的 Warning 弹窗 + 「YAML 修复全部 / 查看问题面板」按钮。
+                    vscode.window.showWarningMessage(
+                        `${baseName} 存在 YAML 语法错误（首条：第 ${first.line} 行${countHint}），已终止推送。错误摘要：${errSummary}`,
+                        'YAML 修复全部',
+                        '查看问题面板',
+                    ).then((choice) => {
+                        if (choice === 'YAML 修复全部') {
+                            vscode.commands.executeCommand(YAML_CMD_FIX_ALL, target);
+                        } else if (choice === '查看问题面板') {
+                            vscode.commands.executeCommand('workbench.actions.view.problems');
+                        }
+                    });
+                    // 若已有 webview panel（CustomEditor 或已切走的 tab），也把失败摘要投递到面板 modal，
+                    // 保证入口一致性；panel 为 undefined 时 showPushErrorModal 内部会 no-op。
+                    showPushErrorModal(panel, baseName,
+                        `YAML 文件存在语法错误，已终止推送。\n\n首条错误（第 ${first.line} 行${countHint}）：\n${errSummary}\n\n请修复语法后再次推送。可通过命令面板「YAML 修复全部」或 Problems 面板定位问题。`);
+                    return;
+                }
+            } catch (vErr: any) {
+                // 校验器本身崩溃视为致命错误，仍需要终止推送并告知用户
+                console.warn('[推送] YAML 校验器异常:', vErr?.message || vErr);
+                TelemetryService.sendTelemetryEvent('explorerPush.aborted', {
+                    reason: 'yamlValidatorCrash',
+                    ext: 'yaml',
+                });
+                showPushErrorModal(panel, baseName, `YAML 校验器异常，已终止推送。\n\n请手动检查文件语法后重试。\n错误信息：${vErr?.message || vErr}`);
+                return;
+            }
+        }
     }
 
     const rows = await parseFileToRows(filePath);

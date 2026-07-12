@@ -31,6 +31,7 @@ import { type EditorSession } from '../services/diffHighlight';
 import { WebviewDataPusher, type PrefetchResult } from '../services/webviewDataPusher';
 import { FileWatchService } from '../services/fileWatchService';
 import { dispatchEditorMessage, type EditorMsgCtx } from '../handlers/editorMessageHandlers';
+import { tryYamlResolveFallback } from '../handlers/yamlResolveFallback';
 
 // 重新导出工具，便于子类使用
 export { isInQualifiedDir, FILE_PATTERNS };
@@ -433,9 +434,38 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         const panelEntry: PanelEntry = { panel: webviewPanel, ready, markReady };
         BaseEditorProvider.panelMap.set(filePath, panelEntry);
 
+        // ---- YAML 语法级可解析性拦截 ----
+        // 目的：拦截"YAML 库根本无法解析"的病态文件（未闭合引号 / mapping 崩坏 / anchor 冲突等）。
+        // 这些文件在案例编辑器中会因 parser 抛异常而拿到 null 数据 → 前端渲染空白表格
+        // → 用户视角就是"打开后数据丢失"。
+        //
+        // 设计原则（区别于历史"结构启发式拦截"）：
+        //   - 只用 YAML 库判定："能被合法解析" 即通过；不做任何结构合规性猜测。
+        //   - 拦截后引导用户去文本编辑器修复语法错误再回来打开，避免"打开后一片空白"。
+        //   - 合法 YAML（无论顶层单对象/数组、字段全嵌套/全标量/混合）全部按原逻辑走。
+        // ---- YAML 语法级可解析性拦截（兜底）----
+        // 详见 handlers/yamlResolveFallback.ts 头注释。此处仅在 CustomEditor 已被 resolve 时
+        // 作为"双保险"的第二道兜底：若前置拦截器（extension.ts）在 Tab 打开阶段已完整处理，
+        // 则静默关闭本 tab；否则由该模块显式做占位页 → Toast → close+openWith 切换。
+        if (session.type === 'yaml') {
+            const handled = await tryYamlResolveFallback({
+                document,
+                webviewPanel,
+                filePath,
+                fileName,
+                log,
+                removePanelMapEntry: () => BaseEditorProvider.panelMap.delete(filePath),
+            });
+            if (handled) return;
+        }
+
         // ⚡ 预解析（Prefetch）：在 webview 脚本加载的同时并行解析文件，
         // 避免出现「webview 加载完 → 发 init → 才开始 parse」的串行等待延迟。
         // 等 init 消息到达时若 prefetch 已完成，则直接复用结果立即推送，显著缩短首屏数据展示时间。
+        //
+        // 设计原则：YAML 文件只要 parser 能合法解析，就一律走原逻辑（缺 testcase_id 时
+        // 由 ensureTrackingColumns 自动补上主键列），不再做任何"结构合规性猜测式拦截"，
+        // 避免误伤用户手工创建的各种合法 YAML 形态。
         const _prefetchStart = Date.now();
         const prefetchPromise: Promise<PrefetchResult> =
             (async () => {
@@ -698,5 +728,3 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         return Promise.resolve({ id: ctx.destination.toString(), delete: () => {} });
     }
 }
-
-

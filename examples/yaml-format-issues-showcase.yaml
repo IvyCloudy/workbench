@@ -1,0 +1,123 @@
+﻿# ============================================================================
+# 综合 YAML 问题演示样例 —— 用于回归/演示插件所有校验规则的命中效果
+# ----------------------------------------------------------------------------
+# 覆盖：
+#   [BOM]  文件首字符包含 BOM 头
+#   [R1]   Tab 缩进（error，命中即停止其他规则）
+#   [R2]   非首列 Tab 字符（warning）
+#   [R3]   行末多余空格
+#   [R4]   冒号后缺少空格
+#   [R5]   布尔 / null / 特殊数值 未加引号
+#   [R6]   值中出现 # 号，会被 YAML 当注释丢弃
+#   [R7]   值中 YAML 保留字符（{ } [ ] , & * ! > |）
+#   [R8]   序列 "-" 后缺少空格
+#   [F1]   同层重复 key
+#   [F1']  sequence 同一 item 内重复 key
+#   [Parse] 由于中段一处未闭合的双引号，导致后续大量结构被 yaml 库判定为 error
+# ============================================================================
+metadata:
+  name:hello                                   # [R4] 冒号后缺空格
+  version: 1.0                                 
+  version: 2.0                                 # [F1] 与第 21 行 version 重复
+  desc: my #note                               # [R6] 值中 # 会被丢弃
+  desc: 覆盖示例                                # [F1] 与第 23 行 desc 重复
+  enabled: yes                                 # [R5] 歧义布尔值
+  disabled: off                                # [R5] 歧义布尔值
+  ratio: NaN                                   # [R5] 歧义特殊数值
+  fallback: null                               # [R5] 空值 null
+  quoted_ok: "yes"                             # ✅ 正常（不应报警）
+	author: myron                               # [R1] Tab 缩进（error，仅命中此规则）
+  contact: "team@example.com"	# [R2] 值中包含 Tab 字符
+  trailing_ws: hello   
+  empty:                                       # 合法：空值键，仅开启子作用域
+
+# --------------------------------------------------------------------------
+# sequence：不同 item 的同名 key 属正常（修复后不应误报）
+# --------------------------------------------------------------------------
+steps:
+  - operation: click
+    target: btn_login
+    params:
+      x: 1
+      y: 2
+  - operation: input
+    target: input_username
+    params:
+      x: 3
+      y: 4
+  - operation: assert
+    operation: verify                          # [F1'] sequence 同 item 内真正重复
+    target: text_hello
+
+# --------------------------------------------------------------------------
+# 保留字符 / dash 空格问题
+# --------------------------------------------------------------------------
+payload:
+  body: {a:1,b:2}                              # [R7] 保留字符 {
+  tags: [ci, dev]                              # [R7] 保留字符 [
+  ref: &anchor_name                            # [R7] 保留字符 &
+  ptr: *anchor_name                            # [R7] 保留字符 *
+  tag: !CustomTag                              # [R7] 保留字符 !
+  fold: > this is folded                       # [R7] 保留字符 >
+  pipe: | with pipe                            # [R7] 保留字符 |
+
+list_bad:
+  -foo                                         # [R8] "-" 后缺空格
+  -bar                                         # [R8] "-" 后缺空格
+  - good
+
+# --------------------------------------------------------------------------
+# 深层嵌套 + 多问题堆叠（同一行多规则）
+# --------------------------------------------------------------------------
+service:
+  api:
+    host: prod.example.com
+    port:8080                                  # [R4] 冒号后缺空格
+    debug: on                                  # [R5] 歧义布尔
+    debug: false                               # [F1] 与上一行 debug 重复
+    note:server #prod                          # [R4] 缺空格 + [R6] # 注释
+    endpoint: {method:GET,url:/api/v1}         # [R7] 保留字符 { （行内 map）
+
+# --------------------------------------------------------------------------
+# 触发级联错误：一处未闭合的双引号，会让 yaml 库从此处开始报 parse error，
+# 并把后续多层结构判定为语法错误（error 级联）
+# --------------------------------------------------------------------------
+broken_zone:
+  bad_string: "this quote never closes and eats the rest
+  next_key: value_a                            # [Parse] 被上一行未闭合引号吞掉
+  another_key: value_b                         # [Parse] 同上，级联 error
+  nested:
+    deep:
+      x: 1
+      y: 2                                     # [Parse] 级联 error
+      duplicated: same
+      duplicated: again                        # [F1] 同层重复（若还能被规则识别）
+
+# --------------------------------------------------------------------------
+# 更多规则型问题 —— 逐行规则不受 parse 阶段影响，仍会被稳定报出
+# --------------------------------------------------------------------------
+misc:
+  colon_in_val: 时间::错误值                   # 若不是 :: 会更明显；此处保留
+  hash_at_val: label #tag                      # [R6] # 会被丢弃
+  bool_yes: YES                                # [R5] 布尔
+  bool_no: NO                                  # [R5] 布尔
+  spec_inf: .inf                               # [R5] 歧义特殊数值
+  spec_ninf: -.inf                             # [R5] 歧义特殊数值
+  reserved_comma: a,b,c                        # [R7] 逗号保留字符
+  reserved_gt: a>b                             # [R7] > 保留字符
+  reserved_pipe: a|b                           # [R7] | 保留字符
+  reserved_amp: a&b                            # [R7] & 保留字符
+  reserved_star: a*b                           # [R7] * 保留字符
+  reserved_bang: a!b                           # [R7] ! 保留字符
+  reserved_bracket: a[b]c                      # [R7] [ 保留字符
+  reserved_brace: a{b}c                        # [R7] { 保留字符
+
+  # 已加引号的合法样例 —— 不应被任何规则误报
+  quoted_yes: "yes"
+  quoted_brace: "{a:1}"
+  quoted_hash: "value #with hash"
+  numeric_ok: 12345
+  ip_ok: "192.168.1.1"
+  url_ok: "https://example.com/path?a=1&b=2"
+
+# EOF

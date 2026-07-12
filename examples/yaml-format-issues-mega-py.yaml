@@ -1,0 +1,2952 @@
+# ============================================================================
+# 综合大规模 YAML 问题样例（用于验证分批修复：batchSize=100，>20 批）
+# ---------------------------------------------------------------------------
+# 目标问题量：> 2000
+# 由 examples/gen-mega-yaml.mjs 自动生成，勿手工修改
+# ============================================================================
+
+# ---------- Section 1: Tab 相关边界 ----------
+tab_cases:
+  # 1.1 值末尾一个 Tab —— 触发 R2 且可能干扰下一行结构
+  end_tab_1: value1
+  end_tab_2: value2
+  end_tab_3: value3
+  # 1.2 值中间夹 Tab —— R2
+  mid_tab_1: hello world
+  mid_tab_2: foo bar baz
+  # 1.3 冒号后紧跟 Tab（等价于缺空格 + 内联 Tab）
+  after_colon_tab_1: value
+  after_colon_tab_2: another
+  # 1.4 值末连续多个 Tab
+  multi_end_tab: end
+  # 1.5 Tab 缩进（R1，命中即 stop 其他规则）
+  tab_indent_1: v
+  tab_indent_2: v
+  tab_indent_3: v
+
+# ---------- Section 2: 各规则典型示例 ----------
+typical:
+  name: "hello                    # R4 冒号后缺空格"
+  desc: "my #note                # R6 值中 # 会被丢弃"
+  enabled: "yes                  # R5 歧义布尔"
+  disabled: "off                 # R5 歧义布尔"
+  ratio: "NaN                    # R5 特殊数值"
+  fallback: "null                # R5 null"
+  body: "{a:1,b:2}               # R7 { }"
+  tags: "[ci, dev]               # R7 [ ]"
+  ref_val: "a&b                  # R7 &"
+  ptr_val: "a*b                  # R7 *"
+  bang_val: "a!b                 # R7 !"
+  gt_val: "a>b                   # R7 >"
+  pipe_val: "a|b                 # R7 |"
+  comma_val: "a,b,c              # R7 ,"
+  trailing_ws: hi
+  ends_with_ws2: bye
+
+list_bad_dash:
+  - foo                          # R8
+  - bar                          # R8
+  - baz                          # R8
+  - good
+
+# ---------- Section 3: 重复 key ----------
+dup_root:
+  a: 1
+  # [duplicate key removed] a: 2                          # F1 dup
+  b: 3
+  # [duplicate key removed] b: 4                          # F1 dup
+  # [duplicate key removed] b: 5                          # F1 dup
+nested_dup:
+  inner:
+    x: 1
+    # [duplicate key removed] x: 2                        # F1 dup
+    y: 3
+    # [duplicate key removed] y: 4                        # F1 dup
+seq_dup_items:
+  - k: 1
+    # [duplicate key removed] k: 2                        # F1 dup（sequence 同一 item 内）
+  - k: 3
+    # [duplicate key removed] k: 4                        # F1 dup（sequence 同一 item 内）
+# 下面这段属于合法：sequence 不同 item 的同名 key，不应报警
+seq_ok_items:
+  - operation: a
+    target: t1
+  - operation: b
+    target: t2
+
+# ---------- Section 4: 未闭合引号 → parse error 级联 ----------
+broken_zone:
+  bad_string: "this quote never closes and eats the rest"
+  next_key_1: "value_a           # 被上一行吞掉"
+  next_key_2: "value_b           # 级联 error"
+  nested_layer:
+    deep_1: 1
+    deep_2: 2
+    dup_in_broken: x
+    # [duplicate key removed] dup_in_broken: y            # F1（若还能识别）
+
+# ---------- Section 5: 批量生成的问题（用于验证分批修复） ----------
+# 结构：mass_group_XXX，每组内塞入 8~10 个典型问题
+mass_groups:
+  group_001:
+    field_001_a: value_001
+    field_001_b: "yes"
+    field_001_c: "null"
+    field_001_d: "label001 #tag"
+    field_001_e: "{k001:1,v:2}"
+    field_001_f: "a&b_001"
+    field_001_g: trail_001
+    field_001_h: endtab_001
+    field_001_i: 1
+    # [duplicate key removed] field_001_i: 2
+    items_001:
+      - bad_001
+  group_002:
+    field_002_a: value_002
+    field_002_b: "yes"
+    field_002_c: "null"
+    field_002_d: "label002 #tag"
+    field_002_e: "{k002:1,v:2}"
+    field_002_f: "a&b_002"
+    field_002_g: trail_002
+    field_002_h: endtab_002
+    field_002_i: 1
+    # [duplicate key removed] field_002_i: 2
+    items_002:
+      - bad_002
+  group_003:
+    field_003_a: value_003
+    field_003_b: "yes"
+    field_003_c: "null"
+    field_003_d: "label003 #tag"
+    field_003_e: "{k003:1,v:2}"
+    field_003_f: "a&b_003"
+    field_003_g: trail_003
+    field_003_h: endtab_003
+    field_003_i: 1
+    # [duplicate key removed] field_003_i: 2
+    items_003:
+      - bad_003
+  group_004:
+    field_004_a: value_004
+    field_004_b: "yes"
+    field_004_c: "null"
+    field_004_d: "label004 #tag"
+    field_004_e: "{k004:1,v:2}"
+    field_004_f: "a&b_004"
+    field_004_g: trail_004
+    field_004_h: endtab_004
+    field_004_i: 1
+    # [duplicate key removed] field_004_i: 2
+    items_004:
+      - bad_004
+  group_005:
+    field_005_a: value_005
+    field_005_b: "yes"
+    field_005_c: "null"
+    field_005_d: "label005 #tag"
+    field_005_e: "{k005:1,v:2}"
+    field_005_f: "a&b_005"
+    field_005_g: trail_005
+    field_005_h: endtab_005
+    field_005_i: 1
+    # [duplicate key removed] field_005_i: 2
+    items_005:
+      - bad_005
+  group_006:
+    field_006_a: value_006
+    field_006_b: "yes"
+    field_006_c: "null"
+    field_006_d: "label006 #tag"
+    field_006_e: "{k006:1,v:2}"
+    field_006_f: "a&b_006"
+    field_006_g: trail_006
+    field_006_h: endtab_006
+    field_006_i: 1
+    # [duplicate key removed] field_006_i: 2
+    items_006:
+      - bad_006
+  group_007:
+    field_007_a: value_007
+    field_007_b: "yes"
+    field_007_c: "null"
+    field_007_d: "label007 #tag"
+    field_007_e: "{k007:1,v:2}"
+    field_007_f: "a&b_007"
+    field_007_g: trail_007
+    field_007_h: endtab_007
+    field_007_i: 1
+    # [duplicate key removed] field_007_i: 2
+    items_007:
+      - bad_007
+  group_008:
+    field_008_a: value_008
+    field_008_b: "yes"
+    field_008_c: "null"
+    field_008_d: "label008 #tag"
+    field_008_e: "{k008:1,v:2}"
+    field_008_f: "a&b_008"
+    field_008_g: trail_008
+    field_008_h: endtab_008
+    field_008_i: 1
+    # [duplicate key removed] field_008_i: 2
+    items_008:
+      - bad_008
+  group_009:
+    field_009_a: value_009
+    field_009_b: "yes"
+    field_009_c: "null"
+    field_009_d: "label009 #tag"
+    field_009_e: "{k009:1,v:2}"
+    field_009_f: "a&b_009"
+    field_009_g: trail_009
+    field_009_h: endtab_009
+    field_009_i: 1
+    # [duplicate key removed] field_009_i: 2
+    items_009:
+      - bad_009
+  group_010:
+    field_010_a: value_010
+    field_010_b: "yes"
+    field_010_c: "null"
+    field_010_d: "label010 #tag"
+    field_010_e: "{k010:1,v:2}"
+    field_010_f: "a&b_010"
+    field_010_g: trail_010
+    field_010_h: endtab_010
+    field_010_i: 1
+    # [duplicate key removed] field_010_i: 2
+    items_010:
+      - bad_010
+  group_011:
+    field_011_a: value_011
+    field_011_b: "yes"
+    field_011_c: "null"
+    field_011_d: "label011 #tag"
+    field_011_e: "{k011:1,v:2}"
+    field_011_f: "a&b_011"
+    field_011_g: trail_011
+    field_011_h: endtab_011
+    field_011_i: 1
+    # [duplicate key removed] field_011_i: 2
+    items_011:
+      - bad_011
+  group_012:
+    field_012_a: value_012
+    field_012_b: "yes"
+    field_012_c: "null"
+    field_012_d: "label012 #tag"
+    field_012_e: "{k012:1,v:2}"
+    field_012_f: "a&b_012"
+    field_012_g: trail_012
+    field_012_h: endtab_012
+    field_012_i: 1
+    # [duplicate key removed] field_012_i: 2
+    items_012:
+      - bad_012
+  group_013:
+    field_013_a: value_013
+    field_013_b: "yes"
+    field_013_c: "null"
+    field_013_d: "label013 #tag"
+    field_013_e: "{k013:1,v:2}"
+    field_013_f: "a&b_013"
+    field_013_g: trail_013
+    field_013_h: endtab_013
+    field_013_i: 1
+    # [duplicate key removed] field_013_i: 2
+    items_013:
+      - bad_013
+  group_014:
+    field_014_a: value_014
+    field_014_b: "yes"
+    field_014_c: "null"
+    field_014_d: "label014 #tag"
+    field_014_e: "{k014:1,v:2}"
+    field_014_f: "a&b_014"
+    field_014_g: trail_014
+    field_014_h: endtab_014
+    field_014_i: 1
+    # [duplicate key removed] field_014_i: 2
+    items_014:
+      - bad_014
+  group_015:
+    field_015_a: value_015
+    field_015_b: "yes"
+    field_015_c: "null"
+    field_015_d: "label015 #tag"
+    field_015_e: "{k015:1,v:2}"
+    field_015_f: "a&b_015"
+    field_015_g: trail_015
+    field_015_h: endtab_015
+    field_015_i: 1
+    # [duplicate key removed] field_015_i: 2
+    items_015:
+      - bad_015
+  group_016:
+    field_016_a: value_016
+    field_016_b: "yes"
+    field_016_c: "null"
+    field_016_d: "label016 #tag"
+    field_016_e: "{k016:1,v:2}"
+    field_016_f: "a&b_016"
+    field_016_g: trail_016
+    field_016_h: endtab_016
+    field_016_i: 1
+    # [duplicate key removed] field_016_i: 2
+    items_016:
+      - bad_016
+  group_017:
+    field_017_a: value_017
+    field_017_b: "yes"
+    field_017_c: "null"
+    field_017_d: "label017 #tag"
+    field_017_e: "{k017:1,v:2}"
+    field_017_f: "a&b_017"
+    field_017_g: trail_017
+    field_017_h: endtab_017
+    field_017_i: 1
+    # [duplicate key removed] field_017_i: 2
+    items_017:
+      - bad_017
+  group_018:
+    field_018_a: value_018
+    field_018_b: "yes"
+    field_018_c: "null"
+    field_018_d: "label018 #tag"
+    field_018_e: "{k018:1,v:2}"
+    field_018_f: "a&b_018"
+    field_018_g: trail_018
+    field_018_h: endtab_018
+    field_018_i: 1
+    # [duplicate key removed] field_018_i: 2
+    items_018:
+      - bad_018
+  group_019:
+    field_019_a: value_019
+    field_019_b: "yes"
+    field_019_c: "null"
+    field_019_d: "label019 #tag"
+    field_019_e: "{k019:1,v:2}"
+    field_019_f: "a&b_019"
+    field_019_g: trail_019
+    field_019_h: endtab_019
+    field_019_i: 1
+    # [duplicate key removed] field_019_i: 2
+    items_019:
+      - bad_019
+  group_020:
+    field_020_a: value_020
+    field_020_b: "yes"
+    field_020_c: "null"
+    field_020_d: "label020 #tag"
+    field_020_e: "{k020:1,v:2}"
+    field_020_f: "a&b_020"
+    field_020_g: trail_020
+    field_020_h: endtab_020
+    field_020_i: 1
+    # [duplicate key removed] field_020_i: 2
+    items_020:
+      - bad_020
+  group_021:
+    field_021_a: value_021
+    field_021_b: "yes"
+    field_021_c: "null"
+    field_021_d: "label021 #tag"
+    field_021_e: "{k021:1,v:2}"
+    field_021_f: "a&b_021"
+    field_021_g: trail_021
+    field_021_h: endtab_021
+    field_021_i: 1
+    # [duplicate key removed] field_021_i: 2
+    items_021:
+      - bad_021
+  group_022:
+    field_022_a: value_022
+    field_022_b: "yes"
+    field_022_c: "null"
+    field_022_d: "label022 #tag"
+    field_022_e: "{k022:1,v:2}"
+    field_022_f: "a&b_022"
+    field_022_g: trail_022
+    field_022_h: endtab_022
+    field_022_i: 1
+    # [duplicate key removed] field_022_i: 2
+    items_022:
+      - bad_022
+  group_023:
+    field_023_a: value_023
+    field_023_b: "yes"
+    field_023_c: "null"
+    field_023_d: "label023 #tag"
+    field_023_e: "{k023:1,v:2}"
+    field_023_f: "a&b_023"
+    field_023_g: trail_023
+    field_023_h: endtab_023
+    field_023_i: 1
+    # [duplicate key removed] field_023_i: 2
+    items_023:
+      - bad_023
+  group_024:
+    field_024_a: value_024
+    field_024_b: "yes"
+    field_024_c: "null"
+    field_024_d: "label024 #tag"
+    field_024_e: "{k024:1,v:2}"
+    field_024_f: "a&b_024"
+    field_024_g: trail_024
+    field_024_h: endtab_024
+    field_024_i: 1
+    # [duplicate key removed] field_024_i: 2
+    items_024:
+      - bad_024
+  group_025:
+    field_025_a: value_025
+    field_025_b: "yes"
+    field_025_c: "null"
+    field_025_d: "label025 #tag"
+    field_025_e: "{k025:1,v:2}"
+    field_025_f: "a&b_025"
+    field_025_g: trail_025
+    field_025_h: endtab_025
+    field_025_i: 1
+    # [duplicate key removed] field_025_i: 2
+    items_025:
+      - bad_025
+  group_026:
+    field_026_a: value_026
+    field_026_b: "yes"
+    field_026_c: "null"
+    field_026_d: "label026 #tag"
+    field_026_e: "{k026:1,v:2}"
+    field_026_f: "a&b_026"
+    field_026_g: trail_026
+    field_026_h: endtab_026
+    field_026_i: 1
+    # [duplicate key removed] field_026_i: 2
+    items_026:
+      - bad_026
+  group_027:
+    field_027_a: value_027
+    field_027_b: "yes"
+    field_027_c: "null"
+    field_027_d: "label027 #tag"
+    field_027_e: "{k027:1,v:2}"
+    field_027_f: "a&b_027"
+    field_027_g: trail_027
+    field_027_h: endtab_027
+    field_027_i: 1
+    # [duplicate key removed] field_027_i: 2
+    items_027:
+      - bad_027
+  group_028:
+    field_028_a: value_028
+    field_028_b: "yes"
+    field_028_c: "null"
+    field_028_d: "label028 #tag"
+    field_028_e: "{k028:1,v:2}"
+    field_028_f: "a&b_028"
+    field_028_g: trail_028
+    field_028_h: endtab_028
+    field_028_i: 1
+    # [duplicate key removed] field_028_i: 2
+    items_028:
+      - bad_028
+  group_029:
+    field_029_a: value_029
+    field_029_b: "yes"
+    field_029_c: "null"
+    field_029_d: "label029 #tag"
+    field_029_e: "{k029:1,v:2}"
+    field_029_f: "a&b_029"
+    field_029_g: trail_029
+    field_029_h: endtab_029
+    field_029_i: 1
+    # [duplicate key removed] field_029_i: 2
+    items_029:
+      - bad_029
+  group_030:
+    field_030_a: value_030
+    field_030_b: "yes"
+    field_030_c: "null"
+    field_030_d: "label030 #tag"
+    field_030_e: "{k030:1,v:2}"
+    field_030_f: "a&b_030"
+    field_030_g: trail_030
+    field_030_h: endtab_030
+    field_030_i: 1
+    # [duplicate key removed] field_030_i: 2
+    items_030:
+      - bad_030
+  group_031:
+    field_031_a: value_031
+    field_031_b: "yes"
+    field_031_c: "null"
+    field_031_d: "label031 #tag"
+    field_031_e: "{k031:1,v:2}"
+    field_031_f: "a&b_031"
+    field_031_g: trail_031
+    field_031_h: endtab_031
+    field_031_i: 1
+    # [duplicate key removed] field_031_i: 2
+    items_031:
+      - bad_031
+  group_032:
+    field_032_a: value_032
+    field_032_b: "yes"
+    field_032_c: "null"
+    field_032_d: "label032 #tag"
+    field_032_e: "{k032:1,v:2}"
+    field_032_f: "a&b_032"
+    field_032_g: trail_032
+    field_032_h: endtab_032
+    field_032_i: 1
+    # [duplicate key removed] field_032_i: 2
+    items_032:
+      - bad_032
+  group_033:
+    field_033_a: value_033
+    field_033_b: "yes"
+    field_033_c: "null"
+    field_033_d: "label033 #tag"
+    field_033_e: "{k033:1,v:2}"
+    field_033_f: "a&b_033"
+    field_033_g: trail_033
+    field_033_h: endtab_033
+    field_033_i: 1
+    # [duplicate key removed] field_033_i: 2
+    items_033:
+      - bad_033
+  group_034:
+    field_034_a: value_034
+    field_034_b: "yes"
+    field_034_c: "null"
+    field_034_d: "label034 #tag"
+    field_034_e: "{k034:1,v:2}"
+    field_034_f: "a&b_034"
+    field_034_g: trail_034
+    field_034_h: endtab_034
+    field_034_i: 1
+    # [duplicate key removed] field_034_i: 2
+    items_034:
+      - bad_034
+  group_035:
+    field_035_a: value_035
+    field_035_b: "yes"
+    field_035_c: "null"
+    field_035_d: "label035 #tag"
+    field_035_e: "{k035:1,v:2}"
+    field_035_f: "a&b_035"
+    field_035_g: trail_035
+    field_035_h: endtab_035
+    field_035_i: 1
+    # [duplicate key removed] field_035_i: 2
+    items_035:
+      - bad_035
+  group_036:
+    field_036_a: value_036
+    field_036_b: "yes"
+    field_036_c: "null"
+    field_036_d: "label036 #tag"
+    field_036_e: "{k036:1,v:2}"
+    field_036_f: "a&b_036"
+    field_036_g: trail_036
+    field_036_h: endtab_036
+    field_036_i: 1
+    # [duplicate key removed] field_036_i: 2
+    items_036:
+      - bad_036
+  group_037:
+    field_037_a: value_037
+    field_037_b: "yes"
+    field_037_c: "null"
+    field_037_d: "label037 #tag"
+    field_037_e: "{k037:1,v:2}"
+    field_037_f: "a&b_037"
+    field_037_g: trail_037
+    field_037_h: endtab_037
+    field_037_i: 1
+    # [duplicate key removed] field_037_i: 2
+    items_037:
+      - bad_037
+  group_038:
+    field_038_a: value_038
+    field_038_b: "yes"
+    field_038_c: "null"
+    field_038_d: "label038 #tag"
+    field_038_e: "{k038:1,v:2}"
+    field_038_f: "a&b_038"
+    field_038_g: trail_038
+    field_038_h: endtab_038
+    field_038_i: 1
+    # [duplicate key removed] field_038_i: 2
+    items_038:
+      - bad_038
+  group_039:
+    field_039_a: value_039
+    field_039_b: "yes"
+    field_039_c: "null"
+    field_039_d: "label039 #tag"
+    field_039_e: "{k039:1,v:2}"
+    field_039_f: "a&b_039"
+    field_039_g: trail_039
+    field_039_h: endtab_039
+    field_039_i: 1
+    # [duplicate key removed] field_039_i: 2
+    items_039:
+      - bad_039
+  group_040:
+    field_040_a: value_040
+    field_040_b: "yes"
+    field_040_c: "null"
+    field_040_d: "label040 #tag"
+    field_040_e: "{k040:1,v:2}"
+    field_040_f: "a&b_040"
+    field_040_g: trail_040
+    field_040_h: endtab_040
+    field_040_i: 1
+    # [duplicate key removed] field_040_i: 2
+    items_040:
+      - bad_040
+  group_041:
+    field_041_a: value_041
+    field_041_b: "yes"
+    field_041_c: "null"
+    field_041_d: "label041 #tag"
+    field_041_e: "{k041:1,v:2}"
+    field_041_f: "a&b_041"
+    field_041_g: trail_041
+    field_041_h: endtab_041
+    field_041_i: 1
+    # [duplicate key removed] field_041_i: 2
+    items_041:
+      - bad_041
+  group_042:
+    field_042_a: value_042
+    field_042_b: "yes"
+    field_042_c: "null"
+    field_042_d: "label042 #tag"
+    field_042_e: "{k042:1,v:2}"
+    field_042_f: "a&b_042"
+    field_042_g: trail_042
+    field_042_h: endtab_042
+    field_042_i: 1
+    # [duplicate key removed] field_042_i: 2
+    items_042:
+      - bad_042
+  group_043:
+    field_043_a: value_043
+    field_043_b: "yes"
+    field_043_c: "null"
+    field_043_d: "label043 #tag"
+    field_043_e: "{k043:1,v:2}"
+    field_043_f: "a&b_043"
+    field_043_g: trail_043
+    field_043_h: endtab_043
+    field_043_i: 1
+    # [duplicate key removed] field_043_i: 2
+    items_043:
+      - bad_043
+  group_044:
+    field_044_a: value_044
+    field_044_b: "yes"
+    field_044_c: "null"
+    field_044_d: "label044 #tag"
+    field_044_e: "{k044:1,v:2}"
+    field_044_f: "a&b_044"
+    field_044_g: trail_044
+    field_044_h: endtab_044
+    field_044_i: 1
+    # [duplicate key removed] field_044_i: 2
+    items_044:
+      - bad_044
+  group_045:
+    field_045_a: value_045
+    field_045_b: "yes"
+    field_045_c: "null"
+    field_045_d: "label045 #tag"
+    field_045_e: "{k045:1,v:2}"
+    field_045_f: "a&b_045"
+    field_045_g: trail_045
+    field_045_h: endtab_045
+    field_045_i: 1
+    # [duplicate key removed] field_045_i: 2
+    items_045:
+      - bad_045
+  group_046:
+    field_046_a: value_046
+    field_046_b: "yes"
+    field_046_c: "null"
+    field_046_d: "label046 #tag"
+    field_046_e: "{k046:1,v:2}"
+    field_046_f: "a&b_046"
+    field_046_g: trail_046
+    field_046_h: endtab_046
+    field_046_i: 1
+    # [duplicate key removed] field_046_i: 2
+    items_046:
+      - bad_046
+  group_047:
+    field_047_a: value_047
+    field_047_b: "yes"
+    field_047_c: "null"
+    field_047_d: "label047 #tag"
+    field_047_e: "{k047:1,v:2}"
+    field_047_f: "a&b_047"
+    field_047_g: trail_047
+    field_047_h: endtab_047
+    field_047_i: 1
+    # [duplicate key removed] field_047_i: 2
+    items_047:
+      - bad_047
+  group_048:
+    field_048_a: value_048
+    field_048_b: "yes"
+    field_048_c: "null"
+    field_048_d: "label048 #tag"
+    field_048_e: "{k048:1,v:2}"
+    field_048_f: "a&b_048"
+    field_048_g: trail_048
+    field_048_h: endtab_048
+    field_048_i: 1
+    # [duplicate key removed] field_048_i: 2
+    items_048:
+      - bad_048
+  group_049:
+    field_049_a: value_049
+    field_049_b: "yes"
+    field_049_c: "null"
+    field_049_d: "label049 #tag"
+    field_049_e: "{k049:1,v:2}"
+    field_049_f: "a&b_049"
+    field_049_g: trail_049
+    field_049_h: endtab_049
+    field_049_i: 1
+    # [duplicate key removed] field_049_i: 2
+    items_049:
+      - bad_049
+  group_050:
+    field_050_a: value_050
+    field_050_b: "yes"
+    field_050_c: "null"
+    field_050_d: "label050 #tag"
+    field_050_e: "{k050:1,v:2}"
+    field_050_f: "a&b_050"
+    field_050_g: trail_050
+    field_050_h: endtab_050
+    field_050_i: 1
+    # [duplicate key removed] field_050_i: 2
+    items_050:
+      - bad_050
+  group_051:
+    field_051_a: value_051
+    field_051_b: "yes"
+    field_051_c: "null"
+    field_051_d: "label051 #tag"
+    field_051_e: "{k051:1,v:2}"
+    field_051_f: "a&b_051"
+    field_051_g: trail_051
+    field_051_h: endtab_051
+    field_051_i: 1
+    # [duplicate key removed] field_051_i: 2
+    items_051:
+      - bad_051
+  group_052:
+    field_052_a: value_052
+    field_052_b: "yes"
+    field_052_c: "null"
+    field_052_d: "label052 #tag"
+    field_052_e: "{k052:1,v:2}"
+    field_052_f: "a&b_052"
+    field_052_g: trail_052
+    field_052_h: endtab_052
+    field_052_i: 1
+    # [duplicate key removed] field_052_i: 2
+    items_052:
+      - bad_052
+  group_053:
+    field_053_a: value_053
+    field_053_b: "yes"
+    field_053_c: "null"
+    field_053_d: "label053 #tag"
+    field_053_e: "{k053:1,v:2}"
+    field_053_f: "a&b_053"
+    field_053_g: trail_053
+    field_053_h: endtab_053
+    field_053_i: 1
+    # [duplicate key removed] field_053_i: 2
+    items_053:
+      - bad_053
+  group_054:
+    field_054_a: value_054
+    field_054_b: "yes"
+    field_054_c: "null"
+    field_054_d: "label054 #tag"
+    field_054_e: "{k054:1,v:2}"
+    field_054_f: "a&b_054"
+    field_054_g: trail_054
+    field_054_h: endtab_054
+    field_054_i: 1
+    # [duplicate key removed] field_054_i: 2
+    items_054:
+      - bad_054
+  group_055:
+    field_055_a: value_055
+    field_055_b: "yes"
+    field_055_c: "null"
+    field_055_d: "label055 #tag"
+    field_055_e: "{k055:1,v:2}"
+    field_055_f: "a&b_055"
+    field_055_g: trail_055
+    field_055_h: endtab_055
+    field_055_i: 1
+    # [duplicate key removed] field_055_i: 2
+    items_055:
+      - bad_055
+  group_056:
+    field_056_a: value_056
+    field_056_b: "yes"
+    field_056_c: "null"
+    field_056_d: "label056 #tag"
+    field_056_e: "{k056:1,v:2}"
+    field_056_f: "a&b_056"
+    field_056_g: trail_056
+    field_056_h: endtab_056
+    field_056_i: 1
+    # [duplicate key removed] field_056_i: 2
+    items_056:
+      - bad_056
+  group_057:
+    field_057_a: value_057
+    field_057_b: "yes"
+    field_057_c: "null"
+    field_057_d: "label057 #tag"
+    field_057_e: "{k057:1,v:2}"
+    field_057_f: "a&b_057"
+    field_057_g: trail_057
+    field_057_h: endtab_057
+    field_057_i: 1
+    # [duplicate key removed] field_057_i: 2
+    items_057:
+      - bad_057
+  group_058:
+    field_058_a: value_058
+    field_058_b: "yes"
+    field_058_c: "null"
+    field_058_d: "label058 #tag"
+    field_058_e: "{k058:1,v:2}"
+    field_058_f: "a&b_058"
+    field_058_g: trail_058
+    field_058_h: endtab_058
+    field_058_i: 1
+    # [duplicate key removed] field_058_i: 2
+    items_058:
+      - bad_058
+  group_059:
+    field_059_a: value_059
+    field_059_b: "yes"
+    field_059_c: "null"
+    field_059_d: "label059 #tag"
+    field_059_e: "{k059:1,v:2}"
+    field_059_f: "a&b_059"
+    field_059_g: trail_059
+    field_059_h: endtab_059
+    field_059_i: 1
+    # [duplicate key removed] field_059_i: 2
+    items_059:
+      - bad_059
+  group_060:
+    field_060_a: value_060
+    field_060_b: "yes"
+    field_060_c: "null"
+    field_060_d: "label060 #tag"
+    field_060_e: "{k060:1,v:2}"
+    field_060_f: "a&b_060"
+    field_060_g: trail_060
+    field_060_h: endtab_060
+    field_060_i: 1
+    # [duplicate key removed] field_060_i: 2
+    items_060:
+      - bad_060
+  group_061:
+    field_061_a: value_061
+    field_061_b: "yes"
+    field_061_c: "null"
+    field_061_d: "label061 #tag"
+    field_061_e: "{k061:1,v:2}"
+    field_061_f: "a&b_061"
+    field_061_g: trail_061
+    field_061_h: endtab_061
+    field_061_i: 1
+    # [duplicate key removed] field_061_i: 2
+    items_061:
+      - bad_061
+  group_062:
+    field_062_a: value_062
+    field_062_b: "yes"
+    field_062_c: "null"
+    field_062_d: "label062 #tag"
+    field_062_e: "{k062:1,v:2}"
+    field_062_f: "a&b_062"
+    field_062_g: trail_062
+    field_062_h: endtab_062
+    field_062_i: 1
+    # [duplicate key removed] field_062_i: 2
+    items_062:
+      - bad_062
+  group_063:
+    field_063_a: value_063
+    field_063_b: "yes"
+    field_063_c: "null"
+    field_063_d: "label063 #tag"
+    field_063_e: "{k063:1,v:2}"
+    field_063_f: "a&b_063"
+    field_063_g: trail_063
+    field_063_h: endtab_063
+    field_063_i: 1
+    # [duplicate key removed] field_063_i: 2
+    items_063:
+      - bad_063
+  group_064:
+    field_064_a: value_064
+    field_064_b: "yes"
+    field_064_c: "null"
+    field_064_d: "label064 #tag"
+    field_064_e: "{k064:1,v:2}"
+    field_064_f: "a&b_064"
+    field_064_g: trail_064
+    field_064_h: endtab_064
+    field_064_i: 1
+    # [duplicate key removed] field_064_i: 2
+    items_064:
+      - bad_064
+  group_065:
+    field_065_a: value_065
+    field_065_b: "yes"
+    field_065_c: "null"
+    field_065_d: "label065 #tag"
+    field_065_e: "{k065:1,v:2}"
+    field_065_f: "a&b_065"
+    field_065_g: trail_065
+    field_065_h: endtab_065
+    field_065_i: 1
+    # [duplicate key removed] field_065_i: 2
+    items_065:
+      - bad_065
+  group_066:
+    field_066_a: value_066
+    field_066_b: "yes"
+    field_066_c: "null"
+    field_066_d: "label066 #tag"
+    field_066_e: "{k066:1,v:2}"
+    field_066_f: "a&b_066"
+    field_066_g: trail_066
+    field_066_h: endtab_066
+    field_066_i: 1
+    # [duplicate key removed] field_066_i: 2
+    items_066:
+      - bad_066
+  group_067:
+    field_067_a: value_067
+    field_067_b: "yes"
+    field_067_c: "null"
+    field_067_d: "label067 #tag"
+    field_067_e: "{k067:1,v:2}"
+    field_067_f: "a&b_067"
+    field_067_g: trail_067
+    field_067_h: endtab_067
+    field_067_i: 1
+    # [duplicate key removed] field_067_i: 2
+    items_067:
+      - bad_067
+  group_068:
+    field_068_a: value_068
+    field_068_b: "yes"
+    field_068_c: "null"
+    field_068_d: "label068 #tag"
+    field_068_e: "{k068:1,v:2}"
+    field_068_f: "a&b_068"
+    field_068_g: trail_068
+    field_068_h: endtab_068
+    field_068_i: 1
+    # [duplicate key removed] field_068_i: 2
+    items_068:
+      - bad_068
+  group_069:
+    field_069_a: value_069
+    field_069_b: "yes"
+    field_069_c: "null"
+    field_069_d: "label069 #tag"
+    field_069_e: "{k069:1,v:2}"
+    field_069_f: "a&b_069"
+    field_069_g: trail_069
+    field_069_h: endtab_069
+    field_069_i: 1
+    # [duplicate key removed] field_069_i: 2
+    items_069:
+      - bad_069
+  group_070:
+    field_070_a: value_070
+    field_070_b: "yes"
+    field_070_c: "null"
+    field_070_d: "label070 #tag"
+    field_070_e: "{k070:1,v:2}"
+    field_070_f: "a&b_070"
+    field_070_g: trail_070
+    field_070_h: endtab_070
+    field_070_i: 1
+    # [duplicate key removed] field_070_i: 2
+    items_070:
+      - bad_070
+  group_071:
+    field_071_a: value_071
+    field_071_b: "yes"
+    field_071_c: "null"
+    field_071_d: "label071 #tag"
+    field_071_e: "{k071:1,v:2}"
+    field_071_f: "a&b_071"
+    field_071_g: trail_071
+    field_071_h: endtab_071
+    field_071_i: 1
+    # [duplicate key removed] field_071_i: 2
+    items_071:
+      - bad_071
+  group_072:
+    field_072_a: value_072
+    field_072_b: "yes"
+    field_072_c: "null"
+    field_072_d: "label072 #tag"
+    field_072_e: "{k072:1,v:2}"
+    field_072_f: "a&b_072"
+    field_072_g: trail_072
+    field_072_h: endtab_072
+    field_072_i: 1
+    # [duplicate key removed] field_072_i: 2
+    items_072:
+      - bad_072
+  group_073:
+    field_073_a: value_073
+    field_073_b: "yes"
+    field_073_c: "null"
+    field_073_d: "label073 #tag"
+    field_073_e: "{k073:1,v:2}"
+    field_073_f: "a&b_073"
+    field_073_g: trail_073
+    field_073_h: endtab_073
+    field_073_i: 1
+    # [duplicate key removed] field_073_i: 2
+    items_073:
+      - bad_073
+  group_074:
+    field_074_a: value_074
+    field_074_b: "yes"
+    field_074_c: "null"
+    field_074_d: "label074 #tag"
+    field_074_e: "{k074:1,v:2}"
+    field_074_f: "a&b_074"
+    field_074_g: trail_074
+    field_074_h: endtab_074
+    field_074_i: 1
+    # [duplicate key removed] field_074_i: 2
+    items_074:
+      - bad_074
+  group_075:
+    field_075_a: value_075
+    field_075_b: "yes"
+    field_075_c: "null"
+    field_075_d: "label075 #tag"
+    field_075_e: "{k075:1,v:2}"
+    field_075_f: "a&b_075"
+    field_075_g: trail_075
+    field_075_h: endtab_075
+    field_075_i: 1
+    # [duplicate key removed] field_075_i: 2
+    items_075:
+      - bad_075
+  group_076:
+    field_076_a: value_076
+    field_076_b: "yes"
+    field_076_c: "null"
+    field_076_d: "label076 #tag"
+    field_076_e: "{k076:1,v:2}"
+    field_076_f: "a&b_076"
+    field_076_g: trail_076
+    field_076_h: endtab_076
+    field_076_i: 1
+    # [duplicate key removed] field_076_i: 2
+    items_076:
+      - bad_076
+  group_077:
+    field_077_a: value_077
+    field_077_b: "yes"
+    field_077_c: "null"
+    field_077_d: "label077 #tag"
+    field_077_e: "{k077:1,v:2}"
+    field_077_f: "a&b_077"
+    field_077_g: trail_077
+    field_077_h: endtab_077
+    field_077_i: 1
+    # [duplicate key removed] field_077_i: 2
+    items_077:
+      - bad_077
+  group_078:
+    field_078_a: value_078
+    field_078_b: "yes"
+    field_078_c: "null"
+    field_078_d: "label078 #tag"
+    field_078_e: "{k078:1,v:2}"
+    field_078_f: "a&b_078"
+    field_078_g: trail_078
+    field_078_h: endtab_078
+    field_078_i: 1
+    # [duplicate key removed] field_078_i: 2
+    items_078:
+      - bad_078
+  group_079:
+    field_079_a: value_079
+    field_079_b: "yes"
+    field_079_c: "null"
+    field_079_d: "label079 #tag"
+    field_079_e: "{k079:1,v:2}"
+    field_079_f: "a&b_079"
+    field_079_g: trail_079
+    field_079_h: endtab_079
+    field_079_i: 1
+    # [duplicate key removed] field_079_i: 2
+    items_079:
+      - bad_079
+  group_080:
+    field_080_a: value_080
+    field_080_b: "yes"
+    field_080_c: "null"
+    field_080_d: "label080 #tag"
+    field_080_e: "{k080:1,v:2}"
+    field_080_f: "a&b_080"
+    field_080_g: trail_080
+    field_080_h: endtab_080
+    field_080_i: 1
+    # [duplicate key removed] field_080_i: 2
+    items_080:
+      - bad_080
+  group_081:
+    field_081_a: value_081
+    field_081_b: "yes"
+    field_081_c: "null"
+    field_081_d: "label081 #tag"
+    field_081_e: "{k081:1,v:2}"
+    field_081_f: "a&b_081"
+    field_081_g: trail_081
+    field_081_h: endtab_081
+    field_081_i: 1
+    # [duplicate key removed] field_081_i: 2
+    items_081:
+      - bad_081
+  group_082:
+    field_082_a: value_082
+    field_082_b: "yes"
+    field_082_c: "null"
+    field_082_d: "label082 #tag"
+    field_082_e: "{k082:1,v:2}"
+    field_082_f: "a&b_082"
+    field_082_g: trail_082
+    field_082_h: endtab_082
+    field_082_i: 1
+    # [duplicate key removed] field_082_i: 2
+    items_082:
+      - bad_082
+  group_083:
+    field_083_a: value_083
+    field_083_b: "yes"
+    field_083_c: "null"
+    field_083_d: "label083 #tag"
+    field_083_e: "{k083:1,v:2}"
+    field_083_f: "a&b_083"
+    field_083_g: trail_083
+    field_083_h: endtab_083
+    field_083_i: 1
+    # [duplicate key removed] field_083_i: 2
+    items_083:
+      - bad_083
+  group_084:
+    field_084_a: value_084
+    field_084_b: "yes"
+    field_084_c: "null"
+    field_084_d: "label084 #tag"
+    field_084_e: "{k084:1,v:2}"
+    field_084_f: "a&b_084"
+    field_084_g: trail_084
+    field_084_h: endtab_084
+    field_084_i: 1
+    # [duplicate key removed] field_084_i: 2
+    items_084:
+      - bad_084
+  group_085:
+    field_085_a: value_085
+    field_085_b: "yes"
+    field_085_c: "null"
+    field_085_d: "label085 #tag"
+    field_085_e: "{k085:1,v:2}"
+    field_085_f: "a&b_085"
+    field_085_g: trail_085
+    field_085_h: endtab_085
+    field_085_i: 1
+    # [duplicate key removed] field_085_i: 2
+    items_085:
+      - bad_085
+  group_086:
+    field_086_a: value_086
+    field_086_b: "yes"
+    field_086_c: "null"
+    field_086_d: "label086 #tag"
+    field_086_e: "{k086:1,v:2}"
+    field_086_f: "a&b_086"
+    field_086_g: trail_086
+    field_086_h: endtab_086
+    field_086_i: 1
+    # [duplicate key removed] field_086_i: 2
+    items_086:
+      - bad_086
+  group_087:
+    field_087_a: value_087
+    field_087_b: "yes"
+    field_087_c: "null"
+    field_087_d: "label087 #tag"
+    field_087_e: "{k087:1,v:2}"
+    field_087_f: "a&b_087"
+    field_087_g: trail_087
+    field_087_h: endtab_087
+    field_087_i: 1
+    # [duplicate key removed] field_087_i: 2
+    items_087:
+      - bad_087
+  group_088:
+    field_088_a: value_088
+    field_088_b: "yes"
+    field_088_c: "null"
+    field_088_d: "label088 #tag"
+    field_088_e: "{k088:1,v:2}"
+    field_088_f: "a&b_088"
+    field_088_g: trail_088
+    field_088_h: endtab_088
+    field_088_i: 1
+    # [duplicate key removed] field_088_i: 2
+    items_088:
+      - bad_088
+  group_089:
+    field_089_a: value_089
+    field_089_b: "yes"
+    field_089_c: "null"
+    field_089_d: "label089 #tag"
+    field_089_e: "{k089:1,v:2}"
+    field_089_f: "a&b_089"
+    field_089_g: trail_089
+    field_089_h: endtab_089
+    field_089_i: 1
+    # [duplicate key removed] field_089_i: 2
+    items_089:
+      - bad_089
+  group_090:
+    field_090_a: value_090
+    field_090_b: "yes"
+    field_090_c: "null"
+    field_090_d: "label090 #tag"
+    field_090_e: "{k090:1,v:2}"
+    field_090_f: "a&b_090"
+    field_090_g: trail_090
+    field_090_h: endtab_090
+    field_090_i: 1
+    # [duplicate key removed] field_090_i: 2
+    items_090:
+      - bad_090
+  group_091:
+    field_091_a: value_091
+    field_091_b: "yes"
+    field_091_c: "null"
+    field_091_d: "label091 #tag"
+    field_091_e: "{k091:1,v:2}"
+    field_091_f: "a&b_091"
+    field_091_g: trail_091
+    field_091_h: endtab_091
+    field_091_i: 1
+    # [duplicate key removed] field_091_i: 2
+    items_091:
+      - bad_091
+  group_092:
+    field_092_a: value_092
+    field_092_b: "yes"
+    field_092_c: "null"
+    field_092_d: "label092 #tag"
+    field_092_e: "{k092:1,v:2}"
+    field_092_f: "a&b_092"
+    field_092_g: trail_092
+    field_092_h: endtab_092
+    field_092_i: 1
+    # [duplicate key removed] field_092_i: 2
+    items_092:
+      - bad_092
+  group_093:
+    field_093_a: value_093
+    field_093_b: "yes"
+    field_093_c: "null"
+    field_093_d: "label093 #tag"
+    field_093_e: "{k093:1,v:2}"
+    field_093_f: "a&b_093"
+    field_093_g: trail_093
+    field_093_h: endtab_093
+    field_093_i: 1
+    # [duplicate key removed] field_093_i: 2
+    items_093:
+      - bad_093
+  group_094:
+    field_094_a: value_094
+    field_094_b: "yes"
+    field_094_c: "null"
+    field_094_d: "label094 #tag"
+    field_094_e: "{k094:1,v:2}"
+    field_094_f: "a&b_094"
+    field_094_g: trail_094
+    field_094_h: endtab_094
+    field_094_i: 1
+    # [duplicate key removed] field_094_i: 2
+    items_094:
+      - bad_094
+  group_095:
+    field_095_a: value_095
+    field_095_b: "yes"
+    field_095_c: "null"
+    field_095_d: "label095 #tag"
+    field_095_e: "{k095:1,v:2}"
+    field_095_f: "a&b_095"
+    field_095_g: trail_095
+    field_095_h: endtab_095
+    field_095_i: 1
+    # [duplicate key removed] field_095_i: 2
+    items_095:
+      - bad_095
+  group_096:
+    field_096_a: value_096
+    field_096_b: "yes"
+    field_096_c: "null"
+    field_096_d: "label096 #tag"
+    field_096_e: "{k096:1,v:2}"
+    field_096_f: "a&b_096"
+    field_096_g: trail_096
+    field_096_h: endtab_096
+    field_096_i: 1
+    # [duplicate key removed] field_096_i: 2
+    items_096:
+      - bad_096
+  group_097:
+    field_097_a: value_097
+    field_097_b: "yes"
+    field_097_c: "null"
+    field_097_d: "label097 #tag"
+    field_097_e: "{k097:1,v:2}"
+    field_097_f: "a&b_097"
+    field_097_g: trail_097
+    field_097_h: endtab_097
+    field_097_i: 1
+    # [duplicate key removed] field_097_i: 2
+    items_097:
+      - bad_097
+  group_098:
+    field_098_a: value_098
+    field_098_b: "yes"
+    field_098_c: "null"
+    field_098_d: "label098 #tag"
+    field_098_e: "{k098:1,v:2}"
+    field_098_f: "a&b_098"
+    field_098_g: trail_098
+    field_098_h: endtab_098
+    field_098_i: 1
+    # [duplicate key removed] field_098_i: 2
+    items_098:
+      - bad_098
+  group_099:
+    field_099_a: value_099
+    field_099_b: "yes"
+    field_099_c: "null"
+    field_099_d: "label099 #tag"
+    field_099_e: "{k099:1,v:2}"
+    field_099_f: "a&b_099"
+    field_099_g: trail_099
+    field_099_h: endtab_099
+    field_099_i: 1
+    # [duplicate key removed] field_099_i: 2
+    items_099:
+      - bad_099
+  group_100:
+    field_100_a: value_100
+    field_100_b: "yes"
+    field_100_c: "null"
+    field_100_d: "label100 #tag"
+    field_100_e: "{k100:1,v:2}"
+    field_100_f: "a&b_100"
+    field_100_g: trail_100
+    field_100_h: endtab_100
+    field_100_i: 1
+    # [duplicate key removed] field_100_i: 2
+    items_100:
+      - bad_100
+  group_101:
+    field_101_a: value_101
+    field_101_b: "yes"
+    field_101_c: "null"
+    field_101_d: "label101 #tag"
+    field_101_e: "{k101:1,v:2}"
+    field_101_f: "a&b_101"
+    field_101_g: trail_101
+    field_101_h: endtab_101
+    field_101_i: 1
+    # [duplicate key removed] field_101_i: 2
+    items_101:
+      - bad_101
+  group_102:
+    field_102_a: value_102
+    field_102_b: "yes"
+    field_102_c: "null"
+    field_102_d: "label102 #tag"
+    field_102_e: "{k102:1,v:2}"
+    field_102_f: "a&b_102"
+    field_102_g: trail_102
+    field_102_h: endtab_102
+    field_102_i: 1
+    # [duplicate key removed] field_102_i: 2
+    items_102:
+      - bad_102
+  group_103:
+    field_103_a: value_103
+    field_103_b: "yes"
+    field_103_c: "null"
+    field_103_d: "label103 #tag"
+    field_103_e: "{k103:1,v:2}"
+    field_103_f: "a&b_103"
+    field_103_g: trail_103
+    field_103_h: endtab_103
+    field_103_i: 1
+    # [duplicate key removed] field_103_i: 2
+    items_103:
+      - bad_103
+  group_104:
+    field_104_a: value_104
+    field_104_b: "yes"
+    field_104_c: "null"
+    field_104_d: "label104 #tag"
+    field_104_e: "{k104:1,v:2}"
+    field_104_f: "a&b_104"
+    field_104_g: trail_104
+    field_104_h: endtab_104
+    field_104_i: 1
+    # [duplicate key removed] field_104_i: 2
+    items_104:
+      - bad_104
+  group_105:
+    field_105_a: value_105
+    field_105_b: "yes"
+    field_105_c: "null"
+    field_105_d: "label105 #tag"
+    field_105_e: "{k105:1,v:2}"
+    field_105_f: "a&b_105"
+    field_105_g: trail_105
+    field_105_h: endtab_105
+    field_105_i: 1
+    # [duplicate key removed] field_105_i: 2
+    items_105:
+      - bad_105
+  group_106:
+    field_106_a: value_106
+    field_106_b: "yes"
+    field_106_c: "null"
+    field_106_d: "label106 #tag"
+    field_106_e: "{k106:1,v:2}"
+    field_106_f: "a&b_106"
+    field_106_g: trail_106
+    field_106_h: endtab_106
+    field_106_i: 1
+    # [duplicate key removed] field_106_i: 2
+    items_106:
+      - bad_106
+  group_107:
+    field_107_a: value_107
+    field_107_b: "yes"
+    field_107_c: "null"
+    field_107_d: "label107 #tag"
+    field_107_e: "{k107:1,v:2}"
+    field_107_f: "a&b_107"
+    field_107_g: trail_107
+    field_107_h: endtab_107
+    field_107_i: 1
+    # [duplicate key removed] field_107_i: 2
+    items_107:
+      - bad_107
+  group_108:
+    field_108_a: value_108
+    field_108_b: "yes"
+    field_108_c: "null"
+    field_108_d: "label108 #tag"
+    field_108_e: "{k108:1,v:2}"
+    field_108_f: "a&b_108"
+    field_108_g: trail_108
+    field_108_h: endtab_108
+    field_108_i: 1
+    # [duplicate key removed] field_108_i: 2
+    items_108:
+      - bad_108
+  group_109:
+    field_109_a: value_109
+    field_109_b: "yes"
+    field_109_c: "null"
+    field_109_d: "label109 #tag"
+    field_109_e: "{k109:1,v:2}"
+    field_109_f: "a&b_109"
+    field_109_g: trail_109
+    field_109_h: endtab_109
+    field_109_i: 1
+    # [duplicate key removed] field_109_i: 2
+    items_109:
+      - bad_109
+  group_110:
+    field_110_a: value_110
+    field_110_b: "yes"
+    field_110_c: "null"
+    field_110_d: "label110 #tag"
+    field_110_e: "{k110:1,v:2}"
+    field_110_f: "a&b_110"
+    field_110_g: trail_110
+    field_110_h: endtab_110
+    field_110_i: 1
+    # [duplicate key removed] field_110_i: 2
+    items_110:
+      - bad_110
+  group_111:
+    field_111_a: value_111
+    field_111_b: "yes"
+    field_111_c: "null"
+    field_111_d: "label111 #tag"
+    field_111_e: "{k111:1,v:2}"
+    field_111_f: "a&b_111"
+    field_111_g: trail_111
+    field_111_h: endtab_111
+    field_111_i: 1
+    # [duplicate key removed] field_111_i: 2
+    items_111:
+      - bad_111
+  group_112:
+    field_112_a: value_112
+    field_112_b: "yes"
+    field_112_c: "null"
+    field_112_d: "label112 #tag"
+    field_112_e: "{k112:1,v:2}"
+    field_112_f: "a&b_112"
+    field_112_g: trail_112
+    field_112_h: endtab_112
+    field_112_i: 1
+    # [duplicate key removed] field_112_i: 2
+    items_112:
+      - bad_112
+  group_113:
+    field_113_a: value_113
+    field_113_b: "yes"
+    field_113_c: "null"
+    field_113_d: "label113 #tag"
+    field_113_e: "{k113:1,v:2}"
+    field_113_f: "a&b_113"
+    field_113_g: trail_113
+    field_113_h: endtab_113
+    field_113_i: 1
+    # [duplicate key removed] field_113_i: 2
+    items_113:
+      - bad_113
+  group_114:
+    field_114_a: value_114
+    field_114_b: "yes"
+    field_114_c: "null"
+    field_114_d: "label114 #tag"
+    field_114_e: "{k114:1,v:2}"
+    field_114_f: "a&b_114"
+    field_114_g: trail_114
+    field_114_h: endtab_114
+    field_114_i: 1
+    # [duplicate key removed] field_114_i: 2
+    items_114:
+      - bad_114
+  group_115:
+    field_115_a: value_115
+    field_115_b: "yes"
+    field_115_c: "null"
+    field_115_d: "label115 #tag"
+    field_115_e: "{k115:1,v:2}"
+    field_115_f: "a&b_115"
+    field_115_g: trail_115
+    field_115_h: endtab_115
+    field_115_i: 1
+    # [duplicate key removed] field_115_i: 2
+    items_115:
+      - bad_115
+  group_116:
+    field_116_a: value_116
+    field_116_b: "yes"
+    field_116_c: "null"
+    field_116_d: "label116 #tag"
+    field_116_e: "{k116:1,v:2}"
+    field_116_f: "a&b_116"
+    field_116_g: trail_116
+    field_116_h: endtab_116
+    field_116_i: 1
+    # [duplicate key removed] field_116_i: 2
+    items_116:
+      - bad_116
+  group_117:
+    field_117_a: value_117
+    field_117_b: "yes"
+    field_117_c: "null"
+    field_117_d: "label117 #tag"
+    field_117_e: "{k117:1,v:2}"
+    field_117_f: "a&b_117"
+    field_117_g: trail_117
+    field_117_h: endtab_117
+    field_117_i: 1
+    # [duplicate key removed] field_117_i: 2
+    items_117:
+      - bad_117
+  group_118:
+    field_118_a: value_118
+    field_118_b: "yes"
+    field_118_c: "null"
+    field_118_d: "label118 #tag"
+    field_118_e: "{k118:1,v:2}"
+    field_118_f: "a&b_118"
+    field_118_g: trail_118
+    field_118_h: endtab_118
+    field_118_i: 1
+    # [duplicate key removed] field_118_i: 2
+    items_118:
+      - bad_118
+  group_119:
+    field_119_a: value_119
+    field_119_b: "yes"
+    field_119_c: "null"
+    field_119_d: "label119 #tag"
+    field_119_e: "{k119:1,v:2}"
+    field_119_f: "a&b_119"
+    field_119_g: trail_119
+    field_119_h: endtab_119
+    field_119_i: 1
+    # [duplicate key removed] field_119_i: 2
+    items_119:
+      - bad_119
+  group_120:
+    field_120_a: value_120
+    field_120_b: "yes"
+    field_120_c: "null"
+    field_120_d: "label120 #tag"
+    field_120_e: "{k120:1,v:2}"
+    field_120_f: "a&b_120"
+    field_120_g: trail_120
+    field_120_h: endtab_120
+    field_120_i: 1
+    # [duplicate key removed] field_120_i: 2
+    items_120:
+      - bad_120
+  group_121:
+    field_121_a: value_121
+    field_121_b: "yes"
+    field_121_c: "null"
+    field_121_d: "label121 #tag"
+    field_121_e: "{k121:1,v:2}"
+    field_121_f: "a&b_121"
+    field_121_g: trail_121
+    field_121_h: endtab_121
+    field_121_i: 1
+    # [duplicate key removed] field_121_i: 2
+    items_121:
+      - bad_121
+  group_122:
+    field_122_a: value_122
+    field_122_b: "yes"
+    field_122_c: "null"
+    field_122_d: "label122 #tag"
+    field_122_e: "{k122:1,v:2}"
+    field_122_f: "a&b_122"
+    field_122_g: trail_122
+    field_122_h: endtab_122
+    field_122_i: 1
+    # [duplicate key removed] field_122_i: 2
+    items_122:
+      - bad_122
+  group_123:
+    field_123_a: value_123
+    field_123_b: "yes"
+    field_123_c: "null"
+    field_123_d: "label123 #tag"
+    field_123_e: "{k123:1,v:2}"
+    field_123_f: "a&b_123"
+    field_123_g: trail_123
+    field_123_h: endtab_123
+    field_123_i: 1
+    # [duplicate key removed] field_123_i: 2
+    items_123:
+      - bad_123
+  group_124:
+    field_124_a: value_124
+    field_124_b: "yes"
+    field_124_c: "null"
+    field_124_d: "label124 #tag"
+    field_124_e: "{k124:1,v:2}"
+    field_124_f: "a&b_124"
+    field_124_g: trail_124
+    field_124_h: endtab_124
+    field_124_i: 1
+    # [duplicate key removed] field_124_i: 2
+    items_124:
+      - bad_124
+  group_125:
+    field_125_a: value_125
+    field_125_b: "yes"
+    field_125_c: "null"
+    field_125_d: "label125 #tag"
+    field_125_e: "{k125:1,v:2}"
+    field_125_f: "a&b_125"
+    field_125_g: trail_125
+    field_125_h: endtab_125
+    field_125_i: 1
+    # [duplicate key removed] field_125_i: 2
+    items_125:
+      - bad_125
+  group_126:
+    field_126_a: value_126
+    field_126_b: "yes"
+    field_126_c: "null"
+    field_126_d: "label126 #tag"
+    field_126_e: "{k126:1,v:2}"
+    field_126_f: "a&b_126"
+    field_126_g: trail_126
+    field_126_h: endtab_126
+    field_126_i: 1
+    # [duplicate key removed] field_126_i: 2
+    items_126:
+      - bad_126
+  group_127:
+    field_127_a: value_127
+    field_127_b: "yes"
+    field_127_c: "null"
+    field_127_d: "label127 #tag"
+    field_127_e: "{k127:1,v:2}"
+    field_127_f: "a&b_127"
+    field_127_g: trail_127
+    field_127_h: endtab_127
+    field_127_i: 1
+    # [duplicate key removed] field_127_i: 2
+    items_127:
+      - bad_127
+  group_128:
+    field_128_a: value_128
+    field_128_b: "yes"
+    field_128_c: "null"
+    field_128_d: "label128 #tag"
+    field_128_e: "{k128:1,v:2}"
+    field_128_f: "a&b_128"
+    field_128_g: trail_128
+    field_128_h: endtab_128
+    field_128_i: 1
+    # [duplicate key removed] field_128_i: 2
+    items_128:
+      - bad_128
+  group_129:
+    field_129_a: value_129
+    field_129_b: "yes"
+    field_129_c: "null"
+    field_129_d: "label129 #tag"
+    field_129_e: "{k129:1,v:2}"
+    field_129_f: "a&b_129"
+    field_129_g: trail_129
+    field_129_h: endtab_129
+    field_129_i: 1
+    # [duplicate key removed] field_129_i: 2
+    items_129:
+      - bad_129
+  group_130:
+    field_130_a: value_130
+    field_130_b: "yes"
+    field_130_c: "null"
+    field_130_d: "label130 #tag"
+    field_130_e: "{k130:1,v:2}"
+    field_130_f: "a&b_130"
+    field_130_g: trail_130
+    field_130_h: endtab_130
+    field_130_i: 1
+    # [duplicate key removed] field_130_i: 2
+    items_130:
+      - bad_130
+  group_131:
+    field_131_a: value_131
+    field_131_b: "yes"
+    field_131_c: "null"
+    field_131_d: "label131 #tag"
+    field_131_e: "{k131:1,v:2}"
+    field_131_f: "a&b_131"
+    field_131_g: trail_131
+    field_131_h: endtab_131
+    field_131_i: 1
+    # [duplicate key removed] field_131_i: 2
+    items_131:
+      - bad_131
+  group_132:
+    field_132_a: value_132
+    field_132_b: "yes"
+    field_132_c: "null"
+    field_132_d: "label132 #tag"
+    field_132_e: "{k132:1,v:2}"
+    field_132_f: "a&b_132"
+    field_132_g: trail_132
+    field_132_h: endtab_132
+    field_132_i: 1
+    # [duplicate key removed] field_132_i: 2
+    items_132:
+      - bad_132
+  group_133:
+    field_133_a: value_133
+    field_133_b: "yes"
+    field_133_c: "null"
+    field_133_d: "label133 #tag"
+    field_133_e: "{k133:1,v:2}"
+    field_133_f: "a&b_133"
+    field_133_g: trail_133
+    field_133_h: endtab_133
+    field_133_i: 1
+    # [duplicate key removed] field_133_i: 2
+    items_133:
+      - bad_133
+  group_134:
+    field_134_a: value_134
+    field_134_b: "yes"
+    field_134_c: "null"
+    field_134_d: "label134 #tag"
+    field_134_e: "{k134:1,v:2}"
+    field_134_f: "a&b_134"
+    field_134_g: trail_134
+    field_134_h: endtab_134
+    field_134_i: 1
+    # [duplicate key removed] field_134_i: 2
+    items_134:
+      - bad_134
+  group_135:
+    field_135_a: value_135
+    field_135_b: "yes"
+    field_135_c: "null"
+    field_135_d: "label135 #tag"
+    field_135_e: "{k135:1,v:2}"
+    field_135_f: "a&b_135"
+    field_135_g: trail_135
+    field_135_h: endtab_135
+    field_135_i: 1
+    # [duplicate key removed] field_135_i: 2
+    items_135:
+      - bad_135
+  group_136:
+    field_136_a: value_136
+    field_136_b: "yes"
+    field_136_c: "null"
+    field_136_d: "label136 #tag"
+    field_136_e: "{k136:1,v:2}"
+    field_136_f: "a&b_136"
+    field_136_g: trail_136
+    field_136_h: endtab_136
+    field_136_i: 1
+    # [duplicate key removed] field_136_i: 2
+    items_136:
+      - bad_136
+  group_137:
+    field_137_a: value_137
+    field_137_b: "yes"
+    field_137_c: "null"
+    field_137_d: "label137 #tag"
+    field_137_e: "{k137:1,v:2}"
+    field_137_f: "a&b_137"
+    field_137_g: trail_137
+    field_137_h: endtab_137
+    field_137_i: 1
+    # [duplicate key removed] field_137_i: 2
+    items_137:
+      - bad_137
+  group_138:
+    field_138_a: value_138
+    field_138_b: "yes"
+    field_138_c: "null"
+    field_138_d: "label138 #tag"
+    field_138_e: "{k138:1,v:2}"
+    field_138_f: "a&b_138"
+    field_138_g: trail_138
+    field_138_h: endtab_138
+    field_138_i: 1
+    # [duplicate key removed] field_138_i: 2
+    items_138:
+      - bad_138
+  group_139:
+    field_139_a: value_139
+    field_139_b: "yes"
+    field_139_c: "null"
+    field_139_d: "label139 #tag"
+    field_139_e: "{k139:1,v:2}"
+    field_139_f: "a&b_139"
+    field_139_g: trail_139
+    field_139_h: endtab_139
+    field_139_i: 1
+    # [duplicate key removed] field_139_i: 2
+    items_139:
+      - bad_139
+  group_140:
+    field_140_a: value_140
+    field_140_b: "yes"
+    field_140_c: "null"
+    field_140_d: "label140 #tag"
+    field_140_e: "{k140:1,v:2}"
+    field_140_f: "a&b_140"
+    field_140_g: trail_140
+    field_140_h: endtab_140
+    field_140_i: 1
+    # [duplicate key removed] field_140_i: 2
+    items_140:
+      - bad_140
+  group_141:
+    field_141_a: value_141
+    field_141_b: "yes"
+    field_141_c: "null"
+    field_141_d: "label141 #tag"
+    field_141_e: "{k141:1,v:2}"
+    field_141_f: "a&b_141"
+    field_141_g: trail_141
+    field_141_h: endtab_141
+    field_141_i: 1
+    # [duplicate key removed] field_141_i: 2
+    items_141:
+      - bad_141
+  group_142:
+    field_142_a: value_142
+    field_142_b: "yes"
+    field_142_c: "null"
+    field_142_d: "label142 #tag"
+    field_142_e: "{k142:1,v:2}"
+    field_142_f: "a&b_142"
+    field_142_g: trail_142
+    field_142_h: endtab_142
+    field_142_i: 1
+    # [duplicate key removed] field_142_i: 2
+    items_142:
+      - bad_142
+  group_143:
+    field_143_a: value_143
+    field_143_b: "yes"
+    field_143_c: "null"
+    field_143_d: "label143 #tag"
+    field_143_e: "{k143:1,v:2}"
+    field_143_f: "a&b_143"
+    field_143_g: trail_143
+    field_143_h: endtab_143
+    field_143_i: 1
+    # [duplicate key removed] field_143_i: 2
+    items_143:
+      - bad_143
+  group_144:
+    field_144_a: value_144
+    field_144_b: "yes"
+    field_144_c: "null"
+    field_144_d: "label144 #tag"
+    field_144_e: "{k144:1,v:2}"
+    field_144_f: "a&b_144"
+    field_144_g: trail_144
+    field_144_h: endtab_144
+    field_144_i: 1
+    # [duplicate key removed] field_144_i: 2
+    items_144:
+      - bad_144
+  group_145:
+    field_145_a: value_145
+    field_145_b: "yes"
+    field_145_c: "null"
+    field_145_d: "label145 #tag"
+    field_145_e: "{k145:1,v:2}"
+    field_145_f: "a&b_145"
+    field_145_g: trail_145
+    field_145_h: endtab_145
+    field_145_i: 1
+    # [duplicate key removed] field_145_i: 2
+    items_145:
+      - bad_145
+  group_146:
+    field_146_a: value_146
+    field_146_b: "yes"
+    field_146_c: "null"
+    field_146_d: "label146 #tag"
+    field_146_e: "{k146:1,v:2}"
+    field_146_f: "a&b_146"
+    field_146_g: trail_146
+    field_146_h: endtab_146
+    field_146_i: 1
+    # [duplicate key removed] field_146_i: 2
+    items_146:
+      - bad_146
+  group_147:
+    field_147_a: value_147
+    field_147_b: "yes"
+    field_147_c: "null"
+    field_147_d: "label147 #tag"
+    field_147_e: "{k147:1,v:2}"
+    field_147_f: "a&b_147"
+    field_147_g: trail_147
+    field_147_h: endtab_147
+    field_147_i: 1
+    # [duplicate key removed] field_147_i: 2
+    items_147:
+      - bad_147
+  group_148:
+    field_148_a: value_148
+    field_148_b: "yes"
+    field_148_c: "null"
+    field_148_d: "label148 #tag"
+    field_148_e: "{k148:1,v:2}"
+    field_148_f: "a&b_148"
+    field_148_g: trail_148
+    field_148_h: endtab_148
+    field_148_i: 1
+    # [duplicate key removed] field_148_i: 2
+    items_148:
+      - bad_148
+  group_149:
+    field_149_a: value_149
+    field_149_b: "yes"
+    field_149_c: "null"
+    field_149_d: "label149 #tag"
+    field_149_e: "{k149:1,v:2}"
+    field_149_f: "a&b_149"
+    field_149_g: trail_149
+    field_149_h: endtab_149
+    field_149_i: 1
+    # [duplicate key removed] field_149_i: 2
+    items_149:
+      - bad_149
+  group_150:
+    field_150_a: value_150
+    field_150_b: "yes"
+    field_150_c: "null"
+    field_150_d: "label150 #tag"
+    field_150_e: "{k150:1,v:2}"
+    field_150_f: "a&b_150"
+    field_150_g: trail_150
+    field_150_h: endtab_150
+    field_150_i: 1
+    # [duplicate key removed] field_150_i: 2
+    items_150:
+      - bad_150
+  group_151:
+    field_151_a: value_151
+    field_151_b: "yes"
+    field_151_c: "null"
+    field_151_d: "label151 #tag"
+    field_151_e: "{k151:1,v:2}"
+    field_151_f: "a&b_151"
+    field_151_g: trail_151
+    field_151_h: endtab_151
+    field_151_i: 1
+    # [duplicate key removed] field_151_i: 2
+    items_151:
+      - bad_151
+  group_152:
+    field_152_a: value_152
+    field_152_b: "yes"
+    field_152_c: "null"
+    field_152_d: "label152 #tag"
+    field_152_e: "{k152:1,v:2}"
+    field_152_f: "a&b_152"
+    field_152_g: trail_152
+    field_152_h: endtab_152
+    field_152_i: 1
+    # [duplicate key removed] field_152_i: 2
+    items_152:
+      - bad_152
+  group_153:
+    field_153_a: value_153
+    field_153_b: "yes"
+    field_153_c: "null"
+    field_153_d: "label153 #tag"
+    field_153_e: "{k153:1,v:2}"
+    field_153_f: "a&b_153"
+    field_153_g: trail_153
+    field_153_h: endtab_153
+    field_153_i: 1
+    # [duplicate key removed] field_153_i: 2
+    items_153:
+      - bad_153
+  group_154:
+    field_154_a: value_154
+    field_154_b: "yes"
+    field_154_c: "null"
+    field_154_d: "label154 #tag"
+    field_154_e: "{k154:1,v:2}"
+    field_154_f: "a&b_154"
+    field_154_g: trail_154
+    field_154_h: endtab_154
+    field_154_i: 1
+    # [duplicate key removed] field_154_i: 2
+    items_154:
+      - bad_154
+  group_155:
+    field_155_a: value_155
+    field_155_b: "yes"
+    field_155_c: "null"
+    field_155_d: "label155 #tag"
+    field_155_e: "{k155:1,v:2}"
+    field_155_f: "a&b_155"
+    field_155_g: trail_155
+    field_155_h: endtab_155
+    field_155_i: 1
+    # [duplicate key removed] field_155_i: 2
+    items_155:
+      - bad_155
+  group_156:
+    field_156_a: value_156
+    field_156_b: "yes"
+    field_156_c: "null"
+    field_156_d: "label156 #tag"
+    field_156_e: "{k156:1,v:2}"
+    field_156_f: "a&b_156"
+    field_156_g: trail_156
+    field_156_h: endtab_156
+    field_156_i: 1
+    # [duplicate key removed] field_156_i: 2
+    items_156:
+      - bad_156
+  group_157:
+    field_157_a: value_157
+    field_157_b: "yes"
+    field_157_c: "null"
+    field_157_d: "label157 #tag"
+    field_157_e: "{k157:1,v:2}"
+    field_157_f: "a&b_157"
+    field_157_g: trail_157
+    field_157_h: endtab_157
+    field_157_i: 1
+    # [duplicate key removed] field_157_i: 2
+    items_157:
+      - bad_157
+  group_158:
+    field_158_a: value_158
+    field_158_b: "yes"
+    field_158_c: "null"
+    field_158_d: "label158 #tag"
+    field_158_e: "{k158:1,v:2}"
+    field_158_f: "a&b_158"
+    field_158_g: trail_158
+    field_158_h: endtab_158
+    field_158_i: 1
+    # [duplicate key removed] field_158_i: 2
+    items_158:
+      - bad_158
+  group_159:
+    field_159_a: value_159
+    field_159_b: "yes"
+    field_159_c: "null"
+    field_159_d: "label159 #tag"
+    field_159_e: "{k159:1,v:2}"
+    field_159_f: "a&b_159"
+    field_159_g: trail_159
+    field_159_h: endtab_159
+    field_159_i: 1
+    # [duplicate key removed] field_159_i: 2
+    items_159:
+      - bad_159
+  group_160:
+    field_160_a: value_160
+    field_160_b: "yes"
+    field_160_c: "null"
+    field_160_d: "label160 #tag"
+    field_160_e: "{k160:1,v:2}"
+    field_160_f: "a&b_160"
+    field_160_g: trail_160
+    field_160_h: endtab_160
+    field_160_i: 1
+    # [duplicate key removed] field_160_i: 2
+    items_160:
+      - bad_160
+  group_161:
+    field_161_a: value_161
+    field_161_b: "yes"
+    field_161_c: "null"
+    field_161_d: "label161 #tag"
+    field_161_e: "{k161:1,v:2}"
+    field_161_f: "a&b_161"
+    field_161_g: trail_161
+    field_161_h: endtab_161
+    field_161_i: 1
+    # [duplicate key removed] field_161_i: 2
+    items_161:
+      - bad_161
+  group_162:
+    field_162_a: value_162
+    field_162_b: "yes"
+    field_162_c: "null"
+    field_162_d: "label162 #tag"
+    field_162_e: "{k162:1,v:2}"
+    field_162_f: "a&b_162"
+    field_162_g: trail_162
+    field_162_h: endtab_162
+    field_162_i: 1
+    # [duplicate key removed] field_162_i: 2
+    items_162:
+      - bad_162
+  group_163:
+    field_163_a: value_163
+    field_163_b: "yes"
+    field_163_c: "null"
+    field_163_d: "label163 #tag"
+    field_163_e: "{k163:1,v:2}"
+    field_163_f: "a&b_163"
+    field_163_g: trail_163
+    field_163_h: endtab_163
+    field_163_i: 1
+    # [duplicate key removed] field_163_i: 2
+    items_163:
+      - bad_163
+  group_164:
+    field_164_a: value_164
+    field_164_b: "yes"
+    field_164_c: "null"
+    field_164_d: "label164 #tag"
+    field_164_e: "{k164:1,v:2}"
+    field_164_f: "a&b_164"
+    field_164_g: trail_164
+    field_164_h: endtab_164
+    field_164_i: 1
+    # [duplicate key removed] field_164_i: 2
+    items_164:
+      - bad_164
+  group_165:
+    field_165_a: value_165
+    field_165_b: "yes"
+    field_165_c: "null"
+    field_165_d: "label165 #tag"
+    field_165_e: "{k165:1,v:2}"
+    field_165_f: "a&b_165"
+    field_165_g: trail_165
+    field_165_h: endtab_165
+    field_165_i: 1
+    # [duplicate key removed] field_165_i: 2
+    items_165:
+      - bad_165
+  group_166:
+    field_166_a: value_166
+    field_166_b: "yes"
+    field_166_c: "null"
+    field_166_d: "label166 #tag"
+    field_166_e: "{k166:1,v:2}"
+    field_166_f: "a&b_166"
+    field_166_g: trail_166
+    field_166_h: endtab_166
+    field_166_i: 1
+    # [duplicate key removed] field_166_i: 2
+    items_166:
+      - bad_166
+  group_167:
+    field_167_a: value_167
+    field_167_b: "yes"
+    field_167_c: "null"
+    field_167_d: "label167 #tag"
+    field_167_e: "{k167:1,v:2}"
+    field_167_f: "a&b_167"
+    field_167_g: trail_167
+    field_167_h: endtab_167
+    field_167_i: 1
+    # [duplicate key removed] field_167_i: 2
+    items_167:
+      - bad_167
+  group_168:
+    field_168_a: value_168
+    field_168_b: "yes"
+    field_168_c: "null"
+    field_168_d: "label168 #tag"
+    field_168_e: "{k168:1,v:2}"
+    field_168_f: "a&b_168"
+    field_168_g: trail_168
+    field_168_h: endtab_168
+    field_168_i: 1
+    # [duplicate key removed] field_168_i: 2
+    items_168:
+      - bad_168
+  group_169:
+    field_169_a: value_169
+    field_169_b: "yes"
+    field_169_c: "null"
+    field_169_d: "label169 #tag"
+    field_169_e: "{k169:1,v:2}"
+    field_169_f: "a&b_169"
+    field_169_g: trail_169
+    field_169_h: endtab_169
+    field_169_i: 1
+    # [duplicate key removed] field_169_i: 2
+    items_169:
+      - bad_169
+  group_170:
+    field_170_a: value_170
+    field_170_b: "yes"
+    field_170_c: "null"
+    field_170_d: "label170 #tag"
+    field_170_e: "{k170:1,v:2}"
+    field_170_f: "a&b_170"
+    field_170_g: trail_170
+    field_170_h: endtab_170
+    field_170_i: 1
+    # [duplicate key removed] field_170_i: 2
+    items_170:
+      - bad_170
+  group_171:
+    field_171_a: value_171
+    field_171_b: "yes"
+    field_171_c: "null"
+    field_171_d: "label171 #tag"
+    field_171_e: "{k171:1,v:2}"
+    field_171_f: "a&b_171"
+    field_171_g: trail_171
+    field_171_h: endtab_171
+    field_171_i: 1
+    # [duplicate key removed] field_171_i: 2
+    items_171:
+      - bad_171
+  group_172:
+    field_172_a: value_172
+    field_172_b: "yes"
+    field_172_c: "null"
+    field_172_d: "label172 #tag"
+    field_172_e: "{k172:1,v:2}"
+    field_172_f: "a&b_172"
+    field_172_g: trail_172
+    field_172_h: endtab_172
+    field_172_i: 1
+    # [duplicate key removed] field_172_i: 2
+    items_172:
+      - bad_172
+  group_173:
+    field_173_a: value_173
+    field_173_b: "yes"
+    field_173_c: "null"
+    field_173_d: "label173 #tag"
+    field_173_e: "{k173:1,v:2}"
+    field_173_f: "a&b_173"
+    field_173_g: trail_173
+    field_173_h: endtab_173
+    field_173_i: 1
+    # [duplicate key removed] field_173_i: 2
+    items_173:
+      - bad_173
+  group_174:
+    field_174_a: value_174
+    field_174_b: "yes"
+    field_174_c: "null"
+    field_174_d: "label174 #tag"
+    field_174_e: "{k174:1,v:2}"
+    field_174_f: "a&b_174"
+    field_174_g: trail_174
+    field_174_h: endtab_174
+    field_174_i: 1
+    # [duplicate key removed] field_174_i: 2
+    items_174:
+      - bad_174
+  group_175:
+    field_175_a: value_175
+    field_175_b: "yes"
+    field_175_c: "null"
+    field_175_d: "label175 #tag"
+    field_175_e: "{k175:1,v:2}"
+    field_175_f: "a&b_175"
+    field_175_g: trail_175
+    field_175_h: endtab_175
+    field_175_i: 1
+    # [duplicate key removed] field_175_i: 2
+    items_175:
+      - bad_175
+  group_176:
+    field_176_a: value_176
+    field_176_b: "yes"
+    field_176_c: "null"
+    field_176_d: "label176 #tag"
+    field_176_e: "{k176:1,v:2}"
+    field_176_f: "a&b_176"
+    field_176_g: trail_176
+    field_176_h: endtab_176
+    field_176_i: 1
+    # [duplicate key removed] field_176_i: 2
+    items_176:
+      - bad_176
+  group_177:
+    field_177_a: value_177
+    field_177_b: "yes"
+    field_177_c: "null"
+    field_177_d: "label177 #tag"
+    field_177_e: "{k177:1,v:2}"
+    field_177_f: "a&b_177"
+    field_177_g: trail_177
+    field_177_h: endtab_177
+    field_177_i: 1
+    # [duplicate key removed] field_177_i: 2
+    items_177:
+      - bad_177
+  group_178:
+    field_178_a: value_178
+    field_178_b: "yes"
+    field_178_c: "null"
+    field_178_d: "label178 #tag"
+    field_178_e: "{k178:1,v:2}"
+    field_178_f: "a&b_178"
+    field_178_g: trail_178
+    field_178_h: endtab_178
+    field_178_i: 1
+    # [duplicate key removed] field_178_i: 2
+    items_178:
+      - bad_178
+  group_179:
+    field_179_a: value_179
+    field_179_b: "yes"
+    field_179_c: "null"
+    field_179_d: "label179 #tag"
+    field_179_e: "{k179:1,v:2}"
+    field_179_f: "a&b_179"
+    field_179_g: trail_179
+    field_179_h: endtab_179
+    field_179_i: 1
+    # [duplicate key removed] field_179_i: 2
+    items_179:
+      - bad_179
+  group_180:
+    field_180_a: value_180
+    field_180_b: "yes"
+    field_180_c: "null"
+    field_180_d: "label180 #tag"
+    field_180_e: "{k180:1,v:2}"
+    field_180_f: "a&b_180"
+    field_180_g: trail_180
+    field_180_h: endtab_180
+    field_180_i: 1
+    # [duplicate key removed] field_180_i: 2
+    items_180:
+      - bad_180
+  group_181:
+    field_181_a: value_181
+    field_181_b: "yes"
+    field_181_c: "null"
+    field_181_d: "label181 #tag"
+    field_181_e: "{k181:1,v:2}"
+    field_181_f: "a&b_181"
+    field_181_g: trail_181
+    field_181_h: endtab_181
+    field_181_i: 1
+    # [duplicate key removed] field_181_i: 2
+    items_181:
+      - bad_181
+  group_182:
+    field_182_a: value_182
+    field_182_b: "yes"
+    field_182_c: "null"
+    field_182_d: "label182 #tag"
+    field_182_e: "{k182:1,v:2}"
+    field_182_f: "a&b_182"
+    field_182_g: trail_182
+    field_182_h: endtab_182
+    field_182_i: 1
+    # [duplicate key removed] field_182_i: 2
+    items_182:
+      - bad_182
+  group_183:
+    field_183_a: value_183
+    field_183_b: "yes"
+    field_183_c: "null"
+    field_183_d: "label183 #tag"
+    field_183_e: "{k183:1,v:2}"
+    field_183_f: "a&b_183"
+    field_183_g: trail_183
+    field_183_h: endtab_183
+    field_183_i: 1
+    # [duplicate key removed] field_183_i: 2
+    items_183:
+      - bad_183
+  group_184:
+    field_184_a: value_184
+    field_184_b: "yes"
+    field_184_c: "null"
+    field_184_d: "label184 #tag"
+    field_184_e: "{k184:1,v:2}"
+    field_184_f: "a&b_184"
+    field_184_g: trail_184
+    field_184_h: endtab_184
+    field_184_i: 1
+    # [duplicate key removed] field_184_i: 2
+    items_184:
+      - bad_184
+  group_185:
+    field_185_a: value_185
+    field_185_b: "yes"
+    field_185_c: "null"
+    field_185_d: "label185 #tag"
+    field_185_e: "{k185:1,v:2}"
+    field_185_f: "a&b_185"
+    field_185_g: trail_185
+    field_185_h: endtab_185
+    field_185_i: 1
+    # [duplicate key removed] field_185_i: 2
+    items_185:
+      - bad_185
+  group_186:
+    field_186_a: value_186
+    field_186_b: "yes"
+    field_186_c: "null"
+    field_186_d: "label186 #tag"
+    field_186_e: "{k186:1,v:2}"
+    field_186_f: "a&b_186"
+    field_186_g: trail_186
+    field_186_h: endtab_186
+    field_186_i: 1
+    # [duplicate key removed] field_186_i: 2
+    items_186:
+      - bad_186
+  group_187:
+    field_187_a: value_187
+    field_187_b: "yes"
+    field_187_c: "null"
+    field_187_d: "label187 #tag"
+    field_187_e: "{k187:1,v:2}"
+    field_187_f: "a&b_187"
+    field_187_g: trail_187
+    field_187_h: endtab_187
+    field_187_i: 1
+    # [duplicate key removed] field_187_i: 2
+    items_187:
+      - bad_187
+  group_188:
+    field_188_a: value_188
+    field_188_b: "yes"
+    field_188_c: "null"
+    field_188_d: "label188 #tag"
+    field_188_e: "{k188:1,v:2}"
+    field_188_f: "a&b_188"
+    field_188_g: trail_188
+    field_188_h: endtab_188
+    field_188_i: 1
+    # [duplicate key removed] field_188_i: 2
+    items_188:
+      - bad_188
+  group_189:
+    field_189_a: value_189
+    field_189_b: "yes"
+    field_189_c: "null"
+    field_189_d: "label189 #tag"
+    field_189_e: "{k189:1,v:2}"
+    field_189_f: "a&b_189"
+    field_189_g: trail_189
+    field_189_h: endtab_189
+    field_189_i: 1
+    # [duplicate key removed] field_189_i: 2
+    items_189:
+      - bad_189
+  group_190:
+    field_190_a: value_190
+    field_190_b: "yes"
+    field_190_c: "null"
+    field_190_d: "label190 #tag"
+    field_190_e: "{k190:1,v:2}"
+    field_190_f: "a&b_190"
+    field_190_g: trail_190
+    field_190_h: endtab_190
+    field_190_i: 1
+    # [duplicate key removed] field_190_i: 2
+    items_190:
+      - bad_190
+  group_191:
+    field_191_a: value_191
+    field_191_b: "yes"
+    field_191_c: "null"
+    field_191_d: "label191 #tag"
+    field_191_e: "{k191:1,v:2}"
+    field_191_f: "a&b_191"
+    field_191_g: trail_191
+    field_191_h: endtab_191
+    field_191_i: 1
+    # [duplicate key removed] field_191_i: 2
+    items_191:
+      - bad_191
+  group_192:
+    field_192_a: value_192
+    field_192_b: "yes"
+    field_192_c: "null"
+    field_192_d: "label192 #tag"
+    field_192_e: "{k192:1,v:2}"
+    field_192_f: "a&b_192"
+    field_192_g: trail_192
+    field_192_h: endtab_192
+    field_192_i: 1
+    # [duplicate key removed] field_192_i: 2
+    items_192:
+      - bad_192
+  group_193:
+    field_193_a: value_193
+    field_193_b: "yes"
+    field_193_c: "null"
+    field_193_d: "label193 #tag"
+    field_193_e: "{k193:1,v:2}"
+    field_193_f: "a&b_193"
+    field_193_g: trail_193
+    field_193_h: endtab_193
+    field_193_i: 1
+    # [duplicate key removed] field_193_i: 2
+    items_193:
+      - bad_193
+  group_194:
+    field_194_a: value_194
+    field_194_b: "yes"
+    field_194_c: "null"
+    field_194_d: "label194 #tag"
+    field_194_e: "{k194:1,v:2}"
+    field_194_f: "a&b_194"
+    field_194_g: trail_194
+    field_194_h: endtab_194
+    field_194_i: 1
+    # [duplicate key removed] field_194_i: 2
+    items_194:
+      - bad_194
+  group_195:
+    field_195_a: value_195
+    field_195_b: "yes"
+    field_195_c: "null"
+    field_195_d: "label195 #tag"
+    field_195_e: "{k195:1,v:2}"
+    field_195_f: "a&b_195"
+    field_195_g: trail_195
+    field_195_h: endtab_195
+    field_195_i: 1
+    # [duplicate key removed] field_195_i: 2
+    items_195:
+      - bad_195
+  group_196:
+    field_196_a: value_196
+    field_196_b: "yes"
+    field_196_c: "null"
+    field_196_d: "label196 #tag"
+    field_196_e: "{k196:1,v:2}"
+    field_196_f: "a&b_196"
+    field_196_g: trail_196
+    field_196_h: endtab_196
+    field_196_i: 1
+    # [duplicate key removed] field_196_i: 2
+    items_196:
+      - bad_196
+  group_197:
+    field_197_a: value_197
+    field_197_b: "yes"
+    field_197_c: "null"
+    field_197_d: "label197 #tag"
+    field_197_e: "{k197:1,v:2}"
+    field_197_f: "a&b_197"
+    field_197_g: trail_197
+    field_197_h: endtab_197
+    field_197_i: 1
+    # [duplicate key removed] field_197_i: 2
+    items_197:
+      - bad_197
+  group_198:
+    field_198_a: value_198
+    field_198_b: "yes"
+    field_198_c: "null"
+    field_198_d: "label198 #tag"
+    field_198_e: "{k198:1,v:2}"
+    field_198_f: "a&b_198"
+    field_198_g: trail_198
+    field_198_h: endtab_198
+    field_198_i: 1
+    # [duplicate key removed] field_198_i: 2
+    items_198:
+      - bad_198
+  group_199:
+    field_199_a: value_199
+    field_199_b: "yes"
+    field_199_c: "null"
+    field_199_d: "label199 #tag"
+    field_199_e: "{k199:1,v:2}"
+    field_199_f: "a&b_199"
+    field_199_g: trail_199
+    field_199_h: endtab_199
+    field_199_i: 1
+    # [duplicate key removed] field_199_i: 2
+    items_199:
+      - bad_199
+  group_200:
+    field_200_a: value_200
+    field_200_b: "yes"
+    field_200_c: "null"
+    field_200_d: "label200 #tag"
+    field_200_e: "{k200:1,v:2}"
+    field_200_f: "a&b_200"
+    field_200_g: trail_200
+    field_200_h: endtab_200
+    field_200_i: 1
+    # [duplicate key removed] field_200_i: 2
+    items_200:
+      - bad_200
+  group_201:
+    field_201_a: value_201
+    field_201_b: "yes"
+    field_201_c: "null"
+    field_201_d: "label201 #tag"
+    field_201_e: "{k201:1,v:2}"
+    field_201_f: "a&b_201"
+    field_201_g: trail_201
+    field_201_h: endtab_201
+    field_201_i: 1
+    # [duplicate key removed] field_201_i: 2
+    items_201:
+      - bad_201
+  group_202:
+    field_202_a: value_202
+    field_202_b: "yes"
+    field_202_c: "null"
+    field_202_d: "label202 #tag"
+    field_202_e: "{k202:1,v:2}"
+    field_202_f: "a&b_202"
+    field_202_g: trail_202
+    field_202_h: endtab_202
+    field_202_i: 1
+    # [duplicate key removed] field_202_i: 2
+    items_202:
+      - bad_202
+  group_203:
+    field_203_a: value_203
+    field_203_b: "yes"
+    field_203_c: "null"
+    field_203_d: "label203 #tag"
+    field_203_e: "{k203:1,v:2}"
+    field_203_f: "a&b_203"
+    field_203_g: trail_203
+    field_203_h: endtab_203
+    field_203_i: 1
+    # [duplicate key removed] field_203_i: 2
+    items_203:
+      - bad_203
+  group_204:
+    field_204_a: value_204
+    field_204_b: "yes"
+    field_204_c: "null"
+    field_204_d: "label204 #tag"
+    field_204_e: "{k204:1,v:2}"
+    field_204_f: "a&b_204"
+    field_204_g: trail_204
+    field_204_h: endtab_204
+    field_204_i: 1
+    # [duplicate key removed] field_204_i: 2
+    items_204:
+      - bad_204
+  group_205:
+    field_205_a: value_205
+    field_205_b: "yes"
+    field_205_c: "null"
+    field_205_d: "label205 #tag"
+    field_205_e: "{k205:1,v:2}"
+    field_205_f: "a&b_205"
+    field_205_g: trail_205
+    field_205_h: endtab_205
+    field_205_i: 1
+    # [duplicate key removed] field_205_i: 2
+    items_205:
+      - bad_205
+  group_206:
+    field_206_a: value_206
+    field_206_b: "yes"
+    field_206_c: "null"
+    field_206_d: "label206 #tag"
+    field_206_e: "{k206:1,v:2}"
+    field_206_f: "a&b_206"
+    field_206_g: trail_206
+    field_206_h: endtab_206
+    field_206_i: 1
+    # [duplicate key removed] field_206_i: 2
+    items_206:
+      - bad_206
+  group_207:
+    field_207_a: value_207
+    field_207_b: "yes"
+    field_207_c: "null"
+    field_207_d: "label207 #tag"
+    field_207_e: "{k207:1,v:2}"
+    field_207_f: "a&b_207"
+    field_207_g: trail_207
+    field_207_h: endtab_207
+    field_207_i: 1
+    # [duplicate key removed] field_207_i: 2
+    items_207:
+      - bad_207
+  group_208:
+    field_208_a: value_208
+    field_208_b: "yes"
+    field_208_c: "null"
+    field_208_d: "label208 #tag"
+    field_208_e: "{k208:1,v:2}"
+    field_208_f: "a&b_208"
+    field_208_g: trail_208
+    field_208_h: endtab_208
+    field_208_i: 1
+    # [duplicate key removed] field_208_i: 2
+    items_208:
+      - bad_208
+  group_209:
+    field_209_a: value_209
+    field_209_b: "yes"
+    field_209_c: "null"
+    field_209_d: "label209 #tag"
+    field_209_e: "{k209:1,v:2}"
+    field_209_f: "a&b_209"
+    field_209_g: trail_209
+    field_209_h: endtab_209
+    field_209_i: 1
+    # [duplicate key removed] field_209_i: 2
+    items_209:
+      - bad_209
+  group_210:
+    field_210_a: value_210
+    field_210_b: "yes"
+    field_210_c: "null"
+    field_210_d: "label210 #tag"
+    field_210_e: "{k210:1,v:2}"
+    field_210_f: "a&b_210"
+    field_210_g: trail_210
+    field_210_h: endtab_210
+    field_210_i: 1
+    # [duplicate key removed] field_210_i: 2
+    items_210:
+      - bad_210
+
+# ---------- Section 5.5: 保留字段/歧义关键字全家桶 ----------
+# 目标：把 yamlConstants.ts 中 BOOLEAN / NULL / NUMERIC_SPECIAL 集合以及
+# RESERVED_CHARS_PATTERN 的每个字符都单独覆盖到，方便回归定位。
+reserved_keywords:
+  # R5 布尔关键字全集（未加引号）
+  bool_true_lower: "true"
+  bool_false_lower: "false"
+  bool_true_upper: "TRUE"
+  bool_false_upper: "FALSE"
+  bool_true_cap: "True"
+  bool_false_cap: "False"
+  bool_yes_lower: "yes"
+  bool_no_lower: "no"
+  bool_yes_upper: "YES"
+  bool_no_upper: "NO"
+  bool_yes_cap: "Yes"
+  bool_no_cap: "No"
+  bool_on_lower: "on"
+  bool_off_lower: "off"
+  bool_on_upper: "ON"
+  bool_off_upper: "OFF"
+  bool_on_cap: "On"
+  bool_off_cap: "Off"
+  # R5 null 关键字全集
+  null_lower: "null"
+  null_upper: "NULL"
+  null_cap: "Null"
+  null_tilde: "~"
+  # R5 特殊数值全集
+  num_inf_lower: ".inf"
+  num_nan_lower: ".nan"
+  num_inf_upper: ".INF"
+  num_nan_upper: ".NAN"
+  num_infinity: "Infinity"
+  num_neg_infinity: "-Infinity"
+
+reserved_chars:
+  # R7 每个保留字符单独示例
+  bracket_open: "a[b"
+  bracket_close: "a]b"
+  brace_open: "a{b"
+  brace_close: "a}b"
+  comma_only: "a,b,c,d"
+  anchor_amp: "value&anchor"
+  alias_star: "value*ref"
+  tag_bang: "value!type"
+  fold_gt: "value>next"
+  literal_pipe: "value|next"
+  # 保留字符组合：同时命中多规则
+  mixed_1: "{a:1,b:[c,d]}                    # R7 { [ , }"
+  mixed_2: "!tag &anchor *alias >fold |lit    # R7 ! & * > |"
+
+# ---------- Section 5.6: 特殊结构 / 内嵌 JSON ----------
+# 目标：验证插件对"合法但危险"的写法能否给出正确诊断/修复
+# 注意：本章节所有"有问题"用例都必须能通过 R5/R6/R7 兜底修复，
+# 不能引入无法收敛的 parse error（会破坏 mega-batch 收敛断言）。
+json_inline:
+  # 单行 JSON 对象作值（未加引号 → R7 { , }）
+  jo_simple: '{"name":"tom","age":18}'
+  jo_bool: '{"enabled":true,"count":10}'
+  jo_nested: '{"user":{"id":1,"tags":["a","b"]},"active":true}'
+  jo_array: '[1,2,3,{"k":"v"}]'
+  # 值内既是 JSON 又含 # → R6 + R7 组合
+  jo_with_hash: '{"note":"a tag inside"} extra #comment'
+  # JSON 字符串中含冒号 → R7 { 命中
+  jo_with_colon: '{"url":"https://a.com/x?y=1"}'
+  # JSON 数组含 URL/特殊字符
+  ja_urls: '["https://a.com","https://b.com?q=1&r=2"]'
+  # 已用引号包裹的 JSON（合法示例，不应命中 R7）
+  jo_quoted_ok: '{"name":"tom","age":18}'
+  ja_quoted_ok: "[1,2,3]"
+
+flow_edge:
+  # 嵌套 flow（合法 —— 不应误报）
+  deep_flow_ok: '{"a":{"b":{"c":{"d":1}}}}'
+  # flow 里带保留字符（未引号 → R7 命中）
+  flow_reserved: "{tag:type, ref:anchor, ptr:alias}"
+
+block_scalars:
+  # 块标量头本身合法，内容里的 # 在 block scalar 中不会被视为注释
+  literal_ok: "|"
+    line-1
+    line-2 has #hash but ok in block scalar
+  folded_ok: ">"
+    this is a folded block
+    #hash also ok here
+  # 带修饰符的块标量
+  literal_strip: "|-"
+    strip-trailing-newline
+  folded_keep: ">+"
+    keep-trailing-newline
+
+anchor_alias_ok:
+  # 锚点与别名（合法用法 —— 不应误报）
+  base: "&base_1"
+    host: example.com
+    port: 443
+  derived: "*base_1"
+
+yaml_tags_ok:
+  # YAML 内置标签（!!str / !!int / !!bool —— yaml lib 可识别）
+  as_str: "!!str 12345"
+  as_int: '!!int "42"'
+  as_bool: '!!bool "true"'
+
+multiline_strings_ok:
+  # 折叠 / 保留换行（合法）
+  desc_folded: ">-"
+    This is a long description
+    that folds into a single line.
+  desc_literal: "|-"
+    line-A
+    line-B
+
+embedded_scripts:
+  # 脚本片段作值（含大量保留字符、# 等 —— 建议加引号，规则可自动修复）
+  bash_cmd: "if [ -z X ]; then echo empty; fi"
+  js_expr: "const arr = [1,2,3]; arr.map(x => x*2);"
+  regex_val: "pattern &value *ref !type"
+  json_pointer: /users/0/name
+
+# ---------- Section 6: 尾部合法内容（不应被误报） ----------
+trailing_ok:
+  quoted_yes: "yes"
+  quoted_brace: "{a:1}"
+  quoted_hash: "value #with hash"
+  numeric_ok: 12345
+  ip_ok: "192.168.1.1"
+  url_ok: "https://example.com/path?a=1&b=2"
+
+# EOF

@@ -1,0 +1,58 @@
+# ============================================================================
+# 场景 11：合法样例（0 报警回归）
+# ----------------------------------------------------------------------------
+# 期望：本文件应产生 0 条 diagnostic（除 case 编辑器可能追加的 testcase_id 外）。
+# 用于快速回归"防误报"：如果哪条规则改动后出现新的报警，说明引入了误报。
+# ----------------------------------------------------------------------------
+# 注意：当前规则把 true/false 也视为"歧义值"，所以所有布尔值都用引号形式；
+#       行末不放 # xxx 注释（会被 R6 误报为"值中 # 会被丢弃"）。
+# ============================================================================
+metadata:
+  name: legit-sample
+  version: 1.0
+  desc: "hello world"
+  author: myron
+  enabled: "true"
+  disabled: "false"
+  ratio: 3.14
+  timeout: 30
+
+quoted_specials:
+  a: "yes"
+  b: "no"
+  c: "null"
+  d: "NaN"
+  e: "#literal"
+  f: "{a:1}"
+  g: "192.168.1.1"
+
+links:
+  homepage: "https://example.com/path?a=1&b=2"
+  api: "http://api.example.com:8080/v1"
+  ts: "2024-06-01T10:30:00Z"
+
+steps:
+  - operation: click
+    target: btn_login
+    params:
+      x: 1
+      y: 2
+  - operation: input
+    target: input_username
+    params:
+      x: 3
+      y: 4
+  - operation: assert
+    target: text_hello
+
+groups:
+  - name: group_a
+    members:
+      - id: 1
+        name: alice
+      - id: 2
+        name: bob
+  - name: group_b
+    members:
+      - id: 3
+        name: carol

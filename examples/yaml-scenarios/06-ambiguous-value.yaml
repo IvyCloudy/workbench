@@ -1,0 +1,31 @@
+# ============================================================================
+# 场景 06：R5 · 歧义值需引号
+# ----------------------------------------------------------------------------
+# 期望：BOOLEAN_KEYWORDS / NULL_KEYWORDS / NUMERIC_SPECIAL_KEYWORDS 中的
+#       裸值都应命中"歧义值需引号"，修复策略：整个值加双引号。
+# 覆盖布尔的多种大小写变体，以及 null / ~ / NaN / .inf 等。
+# ============================================================================
+flags:
+  enabled: yes
+  disabled: no
+  active: On
+  suspended: OFF
+  legacy: YES
+  legacy2: No
+  toggle: true
+  reverse: false
+  hidden: TRUE
+
+special:
+  fallback: null
+  ratio: NaN
+  inf1: .inf
+  inf2: -.inf
+  tilde: ~
+  upper_null: NULL
+
+# 已加引号的合法样例，不应误报
+ok_flags:
+  a: "yes"
+  b: "null"
+  c: "NaN"

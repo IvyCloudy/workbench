@@ -1,0 +1,30 @@
+# ============================================================================
+# 场景 10：Parse · 解析错误 + 级联影响
+# ----------------------------------------------------------------------------
+# 期望：
+#   · 未闭合引号会让 YAML 库从此行开始报 parse error，并把后续多层结构判定
+#     为"无法解析"（级联 error），但**逐行规则不受 parse 阶段影响，仍会稳定命中**。
+#   · 嵌套映射（`key: {a:1}` 未加引号）应给出"引号包裹"修复建议。
+#   · 修复完 parse 错误后，级联 error 应自动消失（多轮迭代验证点）。
+# ============================================================================
+config_a:
+  name: hello
+  bad_string: "this quote never closes and eats the rest
+  next_key: value_a
+  another_key: value_b
+  nested:
+    deep:
+      x: 1
+      y: 2
+
+config_b:
+  inline_map: {a:1,b:2}
+  inline_map2: {x:10,y:20}
+
+# ---- 修复后应通过 parse 的合法版本（对照参考）----
+# config_a:
+#   name: hello
+#   bad_string: "this quote never closes and eats the rest"
+#   next_key: value_a
+# config_b:
+#   inline_map: "{a:1,b:2}"

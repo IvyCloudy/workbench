@@ -1,0 +1,38 @@
+# ============================================================================
+# 场景 09：F1 · 重复 key
+# ----------------------------------------------------------------------------
+# 期望：
+#   · 同一 map 作用域内重复 key：报警（后者会覆盖前者，修复策略：注释化）
+#   · sequence 不同 item 的同名 key：不应误报（每个 '-' 独立作用域）
+#   · sequence 同一 item 内的重复 key：应报警
+# ============================================================================
+metadata:
+  name: dup-key
+  version: 1.0
+  version: 2.0
+  desc: hello
+  desc: world
+
+server:
+  host: localhost
+  port: 8080
+  port: 9090
+  port: 7070
+
+# sequence 不同 item 的同名 key，不应误报
+steps:
+  - operation: click
+    target: btn_a
+  - operation: input
+    target: input_a
+  - operation: assert
+    target: text_a
+
+# sequence 同一 item 内的重复 key
+alerts:
+  - operation: click
+    operation: verify
+    target: btn_x
+  - operation: input
+    target: input_y
+    target: input_z

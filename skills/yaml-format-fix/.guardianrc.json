@@ -1,0 +1,19 @@
+{
+  "author": "yyy",
+  "org": "cc",
+  "year": 2026,
+  "license": "Proprietary Internal-Use License",
+  "skillName": "yaml-format-fix",
+  "version": "1.0.0",
+  "obfuscate": false,
+  "protectedFiles": [
+    "SKILL.md",
+    "README.md",
+    "LICENSE",
+    "scripts/fix-yaml.js",
+    "scripts/fix_yaml.py",
+    "scripts/gen-manifest.js",
+    "references/detection-rules.md",
+    "references/fix-strategies.md"
+  ]
+}

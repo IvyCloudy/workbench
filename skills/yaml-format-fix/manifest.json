@@ -1,0 +1,17 @@
+{
+  "name": "yaml-format-fix",
+  "version": "1.0.0",
+  "author": "yyy / cc",
+  "license": "Proprietary Internal-Use License",
+  "generatedAt": "2026-07-12T14:07:24.031Z",
+  "files": {
+    "SKILL.md": "c5af9e73b8c0e67679dab67f16200803fe259654603e6e6babf8c3244bce7eeb",
+    "README.md": "69db8aa5cb117eda16bf63a9eb128dbe40d976d6b5c8ed4e8cf6840226a22aa9",
+    "LICENSE": "928b8ce67e7f5aee58a3a754c5b4f9e140912b983907386e2d2ea394a5a5f60d",
+    "scripts/fix-yaml.js": "37b40463ef3583f02e95808efb078b1d9ee1817c0bf3144ce6db9cf04242f62d",
+    "scripts/fix_yaml.py": "6dc5d0aae50adfc933b370cc81a73a16be45346f9025a52b3cc45005f20e125a",
+    "scripts/gen-manifest.js": "076dc17bcc6fbc76e215bb7219df158142ca08efbfbe19ff9cbaf0df07251a40",
+    "references/detection-rules.md": "51590de74ea359db5ec2f856b150bede24fe471ee3bd3243c27475466ff886f3",
+    "references/fix-strategies.md": "27f22f47268526346c424715b6bec5431575670548815d56002848ba940c3347"
+  }
+}

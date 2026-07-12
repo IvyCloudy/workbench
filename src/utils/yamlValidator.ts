@@ -1,371 +1,191 @@
 /**
  * ============================================================================
  *  utils/yamlValidator.ts
- *  YAML 格式校验器
+ *  YAML 格式校验器（编排层）
  * ----------------------------------------------------------------------------
  *  职责：
- *    1. 在用户打开 YAML 文件、展示案例编辑器之前，对文件内容逐行校验。
- *    2. 检测常见格式问题：Tab 缩进、行末空格、冒号后缺空格、特殊未引号值等。
- *    3. 结合 yaml 库的 parseDocument 获取精确的解析错误行号。
- *    4. 返回 Issue 列表供调用方弹窗展示。
+ *    1. 读取 YAML 文本，遍历规则表逐行校验（详见 yamlRules.ts）。
+ *    2. 结合 yaml 库的 parseAllDocuments 拿到精确的语法错误行号。
+ *    3. 将 YamlIssue → vscode.Diagnostic，支持精准列/长度范围。
+ *    4. 维护每文件的修复表（Map<line, Fix[]>），支持同一行叠加多条修复。
+ *    5. 文档关闭时主动清理修复表，避免内存泄漏。
  * ============================================================================
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import * as YAML from 'yaml';
 import * as vscode from 'vscode';
 import { TelemetryService } from './telemetry';
+import { createLogger } from './logger';
+import type { YamlIssue } from './yamlTypes';
+import { YAML_DIAGNOSTIC_SOURCE } from './yamlConstants';
+import {
+    YAML_RULES,
+    YAML_FILE_RULES,
+    buildLineCtx,
+    generateFixForParseError,
+    truncateYamlMessage,
+} from './yamlRules';
+
+// 类型再导出，保持外部导入路径兼容
+export type { YamlIssue } from './yamlTypes';
+
+const log = createLogger('YAML');
 
 // ============================================
-// 类型定义
+// 破坏性 fix 识别
 // ============================================
+//   parser 兜底策略产出的 fix 会把行**注释化**（保留原文供人工复查），
+//   这类 fix 一旦被优先应用，会覆盖同一行的规则修复（如 R4 补空格），
+//   导致"修复 error / 修复单行"变成"整行注释化"。
+//   本 helper 与 handler 中的 isIndentMismatchFallback 保持一致，
+//   用于在 issue 生成阶段就避免破坏性 fix 与非破坏性 fix 同行竞争。
 
-export interface YamlIssue {
-    /** 1-based 行号 */
-    line: number;
-    /** 1-based 列号（近似） */
-    column: number;
-    /** 问题描述（已包含行号） */
-    message: string;
-    /** error = 可能导致解析失败，warning = 潜在格式问题 */
-    severity: 'error' | 'warning';
-    /** 建议修复后的整行内容（可选），用于弹窗展示"修改后的值" */
-    fix?: string;
+const DESTRUCTIVE_FIX_PREFIXES = [
+    '# [indent mismatch]',
+    '# [duplicate key removed]',
+    '# [unparseable]',
+];
+
+/**
+ * 级联兜底 fix 前缀：这类 fix 的**根因通常不在本行**（例如上一行 R4 冗余
+ * 造成整段级联报 "same column"），把它单独应用会误伤无辜行。
+ *   - `# [indent mismatch]`：缩进列错位兜底
+ *   - `# [unparseable]`：通用无法归类的 parse error 兜底
+ * 与之相对，`# [duplicate key removed]` 虽然也是"注释化"，但根因就在本行
+ * （用户显式写了重复 key），属于安全兜底 —— 不列入此清单。
+ */
+const CASCADE_FALLBACK_FIX_PREFIXES = [
+    '# [indent mismatch]',
+    '# [unparseable]',
+];
+
+/**
+ * 判断一条 fix 是否为「破坏性 fix」——parser 兜底产出的注释化整行修复。
+ * 覆盖三类：indent mismatch / duplicate key removed / unparseable。
+ * 用于**诊断消息展示层**（如提示"该 fix 会注释化整行"）。
+ */
+export function isDestructiveFix(fix: string): boolean {
+    const trimmed = fix.trimStart();
+    return DESTRUCTIVE_FIX_PREFIXES.some(p => trimmed.startsWith(p));
+}
+
+/**
+ * 判断一条 fix 是否为「级联兜底 fix」—— 仅 indent mismatch / unparseable。
+ * 这两类 fix 的根因常在其他行，单独应用会误伤；因此：
+ *   1) 单行 QuickFix 场景要降级为"⚠️ 破坏性"警示项（避免默认首选）；
+ *   2) "修复选中范围 / 仅修复 error" 场景若剩下的都是这类 fix，直接中止。
+ * duplicate key 不属于此类（根因就在本行，注释化即正确修复）。
+ */
+export function isCascadeFallbackFix(fix: string): boolean {
+    const trimmed = fix.trimStart();
+    return CASCADE_FALLBACK_FIX_PREFIXES.some(p => trimmed.startsWith(p));
 }
 
 // ============================================
-// YAML 格式保留字符（不加引号会被解析为特殊语法结构）
+// 内容缓存（LRU，避免相同内容重复校验）
 // ============================================
 
 /**
- * 在未引号 YAML 值中存在风险的保留字符。
- * 这些字符会触发 YAML 特殊语法（映射、序列、锚点、标签等），
- * 如果期望的是字符串值，必须用引号包裹。
+ * key = 内容 sha1 hex（40 字符），避免用完整内容做 key 造成内存冗余；
+ *   假设 32 项 × 1MB 全命中场景下，key 集合从 32MB → 1.28KB。
+ * value = 校验结果
+ * 固定上限 32 项，超出删除首个（插入顺序 = LRU 逆序）。
+ *
+ * sha1 冲突概率极低（生日悖论下 2^80 次才有 50% 冲突），
+ * 对文档校验缓存场景足够安全。
  */
-const RESERVED_CHARS_PATTERN = /[\[\]{},&*!>|]/;
+const VALIDATION_CACHE_MAX = 32;
+const VALIDATION_CACHE_CONTENT_MAX = 1 * 1024 * 1024; // 1MB
+const validationCache = new Map<string, YamlIssue[]>();
 
-/** 每个保留字符的说明 */
-const RESERVED_CHAR_DESCRIPTIONS: Record<string, string> = {
-    '{': '开花括号通常用于内联映射 (flow mapping)',
-    '}': '闭花括号通常用于内联映射结束',
-    '[': '开方括号通常用于内联序列 (flow sequence)',
-    ']': '闭方括号通常用于内联序列结束',
-    ',': '逗号通常用于分隔内联集合项',
-    '&': '& 符号用于定义 YAML 锚点 (anchor)',
-    '*': '* 符号用于引用 YAML 别名 (alias)',
-    '!': '! 符号用于声明 YAML 标签 (tag)',
-    '>': '> 符号用于折叠块标量 (block scalar)',
-    '|': '| 符号用于保留换行的块标量 (literal block scalar)',
-};
-
-/**
- * 在未引号的值中查找首个有风险的保留字符
- */
-function findFirstReservedChar(value: string): string | null {
-    const match = value.match(RESERVED_CHARS_PATTERN);
-    return match ? match[0] : null;
+function hashContent(content: string): string {
+    return crypto.createHash('sha1').update(content).digest('hex');
 }
 
-// ============================================
-// YAML 布尔值歧义词（不加引号会被解析为布尔值）
-// ============================================
-
-const BOOLEAN_AMBIGUOUS = new Set([
-    'true', 'false', 'TRUE', 'FALSE', 'True', 'False',
-    'yes', 'no', 'YES', 'NO', 'Yes', 'No',
-    'on', 'off', 'ON', 'OFF', 'On', 'Off',
-    'null', 'NULL', 'Null', '~',
-    '.inf', '.nan', '.INF', '.NAN', 'Infinity', '-Infinity',
-]);
-
-// ============================================
-// 工具函数
-// ============================================
-
-/**
- * 截断 YAML 库错误消息中的源码片段。
- * 库错误通常格式为："错误描述 at line N, column M:\n<源码行内容>"
- * 源码行可能很长导致 VS Code 展示不全，这里保留错误描述 + 截断后的源码行（≤80 字符）。
- */
-function truncateYamlMessage(msg: string): string {
-    const idx = msg.indexOf('\n');
-    if (idx > 0) {
-        const desc = msg.substring(0, idx).trim();
-        const source = msg.substring(idx + 1).trim();
-        const maxLen = 80;
-        return desc + (source.length > maxLen ? ' | ' + source.substring(0, maxLen) + '…' : ' | ' + source);
+function cachePut(content: string, issues: YamlIssue[], preHash?: string): void {
+    if (content.length > VALIDATION_CACHE_CONTENT_MAX) return;
+    const key = preHash ?? hashContent(content);
+    if (validationCache.has(key)) {
+        validationCache.delete(key); // 提到末尾（重新插入）
+    } else if (validationCache.size >= VALIDATION_CACHE_MAX) {
+        const firstKey = validationCache.keys().next().value;
+        if (firstKey !== undefined) validationCache.delete(firstKey);
     }
-    return msg;
+    validationCache.set(key, issues);
 }
 
-/**
- * 对 YAML 解析错误尝试生成修复方案。
- * 目前支持：
- *   - 嵌套映射（nested mappings）→ 引号包裹含 {key:value} 的未引号值
- *   - 缺闭合引号（missing closing quote）→ 补上对应的闭合引号
- */
-function generateFixForParseError(lineText: string, col: number, errMsg: string): string | undefined {
-    if (!lineText) { return undefined; }
-    const lower = errMsg.toLowerCase();
-
-    const isNestedMap = lower.includes('nested map') || lower.includes('compact map') || lower.includes('not allowed');
-    const isMissingQuote = lower.includes('missing closing') && lower.includes('quote');
-
-    if (isNestedMap) {
-        // 1. 序列项格式：`  - value_with_{}` — 优先匹配（比 key:value 更精确）
-        const seqMatch = lineText.match(/^(\s*-\s+)(.+)$/);
-        if (seqMatch) {
-            const prefix = seqMatch[1];
-            let value = seqMatch[2].replace(/[\s\u00A0]+$/, ''); // 去尾部特殊空格（\r 等），避免引号错行
-            const hasDouble = value.includes('"');
-            const hasSingle = value.includes("'");
-            let wrapped: string;
-            if (hasDouble && hasSingle) {
-                wrapped = '"' + value.replace(/"/g, '\\"') + '"';
-            } else if (hasDouble) {
-                wrapped = "'" + value + "'";
-            } else {
-                wrapped = '"' + value + '"';
-            }
-            return prefix + wrapped;
-        }
-        // 2. key: value 格式 — 用第一个冒号作为分隔
-        const firstColon = lineText.indexOf(':');
-        if (firstColon > 0 && firstColon < lineText.length - 1) {
-            let valStart = firstColon + 1;
-            while (valStart < lineText.length && lineText[valStart] === ' ') {
-                valStart++;
-            }
-            if (valStart < lineText.length) {
-                const keyPart = lineText.substring(0, valStart);
-                let value = lineText.substring(valStart).replace(/[\s\u00A0]+$/, '');
-                const hasDouble = value.includes('"');
-                const hasSingle = value.includes("'");
-                let wrapped: string;
-                if (hasDouble && hasSingle) {
-                    wrapped = '"' + value.replace(/"/g, '\\"') + '"';
-                } else if (hasDouble) {
-                    wrapped = "'" + value + "'";
-                } else {
-                    wrapped = '"' + value + '"';
-                }
-                return keyPart + wrapped;
-            }
-        }
-        return undefined;
-    }
-
-    if (isMissingQuote) {
-        // 缺闭合引号：尝试找到未配对的引号并补上
-        const singles = lineText.split("'").length - 1;
-        const doubles = (lineText.match(/"/g) || []).length;
-        if (singles % 2 !== 0) {
-            // 单引号不成对 → 补一个单引号
-            return lineText + "'";
-        }
-        if (doubles % 2 !== 0) {
-            // 双引号不成对 → 补一个双引号
-            return lineText + '"';
-        }
-    }
-
-    return undefined;
+export function clearYamlValidationCache(): void {
+    validationCache.clear();
 }
 
-/**
- * 读取文件内容并逐行校验 YAML 格式。
- * @param filePath YAML 文件绝对路径
- * @returns 格式问题列表；为空数组表示一切正常
- */
-export async function validateYamlFile(filePath: string): Promise<YamlIssue[]> {
-    let content: string;
-    try {
-        content = await fs.promises.readFile(filePath, 'utf-8');
-    } catch {
-        // 读文件失败不在本校验范围，交由调用方处理
-        return [];
-    }
-    return validateYamlContent(content);
-}
+// ============================================
+// 核心：字符串内容校验
+// ============================================
 
 /**
  * 校验 YAML 字符串内容的格式。
  * @param content YAML 文件原文
- * @returns 格式问题列表
+ * @returns 格式问题列表（可能同一行有多条）
  */
 export function validateYamlContent(content: string): YamlIssue[] {
+    // ── 缓存快速路径：相同内容直接返回缓存的 issue 列表 ──
+    // 大文件不参与缓存（也不做 hash 计算，避免额外 CPU 消耗）
+    const cacheable = content.length <= VALIDATION_CACHE_CONTENT_MAX;
+    const cacheKey = cacheable ? hashContent(content) : '';
+    if (cacheable) {
+        const cached = validationCache.get(cacheKey);
+        if (cached) return cached;
+    }
+
     const issues: YamlIssue[] = [];
     const lines = content.split('\n');
 
     // ── 1. 文件级检查：BOM 头 ──
     if (content.charCodeAt(0) === 0xfeff) {
+        // fix：把第一行首字符的 U+FEFF 剥掉（此处已经通过 split('\n') 拿到 lines[0]，其首字符仍是 U+FEFF）
+        const firstLine = lines[0] ?? '';
+        const fixed = firstLine.charCodeAt(0) === 0xfeff ? firstLine.slice(1) : firstLine;
         issues.push({
-            line: 1, column: 1,
+            line: 1, column: 1, length: 1,
+            title: 'BOM 头',
             message: '文件开头包含 BOM (Byte Order Mark)，可能导致解析异常',
             severity: 'warning',
+            fix: fixed,
         });
     }
 
-    // ── 2. 逐行检查 ──
+    // ── 2. 逐行遍历规则表 ──
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const lineNum = i + 1;
+        const trimmed = line.trim();
+        if (trimmed === '' || trimmed.startsWith('#')) continue;
 
-        // 跳过空行和纯注释行
-        if (line.trim() === '' || line.trim().startsWith('#')) {
-            continue;
-        }
-
-        // 2a. Tab 缩进（致命错误，YAML 规范严格禁止）
-        const leadingTabMatch = line.match(/^(\t+)/);
-        if (leadingTabMatch) {
-            // 建议将每个 Tab 替换为 4 个空格
-            const fixed = line.replace(/^\t+/, (tabs) => '    '.repeat(tabs.length));
-            issues.push({
-                line: lineNum, column: 1,
-                message: `第 ${lineNum} 行：使用了 Tab 缩进，YAML 规范不允许用 Tab 进行缩进，请改用空格`,
-                severity: 'error',
-                fix: fixed,
-            });
-            // Tab 缩进是致命问题，该行不再做其他检查
-            continue;
-        }
-
-        // 2b. 任意位置的 Tab 字符（非首行 Tab 缩进）
-        const tabIdx = line.indexOf('\t');
-        if (tabIdx > 0) {
-            issues.push({
-                line: lineNum, column: tabIdx + 1,
-                message: `第 ${lineNum} 行：字符串内容中包含 Tab 字符，可能被解析为缩进导致格式错误`,
-                severity: 'warning',
-            });
-        }
-
-        // 2c. 行末空格（可能导致缩进层级判断错误）
-        if (line !== line.trimEnd() && line.length > 0) {
-            issues.push({
-                line: lineNum, column: line.trimEnd().length + 1,
-                message: `第 ${lineNum} 行：末尾有多余空格，可能导致缩进层级判断错误`,
-                severity: 'warning',
-                fix: line.trimEnd(),
-            });
-        }
-
-        // 2d. 冒号后缺少空格（key:value 而不是 key: value）
-        const colonIdx = line.indexOf(':');
-        if (colonIdx > 0) {
-            const beforeColon = line.substring(0, colonIdx);
-            const afterColon = line[colonIdx + 1];
-            // 排除：URL（含 ://）、时间（含 ::）、引号包裹的值
-            if (
-                afterColon !== undefined &&
-                afterColon !== ' ' &&
-                afterColon !== '\r' &&
-                !beforeColon.endsWith('://') &&          // URL
-                !line.includes('::')                       // 不是时间/内联块
-            ) {
-                const valuePart = line.substring(colonIdx + 1).trim();
-                if (valuePart.length > 0 && !/^["']/.test(valuePart) && !/^\d/.test(valuePart)) {
-                    // 冒号后紧跟非数字、非引号字符，大概率格式不规范
-                    // 建议修复：在冒号后插入一个空格
-                    const fixed = line.substring(0, colonIdx + 1) + ' ' + line.substring(colonIdx + 1);
-                    issues.push({
-                        line: lineNum, column: colonIdx + 1,
-                        message: `第 ${lineNum} 行：冒号后缺少空格，字段 "${beforeColon.trim()}" 的值未被正确识别`,
-                        severity: 'warning',
-                        fix: fixed,
-                    });
-                }
-            }
-        }
-
-        // 2e. 检查未加引号的布尔歧义值
-        // 匹配模式： key: value (value 是布尔歧义词)
-        const kvMatch = line.match(/^\s*[^#:]+:\s*(.+?)(?:\s*#.*)?$/);
-        if (kvMatch) {
-            const rawValue = kvMatch[1].trim();
-            const unquotedValue = rawValue.replace(/^['"\u2018\u2019\u201C\u201D\u300C\u300D\u300E\u300F\uFF02]\s*/u, '').replace(/\s*['"\u2018\u2019\u201C\u201D\u300C\u300D\u300E\u300F\uFF02]$/u, '');
-            if (rawValue === unquotedValue && BOOLEAN_AMBIGUOUS.has(unquotedValue)) {
-                // 建议修复：将值用双引号包裹；优先保留原值中的单引号使用双引号
-                const quote = rawValue.includes('"') ? "'" : '"';
-                const fixed = line.replace(rawValue, `${quote}${rawValue}${quote}`);
-                issues.push({
-                    line: lineNum, column: line.indexOf(':') + 2,
-                    message: `第 ${lineNum} 行：值 "${unquotedValue}" 会被 YAML 解析为特殊类型，如需字符串请加引号`,
-                    severity: 'warning',
-                    fix: fixed,
-                });
-            }
-        }
-
-        // 2f. 检查 # 号出现在值中（YAML 会把 # 后内容当注释丢弃）
-        // 例：requirement: 需求编号 #12345 → 解析后只保留 "需求编号 "
-        //
-        // 检测规则：行中有 #，且 # 在冒号之后的非注释位置（不是纯注释行开头），
-        // 并且 # 前面有空格（说明 YAML 会将其后的内容当作注释截断），
-        // 且 # 不在引号内（加引号的值中 # 是安全的）。
-        const hashIdx = line.indexOf('#');
-        if (hashIdx > 0) {
-            const colonIdx2 = line.indexOf(':');
-            // # 出现在冒号之后 => 可能把值截断
-            if (colonIdx2 > 0 && hashIdx > colonIdx2) {
-                const valueSection = line.substring(colonIdx2 + 1, hashIdx);
-                const betweenColonAndHash = valueSection.trim();
-                // 值部分不为空且 # 前面是空格，说明后面的内容会被当注释丢弃
-                if (betweenColonAndHash.length > 0 && line[hashIdx - 1] === ' ') {
-                    // 排除 # 在引号内的安全情况：冒号到 # 之间有未闭合的引号
-                    const hasOpenDoubleQuote = valueSection.includes('"') && !valueSection.substring(valueSection.indexOf('"') + 1).includes('"');
-                    const hasOpenSingleQuote = valueSection.includes("'") && !valueSection.substring(valueSection.indexOf("'") + 1).includes("'");
-                    if (hasOpenDoubleQuote || hasOpenSingleQuote) {
-                        // # 在引号内，安全，不报警
-                    } else {
-                        const afterHash = line.substring(hashIdx + 1).trim();
-                        if (afterHash.length > 0) {
-                            // 建议修复：用双引号包裹冒号后的整个值
-                            const keyPart = line.substring(0, colonIdx2 + 1);
-                            const valuePart = line.substring(colonIdx2 + 1);
-                            const quote = valuePart.includes('"') ? "'" : '"';
-                            const fixed = `${keyPart} ${quote}${valuePart.trim()}${quote}`;
-                            issues.push({
-                                line: lineNum, column: hashIdx + 1,
-                                message: `第 ${lineNum} 行：值中包含 "#"，"${afterHash}" 会被 YAML 当作注释丢弃，如需保留请用引号包裹整个值`,
-                                severity: 'warning',
-                                fix: fixed,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        // 2g. 检查未引号值中的 YAML 保留字符
-        // 像 { } [ ] , & * ! > | 等字符在未引号值中会被解析为特殊语法
-        const reservedKvMatch = line.match(/^\s*([^#:]+):\s*(.+?)(?:\s*#.*)?$/);
-        if (reservedKvMatch) {
-            const rawValue = reservedKvMatch[2].trim();
-            // 排除空值与已引号包裹的值（兼顾 ASCII 和 Unicode 引号）
-            const unquotedReserved = rawValue
-                .replace(/^['"\u2018\u2019\u201C\u201D\u300C\u300D\u300E\u300F\uFF02]\s*/u, '')
-                .replace(/\s*['"\u2018\u2019\u201C\u201D\u300C\u300D\u300E\u300F\uFF02]$/u, '');
-            if (rawValue.length > 0 && unquotedReserved === rawValue) {
-                const reservedChar = findFirstReservedChar(rawValue);
-                if (reservedChar) {
-                    const desc = RESERVED_CHAR_DESCRIPTIONS[reservedChar] || '';
-                    const quote = rawValue.includes('"') ? "'" : '"';
-                    const fixed = line.replace(rawValue, `${quote}${rawValue}${quote}`);
-                    const charPos = line.indexOf(reservedChar);
-                    issues.push({
-                        line: lineNum, column: charPos + 1,
-                        message: `第 ${lineNum} 行：值中包含 YAML 保留字符 "${reservedChar}"${desc ? `（${desc}）` : ''}，如需字符串请用引号包裹`,
-                        severity: 'warning',
-                        fix: fixed,
-                    });
-                }
-            }
+        const ctx = buildLineCtx(line);
+        for (const entry of YAML_RULES) {
+            const issue = entry.rule(line, lineNum, ctx);
+            if (!issue) continue;
+            // 值等价过滤：若给出了 fix 但结果与原行一致（如已加引号、无实际变化），
+            // 说明值本身已符合规范，不再上报，避免误报。
+            if (issue.fix !== undefined && issue.fix === line) continue;
+            issues.push(issue);
+            if (entry.stopOnHit) break;
         }
     }
 
-    // ── 3. 使用 yaml 库尝试解析，捕获精确的语法错误 ──
-    // 使用 parseAllDocuments 以支持多文档 YAML（--- 分隔），避免误报 "multiple documents" 错误。
+    // ── 2b. 文件级规则（重复 key 等） ──
+    for (const fileRule of YAML_FILE_RULES) {
+        try {
+            const extra = fileRule(lines);
+            if (extra.length > 0) issues.push(...extra);
+        } catch (err: any) {
+            log.warn('文件级规则执行异常:', err?.message || err);
+        }
+    }
+
+    // ── 3. yaml 库解析错误捕获 ──
     try {
         const docs = YAML.parseAllDocuments(content);
         for (const doc of docs) {
@@ -375,21 +195,35 @@ export function validateYamlContent(content: string): YamlIssue[] {
             for (const err of errors) {
                 const errLine = err?.linePos?.[0]?.line || 1;
                 const errCol = err?.linePos?.[0]?.col || 1;
-                // 避免和上面逐行检查的 Tab 缩进错误重复
                 const alreadyReported = issues.some(
                     (iss) => iss.line === errLine && iss.severity === 'error',
                 );
-                if (!alreadyReported) {
-                    const lineText = (errLine > 0 && errLine <= lines.length) ? lines[errLine - 1] : '';
-                    const fix = generateFixForParseError(lineText, errCol, err.message);
-                    issues.push({
-                        line: errLine,
-                        column: errCol,
-                        message: `YAML 解析错误 (第 ${errLine} 行): ${truncateYamlMessage(err.message)}`,
-                        severity: 'error',
-                        fix,
-                    });
+                if (alreadyReported) continue;
+                const lineText = (errLine > 0 && errLine <= lines.length) ? lines[errLine - 1] : '';
+                let fix = generateFixForParseError(lineText, errCol, err.message);
+                // fix 与原行一致则无效，只保留错误本体
+                if (fix !== undefined && fix === lineText) fix = undefined;
+                // ── 关键：若同一行已经有规则给出的**非破坏性** fix，就不再叠加破坏性兜底 ──
+                //   场景：`name:hello`（R4 缺空格）会让 YAML parser 把该行或后续行报为
+                //     "same column" / "must start at" → 兜底 fix = "# [indent mismatch] xxx"
+                //     若直接叠加，parser 兜底会**覆盖** R4 的 `name: hello` 修复，导致
+                //     "修复 error"、"修复单行"（用户点 error 那条 QuickFix）都变成整行注释化。
+                //   策略：同行已有 fix 时，本 error 只报警不给 fix；等下一轮规则 fix 应用后
+                //     重新校验，parse 错误大概率自动消失；实在消不掉时，用户可用"修复全部"
+                //     进入 handler 的"稳妥 fix 优先 + 兜底延后"多轮策略。
+                if (fix !== undefined && isDestructiveFix(fix)) {
+                    const hasSafeFixSameLine = issues.some(
+                        (iss) => iss.line === errLine && iss.fix !== undefined && !isDestructiveFix(iss.fix),
+                    );
+                    if (hasSafeFixSameLine) fix = undefined;
                 }
+                issues.push({
+                    line: errLine, column: errCol, length: 1,
+                    title: 'YAML 解析错误',
+                    message: `YAML 解析错误 (第 ${errLine} 行): ${truncateYamlMessage(err.message)}`,
+                    severity: 'error',
+                    fix,
+                });
             }
 
             for (const warn of warnings) {
@@ -397,18 +231,17 @@ export function validateYamlContent(content: string): YamlIssue[] {
                 const alreadyReported = issues.some(
                     (iss) => iss.line === wLine && iss.message.includes(warn.message),
                 );
-                if (!alreadyReported) {
-                    issues.push({
-                        line: wLine,
-                        column: warn?.linePos?.[0]?.col || 1,
-                        message: `YAML 解析警告 (第 ${wLine} 行): ${truncateYamlMessage(warn.message)}`,
-                        severity: 'warning',
+                if (alreadyReported) continue;
+                issues.push({
+                    line: wLine, column: warn?.linePos?.[0]?.col || 1, length: 1,
+                    title: 'YAML 解析警告',
+                    message: `YAML 解析警告 (第 ${wLine} 行): ${truncateYamlMessage(warn.message)}`,
+                    severity: 'warning',
                 });
             }
         }
-        }
     } catch {
-        // parseAllDocuments / parseDocument 失败，尝试用 parse 获取错误信息
+        // parseAllDocuments 失败，尝试用 parse 拿错误行号
         try {
             YAML.parse(content);
         } catch (parseErr: any) {
@@ -419,39 +252,55 @@ export function validateYamlContent(content: string): YamlIssue[] {
             );
             if (!alreadyReported) {
                 const lineText = (errLine > 0 && errLine <= lines.length) ? lines[errLine - 1] : '';
-                const fix = generateFixForParseError(lineText, errCol, parseErr.message);
+                let fix = generateFixForParseError(lineText, errCol, parseErr.message);
+                if (fix !== undefined && fix === lineText) fix = undefined;
+                // 同上：同行已有非破坏性 fix 时，parser 兜底不再叠加破坏性 fix
+                if (fix !== undefined && isDestructiveFix(fix)) {
+                    const hasSafeFixSameLine = issues.some(
+                        (iss) => iss.line === errLine && iss.fix !== undefined && !isDestructiveFix(iss.fix),
+                    );
+                    if (hasSafeFixSameLine) fix = undefined;
+                }
                 issues.push({
-                    line: errLine,
-                    column: errCol,
+                    line: errLine, column: errCol, length: 1,
+                    title: 'YAML 格式错误',
                     message: `YAML 格式错误 (第 ${errLine} 行): ${truncateYamlMessage(parseErr.message)}`,
                     severity: 'error',
                     fix,
                 });
             }
         }
-
     }
 
+    cachePut(content, issues, cacheable ? cacheKey : undefined);
     return issues;
 }
 
+/**
+ * 读取文件内容并逐行校验 YAML 格式。
+ */
+export async function validateYamlFile(filePath: string): Promise<YamlIssue[]> {
+    let content: string;
+    try {
+        content = await fs.promises.readFile(filePath, 'utf-8');
+    } catch {
+        return [];
+    }
+    return validateYamlContent(content);
+}
+
 // ============================================
-// VS Code Diagnostics 发布（在 YAML 文件内展示波浪线）
+// VS Code Diagnostics & 修复表
 // ============================================
 
-/** YAML 校验结果的 DiagnosticCollection（全局单例） */
 let yamlDiagnosticsCollection: vscode.DiagnosticCollection | undefined;
 
 /**
- * 修复数据存储：key = uri.toString(), value = Map<行号, fix字符串>
- * 每行只有一个 fix，因为 validateYamlFile 中 Tab 缩进行会 continue 跳过后续检查。
+ * 修复数据存储：key = uri.toString(), value = Map<行号, fix字符串[]>
+ * 允许同一行叠加多条修复（会按顺序 apply）。
  */
-const fixDataStore = new Map<string, Map<number, string>>();
+const fixDataStore = new Map<string, Map<number, string[]>>();
 
-/**
- * 获取或创建 YAML 校验 DiagnosticCollection。
- * 需在 activate 中调用 init 后使用。
- */
 export function getYamlDiagnosticsCollection(): vscode.DiagnosticCollection {
     if (!yamlDiagnosticsCollection) {
         yamlDiagnosticsCollection = vscode.languages.createDiagnosticCollection('yamlFormat');
@@ -460,36 +309,47 @@ export function getYamlDiagnosticsCollection(): vscode.DiagnosticCollection {
 }
 
 /**
- * 在 activate 时注册并绑定到 context.subscriptions。
+ * 在 activate 时注册；若已存在则 dispose 旧实例（防止重复创建）。
  */
 export function initYamlDiagnostics(context: vscode.ExtensionContext): void {
+    if (yamlDiagnosticsCollection) {
+        yamlDiagnosticsCollection.dispose();
+    }
     yamlDiagnosticsCollection = vscode.languages.createDiagnosticCollection('yamlFormat');
     context.subscriptions.push(yamlDiagnosticsCollection);
 }
 
 /**
- * 将 YamlIssue 列表转为 VS Code Diagnostic 列表，并发布到目标文件。
+ * 主动清理指定 URI 的修复数据（文档关闭 / 删除 / 重命名时调用）。
+ */
+export function clearYamlFix(uri: vscode.Uri): void {
+    const key = uri.toString();
+    fixDataStore.delete(key);
+    yamlDiagnosticsCollection?.delete(uri);
+    log.debug('clearYamlFix:', key);
+}
+
+/**
+ * 发布 Diagnostics，并同步更新修复表。
  */
 export function publishYamlDiagnostics(uri: vscode.Uri, issues: YamlIssue[]): void {
     const collection = getYamlDiagnosticsCollection();
     const uriKey = uri.toString();
-    console.log('[YAML-Validator] publishYamlDiagnostics', {
+    log.debug('publishYamlDiagnostics', {
         uri: uriKey,
-        fsPath: uri.fsPath,
         issueCount: issues.length,
         issuesWithFix: issues.filter(i => i.fix !== undefined).length,
     });
     if (issues.length === 0) {
         collection.delete(uri);
         fixDataStore.delete(uriKey);
-        console.log('[YAML-Validator] fixDataStore 已清除 (无问题), key=', uriKey);
         return;
     }
 
     const diagnostics: vscode.Diagnostic[] = issues.map(toDiagnostic);
     collection.set(uri, diagnostics);
 
-    // ── 上报检测问题个数 ──
+    // ── 遥测：检测问题个数 ──
     const errorCount = issues.filter(i => i.severity === 'error').length;
     const warningCount = issues.length - errorCount;
     try {
@@ -501,84 +361,73 @@ export function publishYamlDiagnostics(uri: vscode.Uri, issues: YamlIssue[]): vo
         });
     } catch (_) { /* ignore */ }
 
-    // 存储修复数据供 CodeActionProvider 使用
-    const lineFixes = new Map<number, string>();
+    // ── 修复表：同一行支持叠加多条 fix ──
+    const lineFixes = new Map<number, string[]>();
     for (const issue of issues) {
-        if (issue.fix !== undefined) {
-            lineFixes.set(issue.line, issue.fix);
-        }
+        if (issue.fix === undefined) continue;
+        const arr = lineFixes.get(issue.line);
+        if (arr) arr.push(issue.fix);
+        else lineFixes.set(issue.line, [issue.fix]);
     }
-    console.log('[YAML-Validator] 写入 fixDataStore: key=', uriKey, 'fixCount=', lineFixes.size, 'fixLines=', Array.from(lineFixes.keys()));
     fixDataStore.set(uriKey, lineFixes);
-
-    // 打印当前 fixDataStore 所有 key
-    console.log('[YAML-Validator] fixDataStore 当前所有 keys:', Array.from(fixDataStore.keys()));
+    log.debug('fixDataStore updated:', {
+        uriKey,
+        lineCount: lineFixes.size,
+        totalFixes: Array.from(lineFixes.values()).reduce((s, a) => s + a.length, 0),
+    });
 }
 
 /**
- * 获取指定文件的指定行的修复方案。
- * @param uri 文件 URI
- * @param line 1-based 行号
- * @returns 修复后的整行内容，或 undefined
+ * 获取指定文件某一行的**全部**修复方案（供叠加应用使用）。
  */
-export function getFixForLine(uri: vscode.Uri, line: number): string | undefined {
-    const lineFixes = fixDataStore.get(uri.toString());
-    return lineFixes?.get(line);
+export function getFixesForLine(uri: vscode.Uri, line: number): string[] {
+    return fixDataStore.get(uri.toString())?.get(line) ?? [];
 }
 
 /**
- * 获取指定文件的所有修复方案。
- * @returns 按行号升序排列的修复列表
+ * 获取指定文件所有可修复行的最终修复结果（同一行按顺序叠加）。
+ * 注意：叠加规则很难保证全部无冲突，这里采用"以最后一条为最终结果"策略，因为
+ *   后一条 fix 通常基于对同一行更精细的规则命中。
+ * 更精细的合并（如引号+行末空格串行 apply）可放到后续版本。
  */
 export function getAllFixes(uri: vscode.Uri): Array<{ line: number; fixedLine: string }> {
     const uriKey = uri.toString();
     const lineFixes = fixDataStore.get(uriKey);
-    console.log('[YAML-Validator] getAllFixes: uriKey=', uriKey, 'hasData=', !!lineFixes, 'size=', lineFixes?.size ?? 0);
-    if (!lineFixes) {
-        console.log('[YAML-Validator] fixDataStore 当前所有 keys:', Array.from(fixDataStore.keys()));
-        return [];
-    }
-    const result = Array.from(lineFixes.entries())
-        .map(([line, fixedLine]) => ({ line, fixedLine }))
+    if (!lineFixes) return [];
+    return Array.from(lineFixes.entries())
+        .map(([line, arr]) => ({ line, fixedLine: arr[arr.length - 1] }))
         .sort((a, b) => a.line - b.line);
-    console.log('[YAML-Validator] getAllFixes 返回:', result.length, '条记录');
-    return result;
 }
 
 /**
- * 将单个 YamlIssue 转为 vscode.Diagnostic。
- * 范围为问题所在整行（0 到行尾），确保波浪线覆盖整行。
+ * 将 YamlIssue 转为 vscode.Diagnostic，使用精准的列 / 长度范围。
  */
 function toDiagnostic(issue: YamlIssue): vscode.Diagnostic {
-    const lineIndex = issue.line - 1; // VS Code 使用 0-based 行号
-    const range = new vscode.Range(lineIndex, 0, lineIndex, Number.MAX_SAFE_INTEGER);
+    const lineIndex = issue.line - 1;
+    const startCol = Math.max(0, (issue.column ?? 1) - 1);
+    const len = Math.max(1, issue.length ?? 1);
+    const range = new vscode.Range(lineIndex, startCol, lineIndex, startCol + len);
     const severity = issue.severity === 'error'
         ? vscode.DiagnosticSeverity.Error
         : vscode.DiagnosticSeverity.Warning;
-
     const diagnostic = new vscode.Diagnostic(range, issue.message, severity);
-    diagnostic.source = 'YAML 格式';
-
+    diagnostic.source = YAML_DIAGNOSTIC_SOURCE;
     return diagnostic;
 }
 
 // ============================================
-// 一键修复：将 fix 建议写入文件
+// 批量修复：将 fix 建议写入文件（供命令行/无编辑器场景使用）
 // ============================================
 
 /**
- * 将包含 fix 字段的 Issue 批量应用到本地文件。
- * 按行号降序写入以避免行偏移。
- * @param filePath 待修复的 YAML 文件路径
- * @param issues 含 fix 的校验结果
+ * 将包含 fix 字段的 Issue 批量应用到本地文件（按行号降序写入避免行偏移）。
  * @returns 实际修复的行数
  */
 export async function applyYamlFixes(filePath: string, issues: YamlIssue[]): Promise<number> {
     const fixes = issues
         .filter(i => i.fix !== undefined)
         .sort((a, b) => b.line - a.line);
-
-    if (fixes.length === 0) { return 0; }
+    if (fixes.length === 0) return 0;
 
     const content = await fs.promises.readFile(filePath, 'utf-8');
     const lines = content.split('\n');

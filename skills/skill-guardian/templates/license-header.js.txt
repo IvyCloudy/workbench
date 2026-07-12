@@ -1,0 +1,8 @@
+/**
+ * ============================================================================
+ *  Copyright (c) {{YEAR}} {{AUTHOR}} / {{ORG}}. All rights reserved.
+ *  {{SKILL_NAME}} skill — {{LICENSE}} (see ./LICENSE or ../LICENSE).
+ *  Unauthorized copy / modification / redistribution is strictly prohibited.
+ *  Integrity is verified at runtime against manifest.json.
+ * ============================================================================
+ */

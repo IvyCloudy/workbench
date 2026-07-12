@@ -1,0 +1,21 @@
+{
+  "name": "skill-guardian",
+  "version": "1.0.0",
+  "private": true,
+  "description": "One-click copyright/anti-tamper hardening for any skill directory (license header + LICENSE + manifest + runtime integrity + optional JS obfuscation via javascript-obfuscator + optional Python obfuscation via pyarmor).",
+  "bin": {
+    "guardian": "scripts/guardian.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "guard": "node scripts/guardian.js",
+    "verify": "node scripts/guardian.js verify",
+    "unguard": "node scripts/guardian.js unguard"
+  },
+  "optionalDependencies": {
+    "javascript-obfuscator": "^4.1.0"
+  },
+  "license": "SEE LICENSE IN LICENSE"
+}

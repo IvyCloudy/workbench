@@ -1,0 +1,28 @@
+{
+  "skillName": "skill-guardian",
+  "version": "1.0.0",
+  "author": "myronliu",
+  "org": "Tencent Cloud Big Data",
+  "license": "Proprietary Internal-Use License",
+  "jurisdiction": "the People's Republic of China",
+  "excludes": [
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "tests/",
+    ".guardianrc.json",
+    ".guardianignore"
+  ],
+  "protectedFiles": [
+    "SKILL.md",
+    "README.md",
+    "scripts/guardian.js",
+    "templates/LICENSE.template",
+    "templates/license-header.js.txt",
+    "templates/license-header.py.txt",
+    "templates/runtime-guard.snippet.js",
+    "templates/runtime-guard.snippet.py",
+    "references/guardian-details.md"
+  ],
+  "obfuscate": false
+}

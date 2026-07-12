@@ -13,6 +13,7 @@
  *    - handlers/editorCommands.ts    编辑器切换命令
  *    - handlers/workspaceListeners.ts 工作区文件变化监听（重命名、删除）
  *    - handlers/deletedRowsHandler.ts 已删除行同步
+ *    - handlers/yamlPreOpenInterceptor.ts YAML CustomEditor 打开前置拦截
  *    - utils/storageInitializer.ts   存储初始化与孤儿记录清理
  *    - utils/extensionHelpers.ts     公共工具函数
  * ============================================================================
@@ -38,6 +39,7 @@ import { initializeStorages, cleanupOrphanedRecords } from './utils/storageIniti
 import { openOrCreateHeaderLabelsSettings } from './utils/headerLabels';
 import { initYamlDiagnostics } from './utils/yamlValidator';
 import { registerYamlValidation, disposeYamlValidation } from './handlers/yamlValidationHandler';
+import { registerYamlPreOpenInterceptor } from './handlers/yamlPreOpenInterceptor';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
@@ -78,10 +80,14 @@ export async function activate(context: vscode.ExtensionContext) {
     // Tab 切换监听
     const tabChangeListener = vscode.window.tabGroups.onDidChangeTabs(() => updateShowIcon());
 
+    // YAML CustomEditor 打开前置拦截：不可解析的 YAML 直接切文本编辑器
+    const yamlPreOpenInterceptor = registerYamlPreOpenInterceptor();
+
     context.subscriptions.push(
         ...bindTaskDisposables,
         ...workspaceListeners,
         tabChangeListener,
+        yamlPreOpenInterceptor,
         ...registerYamlValidation(),
 
         // ---- 自定义编辑器 ----

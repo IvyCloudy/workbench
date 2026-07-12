@@ -97,6 +97,36 @@
         "title": "配置表头中英映射",
         "icon": "$(symbol-keyword)",
         "category": "测试案例"
+      },
+      {
+        "command": "testcaseViewer.yaml.fixAll",
+        "title": "修复全部格式问题",
+        "icon": "$(wrench)",
+        "category": "YAML"
+      },
+      {
+        "command": "testcaseViewer.yaml.fixAllErrors",
+        "title": "仅修复 error 级问题",
+        "icon": "$(error)",
+        "category": "YAML"
+      },
+      {
+        "command": "testcaseViewer.yaml.fixAllWarnings",
+        "title": "仅修复 warning 级问题",
+        "icon": "$(warning)",
+        "category": "YAML"
+      },
+      {
+        "command": "testcaseViewer.yaml.fixRange",
+        "title": "修复选中范围格式问题",
+        "icon": "$(selection)",
+        "category": "YAML"
+      },
+      {
+        "command": "testcaseViewer.yaml.fixPick",
+        "title": "YAML · 更多修复操作...",
+        "icon": "$(wrench)",
+        "category": "YAML"
       }
     ],
     "menus": {
@@ -136,8 +166,29 @@
         {
           "command": "testcaseViewer.createNewTestCaseQuick",
           "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例(?:[\\\\/]|$)/i"
+        },
+        {
+          "command": "testcaseViewer.yaml.fixAll",
+          "when": "false"
+        },
+        {
+          "command": "testcaseViewer.yaml.fixAllErrors",
+          "when": "false"
+        },
+        {
+          "command": "testcaseViewer.yaml.fixAllWarnings",
+          "when": "false"
+        },
+        {
+          "command": "testcaseViewer.yaml.fixRange",
+          "when": "false"
+        },
+        {
+          "command": "testcaseViewer.yaml.fixPick",
+          "when": "editorLangId == yaml"
         }
       ],
+      "editor/context": [],
       "testcaseViewer.newCase": [
         {
           "command": "testcaseViewer.createNewTestCaseCsv",
@@ -207,6 +258,11 @@
           },
           "additionalProperties": { "type": "string" },
           "markdownDescription": "推送时**中→英**反向映射（中文表头还原为英文字段名）。\n\n- key 为 CSV 模板/examples/case_example.csv 中的中文表头名，value 为推送给后端接口时所使用的英文字段名。\n- 优先级（高 → 低）：**工作区设置 > 用户设置 > 插件内置默认值**。\n- 推送时若数据的 key 匹配到此映射，自动替换为对应英文 key；未匹配到的 key 保持原样。\n- 若 CSV 模板新增了中文表头，在此处补充一条映射即可，无需修改代码重编译。\n\n示例：\n```json\n{\n  \"优先级\": \"priority\",\n  \"前置条件\": \"preconditions\"\n}\n```"
+        },
+        "testcaseViewer.debug.yaml": {
+          "type": "boolean",
+          "default": false,
+          "description": "开启后会在开发者控制台打印 YAML 校验/修复的详细调试日志。日常使用建议保持关闭。"
         }
       }
     }

@@ -8,6 +8,51 @@
  *   fillSelectedCells  — 弹窗输入值后批量填充选区
  * ========================================================================== */
 
+// ==================== 剪贴板辅助：单元格值 → TSV 字符串 ====================
+function _cellValueToTsv(v) {
+    if (v === null || v === undefined) return '';
+    if (Array.isArray(v)) {
+        var _hasObjV = false;
+        for (var _voi = 0; _voi < v.length; _voi++) { if (v[_voi] && typeof v[_voi] === 'object') { _hasObjV = true; break; } }
+        if (_hasObjV) {
+            return v.map(function (_xx) {
+                if (_xx === null || _xx === undefined) return '';
+                if (typeof _xx === 'object') { try { return JSON.stringify(_xx); } catch (_e) { return ''; } }
+                return String(_xx);
+            }).join('; ');
+        }
+        return (typeof formatCellValue === 'function') ? formatCellValue(v) : v.join('; ');
+    }
+    if (typeof v === 'object') {
+        try { return JSON.stringify(v); } catch (_e) { return ''; }
+    }
+    return String(v);
+}
+
+function _writeSystemClipboard(tsv, successMsg, failMsg) {
+    if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(tsv).then(function () {
+            if (typeof showToast === 'function') showToast(successMsg, 'success');
+        }, function () {
+            if (typeof showToast === 'function') showToast(failMsg || '复制到系统剪贴板失败', 'error');
+        });
+    } else {
+        // 兜底：通过临时 textarea + execCommand
+        var _ta = document.createElement('textarea');
+        _ta.value = tsv;
+        _ta.style.position = 'fixed';
+        _ta.style.left = '-9999px';
+        document.body.appendChild(_ta);
+        _ta.select();
+        var _ok = false;
+        try { _ok = document.execCommand('copy'); } catch (_e2) { }
+        document.body.removeChild(_ta);
+        if (typeof showToast === 'function') {
+            showToast(_ok ? successMsg : (failMsg || '复制到系统剪贴板失败'), _ok ? 'success' : 'error');
+        }
+    }
+}
+
 // ==================== 单元格剪贴板 ====================
 function copyCell() {
     // 矩形选区 > 1 格：将选区复制为二维数组（后续可多格粘贴）
@@ -21,9 +66,11 @@ function copyCell() {
             for (var rr = rc.r1; rr <= rc.r2; rr++) rowList.push(rr);
         }
         var grid = [];
+        var _lines = [];
         for (var i = 0; i < rowList.length; i++) {
             var r = rowList[i];
             var line = [];
+            var _tsvLine = [];
             for (var c = rc.c1; c <= rc.c2; c++) {
                 var v;
                 // detail 列：从明细表读取真实的对象 / 对象数组，而非主表的显示文本（如 '[3 项]'）
@@ -34,12 +81,18 @@ function copyCell() {
                     v = (rows[r] && rows[r][c] !== undefined) ? rows[r][c] : '';
                 }
                 // 对象/对象数组需要深拷贝，避免后续粘贴/编辑共享引用污染源数据
-                line.push((typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(v) : (Array.isArray(v) ? v.slice() : v));
+                var _copied = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(v) : (Array.isArray(v) ? v.slice() : v);
+                line.push(_copied);
+                // TSV：单元格内 \t / \r / \n 替换为空格，避免列错位
+                _tsvLine.push(_cellValueToTsv(v).replace(/\t/g, ' ').replace(/\r?\n/g, ' '));
             }
             grid.push(line);
+            _lines.push(_tsvLine.join('\t'));
         }
         S.clip = grid;
-        showToast('已复制 ' + rowList.length + ' × ' + (rc.c2 - rc.c1 + 1) + ' 区域', 'success');
+        // 同步写入系统剪贴板（TSV），使 Ctrl+V 也可用；toast 由 _writeSystemClipboard 统一触发
+        _writeSystemClipboard(_lines.join('\n'),
+            '已复制 ' + rowList.length + ' 行 × ' + (rc.c2 - rc.c1 + 1) + ' 列');
         return;
     }
     if (S._ctxRow < 0 || S._ctxCol < 0) return;
@@ -54,7 +107,9 @@ function copyCell() {
     }
     // 单元格深拷贝（含对象 / 对象数组），避免后续粘贴或编辑导致引用共享污染源数据
     S.clip = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(v0) : (Array.isArray(v0) ? v0.slice() : v0);
-    showToast('已复制', 'success');
+    // 同步写入系统剪贴板（单格值），使 Ctrl+V 也可用；toast 由 _writeSystemClipboard 统一触发
+    var _tsvSingle = _cellValueToTsv(v0).replace(/\t/g, ' ').replace(/\r?\n/g, ' ');
+    _writeSystemClipboard(_tsvSingle, '已复制');
 }
 
 function pasteCell() {

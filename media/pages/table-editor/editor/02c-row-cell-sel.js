@@ -223,6 +223,13 @@ function onCellMouseDown(e) {
     updateSelectionInfo();
     updatePushBtn();
 
+    // 冻结列（testcase_id）：仅更新选区模型，不进入拖选模式，
+    // 保留原生文本选择能力，确保用户可划词复制单元格内容
+    if (isFrozenCol(ci)) {
+        if (typeof dbg === 'function') dbg('🧊 冻结列 (c' + ci + ') → 仅选区模型，不进入拖选，保留原生文本选择');
+        return;
+    }
+
     function cellAtPoint(x, y) {
         var el = document.elementFromPoint(x, y);
         if (!el) return null;

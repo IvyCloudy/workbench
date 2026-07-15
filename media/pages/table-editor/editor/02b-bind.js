@@ -256,7 +256,7 @@ function bindDocument() {
             var _rcCopy = (typeof getCellSelRect === 'function') ? getCellSelRect() : null;
             if (!_rcCopy) return;
             e.preventDefault();
-            // 1) 维护内部剪贴板（同 copyCell：单格 → 标量；多格 → 二维数组）
+            // 维护内部剪贴板 + 系统剪贴板（copyCell 已统一处理两者的写入）
             try {
                 if (typeof copyCell === 'function') {
                     if (_rcCopy.r1 === _rcCopy.r2 && _rcCopy.c1 === _rcCopy.c2) {
@@ -265,74 +265,6 @@ function bindDocument() {
                     copyCell();
                 }
             } catch (_eCopy) { }
-            // 2) 写入系统剪贴板（TSV，行间 \n，列间 \t；数组用 ;\u00A0 拼接）
-            //    过滤模式下（仅看失败/列筛选/搜索）只复制可见行，避免把被隐藏的成功行带入剪贴板
-            try {
-                var _rowsAll = (S.data && S.data.rows) || [];
-                var _rowList = (typeof getSelRectRows === 'function') ? getSelRectRows() : null;
-                if (!_rowList || _rowList.length === 0) {
-                    _rowList = [];
-                    for (var _rr = _rcCopy.r1; _rr <= _rcCopy.r2; _rr++) _rowList.push(_rr);
-                }
-                var _lines = [];
-                for (var _ri = 0; _ri < _rowList.length; _ri++) {
-                    var _r = _rowList[_ri];
-                    var _line = [];
-                    for (var _c = _rcCopy.c1; _c <= _rcCopy.c2; _c++) {
-                        var _v = (_rowsAll[_r] && _rowsAll[_r][_c] !== undefined) ? _rowsAll[_r][_c] : '';
-                        var _s;
-                        if (Array.isArray(_v)) {
-                            // 对象数组：每个元素 JSON 序列化后以 ;\u00A0 拼接，避免 [object Object]
-                            var _hasObjV = false;
-                            for (var _voi = 0; _voi < _v.length; _voi++) { if (_v[_voi] && typeof _v[_voi] === 'object') { _hasObjV = true; break; } }
-                            if (_hasObjV) {
-                                _s = _v.map(function (_xx) {
-                                    if (_xx === null || _xx === undefined) return '';
-                                    if (typeof _xx === 'object') { try { return JSON.stringify(_xx); } catch (_e3) { return ''; } }
-                                    return String(_xx);
-                                }).join('; ');
-                            } else {
-                                _s = (typeof formatCellValue === 'function') ? formatCellValue(_v) : _v.join('; ');
-                            }
-                        } else if (_v === null || _v === undefined) {
-                            _s = '';
-                        } else if (typeof _v === 'object') {
-                            // 普通对象：序列化为 JSON 字符串
-                            try { _s = JSON.stringify(_v); } catch (_e4) { _s = ''; }
-                        } else {
-                            _s = String(_v);
-                        }
-                        // TSV：单元格内的 \t / \r / \n 统一替换为空格，避免列错位
-                        _s = _s.replace(/\t/g, ' ').replace(/\r?\n/g, ' ');
-                        _line.push(_s);
-                    }
-                    _lines.push(_line.join('\t'));
-                }
-                var _tsv = _lines.join('\n');
-                var _rowsCnt = _lines.length;
-                var _colsCnt = (_rcCopy.c2 - _rcCopy.c1 + 1);
-                if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
-                    navigator.clipboard.writeText(_tsv).then(function () {
-                        if (typeof showToast === 'function') showToast('已复制 ' + _rowsCnt + ' 行 × ' + _colsCnt + ' 列', 'success');
-                    }, function () {
-                        if (typeof showToast === 'function') showToast('复制到系统剪贴板失败', 'error');
-                    });
-                } else {
-                    // 兜底：通过临时 textarea + execCommand
-                    var _ta = document.createElement('textarea');
-                    _ta.value = _tsv;
-                    _ta.style.position = 'fixed';
-                    _ta.style.left = '-9999px';
-                    document.body.appendChild(_ta);
-                    _ta.select();
-                    var _ok = false;
-                    try { _ok = document.execCommand('copy'); } catch (_e2) { }
-                    document.body.removeChild(_ta);
-                    if (typeof showToast === 'function') {
-                        showToast(_ok ? ('已复制 ' + _rowsCnt + ' 行 × ' + _colsCnt + ' 列') : '复制到系统剪贴板失败', _ok ? 'success' : 'error');
-                    }
-                }
-            } catch (_eClip) { }
             return;
         }
         // Ctrl/Cmd + A：全选当前表格的单元格矩形（非编辑态、不在输入控件内）

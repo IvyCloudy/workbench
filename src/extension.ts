@@ -25,7 +25,7 @@ import { TableBrowserProvider } from './providers/TableBrowserProvider';
 import { TestCaseProvider } from './providers/TestCaseProvider';
 import { UnifiedEditorProvider } from './providers/UnifiedEditorProvider';
 import { registerBindTaskFeatures } from './providers/BindTaskProvider';
-import { showPushErrorModal, showToast } from './utils/message';
+import { showModal, showToast } from './utils/message';
 import { BaseEditorProvider } from './providers/BaseEditorProvider';
 import { TelemetryService } from './utils/telemetry';
 import { getActiveFileUri, isTestCaseFile, updateShowIcon, telemetryErrProps } from './utils/extensionHelpers';
@@ -136,16 +136,15 @@ export async function activate(context: vscode.ExtensionContext) {
         // ---- 推送命令 ----
         vscode.commands.registerCommand(
             'testcaseViewer.pushTestCaseFromExplorer',
-            async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
-                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+            async (uri: vscode.Uri, selectedUris?: vscode.Uri[]) => {
+                const targets = selectedUris && selectedUris.length ? selectedUris : (uri ? [uri] : []);
                 TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.pushTestCaseFromExplorer' });
                 try {
                     await handleFilePush(targets, context);
                 } catch (err: any) {
-                    const baseName = targets[0] ? path.basename(targets[0].fsPath) : '';
-                    const panel = targets[0] ? BaseEditorProvider.getPanel(targets[0].fsPath) : undefined;
                     TelemetryService.sendTelemetryErrorEvent('explorerPush.commandError', telemetryErrProps(err));
-                    showPushErrorModal(panel, baseName, `推送失败: ${err.message || err}`);
+                    // 多文件场景使用独立 modal
+                    showModal('default', 'error', '推送异常', `推送过程中发生未预期错误：\n\n${err.message || err}\n\n请检查网络连接后重试。`);
                 }
             }
         ),
@@ -153,8 +152,8 @@ export async function activate(context: vscode.ExtensionContext) {
         // ---- 新增测试案例（右键子菜单 - CSV） ----
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestCaseCsv',
-            async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
-                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+            async (uri: vscode.Uri, selectedUris?: vscode.Uri[]) => {
+                const targets = selectedUris && selectedUris.length ? selectedUris : (uri ? [uri] : []);
                 TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCaseCsv' });
                 try {
                     await handleCreateNewTestCase(targets, context, '.csv');
@@ -167,8 +166,8 @@ export async function activate(context: vscode.ExtensionContext) {
         // ---- 新增测试案例（右键子菜单 - YAML） ----
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestCaseYaml',
-            async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
-                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+            async (uri: vscode.Uri, selectedUris?: vscode.Uri[]) => {
+                const targets = selectedUris && selectedUris.length ? selectedUris : (uri ? [uri] : []);
                 TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCaseYaml' });
                 try {
                     await handleCreateNewTestCase(targets, context, '.yaml');
@@ -181,8 +180,8 @@ export async function activate(context: vscode.ExtensionContext) {
         // ---- 新增测试案例（命令面板入口） ----
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestCase',
-            async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
-                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+            async (uri: vscode.Uri, selectedUris?: vscode.Uri[]) => {
+                const targets = selectedUris && selectedUris.length ? selectedUris : (uri ? [uri] : []);
                 TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestCase' });
                 try {
                     await handleCreateNewTestCase(targets, context);
@@ -252,8 +251,8 @@ export async function activate(context: vscode.ExtensionContext) {
         // ---- 新增测试要点（命令面板 / QuickPick） ----
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestPoint',
-            async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
-                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+            async (uri: vscode.Uri, selectedUris?: vscode.Uri[]) => {
+                const targets = selectedUris && selectedUris.length ? selectedUris : (uri ? [uri] : []);
                 TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestPoint' });
                 try {
                     await handleCreateNewTestPoint(targets, context);
@@ -266,8 +265,8 @@ export async function activate(context: vscode.ExtensionContext) {
         // ---- 新增测试要点（右键子菜单 - Markdown） ----
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestPointMd',
-            async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
-                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+            async (uri: vscode.Uri, selectedUris?: vscode.Uri[]) => {
+                const targets = selectedUris && selectedUris.length ? selectedUris : (uri ? [uri] : []);
                 TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestPointMd' });
                 try {
                     await handleCreateNewTestPoint(targets, context, '.md');
@@ -280,8 +279,8 @@ export async function activate(context: vscode.ExtensionContext) {
         // ---- 新增测试要点（右键子菜单 - XMind） ----
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestPointXmind',
-            async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
-                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+            async (uri: vscode.Uri, selectedUris?: vscode.Uri[]) => {
+                const targets = selectedUris && selectedUris.length ? selectedUris : (uri ? [uri] : []);
                 TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestPointXmind' });
                 try {
                     await handleCreateNewTestPoint(targets, context, '.xmind');

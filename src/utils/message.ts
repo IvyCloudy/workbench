@@ -226,7 +226,10 @@ export function showPushErrorModal(
 /**
  * 推送结果弹窗（成功 / 部分成功 / 全部失败）。
  *
- * - panel 可用 → postMessage({ type:'pushResult', fileName, successCount, failures, total })
+ * @param error  推送流程级错误（如 YAML 语法错误、文件不在合规目录等），
+ *               前端 showPushResultModal 会以红色错误分支渲染，不会误判为"成功"。
+ *
+ * - panel 可用 → postMessage({ type:'pushResult', fileName, successCount, failures, total, error })
  * - panel 不可用 → 独立 webview 模态框展示结果摘要
  */
 export function showPushResult(
@@ -235,12 +238,21 @@ export function showPushResult(
     successCount: number,
     failures: PushFailure[],
     total: number,
+    error?: string,
 ): void {
     if (panel) {
-        panel.webview.postMessage({ type: 'pushResult', fileName, successCount, failures, total });
+        panel.webview.postMessage({ type: 'pushResult', fileName, successCount, failures, total, error });
     } else {
+        // 独立模态框：如果有 error（流程级错误），直接展示错误，不走 successCount/failures 逻辑
+        if (error) {
+            showModal('default', 'error', '推送结果',
+                `推送失败：${fileName}\n\n${error}` + (total > 0 ? `\n\n共 ${total} 条，全部未推送。` : ''));
+            return;
+        }
         const failCount = failures.length;
-        if (failCount === 0) {
+        if (failCount === 0 && successCount === 0) {
+            showModal('default', 'warning', '推送结果', `推送未产生结果：${fileName}\n请检查文件后重试。`);
+        } else if (failCount === 0) {
             showModal('default', 'success', '推送结果', `推送成功：${fileName}\n共 ${successCount} 条全部成功。`);
         } else if (successCount === 0) {
             showModal('default', 'error', '推送结果',
@@ -295,5 +307,3 @@ export function showPushDone(panel: vscode.WebviewPanel | undefined): void {
         panel.webview.postMessage({ type: 'pushDone' });
     }
 }
-
-

@@ -79,11 +79,16 @@ export function findYamlChar(line: string, chars: string): number {
 export function findYamlColon(line: string): number {
     let inSingle = false;
     let inDouble = false;
+    let flowDepth = 0; // {} / [] 嵌套深度
     for (let i = 0; i < line.length; i++) {
         const c = line[i];
         if (!inDouble && c === "'") { inSingle = !inSingle; continue; }
         if (!inSingle && c === '"') { inDouble = !inDouble; continue; }
         if (inSingle || inDouble) continue;
+        // 跟踪 flow 集合深度：{ / [ 入栈，} / ] 出栈
+        if (c === '{' || c === '[') { flowDepth++; continue; }
+        if (c === '}' || c === ']') { if (flowDepth > 0) flowDepth--; continue; }
+        if (flowDepth > 0) continue; // flow 内部的冒号归 YAML 解析器管辖
         if (c !== ':') continue;
         // 排除 ://（URL 协议）
         if (line.substring(i - 2, i) === 'ht' /* 大概率 http/https */ ||

@@ -249,7 +249,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         ),
 
-        // ---- 新增测试要点 ----
+        // ---- 新增测试要点（命令面板 / QuickPick） ----
         vscode.commands.registerCommand(
             'testcaseViewer.createNewTestPoint',
             async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
@@ -257,6 +257,34 @@ export async function activate(context: vscode.ExtensionContext) {
                 TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestPoint' });
                 try {
                     await handleCreateNewTestPoint(targets, context);
+                } catch (err: any) {
+                    showToast(undefined, 'error', `创建测试要点失败: ${err.message || err}`);
+                }
+            }
+        ),
+//
+        // ---- 新增测试要点（右键子菜单 - Markdown） ----
+        vscode.commands.registerCommand(
+            'testcaseViewer.createNewTestPointMd',
+            async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
+                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestPointMd' });
+                try {
+                    await handleCreateNewTestPoint(targets, context, '.md');
+                } catch (err: any) {
+                    showToast(undefined, 'error', `创建测试要点失败: ${err.message || err}`);
+                }
+            }
+        ),
+
+        // ---- 新增测试要点（右键子菜单 - XMind） ----
+        vscode.commands.registerCommand(
+            'testcaseViewer.createNewTestPointXmind',
+            async (uri: vscode.Uri, _selected: any, allUris?: vscode.Uri[]) => {
+                const targets = allUris && allUris.length ? allUris : (uri ? [uri] : []);
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.createNewTestPointXmind' });
+                try {
+                    await handleCreateNewTestPoint(targets, context, '.xmind');
                 } catch (err: any) {
                     showToast(undefined, 'error', `创建测试要点失败: ${err.message || err}`);
                 }

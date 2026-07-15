@@ -31,6 +31,10 @@
       {
         "id": "testcaseViewer.newCase",
         "label": "新增测试案例"
+      },
+      {
+        "id": "testcaseViewer.newPoint",
+        "label": "新增测试要点"
       }
     ],
     "commands": [
@@ -84,6 +88,18 @@
         "command": "testcaseViewer.createNewTestPoint",
         "title": "新增测试要点",
         "icon": "$(add)",
+        "category": "测试案例"
+      },
+      {
+        "command": "testcaseViewer.createNewTestPointMd",
+        "title": "Markdown (.md)",
+        "icon": "$(markdown)",
+        "category": "测试案例"
+      },
+      {
+        "command": "testcaseViewer.createNewTestPointXmind",
+        "title": "XMind (.xmind)",
+        "icon": "$(organization)",
         "category": "测试案例"
       },
       {
@@ -144,8 +160,8 @@
           "group": "2_workspace@1"
         },
         {
-          "command": "testcaseViewer.createNewTestPoint",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试大纲(?:[\\\\/]|$)/i || resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试大纲[\\\\/].+\\.(md|yaml|yml|csv)$/i",
+          "submenu": "testcaseViewer.newPoint",
+          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试大纲(?:[\\\\/]|$)/i || resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试大纲[\\\\/].+\\.(md|xmind)$/i",
           "group": "2_workspace@2"
         },
         {
@@ -161,6 +177,14 @@
         },
         {
           "command": "testcaseViewer.createNewTestCaseYaml",
+          "when": "false"
+        },
+        {
+          "command": "testcaseViewer.createNewTestPointMd",
+          "when": "false"
+        },
+        {
+          "command": "testcaseViewer.createNewTestPointXmind",
           "when": "false"
         },
         {
@@ -196,6 +220,16 @@
         },
         {
           "command": "testcaseViewer.createNewTestCaseYaml",
+          "group": "2"
+        }
+      ],
+      "testcaseViewer.newPoint": [
+        {
+          "command": "testcaseViewer.createNewTestPointMd",
+          "group": "1"
+        },
+        {
+          "command": "testcaseViewer.createNewTestPointXmind",
           "group": "2"
         }
       ]

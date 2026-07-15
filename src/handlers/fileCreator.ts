@@ -147,11 +147,12 @@ export async function handleCreateNewTestCase(
 }
 
 /**
- * 新增测试要点 - 在测试大纲目录下创建 测试要点.md
+ * 新增测试要点 - 在测试大纲目录下创建 测试要点.md 或 测试要点.xmind
  */
 export async function handleCreateNewTestPoint(
     targets: vscode.Uri[],
     context: vscode.ExtensionContext,
+    forcedExt?: string,
 ): Promise<void> {
     if (!targets || targets.length === 0) return;
 
@@ -169,33 +170,76 @@ export async function handleCreateNewTestPoint(
         return;
     }
 
-    let defaultFileName = '测试要点.md';
+    // 格式选择（右键子菜单已指定格式时跳过弹窗）
+    let chosenExt: string;
+    if (forcedExt) {
+        chosenExt = forcedExt;
+    } else {
+        const formatPick = await vscode.window.showQuickPick(
+            [
+                { label: '$(markdown) Markdown (.md)', description: '表格格式的测试要点文档', extension: '.md' },
+                { label: '$(organization) XMind (.xmind)', description: '思维导图格式，适合脑图展示', extension: '.xmind' },
+            ],
+            { placeHolder: '请选择测试要点文件格式', ignoreFocusOut: true }
+        );
+        if (!formatPick) return;
+        chosenExt = formatPick.extension;
+    }
+
+    let defaultFileName = `测试要点${chosenExt}`;
     let defaultFilePath = path.join(baseDir, defaultFileName);
     let counter = 1;
     while (fs.existsSync(defaultFilePath)) {
-        defaultFileName = `测试要点${counter}.md`;
+        defaultFileName = `测试要点${counter}${chosenExt}`;
         defaultFilePath = path.join(baseDir, defaultFileName);
         counter++;
     }
 
-    const templatePath = path.join(context.extensionUri.fsPath, 'examples', 'point_example.md');
-    let templateContent: string;
     try {
-        templateContent = await fs.promises.readFile(templatePath, 'utf-8');
-    } catch (err: any) {
-        showToast(undefined, 'error', `读取模板文件失败: ${err.message || err}`);
-        return;
-    }
+        if (chosenExt === '.xmind') {
+            // XMind 格式：从模板文件复制
+            const templatePath = path.join(context.extensionUri.fsPath, 'examples', 'point_example.xmind');
+            let templateBuffer: Buffer;
+            try {
+                templateBuffer = await fs.promises.readFile(templatePath);
+            } catch (err: any) {
+                showToast(undefined, 'error', `读取 XMind 模板文件失败: ${err.message || err}`);
+                TelemetryService.sendTelemetryErrorEvent('createNewTestPoint.templateReadFailed', { ...telemetryErrProps(err), fileType: '.xmind' });
+                return;
+            }
+            await fs.promises.writeFile(defaultFilePath, templateBuffer);
 
-    try {
-        await createFileAndTriggerRename(
-            defaultFilePath,
-            templateContent,
-            async (finalUri) => {
-                await vscode.commands.executeCommand('vscode.open', finalUri);
-            },
-        );
+            const newFileUri = vscode.Uri.file(defaultFilePath);
+            await vscode.commands.executeCommand('vscode.open', newFileUri);
+            await vscode.commands.executeCommand('revealInExplorer', newFileUri);
+            await new Promise(resolve => setTimeout(resolve, 100));
+            await vscode.commands.executeCommand('renameFile');
+        } else {
+            // Markdown 格式：使用模板创建
+            const templatePath = path.join(context.extensionUri.fsPath, 'examples', 'point_example.md');
+            let templateContent: string;
+            try {
+                templateContent = await fs.promises.readFile(templatePath, 'utf-8');
+            } catch (err: any) {
+                showToast(undefined, 'error', `读取模板文件失败: ${err.message || err}`);
+                return;
+            }
+
+            await createFileAndTriggerRename(
+                defaultFilePath,
+                templateContent,
+                async (finalUri) => {
+                    await vscode.commands.executeCommand('vscode.open', finalUri);
+                },
+            );
+        }
+
+        TelemetryService.sendTelemetryEvent('createNewTestPoint.success', {
+            fileName: defaultFileName,
+            fileType: chosenExt,
+        });
     } catch (err: any) {
         showToast(undefined, 'error', `创建测试要点失败: ${err.message || err}`);
+        TelemetryService.sendTelemetryErrorEvent('createNewTestPoint.error', telemetryErrProps(err));
     }
 }

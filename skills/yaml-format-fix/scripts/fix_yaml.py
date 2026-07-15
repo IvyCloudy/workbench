@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# ============================================================================
-#  Copyright (c) 2026 yyy / cc. All rights reserved.
-#  yaml-format-fix skill — Proprietary Internal-Use License (see ./LICENSE or ../LICENSE).
-#  Unauthorized copy / modification / redistribution is strictly prohibited.
-#  Integrity is verified at runtime against manifest.json.
-# ============================================================================
 """
  scripts/fix_yaml.py  (Python edition)
  YAML 格式修复 CLI —— 与 VS Code 扩展 (utils/yamlRules.ts + yamlValidator.ts)
@@ -201,6 +195,7 @@ def find_yaml_char(line: str, chars: str) -> int:
 
 def find_yaml_colon(line: str) -> int:
     in_single = in_double = False
+    flow_depth = 0  # {} / [] 嵌套深度
     for i, c in enumerate(line):
         if not in_double and c == "'":
             in_single = not in_single
@@ -210,6 +205,16 @@ def find_yaml_colon(line: str) -> int:
             continue
         if in_single or in_double:
             continue
+        # 跟踪 flow 集合深度：{ / [ 入栈，} / ] 出栈
+        if c == "{" or c == "[":
+            flow_depth += 1
+            continue
+        if c == "}" or c == "]":
+            if flow_depth > 0:
+                flow_depth -= 1
+            continue
+        if flow_depth > 0:
+            continue  # flow 内部的冒号归 YAML 解析器管辖
         if c != ":":
             continue
         nxt = line[i + 1] if i + 1 < len(line) else ""
@@ -821,82 +826,6 @@ def apply_fixes(content: str, issues: List[Issue], logger: Logger) -> Tuple[str,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 完整性 & 水印（防复制/防篡改）
-# ═══════════════════════════════════════════════════════════════════════════
-import hashlib as _hashlib
-import platform as _platform
-import getpass as _getpass
-
-
-def _sha256_file(fp: str) -> Optional[str]:
-    try:
-        with open(fp, "rb") as f:
-            return _hashlib.sha256(f.read()).hexdigest()
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _verify_integrity(logger: "Logger") -> Optional[dict]:
-    """依据 skill 根目录下 manifest.json 逐文件校验 sha256。
-    - 找不到 manifest.json：跳过（开发态运行）。
-    - 校验失败：打印告警；若 env YAML_FIX_STRICT=1 则直接退出。
-    """
-    skill_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    manifest_path = os.path.join(skill_root, "manifest.json")
-    if not os.path.isfile(manifest_path):
-        logger.info("[integrity] manifest.json not found — skip (dev mode)")
-        return None
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
-    except Exception as e:  # noqa: BLE001
-        msg = f"[integrity] manifest.json parse failed: {e}"
-        if os.environ.get("YAML_FIX_STRICT") == "1":
-            print(msg, file=sys.stderr)
-            sys.exit(97)
-        logger.warn(msg)
-        return None
-
-    mismatches = []
-    for rel, expected in (manifest.get("files") or {}).items():
-        actual = _sha256_file(os.path.join(skill_root, rel))
-        if actual != expected:
-            mismatches.append((rel, expected, actual))
-    if mismatches:
-        summary = "\n".join(
-            f"  - {rel}: expect {str(exp)[:12]}… got {str(act)[:12]}…"
-            for rel, exp, act in mismatches
-        )
-        msg = f"[integrity] SKILL FILES TAMPERED ({len(mismatches)} file(s) mismatch):\n{summary}"
-        if os.environ.get("YAML_FIX_STRICT") == "1":
-            print(msg, file=sys.stderr)
-            sys.exit(97)
-        logger.warn(msg)
-        return manifest
-    logger.info(
-        f"[integrity] OK — verified {len(manifest.get('files') or {})} file(s) "
-        f"against manifest v{manifest.get('version', '?')}"
-    )
-    return manifest
-
-
-def _machine_fingerprint() -> str:
-    raw = "|".join([
-        _platform.node() or "",
-        (_getpass.getuser() if hasattr(_getpass, "getuser") else "") or "",
-        _platform.system() or "",
-        _platform.machine() or "",
-    ])
-    return _hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
-
-
-def _print_watermark(logger: "Logger", manifest: Optional[dict]) -> None:
-    ver = (manifest or {}).get("version", "dev")
-    fp = _machine_fingerprint()
-    logger.info(f"[yaml-format-fix v{ver}] © 2026 myronliu · Proprietary · fingerprint={fp}")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # CLI
 # ═══════════════════════════════════════════════════════════════════════════
 def build_argparser() -> argparse.ArgumentParser:
@@ -925,8 +854,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"❌ File not found: {file_path}", file=sys.stderr)
         return 2
     logger = Logger(args.verbose)
-    manifest = _verify_integrity(logger)
-    _print_watermark(logger, manifest)
     logger.info(f"Reading {file_path}")
     with open(file_path, "r", encoding="utf-8") as f:
         original = f.read()

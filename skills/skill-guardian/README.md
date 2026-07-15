@@ -117,8 +117,8 @@ skill-guardian/
 
 | 参数 | 默认值 |
 |---|---|
-| author | `myronliu` |
-| org | `Tencent Cloud Big Data` |
+| author | `developer` |
+| org | `Organization` |
 | year | 当前年份 |
 | license | `Proprietary Internal-Use License` |
 | jurisdiction | `the People's Republic of China` |

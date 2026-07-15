@@ -1,75 +1,45 @@
 #!/usr/bin/env node
 /**
  * ============================================================================
- *  Copyright (c) 2026 yyy / cc. All rights reserved.
- *  yaml-format-fix skill — Proprietary Internal-Use License (see ./LICENSE or ../LICENSE).
- *  Unauthorized copy / modification / redistribution is strictly prohibited.
- *  Integrity is verified at runtime against manifest.json.
+ *  scripts/fix-yaml.js  (Node.js edition)
+ *  YAML 格式修复 CLI —— 与 VS Code 扩展 (utils/yamlRules.ts + yamlValidator.ts)
+ *  行为完全一致的独立命令行版本
+ *
+ *  设计原则：
+ *    ①【纯确定性】不依赖 LLM 推理；所有规则/修复算法 1:1 移植自插件源码
+ *    ②【日志完整】--verbose 打印每条规则命中详情、apply 前后行文本、跳过原因
+ *    ③【零外部依赖 · 可选优化】默认仅需 Node.js；若已安装 yaml 库
+ *       (`npm i yaml`)，则启用 P1~P4 parser 级兜底修复
+ *
+ *  规则覆盖（12 条，与插件完全对齐）：
+ *    - 逐行规则 -
+ *      R1  Tab 缩进           → 每个 \\t → 2 空格 (stopOnHit)
+ *      R2  行内 Tab           → 未在引号内 & 非行末的 \\t → 单空格
+ *      R3  行末空格            → rstrip
+ *      R4  冒号后缺空格        → 插入单空格 (让位 R5/R7 时不产 fix)
+ *      R5  歧义值(布尔/null)   → 加引号
+ *      R6  值中 # 号           → 整个值加引号 (含注释文本)
+ *      R7  YAML 保留字符       → 加引号
+ *      R8  '-' 后缺空格        → 插入单空格
+ *    - 文件级规则 -
+ *      F1  重复 key            → 后续同名行改成 `# [duplicate key removed] ...`
+ *    - Parser 兜底 -
+ *      P1  嵌套 map 报错       → 序列/键值对整个值加引号
+ *      P2  缺闭合引号           → 补上对应引号
+ *      P3  same column         → 注释化该行
+ *      P4  duplicate key       → 注释化该行
+ *
+ *  用法：
+ *    node scripts/fix-yaml.js <file>              修复并写回
+ *    node scripts/fix-yaml.js <file> --dry-run    仅预览
+ *    node scripts/fix-yaml.js <file> --json       机器可读输出
+ *    node scripts/fix-yaml.js <file> --verbose    打印详细日志
  * ============================================================================
  */
 
-/* eslint-disable no-console */
 'use strict';
 
-// ────────────────── 完整性 & 水印（防复制/防篡改） ──────────────────
-const _crypto = require('crypto');
-const _os = require('os');
-
-/** 计算文件 sha256（若不存在则返回 null） */
-function _sha256File(fp) {
-    try { return _crypto.createHash('sha256').update(require('fs').readFileSync(fp)).digest('hex'); }
-    catch (_) { return null; }
-}
-
-/**
- * 依据 skill 根目录下的 manifest.json 逐文件校验 sha256。
- * - 找不到 manifest.json：跳过（视为开发态运行）。
- * - 校验失败：打印告警（可通过环境变量 YAML_FIX_STRICT=1 转为致命错误）。
- */
-function verifyIntegrity(logger) {
-    const path = require('path'); const fs = require('fs');
-    const skillRoot = path.resolve(__dirname, '..');
-    const manifestPath = path.join(skillRoot, 'manifest.json');
-    if (!fs.existsSync(manifestPath)) {
-        logger.info('[integrity] manifest.json not found — skip (dev mode)');
-        return { ok: true, skipped: true };
-    }
-    let manifest;
-    try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }
-    catch (e) {
-        const msg = `[integrity] manifest.json parse failed: ${e.message}`;
-        if (process.env.YAML_FIX_STRICT === '1') { console.error(msg); process.exit(97); }
-        logger.warn(msg); return { ok: false };
-    }
-    const mismatches = [];
-    for (const [rel, expected] of Object.entries(manifest.files || {})) {
-        const actual = _sha256File(path.join(skillRoot, rel));
-        if (actual !== expected) mismatches.push({ rel, expected, actual });
-    }
-    if (mismatches.length) {
-        const summary = mismatches.map(m => `  - ${m.rel}: expect ${String(m.expected).slice(0,12)}… got ${String(m.actual).slice(0,12)}…`).join('\n');
-        const msg = `[integrity] SKILL FILES TAMPERED (${mismatches.length} file(s) mismatch):\n${summary}`;
-        if (process.env.YAML_FIX_STRICT === '1') { console.error(msg); process.exit(97); }
-        logger.warn(msg);
-        return { ok: false, manifest, mismatches };
-    }
-    logger.info(`[integrity] OK — verified ${Object.keys(manifest.files).length} file(s) against manifest v${manifest.version || '?'}`);
-    return { ok: true, manifest };
-}
-
-/** 生成脱敏机器指纹（8 位 hex），用于水印溯源 */
-function _machineFingerprint() {
-    const raw = [_os.hostname(), _os.userInfo().username || '', _os.platform(), _os.arch()].join('|');
-    return _crypto.createHash('sha256').update(raw).digest('hex').slice(0, 8);
-}
-
-/** 打印水印（作者 / license / 机器指纹 / 版本） */
-function printWatermark(logger, manifest) {
-    const ver = (manifest && manifest.version) || 'dev';
-    const fp = _machineFingerprint();
-    logger.info(`[yaml-format-fix v${ver}] © 2026 myronliu · Proprietary · fingerprint=${fp}`);
-}
-// ─────────────────────────────────────────────────────────────────────
+/* eslint-disable no-console */
 
 const fs = require('fs');
 const path = require('path');
@@ -188,12 +158,16 @@ function findYamlChar(line, chars) {
 }
 
 function findYamlColon(line) {
-    let inSingle = false, inDouble = false;
+    let inSingle = false, inDouble = false, flowDepth = 0;
     for (let i = 0; i < line.length; i++) {
         const c = line[i];
         if (!inDouble && c === "'") { inSingle = !inSingle; continue; }
         if (!inSingle && c === '"') { inDouble = !inDouble; continue; }
         if (inSingle || inDouble) continue;
+        // 跟踪 flow 集合深度：{ / [ 入栈，} / ] 出栈
+        if (c === '{' || c === '[') { flowDepth++; continue; }
+        if (c === '}' || c === ']') { if (flowDepth > 0) flowDepth--; continue; }
+        if (flowDepth > 0) continue; // flow 内部的冒号归 YAML 解析器管辖
         if (c !== ':') continue;
         if (line[i + 1] === '/' && line[i + 2] === '/') continue; // :// URL
         if (line[i + 1] === ':' || line[i - 1] === ':') continue; // ::
@@ -734,8 +708,6 @@ function main() {
         process.exit(2);
     }
     const logger = createLogger(opts.verbose);
-    const integrity = verifyIntegrity(logger);
-    printWatermark(logger, integrity.manifest);
     logger.info(`Reading ${filePath}`);
     const original = fs.readFileSync(filePath, 'utf-8');
     logger.info(`Size: ${original.length} bytes, ${original.split('\n').length} lines`);

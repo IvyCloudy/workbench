@@ -7,7 +7,7 @@ description: >-
   也提供默认值。触发词：加水印、加版权、License 保护、防复制、防篡改、混淆、pyarmor、
   生成 manifest、加固 skill、protect skill、harden skill。
 version: 1.0.0
-author: myronliu / Tencent Cloud Big Data
+author: developer
 license: Proprietary Internal-Use License
 ---
 
@@ -42,7 +42,7 @@ license: Proprietary Internal-Use License
 ```bash
 node skills/skill-guardian/scripts/guardian.js [guard] <target-skill-dir> \
     [--author "张三"] \
-    [--org "Tencent Cloud Big Data"] \
+    [--org "Organization"] \
     [--year 2026] \
     [--license "Proprietary Internal-Use License"] \
     [--jurisdiction "the People's Republic of China"] \
@@ -80,8 +80,8 @@ node skills/skill-guardian/scripts/guardian.js unguard skills/my-skill
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `--author` | `myronliu` | 版权归属人 |
-| `--org` | `Tencent Cloud Big Data` | 组织/团队名 |
+| `--author` | `developer` | 版权归属人 |
+| `--org` | `Organization` | 组织/团队名 |
 | `--year` | 当前年份 | Copyright 年份 |
 | `--license` | `Proprietary Internal-Use License` | License 名称，写进头部注释 |
 | `--jurisdiction` | `the People's Republic of China` | LICENSE 里的适用法域文字 |
@@ -99,8 +99,8 @@ node skills/skill-guardian/scripts/guardian.js unguard skills/my-skill
 
 ```json
 {
-  "author": "myronliu",
-  "org": "Tencent Cloud Big Data",
+  "author": "developer",
+  "org": "Organization",
   "year": 2026,
   "license": "Proprietary Internal-Use License",
   "jurisdiction": "the People's Republic of China",

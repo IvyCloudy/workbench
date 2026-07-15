@@ -2,7 +2,7 @@
 /* eslint-disable no-console */
 /**
  * ============================================================================
- *  Copyright (c) 2026 myronliu / Tencent Cloud Big Data. All rights reserved.
+ *  Copyright (c) 2026 developer. All rights reserved.
  *  skill-guardian — Proprietary Internal-Use License (see ../LICENSE).
  * ============================================================================
  *  scripts/guardian.js
@@ -17,8 +17,8 @@
  *    unguard <dir>   卸载 License 头 + 运行时守卫块（回滚）
  *
  *  Options:
- *    --author "..."     版权归属人（默认 myronliu）
- *    --org "..."        组织（默认 Tencent Cloud Big Data）
+ *    --author "..."     版权归属人（默认 developer）
+ *    --org "..."        组织（默认 Organization）
  *    --year N           年份（默认当前年）
  *    --license "..."    License 名称（默认 Proprietary Internal-Use License）
  *    --skill-name "..." skill 名（默认取目标目录名）
@@ -83,8 +83,8 @@ Usage:
   node guardian.js unguard   <target-skill-dir> [options]   # 卸载 License 头/守卫块
 
 Options:
-  --author "..."     版权归属人（默认 myronliu）
-  --org "..."        组织（默认 Tencent Cloud Big Data）
+  --author "..."     版权归属人（默认 developer）
+  --org "..."        组织（默认 Organization）
   --year N           年份（默认当前年）
   --license "..."    License 名称（默认 Proprietary Internal-Use License）
   --skill-name "..." skill 名（默认取目标目录名）
@@ -112,8 +112,8 @@ function loadConfig(targetDir, cliOpts) {
     }
     const skillMeta = extractSkillMeta(targetDir);
     const defaults = {
-        author: 'myronliu',
-        org: 'Tencent Cloud Big Data',
+        author: 'developer',
+        org: 'Organization',
         year: new Date().getFullYear(),
         license: 'Proprietary Internal-Use License',
         jurisdiction: "the People's Republic of China",

@@ -1,7 +1,5 @@
 ---
 name: yaml-format-fix
-author: myronliu / Tencent Cloud Big Data
-license: Proprietary — Internal Use Only (see LICENSE)
 version: 1.0.0
 description: >-
   This skill handles ALL YAML syntax/formatting issues via bundled deterministic

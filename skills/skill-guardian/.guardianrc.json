@@ -1,8 +1,8 @@
 {
   "skillName": "skill-guardian",
   "version": "1.0.0",
-  "author": "myronliu",
-  "org": "Tencent Cloud Big Data",
+  "author": "developer",
+  "org": "Organization",
   "license": "Proprietary Internal-Use License",
   "jurisdiction": "the People's Republic of China",
   "excludes": [

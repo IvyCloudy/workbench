@@ -21,7 +21,6 @@ function bindXsPrompt() {
     ok.addEventListener('click', function () { closeXsPrompt(true); });
     cancel.addEventListener('click', function () { closeXsPrompt(false); });
     close.addEventListener('click', function () { closeXsPrompt(false); });
-    modal.addEventListener('click', function (e) { if (e.target === modal) closeXsPrompt(false); });
     if (input) input.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter') { ev.preventDefault(); closeXsPrompt(true); }
         else if (ev.key === 'Escape') { ev.preventDefault(); closeXsPrompt(false); }

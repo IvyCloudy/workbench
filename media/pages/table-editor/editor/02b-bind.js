@@ -530,6 +530,7 @@ function bindDocument() {
     bindDetailModal();
     bindXsPrompt();
     bindCloseFindOnTableClick();
+    bindFindPanelResize();
 }
 
 // bindTable：使用「事件委托」一次性把所有交互事件挂到 #tableContainer 上，

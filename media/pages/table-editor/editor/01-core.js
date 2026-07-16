@@ -1239,7 +1239,6 @@ function bindXsInfoModal() {
     var ok = document.getElementById('xsInfoOkBtn');
     if (close) close.addEventListener('click', closeXsInfoModal);
     if (ok) ok.addEventListener('click', closeXsInfoModal);
-    if (modal) modal.addEventListener('click', function (e) { if (e.target === modal) closeXsInfoModal(); });
     document.addEventListener('keydown', function (ev) {
         if (ev.key === 'Escape') {
             var m = document.getElementById('xsInfoModal');

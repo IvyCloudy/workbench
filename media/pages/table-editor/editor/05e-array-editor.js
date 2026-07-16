@@ -35,9 +35,6 @@ function bindArrayCellEditor() {
     if (cancel) cancel.addEventListener('click', function () { closeArrayCellEditor(false); });
     if (save) save.addEventListener('click', function () { closeArrayCellEditor(true); });
     if (addBtn) addBtn.addEventListener('click', function () { arrEditAddItem(); });
-    if (modal) modal.addEventListener('click', function (e) {
-        if (e.target === modal) closeArrayCellEditor(false);
-    });
     // ESC 关闭、Ctrl/Cmd+Enter 保存（在 body 上监听，避免与全局键冲突）
     var body = document.getElementById('arrEditBody');
     if (body) {

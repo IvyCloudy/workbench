@@ -143,6 +143,54 @@ function bindCloseFindOnTableClick() {
     });
 }
 
+// 查找面板左侧拖拽调整宽度
+function bindFindPanelResize() {
+    if (S._findResizeBound) return;
+    S._findResizeBound = true;
+    var handle = document.getElementById('findPanelHandle');
+    var panel = document.getElementById('findPanel');
+    if (!handle || !panel) return;
+    var startX, startWidth, startRight;
+    var minW = 340, maxW = window.innerWidth * 0.8;
+    function onMove(e) {
+        var dx = startX - (e.clientX || (e.touches && e.touches[0] && e.touches[0].clientX) || startX);
+        var newW = Math.max(minW, Math.min(maxW, startWidth + dx));
+        panel.style.width = newW + 'px';
+        panel.style.minWidth = newW + 'px';
+        panel.style.right = startRight + 'px';
+    }
+    function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.removeEventListener('touchmove', onMove);
+        document.removeEventListener('touchend', onUp);
+        handle.classList.remove('dragging');
+        document.body.style.userSelect = '';
+        document.body.style.cursor = '';
+    }
+    handle.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        startX = e.clientX;
+        startWidth = panel.offsetWidth;
+        startRight = parseInt(getComputedStyle(panel).right, 10) || 0;
+        handle.classList.add('dragging');
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'ew-resize';
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+    handle.addEventListener('touchstart', function (e) {
+        e.preventDefault();
+        startX = e.touches[0].clientX;
+        startWidth = panel.offsetWidth;
+        startRight = parseInt(getComputedStyle(panel).right, 10) || 0;
+        handle.classList.add('dragging');
+        document.body.style.userSelect = 'none';
+        document.addEventListener('touchmove', onMove, { passive: false });
+        document.addEventListener('touchend', onUp);
+    });
+}
+
 // 顶部 searchInput：过滤未命中的行（边输入边过滤，防抖 150ms）
 var _searchTimer = null;
 function onSearch(e) {

@@ -91,10 +91,6 @@ function bindDetailModal() {
     if (close) close.addEventListener('click', closeDetailModal);
     if (cancel) cancel.addEventListener('click', closeDetailModal);
     if (save) save.addEventListener('click', saveDetailModal);
-    var overlay = document.getElementById('detailModal');
-    if (overlay) overlay.addEventListener('click', function (e) {
-        if (e.target === overlay) closeDetailModal();
-    });
 }
 
 function openDetailModal(ri, field) {
@@ -150,6 +146,7 @@ function openDetailModal(ri, field) {
     renderDetailV2();
     var m = document.getElementById('detailModal');
     if (m) m.classList.add('show');
+    requestAnimationFrame(autoGrowAllTextareas);
     updateDetailModInfo();
 }
 
@@ -319,13 +316,18 @@ function renderDetailV2() {
                     inner += '<div class="xs-dv2-arr-empty">空数组，点击右上"+ 添加项"</div>';
                 } else {
                     arr.forEach(function (item, ii) {
-                        var text = (item == null) ? '' : (typeof item === 'object' ? JSON.stringify(item) : String(item));
-                        inner += '<div class="xs-dv2-arr-item" data-field="' + escapeHtml(field) + '" data-ii="' + ii + '">'
-                            +      '<span class="xs-dv2-arr-idx">' + (ii + 1) + '</span>'
-                            +      '<textarea class="xs-dv2-arr-input" data-field="' + escapeHtml(field) + '" data-ii="' + ii + '" rows="1">' + escapeHtml(text) + '</textarea>'
-                            +      '<span class="xs-dv2-arr-del" title="删除该项" data-field="' + escapeHtml(field) + '" data-ii="' + ii + '">×</span>'
-                            +    '</div>';
-                    });
+                            var text = (item == null) ? '' : (typeof item === 'object' ? JSON.stringify(item) : String(item));
+                            var isMultiline = text.indexOf('\n') >= 0 || text.length > 80;
+                            var expandBtn = isMultiline
+                                ? '<button class="xs-dv2-arr-expand-btn" data-field="' + escapeHtml(field) + '" data-ii="' + ii + '" title="展开查看全部">&#x25BC;</button>'
+                                : '';
+                            inner += '<div class="xs-dv2-arr-item" data-field="' + escapeHtml(field) + '" data-ii="' + ii + '">'
+                                +      '<span class="xs-dv2-arr-idx">' + (ii + 1) + '</span>'
+                                +      '<textarea class="xs-dv2-arr-input" data-field="' + escapeHtml(field) + '" data-ii="' + ii + '" rows="1">' + escapeHtml(text) + '</textarea>'
+                                +      expandBtn
+                                +      '<span class="xs-dv2-arr-del" title="删除该项" data-field="' + escapeHtml(field) + '" data-ii="' + ii + '">×</span>'
+                                +    '</div>';
+                        });
                 }
                 html += renderDv2FieldCard(field, 'array', inner, true);
                 return;
@@ -333,8 +335,10 @@ function renderDetailV2() {
             // scalar
             var v = rawObj[field];
             var text = (v == null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+            var isMultiline = text.indexOf('\n') >= 0 || text.length > 80;
             html += renderDv2FieldCard(field, 'scalar',
-                '<textarea class="xs-dv2-scalar" data-field="' + escapeHtml(field) + '" data-kind="scalar" rows="1">' + escapeHtml(text) + '</textarea>'
+                '<textarea class="xs-dv2-scalar" data-field="' + escapeHtml(field) + '" data-kind="scalar" rows="1">' + escapeHtml(text) + '</textarea>',
+                false, isMultiline
             );
         });
     }
@@ -342,10 +346,9 @@ function renderDetailV2() {
 
     body.innerHTML = html;
     bindDv2Events();
-    autoGrowAllTextareas();
 }
 
-function renderDv2FieldCard(field, kind, innerHtml, withAddBtn) {
+function renderDv2FieldCard(field, kind, innerHtml, withAddBtn, expandable) {
     var typeLabel = (kind === 'array') ? '数组' : (kind === 'object' ? '对象' : '文本');
     var typeCls = (kind === 'array') ? 'is-array' : '';
     var actions = '';
@@ -353,6 +356,10 @@ function renderDv2FieldCard(field, kind, innerHtml, withAddBtn) {
         actions = '<div class="xs-dv2-field-actions">'
             +       '<button class="xs-dv2-field-add" data-field="' + escapeHtml(field) + '">+ 添加项</button>'
             +     '</div>';
+    }
+    var expandBtn = '';
+    if (expandable) {
+        expandBtn = '<button class="xs-dv2-expand-btn" data-field="' + escapeHtml(field) + '" title="展开查看全部">&#x25BC;</button>';
     }
     // 字段名：存在中文映射时第一行渲染中文（主），第二行渲染英文 key（辅，等宽小字）；
     //         无映射时仅渲染英文 key 单行，避免空白占位。
@@ -374,6 +381,7 @@ function renderDv2FieldCard(field, kind, innerHtml, withAddBtn) {
         +      nameHtml
         +      '<span class="xs-dv2-field-type ' + typeCls + '">' + typeLabel + '</span>'
         +      actions
+        +      expandBtn
         +    '</div>'
         +    '<div class="xs-dv2-field-body">' + innerHtml + '</div>'
         +  '</div>';
@@ -413,10 +421,41 @@ function bindDv2Events() {
     var dupBtn = document.getElementById('dv2BtnDup');
     if (dupBtn) dupBtn.addEventListener('click', function () { dv2DuplicateStep(); });
 
+    // 展开/收起按钮
+    body.querySelectorAll('.xs-dv2-expand-btn').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var wrapper = btn.closest('.xs-dv2-field');
+            if (!wrapper) return;
+            var ta = wrapper.querySelector('textarea.xs-dv2-scalar');
+            if (wrapper.classList.toggle('expanded')) {
+                // 展开
+                btn.innerHTML = '&#x25B2;';
+                btn.title = '收起';
+                if (ta) {
+                    ta.classList.add('expanded');
+                    autoGrowTextarea(ta);
+                }
+            } else {
+                // 收起
+                btn.innerHTML = '&#x25BC;';
+                btn.title = '展开查看全部';
+                if (ta) {
+                    ta.classList.remove('expanded');
+                    ta.style.height = '';
+                    ta.style.overflowY = '';
+                }
+            }
+        });
+    });
+
     // 右栏：标量 / 对象编辑
     body.querySelectorAll('textarea.xs-dv2-scalar').forEach(function (ta) {
         ta.addEventListener('input', function () {
-            autoGrowTextarea(ta);
+            // 仅展开状态下自动增长
+            if (ta.classList.contains('expanded')) {
+                autoGrowTextarea(ta);
+            }
         });
         ta.addEventListener('change', function () {
             dv2WriteScalar(ta.getAttribute('data-field'), ta.value, ta.getAttribute('data-kind'));
@@ -426,11 +465,43 @@ function bindDv2Events() {
         });
         ta.addEventListener('blur', function () {
             dv2WriteScalar(ta.getAttribute('data-field'), ta.value, ta.getAttribute('data-kind'));
+        });
+        // wheel 事件：文本域内滚动到边界时阻止外传，防止带动右侧面板整页滚动
+        bindTextareaWheel(ta);
+    });
+    // 数组项：展开/收起按钮
+    body.querySelectorAll('.xs-dv2-arr-expand-btn').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var item = btn.closest('.xs-dv2-arr-item');
+            if (!item) return;
+            var ta = item.querySelector('textarea.xs-dv2-arr-input');
+            if (item.classList.toggle('expanded')) {
+                btn.innerHTML = '&#x25B2;';
+                btn.title = '收起';
+                if (ta) {
+                    ta.classList.add('expanded');
+                    autoGrowTextarea(ta);
+                }
+            } else {
+                btn.innerHTML = '&#x25BC;';
+                btn.title = '展开查看全部';
+                if (ta) {
+                    ta.classList.remove('expanded');
+                    ta.style.height = '';
+                    ta.style.overflowY = '';
+                }
+            }
         });
     });
+
     // 右栏：数组项编辑
     body.querySelectorAll('textarea.xs-dv2-arr-input').forEach(function (ta) {
-        ta.addEventListener('input', function () { autoGrowTextarea(ta); });
+        ta.addEventListener('input', function () {
+            if (ta.classList.contains('expanded')) {
+                autoGrowTextarea(ta);
+            }
+        });
         ta.addEventListener('change', function () {
             var f = ta.getAttribute('data-field');
             var ii = parseInt(ta.getAttribute('data-ii'), 10);
@@ -444,6 +515,7 @@ function bindDv2Events() {
             var ii = parseInt(ta.getAttribute('data-ii'), 10);
             dv2WriteArrayItem(f, ii, ta.value);
         });
+        bindTextareaWheel(ta);
     });
     // 右栏：删除数组项
     body.querySelectorAll('.xs-dv2-arr-del').forEach(function (btn) {
@@ -465,14 +537,38 @@ function bindDv2Events() {
 function autoGrowTextarea(ta) {
     if (!ta) return;
     ta.style.height = 'auto';
-    var h = ta.scrollHeight;
-    // 限制最大高度，超出由 textarea 自身滚动
-    var max = 240;
-    ta.style.height = Math.min(h, max) + 'px';
-    if (h > max) ta.style.overflowY = 'auto'; else ta.style.overflowY = 'hidden';
+    var style = getComputedStyle(ta);
+    var borderH = parseInt(style.borderTopWidth, 10) + parseInt(style.borderBottomWidth, 10);
+    ta.style.height = (ta.scrollHeight + borderH) + 'px';
+    ta.style.overflowY = 'hidden';
 }
 function autoGrowAllTextareas() {
     var body = document.getElementById('detailModalBody');
     if (!body) return;
-    body.querySelectorAll('textarea').forEach(function (ta) { autoGrowTextarea(ta); });
+    var expanded = body.querySelectorAll('textarea.expanded');
+    if (expanded.length > 0) {
+        expanded.forEach(function (ta) { autoGrowTextarea(ta); });
+    }
+}
+
+// 文本域 wheel 事件陷阱：聚焦文本域滚动时，阻止滚动到边界后外传给右侧面板
+function bindTextareaWheel(ta) {
+    if (!ta || ta._wheelBound) return;
+    ta._wheelBound = true;
+    ta.addEventListener('wheel', function (e) {
+        var style = getComputedStyle(ta);
+        var overflowY = style.overflowY;
+        // 只有当文本域有滚动条且内容溢出时才拦截
+        if (overflowY !== 'auto' && overflowY !== 'scroll') return;
+        if (ta.scrollHeight <= ta.clientHeight + 2) return;
+        var atTop = ta.scrollTop <= 0;
+        var atBottom = ta.scrollTop + ta.clientHeight >= ta.scrollHeight - 2;
+        var scrollingDown = e.deltaY > 0;
+        var scrollingUp = e.deltaY < 0;
+        // 到达滚动边界时阻止事件外传
+        if ((atTop && scrollingUp) || (atBottom && scrollingDown)) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+    }, { passive: false });
 }

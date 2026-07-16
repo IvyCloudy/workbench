@@ -313,7 +313,6 @@ function bindPushResultModal() {
     var copy = document.getElementById('pushResultCopyBtn');
     if (close) close.addEventListener('click', closePushResultModal);
     if (ok) ok.addEventListener('click', closePushResultModal);
-    if (modal) modal.addEventListener('click', function (e) { if (e.target === modal) closePushResultModal(); });
     if (copy) copy.addEventListener('click', function () {
         var text = S._pushResultDetailText || '';
         if (!text) { showToast('无失败明细可复制', 'error'); return; }

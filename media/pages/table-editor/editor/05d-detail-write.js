@@ -386,31 +386,35 @@ function saveDetailModal() {
     }
 
     // 3) 落盘前：标量类型修正 + 清除值为空的非必需字段（'' / []），避免写回空值到 YAML
+    //    在深拷贝上修改，saveFile 成功后再写回，防止落盘失败时源数据被破坏
     var scalarTypeMap = _buildScalarTypeMap(dt, ri, S._detailBackup ? S._detailBackup.raws : null);
-    rawRows.forEach(function (step) {
-        if (!step || typeof step !== 'object') return;
+    rawRows = rawRows.map(function (step) {
+        if (!step || typeof step !== 'object') return step;
+        var copy = JSON.parse(JSON.stringify(step));
         // a) 标量字段类型修正：从已有步骤推断数字/布尔类型并做转换
         Object.keys(scalarTypeMap).forEach(function (f) {
-            var v = step[f];
+            var v = copy[f];
             if (v == null) return;
             var t = scalarTypeMap[f];
             if (t === 'number' && typeof v === 'string' && v !== '') {
                 var n = Number(v);
-                if (!isNaN(n)) step[f] = n;
+                if (!isNaN(n)) copy[f] = n;
             } else if (t === 'boolean' && typeof v === 'string') {
                 var ls = v.trim().toLowerCase();
-                if (ls === 'true') step[f] = true;
-                else if (ls === 'false') step[f] = false;
+                if (ls === 'true') copy[f] = true;
+                else if (ls === 'false') copy[f] = false;
             }
         });
         // b) 清除值为空的非必需字段
         STRIP_IF_EMPTY_FIELDS.forEach(function (k) {
-            var v = step[k];
+            var v = copy[k];
             if (v === '' || v === null || v === undefined || (Array.isArray(v) && v.length === 0)) {
-                delete step[k];
+                delete copy[k];
             }
         });
+        return copy;
     });
+    dt.rawRowGroups[ri] = rawRows;
 
     // 4) 落盘：diffPushSnapshot 已通过 detailTables.rawRowGroups 签名比对明细变更，
     //    不再需要临时替换单元格值为 JSON。直接发送 displayText（如 "[2 项]"），

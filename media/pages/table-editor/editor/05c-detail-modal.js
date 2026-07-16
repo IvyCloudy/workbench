@@ -614,8 +614,8 @@ function autoGrowAllTextareas() {
 // JSON 语法高亮：将 JSON 字符串转为带颜色标记的 HTML
 function highlightJson(str) {
     var html = escapeHtml(str);
-    // key 着色（蓝色）："...":
-    html = html.replace(/(&quot;[^&]*?&quot;)(\s*:)/g, '<span class="hl-key">$1</span>$2');
+    // key 着色（蓝色）："...":   兼容 key 中包含 HTML 实体（如 &amp; &lt;）
+    html = html.replace(/(&quot;(?:&[a-z]+;|&#\d+;|[^&])*?&quot;)(\s*:)/g, '<span class="hl-key">$1</span>$2');
     // 字符串值着色（绿色）
     html = html.replace(/:(\s*)&quot;([^&]*?)&quot;/g, ':$1<span class="hl-string">&quot;$2&quot;</span>');
     // 数字着色（橙色）
@@ -650,19 +650,22 @@ function dv2ToggleHighlight(field) {
     var ta = wrap ? wrap.querySelector('textarea') : null;
     var pre = wrap ? wrap.querySelector('.xs-dv2-obj-hl') : null;
     var hlBtn = fieldEl ? fieldEl.querySelector('.xs-dv2-hl-btn') : null;
+    var expandBtn = fieldEl ? fieldEl.querySelector('.xs-dv2-expand-btn') : null;
     if (!ta || !pre) return;
     var isHighlight = pre.style.display !== 'none';
     if (isHighlight) {
-        // 切换回编辑模式
+        // 切换回编辑模式：显示 textarea，隐藏高亮预览，恢复展开按钮
         pre.style.display = 'none';
         ta.style.display = '';
         if (hlBtn) { hlBtn.innerHTML = '&#x2728;'; hlBtn.title = '语法高亮'; }
+        if (expandBtn) expandBtn.style.display = '';
     } else {
-        // 切换到高亮模式
+        // 切换到高亮模式：隐藏 textarea + 展开按钮，显示只读高亮预览
         ta.style.display = 'none';
         pre.style.display = '';
         pre.querySelector('code').innerHTML = highlightJson(ta.value);
         if (hlBtn) { hlBtn.innerHTML = '&#x270e;'; hlBtn.title = '编辑'; }
+        if (expandBtn) expandBtn.style.display = 'none';
     }
 }
 

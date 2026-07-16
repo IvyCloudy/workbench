@@ -470,6 +470,13 @@ tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-frozen{background:#fbd9d9}
 .xs-dv2-step-del{flex-shrink:0;width:18px;height:18px;line-height:16px;border-radius:50%;color:#999;cursor:pointer;text-align:center;font-size:13px;visibility:hidden;border:1px solid transparent}
 .xs-dv2-step:hover .xs-dv2-step-del{visibility:visible}
 .xs-dv2-step-del:hover{background:#e34d59;color:#fff;border-color:#e34d59}
+/* 步骤上移/下移按钮 */
+.xs-dv2-step-move{flex-shrink:0;display:flex;flex-direction:column;gap:0;visibility:hidden}
+.xs-dv2-step:hover .xs-dv2-step-move{visibility:visible}
+.xs-dv2-step-up,.xs-dv2-step-dn{width:16px;height:12px;line-height:12px;cursor:pointer;text-align:center;font-size:8px;color:#999;border-radius:2px;user-select:none}
+.xs-dv2-step-up:hover,.xs-dv2-step-dn:hover{background:#d0d7e2;color:#333}
+.xs-dv2-step-up.disabled,.xs-dv2-step-dn.disabled{color:#ddd;cursor:default;pointer-events:none}
+.xs-dv2-step-up.disabled:hover,.xs-dv2-step-dn.disabled:hover{background:transparent}
 .xs-dv2-left-ft{padding:6px 8px;border-top:1px solid var(--bd);display:flex;gap:6px;flex-shrink:0;background:#f5f5f5}
 .xs-dv2-left-ft .xs-btn{flex:1;font-size:12px;padding:5px 8px}
 

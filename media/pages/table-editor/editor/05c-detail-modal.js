@@ -13,6 +13,12 @@
  * 数组列编辑器 + 应用 init() → 05e-array-editor.js（最后加载）
  * ========================================================================== */
 
+// 步骤必备字段及其类型：新增/复制步骤时自动预填充，字段列表始终包含
+var REQUIRED_STEP_FIELDS = ['operation', 'data', 'ui_expected', 'api_expected', 'db_expected'];
+var REQUIRED_STEP_KINDS = { operation: 'scalar', data: 'array', ui_expected: 'array', api_expected: 'array', db_expected: 'array' };
+// 保存 YAML 时，值为空（'' / []）则删除，不写回文件
+var STRIP_IF_EMPTY_FIELDS = ['data', 'ui_expected', 'api_expected', 'db_expected'];
+
 // ==================== 明细弹窗 ====================
 // 返回所有明细表（同时兼容老的单字段 detailTable）
 function getDetailTables() {
@@ -192,10 +198,11 @@ function dv2DetectKind(rawObj, field) {
     var v = rawObj[field];
     if (Array.isArray(v)) return 'array';
     if (v && typeof v === 'object') return 'object';
+    // 必备字段类型兜底：即使被清空删除后字段不存在，仍按注册类型渲染
+    if (v === undefined && REQUIRED_STEP_KINDS[field] === 'array') return 'array';
     return 'scalar';
 }
 
-// 取一个 step 上所有要展示的字段顺序：原始对象 key 顺序优先 + 缺失的表头字段补在末尾
 function dv2FieldOrder(rawObj, headers) {
     var arr = [];
     var seen = new Set();
@@ -203,6 +210,7 @@ function dv2FieldOrder(rawObj, headers) {
         Object.keys(rawObj).forEach(function (k) { arr.push(k); seen.add(k); });
     }
     (headers || []).forEach(function (h) { if (!seen.has(h)) { arr.push(h); seen.add(h); } });
+    REQUIRED_STEP_FIELDS.forEach(function (h) { if (!seen.has(h)) { arr.push(h); seen.add(h); } });
     return arr;
 }
 
@@ -244,6 +252,11 @@ function renderDetailV2() {
             else if (kind === 'object') seedObj[h] = {};
             else seedObj[h] = '';
         });
+        REQUIRED_STEP_FIELDS.forEach(function (k) {
+            if (!(k in seedObj)) {
+                seedObj[k] = REQUIRED_STEP_KINDS[k] === 'array' ? [] : '';
+            }
+        });
         dt.rawRowGroups[ri].push(seedObj);
         rawRows = dt.rawRowGroups[ri];
         if (!S._dv2StepMods) S._dv2StepMods = new Set();
@@ -277,6 +290,10 @@ function renderDetailV2() {
                 +       (sub ? ' <span class="xs-dv2-step-id">(' + escapeHtml(sub) + ')</span>' : '')
                 +     '</span>';
             if (rawType !== 'object') {
+                html += '<span class="xs-dv2-step-move">'
+                    +     '<span class="xs-dv2-step-up' + (di === 0 ? ' disabled' : '') + '" title="上移" data-di="' + di + '">&#9650;</span>'
+                    +     '<span class="xs-dv2-step-dn' + (di === stepCount - 1 ? ' disabled' : '') + '" title="下移" data-di="' + di + '">&#9660;</span>'
+                    +   '</span>';
                 html += '<span class="xs-dv2-step-del" title="删除该步骤" data-di="' + di + '">×</span>';
             }
             html += '</div>';
@@ -317,10 +334,7 @@ function renderDetailV2() {
                 } else {
                     arr.forEach(function (item, ii) {
                             var text = (item == null) ? '' : (typeof item === 'object' ? JSON.stringify(item) : String(item));
-                            var isMultiline = text.indexOf('\n') >= 0 || text.length > 80;
-                            var expandBtn = isMultiline
-                                ? '<button class="xs-dv2-arr-expand-btn" data-field="' + escapeHtml(field) + '" data-ii="' + ii + '" title="展开查看全部">&#x25BC;</button>'
-                                : '';
+                            var expandBtn = '<button class="xs-dv2-arr-expand-btn" data-field="' + escapeHtml(field) + '" data-ii="' + ii + '" title="展开查看全部">&#x25BC;</button>';
                             inner += '<div class="xs-dv2-arr-item" data-field="' + escapeHtml(field) + '" data-ii="' + ii + '">'
                                 +      '<span class="xs-dv2-arr-idx">' + (ii + 1) + '</span>'
                                 +      '<textarea class="xs-dv2-arr-input" data-field="' + escapeHtml(field) + '" data-ii="' + ii + '" rows="1">' + escapeHtml(text) + '</textarea>'
@@ -335,10 +349,9 @@ function renderDetailV2() {
             // scalar
             var v = rawObj[field];
             var text = (v == null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
-            var isMultiline = text.indexOf('\n') >= 0 || text.length > 80;
             html += renderDv2FieldCard(field, 'scalar',
                 '<textarea class="xs-dv2-scalar" data-field="' + escapeHtml(field) + '" data-kind="scalar" rows="1">' + escapeHtml(text) + '</textarea>',
-                false, isMultiline
+                false
             );
         });
     }
@@ -348,7 +361,7 @@ function renderDetailV2() {
     bindDv2Events();
 }
 
-function renderDv2FieldCard(field, kind, innerHtml, withAddBtn, expandable) {
+function renderDv2FieldCard(field, kind, innerHtml, withAddBtn) {
     var typeLabel = (kind === 'array') ? '数组' : (kind === 'object' ? '对象' : '文本');
     var typeCls = (kind === 'array') ? 'is-array' : '';
     var actions = '';
@@ -357,10 +370,9 @@ function renderDv2FieldCard(field, kind, innerHtml, withAddBtn, expandable) {
             +       '<button class="xs-dv2-field-add" data-field="' + escapeHtml(field) + '">+ 添加项</button>'
             +     '</div>';
     }
-    var expandBtn = '';
-    if (expandable) {
-        expandBtn = '<button class="xs-dv2-expand-btn" data-field="' + escapeHtml(field) + '" title="展开查看全部">&#x25BC;</button>';
-    }
+    var expandBtn = (kind === 'scalar' || kind === 'object')
+        ? '<button class="xs-dv2-expand-btn" data-field="' + escapeHtml(field) + '" title="展开查看全部">&#x25BC;</button>'
+        : '';
     // 字段名：存在中文映射时第一行渲染中文（主），第二行渲染英文 key（辅，等宽小字）；
     //         无映射时仅渲染英文 key 单行，避免空白占位。
     var labels = (S && S.headerLabels) || {};
@@ -401,8 +413,12 @@ function bindDv2Events() {
     // 左栏：切换步骤
     body.querySelectorAll('.xs-dv2-step').forEach(function (el) {
         el.addEventListener('click', function (ev) {
-            // 点击删除按钮时不切换
-            if (ev.target && ev.target.classList && ev.target.classList.contains('xs-dv2-step-del')) return;
+            // 点击删除/移动按钮时不切换
+            if (ev.target && ev.target.classList) {
+                if (ev.target.classList.contains('xs-dv2-step-del') ||
+                    ev.target.classList.contains('xs-dv2-step-up') ||
+                    ev.target.classList.contains('xs-dv2-step-dn')) return;
+            }
             var di = parseInt(el.getAttribute('data-di'), 10);
             if (!isNaN(di)) { S._dv2ActiveStep = di; renderDetailV2(); }
         });
@@ -413,6 +429,21 @@ function bindDv2Events() {
             ev.stopPropagation();
             var di = parseInt(btn.getAttribute('data-di'), 10);
             if (!isNaN(di)) dv2DeleteStep(di);
+        });
+    });
+    // 左栏：上移 / 下移步骤
+    body.querySelectorAll('.xs-dv2-step-up:not(.disabled)').forEach(function (btn) {
+        btn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            var di = parseInt(btn.getAttribute('data-di'), 10);
+            if (!isNaN(di) && di > 0) dv2MoveStep(di, 'up');
+        });
+    });
+    body.querySelectorAll('.xs-dv2-step-dn:not(.disabled)').forEach(function (btn) {
+        btn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            var di = parseInt(btn.getAttribute('data-di'), 10);
+            if (!isNaN(di)) dv2MoveStep(di, 'down');
         });
     });
     // 左栏：添加 / 复制

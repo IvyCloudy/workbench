@@ -7,7 +7,7 @@
  *   字段类型推断 / 取样：dv2GetOrigSample / dv2CoerceScalar / _inferDetailFieldKind
  *   字段写入：dv2WriteScalar / dv2WriteArrayItem /
  *             dv2AddArrayItem / dv2DeleteArrayItem
- *   step 操作：dv2AddStep / dv2DuplicateStep / dv2DeleteStep
+ *   step 操作：dv2AddStep / dv2DuplicateStep / dv2DeleteStep / dv2MoveStep
  *   保存：saveDetailModal / updateDetailModInfo
  *
  * 渲染逻辑见 05c-detail-modal.js；启动 init() 在 05e-array-editor.js 末尾。
@@ -53,6 +53,43 @@ function dv2GetOrigSample(field, isArrayItem, ii) {
         if (origVal[k] !== null && origVal[k] !== undefined && origVal[k] !== '') return origVal[k];
     }
     return undefined;
+}
+
+// 扫描所有行/步骤 + 备份数据，为每个标量字段建立类型映射（'number' / 'boolean' / 'string'）
+// 排除当前行的步骤（live），避免循环自引用；同时扫描备份数据作为当前行的类型参考
+function _buildScalarTypeMap(dt, excludeRi, backupRaws) {
+    var map = {};
+    // 收集所有要扫描的步骤列表（每项是 {step} 对象）
+    var allSteps = [];
+    // a) 其他行的 live 数据
+    if (dt) {
+        var raws = dt.rawRowGroups || [];
+        for (var ri = 0; ri < raws.length; ri++) {
+            if (ri === excludeRi) continue;
+            var grp = raws[ri];
+            if (!Array.isArray(grp)) continue;
+            for (var di = 0; di < grp.length; di++) { allSteps.push(grp[di]); }
+        }
+    }
+    // b) 当前行的备份数据（弹窗打开前的原始值，避免被编辑污染）
+    if (Array.isArray(backupRaws)) {
+        for (var i = 0; i < backupRaws.length; i++) { allSteps.push(backupRaws[i]); }
+    }
+    // c) 扫描所有步骤
+    for (var si = 0; si < allSteps.length; si++) {
+        var step = allSteps[si];
+        if (!step || typeof step !== 'object') continue;
+        Object.keys(step).forEach(function (f) {
+            if (map[f] === 'string') return;
+            var v = step[f];
+            if (v == null || v === '') return;
+            if (Array.isArray(v) || typeof v === 'object') return;
+            var t = typeof v;
+            if (!map[f]) { map[f] = t; }
+            else if (map[f] !== t) { map[f] = 'string'; }
+        });
+    }
+    return map;
 }
 
 // 按原始样本类型，把弹窗里的字符串值还原为原类型；未知类型保留字符串
@@ -169,6 +206,12 @@ function dv2AddStep() {
         else if (kind === 'object') newStep[h] = {};
         else newStep[h] = '';
     });
+    // 确保必备字段始终存在（即使 headers 中没有）
+    REQUIRED_STEP_FIELDS.forEach(function (k) {
+        if (!(k in newStep)) {
+            newStep[k] = REQUIRED_STEP_KINDS[k] === 'array' ? [] : '';
+        }
+    });
     dt.rawRowGroups[ri].push(newStep);
     S._dv2ActiveStep = dt.rawRowGroups[ri].length - 1;
     if (!S._dv2StepMods) S._dv2StepMods = new Set();
@@ -187,6 +230,12 @@ function dv2DuplicateStep() {
     if (!src) { showToast('请先选择要复制的步骤', 'error'); return; }
     var clone;
     try { clone = JSON.parse(JSON.stringify(src)); } catch (_) { clone = {}; }
+    // 确保必备字段始终存在
+    REQUIRED_STEP_FIELDS.forEach(function (k) {
+        if (!(k in clone)) {
+            clone[k] = REQUIRED_STEP_KINDS[k] === 'array' ? [] : '';
+        }
+    });
     rows.splice(S._dv2ActiveStep + 1, 0, clone);
     // 修改集合：所有 > 当前 的索引整体后移，并把新行标记为已修改
     if (!S._dv2StepMods) S._dv2StepMods = new Set();
@@ -224,6 +273,36 @@ function dv2DeleteStep(di) {
         renderDetailV2();
         updateDetailModInfo();
     });
+}
+
+function dv2MoveStep(di, direction) {
+    var dt = getCurrentDetailTable();
+    var ri = S._detailRowIdx;
+    if (!dt || ri < 0) return;
+    var rows = (dt.rawRowGroups && dt.rawRowGroups[ri]) || [];
+    if (di < 0 || di >= rows.length) return;
+    var targetIdx = direction === 'up' ? di - 1 : di + 1;
+    if (targetIdx < 0 || targetIdx >= rows.length) return;
+    // 交换两个 step
+    var tmp = rows[di];
+    rows[di] = rows[targetIdx];
+    rows[targetIdx] = tmp;
+    // 修正修改集合索引
+    if (!S._dv2StepMods) S._dv2StepMods = new Set();
+    var ns = new Set();
+    S._dv2StepMods.forEach(function (k) {
+        if (k === di) ns.add(targetIdx);
+        else if (k === targetIdx) ns.add(di);
+        else ns.add(k);
+    });
+    ns.add(di);
+    ns.add(targetIdx);
+    S._dv2StepMods = ns;
+    // 更新当前选中步骤
+    if (S._dv2ActiveStep === di) S._dv2ActiveStep = targetIdx;
+    else if (S._dv2ActiveStep === targetIdx) S._dv2ActiveStep = di;
+    renderDetailV2();
+    updateDetailModInfo();
 }
 
 function saveDetailModal() {
@@ -306,7 +385,34 @@ function saveDetailModal() {
         S._detailModCellKeys.add(ri + ',' + colIdx);
     }
 
-    // 3) 落盘：diffPushSnapshot 已通过 detailTables.rawRowGroups 签名比对明细变更，
+    // 3) 落盘前：标量类型修正 + 清除值为空的非必需字段（'' / []），避免写回空值到 YAML
+    var scalarTypeMap = _buildScalarTypeMap(dt, ri, S._detailBackup ? S._detailBackup.raws : null);
+    rawRows.forEach(function (step) {
+        if (!step || typeof step !== 'object') return;
+        // a) 标量字段类型修正：从已有步骤推断数字/布尔类型并做转换
+        Object.keys(scalarTypeMap).forEach(function (f) {
+            var v = step[f];
+            if (v == null) return;
+            var t = scalarTypeMap[f];
+            if (t === 'number' && typeof v === 'string' && v !== '') {
+                var n = Number(v);
+                if (!isNaN(n)) step[f] = n;
+            } else if (t === 'boolean' && typeof v === 'string') {
+                var ls = v.trim().toLowerCase();
+                if (ls === 'true') step[f] = true;
+                else if (ls === 'false') step[f] = false;
+            }
+        });
+        // b) 清除值为空的非必需字段
+        STRIP_IF_EMPTY_FIELDS.forEach(function (k) {
+            var v = step[k];
+            if (v === '' || v === null || v === undefined || (Array.isArray(v) && v.length === 0)) {
+                delete step[k];
+            }
+        });
+    });
+
+    // 4) 落盘：diffPushSnapshot 已通过 detailTables.rawRowGroups 签名比对明细变更，
     //    不再需要临时替换单元格值为 JSON。直接发送 displayText（如 "[2 项]"），
     //    避免 JSON 串回流污染前端 S.data 的语义一致性。
     saveFile();

@@ -318,12 +318,15 @@ function renderDetailV2() {
         var fields = dv2FieldOrder(rawObj, dt.headers);
         fields.forEach(function (field) {
             var kind = dv2DetectKind(rawObj, field);
-            // object 子结构暂以 JSON 串展示（罕见场景，沿用旧行为）
+            // 嵌套对象：以 JSON 文本域展示，支持格式化 + 语法高亮
             if (kind === 'object') {
                 var jsonStr = '';
                 try { jsonStr = JSON.stringify(rawObj[field], null, 2); } catch (_) { jsonStr = String(rawObj[field] || ''); }
                 html += renderDv2FieldCard(field, 'object',
-                    '<textarea class="xs-dv2-scalar" data-field="' + escapeHtml(field) + '" data-kind="object" rows="4">' + escapeHtml(jsonStr) + '</textarea>');
+                    '<div class="xs-dv2-obj-wrap">'
+                    +   '<textarea class="xs-dv2-scalar" data-field="' + escapeHtml(field) + '" data-kind="object" rows="4">' + escapeHtml(jsonStr) + '</textarea>'
+                    +   '<pre class="xs-dv2-obj-hl" data-field="' + escapeHtml(field) + '" style="display:none"><code></code></pre>'
+                    + '</div>');
                 return;
             }
             if (kind === 'array') {
@@ -373,6 +376,12 @@ function renderDv2FieldCard(field, kind, innerHtml, withAddBtn) {
     var expandBtn = (kind === 'scalar' || kind === 'object')
         ? '<button class="xs-dv2-expand-btn" data-field="' + escapeHtml(field) + '" title="展开查看全部">&#x25BC;</button>'
         : '';
+    var formatBtn = (kind === 'object')
+        ? '<button class="xs-dv2-format-btn" data-field="' + escapeHtml(field) + '" title="格式化 JSON">{ }</button>'
+        : '';
+    var hlBtn = (kind === 'object')
+        ? '<button class="xs-dv2-hl-btn" data-field="' + escapeHtml(field) + '" title="语法高亮">&#x2728;</button>'
+        : '';
     // 字段名：存在中文映射时第一行渲染中文（主），第二行渲染英文 key（辅，等宽小字）；
     //         无映射时仅渲染英文 key 单行，避免空白占位。
     var labels = (S && S.headerLabels) || {};
@@ -393,6 +402,8 @@ function renderDv2FieldCard(field, kind, innerHtml, withAddBtn) {
         +      nameHtml
         +      '<span class="xs-dv2-field-type ' + typeCls + '">' + typeLabel + '</span>'
         +      actions
+        +      formatBtn
+        +      hlBtn
         +      expandBtn
         +    '</div>'
         +    '<div class="xs-dv2-field-body">' + innerHtml + '</div>'
@@ -477,6 +488,24 @@ function bindDv2Events() {
                     ta.style.overflowY = '';
                 }
             }
+        });
+    });
+
+    // 对象字段：格式化 JSON
+    body.querySelectorAll('.xs-dv2-format-btn').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var field = btn.getAttribute('data-field');
+            dv2FormatJson(field);
+        });
+    });
+
+    // 对象字段：高亮/编辑切换
+    body.querySelectorAll('.xs-dv2-hl-btn').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var field = btn.getAttribute('data-field');
+            dv2ToggleHighlight(field);
         });
     });
 
@@ -579,6 +608,61 @@ function autoGrowAllTextareas() {
     var expanded = body.querySelectorAll('textarea.expanded');
     if (expanded.length > 0) {
         expanded.forEach(function (ta) { autoGrowTextarea(ta); });
+    }
+}
+
+// JSON 语法高亮：将 JSON 字符串转为带颜色标记的 HTML
+function highlightJson(str) {
+    var html = escapeHtml(str);
+    // key 着色（蓝色）："...":
+    html = html.replace(/(&quot;[^&]*?&quot;)(\s*:)/g, '<span class="hl-key">$1</span>$2');
+    // 字符串值着色（绿色）
+    html = html.replace(/:(\s*)&quot;([^&]*?)&quot;/g, ':$1<span class="hl-string">&quot;$2&quot;</span>');
+    // 数字着色（橙色）
+    html = html.replace(/:(\s*)(\d+\.?\d*)/g, ':$1<span class="hl-number">$2</span>');
+    // boolean/null 着色（紫色）
+    html = html.replace(/:(\s*)(true|false|null)/g, ':$1<span class="hl-bool">$2</span>');
+    return html;
+}
+
+// 对象字段：格式化 JSON
+function dv2FormatJson(field) {
+    var fieldEl = document.querySelector('.xs-dv2-field[data-field="' + field + '"]');
+    var wrap = fieldEl ? fieldEl.querySelector('.xs-dv2-obj-wrap') : null;
+    var ta = wrap ? wrap.querySelector('textarea') : null;
+    if (!ta) return;
+    try {
+        var obj = JSON.parse(ta.value);
+        ta.value = JSON.stringify(obj, null, 2);
+        ta.dispatchEvent(new Event('change'));
+        // 如果高亮预览可见，同步刷新
+        var pre = wrap ? wrap.querySelector('.xs-dv2-obj-hl') : null;
+        if (pre && pre.style.display !== 'none') {
+            pre.querySelector('code').innerHTML = highlightJson(ta.value);
+        }
+    } catch (_) { /* JSON 格式不合法，忽略 */ }
+}
+
+// 对象字段：切换高亮/编辑模式
+function dv2ToggleHighlight(field) {
+    var fieldEl = document.querySelector('.xs-dv2-field[data-field="' + field + '"]');
+    var wrap = fieldEl ? fieldEl.querySelector('.xs-dv2-obj-wrap') : null;
+    var ta = wrap ? wrap.querySelector('textarea') : null;
+    var pre = wrap ? wrap.querySelector('.xs-dv2-obj-hl') : null;
+    var hlBtn = fieldEl ? fieldEl.querySelector('.xs-dv2-hl-btn') : null;
+    if (!ta || !pre) return;
+    var isHighlight = pre.style.display !== 'none';
+    if (isHighlight) {
+        // 切换回编辑模式
+        pre.style.display = 'none';
+        ta.style.display = '';
+        if (hlBtn) { hlBtn.innerHTML = '&#x2728;'; hlBtn.title = '语法高亮'; }
+    } else {
+        // 切换到高亮模式
+        ta.style.display = 'none';
+        pre.style.display = '';
+        pre.querySelector('code').innerHTML = highlightJson(ta.value);
+        if (hlBtn) { hlBtn.innerHTML = '&#x270e;'; hlBtn.title = '编辑'; }
     }
 }
 

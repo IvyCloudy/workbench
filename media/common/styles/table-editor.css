@@ -498,6 +498,15 @@ tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-frozen{background:#fbd9d9}
 .xs-dv2-expand-btn{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;cursor:pointer;font-size:12px;color:#667788;border:1px solid #d0d7de;border-radius:4px;background:#f6f8fa;flex-shrink:0;transition:all .15s}
 .xs-dv2-expand-btn:hover{color:var(--p);background:#e8f0fe;border-color:var(--p)}
 .xs-dv2-field.expanded .xs-dv2-expand-btn{color:var(--p);background:#e8f0fe;border-color:var(--p)}
+/* 对象字段：格式化 + 高亮按钮 */
+.xs-dv2-format-btn,.xs-dv2-hl-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;cursor:pointer;font-size:12px;color:#667788;border:1px solid #d0d7de;border-radius:4px;background:#f6f8fa;flex-shrink:0;transition:all .15s;margin-left:4px}
+/* JSON 语法高亮 */
+.xs-dv2-obj-hl{padding:8px 12px;margin:0;background:#fafbfc;border:1px solid #d0d7de;border-radius:4px;font-family:'SF Mono',Monaco,'Cascadia Code',Consolas,monospace;font-size:13px;line-height:1.45;overflow:auto;max-height:420px;white-space:pre-wrap;word-break:break-all}
+.xs-dv2-obj-hl code{font-family:inherit;font-size:inherit}
+.hl-key{color:#0550ae}
+.hl-string{color:#0a3069}
+.hl-number{color:#cf222e}
+.hl-bool{color:#8250df}
 .xs-dv2-field-body{padding:8px 12px}
 
 /* 标量字段：默认单行可滚动，展开后自适应 */

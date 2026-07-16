@@ -35,7 +35,25 @@ var PROTECTED_COLS = [
     'description',
     'priority',
     'test_type',
-    'steps'
+    'steps',
+    'type',
+    'key_flag',
+    'project_des',
+    'plan_exec_num',
+    // CSV 中文表头（与 examples/case_example.csv 表头一致）
+    '路径',
+    '名称',
+    '案例描述',
+    '前置条件',
+    '步骤描述',
+    '预期结果',
+    '案例类型',
+    '优先级',
+    '执行方式',
+    // 推送案例相关字段（pushDataMapper 中 fieldOrDefault 使用的额外字段）
+    '关键案例',
+    '项目说明',
+    '计划执行次数'
 ];
 
 

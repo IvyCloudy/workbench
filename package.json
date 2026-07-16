@@ -270,7 +270,10 @@
             "db_expected": "数据检查",
             "testCaseDesc": "案例描述",
             "description":"案例描述",
-            "test_type": "执行方式"
+            "test_type": "执行方式",
+            "key_flag": "关键案例",
+            "project_des": "项目说明",
+            "plan_exec_num": "计划执行次数"
           },
           "additionalProperties": { "type": "string" },
           "markdownDescription": "测试案例编辑器表头**英→中**映射（仅用于显示，不会写入数据文件）。\n\n- key 为数据文件中的英文字段名，value 为中文显示名。\n- 优先级（高 → 低）：**工作区设置 > 用户设置 > 插件内置默认值**。\n- 同名 key 在高优先级中出现会覆盖低优先级；未配置的字段表头只显示英文 key。\n- 插件已内置常见字段（如 `testcase_id`、`path`、`priority`、`steps` 等），可直接覆盖或扩展。\n\n示例：\n```json\n{\n  \"testcase_id\": \"用例ID\",\n  \"path\": \"路径\"\n}\n```"
@@ -288,7 +291,10 @@
             "前置条件": "preconditions",
             "预期结果": "expected",
             "步骤描述": "description",
-            "执行方式": "test_type"
+            "执行方式": "test_type",
+            "关键案例": "key_flag",
+            "项目说明": "project_des",
+            "计划执行次数": "plan_exec_num"
           },
           "additionalProperties": { "type": "string" },
           "markdownDescription": "推送时**中→英**反向映射（中文表头还原为英文字段名）。\n\n- key 为 CSV 模板/examples/case_example.csv 中的中文表头名，value 为推送给后端接口时所使用的英文字段名。\n- 优先级（高 → 低）：**工作区设置 > 用户设置 > 插件内置默认值**。\n- 推送时若数据的 key 匹配到此映射，自动替换为对应英文 key；未匹配到的 key 保持原样。\n- 若 CSV 模板新增了中文表头，在此处补充一条映射即可，无需修改代码重编译。\n\n示例：\n```json\n{\n  \"优先级\": \"priority\",\n  \"前置条件\": \"preconditions\"\n}\n```"

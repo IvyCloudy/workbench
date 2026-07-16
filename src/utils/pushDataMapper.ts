@@ -105,6 +105,65 @@ function joinLines(v: any): string {
     return toLines(v).join('\n');
 }
 
+/**
+ * 校验并标准化路径：空值返回空字符串；非空非字符串/仅空白/标准化后无效 → 抛错；
+ * 合法路径 → 去掉开头 /，确保结尾有 /。
+ */
+function normalizePath(path: string): string {
+    if (path == null || path === '') return '';
+    if (typeof path !== 'string') {
+        throw new Error('路径类型错误：期望字符串，实际为 ' + typeof path);
+    }
+    var p = path.trim();
+    if (!p) {
+        throw new Error('路径为空或仅含空白字符');
+    }
+    if (p.charAt(0) === '/') p = p.slice(1);
+    if (p.charAt(p.length - 1) !== '/') p = p + '/';
+    if (!p || p === '/') {
+        throw new Error('路径标准化后无效，原始值: "' + path + '"');
+    }
+    return p;
+}
+
+/**
+ * 取字段值：若字段存在且值不为空则使用原值（类型对齐默认值），否则返回默认值。
+ * 默认判空规则：null / undefined / ''（空字符串），也可通过 emptyFn 自定义。
+ *
+ * 类型对齐规则（以 fallback 的 typeof 为准）：
+ *   - fallback 是 string  → 原值非字符串时走 toStr()（number/boolean/object 统一转字符串）
+ *   - fallback 是 number  → 原值尝试 Number()，非法数字（如 "abc"）回退到原值
+ *   - fallback 是 boolean → 原值尝试 "true"/"false" → true/false
+ *   - 类型已一致或无法匹配 → 原样返回
+ *
+ * @example
+ *   fieldOrDefault(row, 'name', '未命名')            // string 兜底
+ *   fieldOrDefault(row, 'type', '功能点类')           // string 兜底
+ *   fieldOrDefault(row, 'count', 0, v => v == null)  // number 兜底，200 → 200
+ */
+export function fieldOrDefault(row: Record<string, any>, field: string, fallback: any, emptyFn?: (v: any) => boolean): any {
+    if (!row || typeof row !== 'object') return fallback;
+    if (!Object.prototype.hasOwnProperty.call(row, field)) return fallback;
+    var v = row[field];
+    var isEmpty = emptyFn || function (x: any) { return x == null || x === ''; };
+    if (isEmpty(v)) return fallback;
+    // 类型已一致，直接返回
+    if (typeof v === typeof fallback) return v;
+    // 按 fallback 类型对齐
+    if (typeof fallback === 'string') return toStr(v);
+    if (typeof fallback === 'number') {
+        var n = Number(v);
+        return isNaN(n) ? v : n;
+    }
+    if (typeof fallback === 'boolean') {
+        var s = String(v).trim().toLowerCase();
+        if (s === 'true') return true;
+        if (s === 'false') return false;
+        return v;
+    }
+    return v;
+}
+
 /** 中文表头识别：只要行里出现任一中文关键键即视为 CSV 中文风格 */
 function isChineseHeaderRow(row: Record<string, any>): boolean {
     if (!row || typeof row !== 'object') return false;
@@ -178,20 +237,20 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
     const execMethod = toStr(row['执行方式']).trim();
     const testType = (!execMethod || execMethod === '手工') ? '手工' : '自动化';
 
-    // type：案例类型 → 空兜底为「功能点类」
-    const typeStr = toStr(row['案例类型']).trim();
-
     return {
         sourceId,
-        testCasePath: toStr(row['路径']),
-        testCaseName: toStr(row['名称']),
+        testCasePath: normalizePath(row['路径']),
+        testCaseName: fieldOrDefault(row, '名称', ''),
         testCaseDes:  unescapeCsvCell(row['案例描述']),
         testType,
-        type:         typeStr || '功能点类',
-        priority:     toStr(row['优先级']),
+        type:         fieldOrDefault(row, '案例类型', '功能点类'),
+        priority:     fieldOrDefault(row, '优先级', '低'),
         preCondition: nl2br(unescapeCsvCell(row['前置条件'])),
         description,
         expected,
+        keyFlag: fieldOrDefault(row, '关键案例', '否'),
+        projextDes: fieldOrDefault(row, '项目说明', ''),
+        planExecNum: fieldOrDefault(row, '计划执行次数', 1)
     };
 }
 
@@ -246,14 +305,17 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
 
     return {
         sourceId,
-        testCasePath: toStr(row['path']),
-        testCaseName: toStr(row['name']),
-        testCaseDes:  toStr(row['description']),
+        testCasePath: normalizePath(row['path']),
+        testCaseName: fieldOrDefault(row, 'name', ''),
+        testCaseDes:  fieldOrDefault(row, 'description', ''),
         testType,
         type:         '功能点类',
-        priority:     toStr(row['priority']),
+        priority:     fieldOrDefault(row, 'priority', '低'),
         preCondition: nl2br(joinLines(row['preconditions'])),
         description,
         expected,
+        keyFlag: fieldOrDefault(row, 'key_flag', '否'),
+        projextDes: fieldOrDefault(row, 'project_des', ''),
+        planExecNum: fieldOrDefault(row, 'plan_exec_num', 1)
     };
 }

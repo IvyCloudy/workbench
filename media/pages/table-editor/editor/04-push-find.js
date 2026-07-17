@@ -284,8 +284,8 @@ function markText(node, kw, isActive) {
         html += '<mark class="' + cls + '">' + escapeHtml(text.slice(hit, hit + kw.length)) + '</mark>';
         i = hit + kw.length;
     }
-    // 如果单元格内是 detail 链接，跳过 mark（保留链接结构）
-    var detailSpan = node.querySelector('.xs-detail-link');
+    // 如果单元格内是 detail 链接或已展开步骤块，跳过 mark（保留结构）
+    var detailSpan = node.querySelector('.xs-detail-link, .xs-step-expanded');
     if (detailSpan) return;
     node.innerHTML = html;
 }
@@ -294,7 +294,7 @@ function clearFindHighlight() {
     document.querySelectorAll('td.xs-editable.highlight').forEach(function (td) {
         td.classList.remove('highlight', 'highlight-active');
         var wrap = td.querySelector('.xs-cell-wrap');
-        if (wrap && !wrap.querySelector('.xs-detail-link')) {
+        if (wrap && !wrap.querySelector('.xs-detail-link, .xs-step-expanded')) {
             // 还原为纯文本
             wrap.innerHTML = escapeHtml(wrap.textContent || '');
         }

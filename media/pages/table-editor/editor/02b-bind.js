@@ -195,6 +195,70 @@ function bindToolbar() {
             focusActiveMatch();
         });
     }
+    // 展开/收起步骤按钮：切换展开模式（内联子表格编辑）与非展开模式（点击弹窗编辑）
+    var expandStepsBtn = document.getElementById('expandStepsBtn');
+    if (expandStepsBtn) {
+        expandStepsBtn.addEventListener('click', function () {
+            var headers = (S.data && S.data.headers) || [];
+            var stepsCol = headers.indexOf('steps');
+            if (stepsCol < 0) {
+                if (typeof showToast === 'function') showToast('未找到 steps 列', 'error');
+                return;
+            }
+            var dt = (typeof getDetailTableByCol === 'function') ? getDetailTableByCol(stepsCol) : null;
+            if (!dt || !dt.rawRowGroups) {
+                if (typeof showToast === 'function') showToast('未找到 steps 明细数据', 'error');
+                return;
+            }
+            var rows = (S.data && S.data.rows) || [];
+            if (S._stepsExpanded) {
+                // ── 收起：恢复为非展开模式 ──
+                var collapsedCount = 0;
+                for (var ri2 = 0; ri2 < rows.length; ri2++) {
+                    var raws2 = dt.rawRowGroups[ri2];
+                    if (!Array.isArray(raws2) || raws2.length === 0) continue;
+                    var count = raws2.length;
+                    var collapsed = count > 0 ? '[' + count + ' 项]' : '[]';
+                    if (S.data.rows[ri2][stepsCol] !== collapsed) {
+                        S.data.rows[ri2][stepsCol] = collapsed;
+                        collapsedCount++;
+                    }
+                }
+                S._stepsExpanded = false;
+                expandStepsBtn.textContent = '展开步骤';
+                if (collapsedCount > 0) { renderTable(); }
+                if (collapsedCount > 0 && typeof showToast === 'function') {
+                    showToast('已收起 ' + collapsedCount + ' 行步骤', 'info');
+                }
+            } else {
+                // ── 展开：每步骤内联描述+预期结果，层次自然清晰 ──
+                var expandedCount = 0;
+                for (var ri = 0; ri < rows.length; ri++) {
+                    var raws = dt.rawRowGroups[ri];
+                    if (!Array.isArray(raws) || raws.length === 0) continue;
+                    var combined = _buildStepCombined(raws);
+                    if (combined) {
+                        S.data.rows[ri][stepsCol] = combined;
+                        expandedCount++;
+                    }
+                }
+                S._stepsExpanded = true;
+                expandStepsBtn.textContent = '收起步骤';
+                if (expandedCount > 0) { renderTable(); }
+                // 展开后记录 steps 列宽为 404px（5 子列之和），供持久化和收起/重新展开时使用
+                // 注意：DOM 列宽由 _buildSkeletonHtml 的 colgroup 直接设置（stepsSubW 硬编码），
+                //       无需再操作 <col> 元素，避免时序问题导致首次展开重叠。
+                setTimeout(function () {
+                    var currentW = S.colWidths && S.colWidths[stepsCol] ? S.colWidths[stepsCol] : 160;
+                    if (currentW < 404) {
+                        S.colWidths[stepsCol] = 404;
+                        if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
+                    }
+                }, 100);
+                if (typeof showToast === 'function') showToast('已展开 ' + expandedCount + ' 行步骤', 'info');
+            }
+        });
+    }
 }
 
 function bindDocument() {
@@ -527,6 +591,13 @@ function bindDocument() {
             }
         }
     });
+    // 子表格编辑：focusout 捕获子表格单元格编辑完成（blur 不冒泡，用 focusout 代替）
+    document.addEventListener('focusout', function (e) {
+        var td = e.target;
+        if (!td || !td.closest || !td.closest('.xse-table')) return;
+        if (td.getAttribute('contenteditable') !== 'true') return;
+        setTimeout(function () { _handleSubTableCellEdit(td); }, 0);
+    });
     bindDetailModal();
     bindXsPrompt();
     bindCloseFindOnTableClick();
@@ -556,10 +627,53 @@ function bindTable() {
             if (!isNaN(ci)) openColFilter(ci, fb);
             return;
         }
-        // 2) 明细链接：必须先于 cell click 处理
+        // 2a) 子表格操作按钮（复制/添加/删除步骤）：必须在展开块处理之前
+        var xseBtnCopy = t.closest && t.closest('.xse-btn-copy');
+        if (xseBtnCopy) {
+            e.stopPropagation();
+            e.preventDefault();
+            var copyStep = parseInt(xseBtnCopy.getAttribute('data-xse-copy'), 10);
+            var xseContainer = xseBtnCopy.closest('.xs-step-expanded');
+            if (xseContainer && !isNaN(copyStep)) {
+                var dri0 = parseInt(xseContainer.getAttribute('data-detail-row'), 10);
+                var dci0 = parseInt(xseContainer.getAttribute('data-detail-col'), 10);
+                _copySubStep(dri0, dci0, copyStep);
+            }
+            return;
+        }
+        var xseBtnDel = t.closest && t.closest('.xse-btn-del');
+        if (xseBtnDel) {
+            e.stopPropagation();
+            e.preventDefault();
+            var delStep = parseInt(xseBtnDel.getAttribute('data-xse-del'), 10);
+            var xseContainer = xseBtnDel.closest('.xs-step-expanded');
+            if (xseContainer && !isNaN(delStep)) {
+                var dri2 = parseInt(xseContainer.getAttribute('data-detail-row'), 10);
+                var dci2 = parseInt(xseContainer.getAttribute('data-detail-col'), 10);
+                _delSubStep(dri2, dci2, delStep);
+            }
+            return;
+        }
+        var xseBtnAdd = t.closest && t.closest('.xse-btn-add');
+        if (xseBtnAdd) {
+            e.stopPropagation();
+            e.preventDefault();
+            var addStep = parseInt(xseBtnAdd.getAttribute('data-xse-add'), 10);
+            var xseContainer2 = xseBtnAdd.closest('.xs-step-expanded');
+            if (xseContainer2 && !isNaN(addStep)) {
+                var dri3 = parseInt(xseContainer2.getAttribute('data-detail-row'), 10);
+                var dci3 = parseInt(xseContainer2.getAttribute('data-detail-col'), 10);
+                _addSubStep(dri3, dci3, addStep);
+            }
+            return;
+        }
+        // 2b) 明细链接（含已展开步骤的结构化块）：必须先于 cell click 处理
         var dlink = t.closest && t.closest('.xs-detail-link');
+        if (!dlink) dlink = t.closest && t.closest('.xs-step-expanded');
         if (dlink) {
             e.stopPropagation();
+            // 展开模式下子表格内联编辑，不弹出明细弹窗；操作按钮已在 2a 处理
+            if (S._stepsExpanded) return;
             var dri = parseInt(dlink.getAttribute('data-detail-row'), 10);
             var dci = parseInt(dlink.getAttribute('data-detail-col'), 10);
             var headers = (S.data && S.data.headers) || [];
@@ -606,9 +720,12 @@ function bindTable() {
             }
             return;
         }
-        // 单元格双击 → 编辑
-        var cellEl = t.closest && t.closest('.xs-editable');
-        if (cellEl) { onCellDblClick(_pseudoEvt(e, cellEl)); return; }
+        // 单元格双击 → 编辑（展开模式子表格内联编辑时不触发外层单元格编辑）
+        var inSubTable2 = t.closest && t.closest('.xse-table');
+        if (!inSubTable2) {
+            var cellEl = t.closest && t.closest('.xs-editable');
+            if (cellEl) { onCellDblClick(_pseudoEvt(e, cellEl)); return; }
+        }
     });
 
     // ---------- contextmenu ----------
@@ -651,12 +768,15 @@ function bindTable() {
             onRowNumMouseDown(_pseudoEvt(e, cbTd2));
             return;
         }
-        // 单元格 mousedown：矩形选区拖选
-        var cellEl2 = t.closest && t.closest('.xs-editable');
-        if (cellEl2) {
-            // 主键才启动拖选；右键交给 contextmenu 处理
-            if (e.button === 0) onCellMouseDown(_pseudoEvt(e, cellEl2));
-            return;
+        // 单元格 mousedown：矩形选区拖选（展开模式子表格内不触发外层选区）
+        var inSubTable3 = t.closest && t.closest('.xse-table');
+        if (!inSubTable3) {
+            var cellEl2 = t.closest && t.closest('.xs-editable');
+            if (cellEl2) {
+                // 主键才启动拖选；右键交给 contextmenu 处理
+                if (e.button === 0) onCellMouseDown(_pseudoEvt(e, cellEl2));
+                return;
+            }
         }
     });
 }
@@ -681,4 +801,231 @@ function _pseudoEvt(e, currentTarget) {
         preventDefault: function () { e.preventDefault(); },
         stopPropagation: function () { e.stopPropagation(); }
     };
+}
+
+// ==================== 步骤展开工具函数 ====================
+// 输出四列分隔格式：序号 | 步骤描述 | 数据 | 预期结果
+// 每步骤用【步骤描述】标记起始，【数据】【预期结果】分隔后续内容
+function _buildStepCombined(raws) {
+    if (!Array.isArray(raws) || raws.length === 0) return '';
+    return raws.map(function (step) {
+        if (!step || typeof step !== 'object') return '';
+        var lines = [];
+        var sid = String(step.id != null ? step.id : '');
+
+        // ── 【步骤描述】+ 序号 ──
+        var op = (step.operation != null ? String(step.operation) : '').trim();
+        lines.push('【步骤描述】');
+        lines.push('步骤' + sid + (op ? ' ' + op : ''));
+
+        // ── 数据（data 内容） ──
+        var dataItems = [];
+        var d = step.data;
+        if (Array.isArray(d)) {
+            d.forEach(function (item) {
+                var s = item != null ? String(item).trim() : '';
+                if (s) dataItems.push(s);
+            });
+        } else if (d != null && String(d).trim() !== '') {
+            String(d).split(/\r?\n/).forEach(function (l) {
+                var s = l.trim();
+                if (s) dataItems.push(s);
+            });
+        }
+        lines.push('【数据】');
+        dataItems.forEach(function (v) { lines.push(v); });
+
+        // ── 预期结果 ──
+        var ui = _toExpectedLines(step.ui_expected);
+        var api = _toExpectedLines(step.api_expected);
+        var db = _toExpectedLines(step.db_expected);
+        lines.push('【预期结果】');
+        // 始终输出三个分组头，空分组也保留标题，保证重新解析后展示完整
+        lines.push('【UI检查】'); ui.forEach(function (v) { lines.push(String(v)); });
+        lines.push('【接口调用】'); api.forEach(function (v) { lines.push(String(v)); });
+        lines.push('【数据检查】'); db.forEach(function (v) { lines.push(String(v)); });
+
+        return lines.join('\n');
+    }).filter(function (s) { return s !== ''; }).join('\n');
+}
+
+function _toExpectedLines(v) {
+    if (v == null) return [];
+    if (Array.isArray(v)) {
+        return v.filter(function (x) { return x != null && String(x).trim() !== ''; });
+    }
+    var s = String(v).trim();
+    return s ? [s] : [];
+}
+
+// ==================== 子表格步骤增删 ====================
+// 在 rawRowGroups 指定索引后插入一个新空步骤，重建合并文本后 patchCell 原地刷新
+function _addSubStep(ri, ci, stepIdx) {
+    var dt = (typeof getDetailTableByCol === 'function') ? getDetailTableByCol(ci) : null;
+    if (!dt || !dt.rawRowGroups) return;
+    if (!dt.rawRowGroups[ri]) dt.rawRowGroups[ri] = [];
+    var raws = dt.rawRowGroups[ri];
+    if (stepIdx < 0 || stepIdx >= raws.length) return;
+    raws.splice(stepIdx + 1, 0, { id: '', operation: '', data: [], ui_expected: [], api_expected: [], db_expected: [] });
+    // 重新编号
+    for (var i = 0; i < raws.length; i++) {
+        raws[i].id = String(i + 1);
+    }
+    _syncSubSteps(ri, ci, raws);
+}
+
+// 复制 rawRowGroups 中指定索引的步骤（深拷贝），插入其后，重建合并文本后 patchCell 原地刷新
+function _copySubStep(ri, ci, stepIdx) {
+    var dt = (typeof getDetailTableByCol === 'function') ? getDetailTableByCol(ci) : null;
+    if (!dt || !dt.rawRowGroups) return;
+    var raws = dt.rawRowGroups[ri];
+    if (!Array.isArray(raws) || stepIdx < 0 || stepIdx >= raws.length) return;
+    // 深拷贝原步骤对象
+    var src = raws[stepIdx];
+    var cloned = {
+        id: '',
+        operation: String(src.operation != null ? src.operation : ''),
+        data: Array.isArray(src.data) ? src.data.slice() : [],
+        ui_expected: Array.isArray(src.ui_expected) ? src.ui_expected.slice() : [],
+        api_expected: Array.isArray(src.api_expected) ? src.api_expected.slice() : [],
+        db_expected: Array.isArray(src.db_expected) ? src.db_expected.slice() : []
+    };
+    raws.splice(stepIdx + 1, 0, cloned);
+    // 重新编号
+    for (var i = 0; i < raws.length; i++) {
+        raws[i].id = String(i + 1);
+    }
+    _syncSubSteps(ri, ci, raws);
+}
+
+// 删除 rawRowGroups 中指定索引的步骤，重建合并文本后 patchCell 原地刷新
+function _delSubStep(ri, ci, stepIdx) {
+    var dt = (typeof getDetailTableByCol === 'function') ? getDetailTableByCol(ci) : null;
+    if (!dt || !dt.rawRowGroups) return;
+    var raws = dt.rawRowGroups[ri];
+    if (!Array.isArray(raws) || stepIdx < 0 || stepIdx >= raws.length) return;
+    raws.splice(stepIdx, 1);
+    // 重新编号
+    for (var i = 0; i < raws.length; i++) {
+        raws[i].id = String(i + 1);
+    }
+    _syncSubSteps(ri, ci, raws);
+}
+
+// 共享：重建合并文本、同步主表数据、标记修改、保存、原地刷新
+function _syncSubSteps(ri, ci, raws) {
+    var combined = _buildStepCombined(raws);
+    if (typeof pushHistory === 'function') pushHistory();
+    if (!S.data.rows[ri]) return;
+    S.data.rows[ri][ci] = combined;
+    if (S.mods) S.mods.add(ri + ',' + ci);
+    if (typeof saveFile === 'function') saveFile();
+    if (typeof patchCell === 'function') patchCell(ri, ci);
+}
+
+// ==================== 子表格内联编辑 ====================
+// 子表格单元格 focusout 时，将编辑内容解析回 rawRowGroups 并同步主表
+function _handleSubTableCellEdit(td) {
+    var container = td.closest('.xs-step-expanded');
+    if (!container) return;
+    var ri = parseInt(container.getAttribute('data-detail-row'), 10);
+    var ci = parseInt(container.getAttribute('data-detail-col'), 10);
+    if (isNaN(ri) || isNaN(ci)) return;
+
+    var stepIdx = parseInt(td.getAttribute('data-xse-step'), 10);
+    var section = td.getAttribute('data-xse-section');
+    if (isNaN(stepIdx) || !section) return;
+
+    var dt = (typeof getDetailTableByCol === 'function') ? getDetailTableByCol(ci) : null;
+    if (!dt || !dt.rawRowGroups) return;
+    if (!dt.rawRowGroups[ri]) dt.rawRowGroups[ri] = [];
+    var step = dt.rawRowGroups[ri][stepIdx];
+    if (!step) {
+        step = { id: String(stepIdx + 1), operation: '', data: [], ui_expected: [], api_expected: [], db_expected: [] };
+        dt.rawRowGroups[ri][stepIdx] = step;
+    }
+
+    // 读取旧值（normalize 兜底）
+    var oldOp = (step.operation != null ? String(step.operation) : '').trim();
+    var oldData = Array.isArray(step.data) ? step.data : [];
+    var oldUi = Array.isArray(step.ui_expected) ? step.ui_expected : [];
+    var oldApi = Array.isArray(step.api_expected) ? step.api_expected : [];
+    var oldDb = Array.isArray(step.db_expected) ? step.db_expected : [];
+
+    if (section === 'desc') {
+        var desc = (td.innerText || td.textContent || '').trim();
+        step.operation = desc;
+    } else if (section === 'data') {
+        var lines = [];
+        var lineEls = td.querySelectorAll('.xse-line');
+        for (var li = 0; li < lineEls.length; li++) {
+            var txt = (lineEls[li].innerText || lineEls[li].textContent || '').trim();
+            if (txt) lines.push(txt);
+        }
+        // 兜底：若用户按下 Enter 产生非 .xse-line 的 div，退化为 innerText 切分
+        if (lines.length === 0) {
+            var raw = (td.innerText || td.textContent || '');
+            lines = raw.split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+        }
+        step.data = lines;
+    } else if (section === 'expected') {
+        var groups = td.querySelectorAll('.xse-group');
+        var ui = [], api = [], db = [];
+        for (var gi = 0; gi < groups.length; gi++) {
+            var group = groups[gi];
+            var sub = group.querySelector('.xse-sub');
+            if (!sub) continue;
+            var title = (sub.innerText || sub.textContent || '').trim();
+            var glines = [];
+            var children = group.children;
+            for (var ci2 = 0; ci2 < children.length; ci2++) {
+                var child = children[ci2];
+                if (child.classList && child.classList.contains('xse-sub')) continue;
+                if (child.classList && child.classList.contains('xse-line')) {
+                    var t = (child.innerText || child.textContent || '').trim();
+                    if (t) glines.push(t);
+                }
+            }
+            if (title === '【UI检查】') ui = glines;
+            else if (title === '【接口调用】') api = glines;
+            else if (title === '【数据检查】') db = glines;
+        }
+        step.ui_expected = ui;
+        step.api_expected = api;
+        step.db_expected = db;
+        // 清除空数组，确保不写入 YAML（显示层面由 _buildStepCombined 保证三组标题始终渲染）
+        if (api.length === 0) delete step.api_expected;
+        if (db.length === 0) delete step.db_expected;
+        if (ui.length === 0) delete step.ui_expected;
+        // 兜底：没有任何 xse-group 时（用户可能删掉了分组结构），退化为按 innerText 切分，默认归入 ui_expected
+        if (groups.length === 0) {
+            var raw = (td.innerText || td.textContent || '').trim();
+            if (raw) {
+                ui = raw.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return !!l; });
+                step.ui_expected = ui;
+            }
+        }
+    }
+
+    // 检查是否有实际变更
+    var changed = false;
+    var newOp = (step.operation != null ? String(step.operation) : '').trim();
+    if (section === 'desc') {
+        changed = newOp !== oldOp;
+    } else if (section === 'data') {
+        changed = JSON.stringify(step.data || []) !== JSON.stringify(oldData);
+    } else if (section === 'expected') {
+        changed = JSON.stringify(step.ui_expected || []) !== JSON.stringify(oldUi) ||
+                  JSON.stringify(step.api_expected || []) !== JSON.stringify(oldApi) ||
+                  JSON.stringify(step.db_expected || []) !== JSON.stringify(oldDb);
+    }
+    if (!changed) return;
+
+    // 重建合并文本并同步主表数据
+    var combined = _buildStepCombined(dt.rawRowGroups[ri]);
+    if (typeof pushHistory === 'function') pushHistory();
+    if (!S.data.rows[ri]) return;
+    S.data.rows[ri][ci] = combined;
+    if (S.mods) S.mods.add(ri + ',' + ci);
+    if (typeof saveFile === 'function') saveFile();
 }

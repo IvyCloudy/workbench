@@ -139,7 +139,9 @@ var S = {
     _highlightedTime: 0,  // _highlightedCells 最近一次设置的时间
     _addedRowTime: 0,     // _addedRowSet 最近一次更新的时间
     // 推送失败 tsId -> 失败时间戳（ms）；用于和用户标记/推送高亮按时间戳竞争优先级
-    _pushFailedTime: new Map()
+    _pushFailedTime: new Map(),
+    // 步骤展开/折叠模式切换（默认非展开 → 点击明细链接弹窗编辑）
+    _stepsExpanded: false
 };
 
 // 统一判断「是否有任何弹窗/输入控件正在打开」，供全局快捷键拦截使用。
@@ -579,6 +581,12 @@ function loadUiState() {
         if (typeof snap.scrollTop === 'number' && snap.scrollTop > 0) {
             S._pendingScrollTop = snap.scrollTop;
         }
+        // 恢复步骤展开/折叠状态
+        if (typeof snap.stepsExpanded === 'boolean') {
+            S._stepsExpanded = snap.stepsExpanded;
+            var _expandBtn2 = document.getElementById('expandStepsBtn');
+            if (_expandBtn2) _expandBtn2.textContent = S._stepsExpanded ? '收起步骤' : '展开步骤';
+        }
     } catch (err) { dbg('loadUiState error', err && err.message); }
 }
 
@@ -610,7 +618,8 @@ function persistUiStateNow() {
             rowExpanded: (S._rowExpanded instanceof Set) ? Array.from(S._rowExpanded) : [],
             colFilters: cf,
             searchKw: S._searchKw || '',
-            scrollTop: cont ? cont.scrollTop : 0
+            scrollTop: cont ? cont.scrollTop : 0,
+            stepsExpanded: !!S._stepsExpanded
         };
         S.vscode.setState(raw);
     } catch (err) { dbg('persistUiState error', err && err.message); }
@@ -792,6 +801,12 @@ window.addEventListener('message', function (e) {
         } else if (!_selfReboundReasons) {
             S.mods.clear();
             S._detailModCellKeys.clear();
+        }
+        // 外部数据覆盖后，步骤展开标记已失效（磁盘数据不含展开格式），重置为折叠态
+        if (!_selfReboundReasons && S._stepsExpanded) {
+            S._stepsExpanded = false;
+            var _expandBtn = document.getElementById('expandStepsBtn');
+            if (_expandBtn) _expandBtn.textContent = '展开步骤';
         }
         // 数据重装载：仅当列结构发生变化时才清空列筛选（避免抹掉持久化恢复的筛选）
         var _newHeadSig = (S.data.headers || []).join('\u0001');

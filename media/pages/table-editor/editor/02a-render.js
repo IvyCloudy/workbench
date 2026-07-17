@@ -216,16 +216,33 @@ function _buildGhostRowsHtml(headers) {
 }
 
 // 构建表格骨架（colgroup + thead + 空 tbody），不含具体 tr
+// 展开模式：colgroup 拆 5 子列，thead 两行均显式列出所有列（不使用 rowspan），
+//           通过空占位 th 保证 table-layout:fixed 下浏览器正确对齐子表头。
 function _buildSkeletonHtml() {
     var headers = (S.data && S.data.headers) || [];
+    var stepsCol = headers.indexOf('steps');
+    var hasSteps = (stepsCol >= 0);
+    var expanded = !!(S._stepsExpanded && hasSteps);
+    var stepsSubW = expanded ? [36, 130, 114, 96, 28] : []; // 序号|步骤描述|预期结果|数据|操作（固定像素，总和=404）
     var html = '<table class="xs-table"><colgroup>';
     html += '<col style="width:50px">';
     for (var i = 0; i < headers.length; i++) {
-        var w = S.colWidths[i] || 160;
-        html += '<col style="width:' + w + 'px">';
+        if (expanded && i === stepsCol) {
+            for (var si = 0; si < stepsSubW.length; si++) {
+                var sw = stepsSubW[si];
+                if (sw === '') { html += '<col>'; }
+                else if (typeof sw === 'number') { html += '<col style="width:' + sw + 'px">'; }
+                else { html += '<col style="width:' + sw + '">'; }
+            }
+        } else {
+            var w = S.colWidths[i] || 160;
+            html += '<col style="width:' + w + 'px">';
+        }
     }
-    html += '</colgroup><thead><tr>';
-html += '<th class="xs-th xs-th-cb xs-th-rownum" title="点击全选整表">#</th>';
+    html += '</colgroup><thead>';
+    // Row 1: 主表头（不使用 rowspan，row2 用占位 th 匹配列结构）
+    html += '<tr>';
+    html += '<th class="xs-th xs-th-cb xs-th-rownum" title="点击全选整表">#</th>';
     var labels = (S && S.headerLabels) || {};
     for (var j = 0; j < headers.length; j++) {
         var hdr = headers[j];
@@ -234,8 +251,6 @@ html += '<th class="xs-th xs-th-cb xs-th-rownum" title="点击全选整表">#</t
         var filterTitle = hasFilter ? '已应用筛选 (点击修改)' : '筛选';
         var colSelCls = S.colSel.has(j) ? ' xs-col-selected' : '';
         var frozenCls = (String(hdr) === 'testcase_id') ? ' xs-th-frozen' : '';
-        // 中文别名仅用于显示，不写入数据；存在映射时第一行渲染中文（强调），第二行渲染英文 key（弱化）；
-        // 无映射时仅渲染英文 key 单行，避免空白占位。
         var cnLabel = labels[String(hdr)];
         var hasCn = !!(cnLabel && typeof cnLabel === 'string');
         var titleLabel = hasCn ? (cnLabel + ' (' + String(hdr) + ')') : String(hdr);
@@ -243,7 +258,8 @@ html += '<th class="xs-th xs-th-cb xs-th-rownum" title="点击全选整表">#</t
             ? '<span class="xs-th-cn" title="' + escapeHtml(cnLabel) + '">' + escapeHtml(cnLabel) + '</span>'
             : '';
         var keyCls = hasCn ? 'xs-th-text' : 'xs-th-text xs-th-text-only';
-        html += '<th class="xs-th' + colSelCls + frozenCls + '" data-col="' + j + '" title="' + escapeHtml(titleLabel) + '">'
+        var colSpanAttr = (expanded && j === stepsCol) ? ' colspan="5"' : '';
+        html += '<th class="xs-th' + colSelCls + frozenCls + (expanded && j === stepsCol ? ' xs-th-group-top' : '') + '" data-col="' + j + '" title="' + escapeHtml(titleLabel) + '"' + colSpanAttr + '>'
             + '<div class="xs-th-inner">'
             +   '<div class="xs-th-labels">'
             +     cnHtml
@@ -255,10 +271,32 @@ html += '<th class="xs-th xs-th-cb xs-th-rownum" title="点击全选整表">#</t
             +     '</svg>'
             +   '</span>'
             + '</div>'
-            + '<div class="xs-resizer" data-col="' + j + '" title="拖动调整列宽；双击自适应"></div>'
+            + (j !== stepsCol ? '<div class="xs-resizer" data-col="' + j + '" title="拖动调整列宽；双击自适应"></div>' : '')
             + '</th>';
     }
-    html += '</tr></thead><tbody id="xsTbody"></tbody></table>';
+    html += '</tr>';
+    // Row 2: 占位 th 填充非 steps 列 + 5 个子列标题（仅展开模式）
+    if (expanded) {
+        html += '<tr>';
+        html += '<th class="xs-th-placeholder"></th>'; // 序号列占位
+        for (var k = 0; k < headers.length; k++) {
+            if (k === stepsCol) {
+                html += '<th class="xs-th-sub xs-th-sub-id">序号</th>';
+                html += '<th class="xs-th-sub xs-th-sub-desc">步骤描述</th>';
+                html += '<th class="xs-th-sub xs-th-sub-expected">预期结果</th>';
+                html += '<th class="xs-th-sub xs-th-sub-data">数据</th>';
+                html += '<th class="xs-th-sub xs-th-sub-op">操作</th>';
+            } else {
+                html += '<th class="xs-th-placeholder"></th>';
+            }
+        }
+        html += '</tr>';
+    }
+    html += '</thead><tbody id="xsTbody"></tbody></table>';
+    // 展开模式添加标记 class，允许表格超出容器宽度（避免列被挤压）
+    if (expanded) {
+        html = html.replace('<table class="xs-table">', '<table class="xs-table xs-steps-expanded">');
+    }
     return html;
 }
 
@@ -282,6 +320,9 @@ function _buildArrayChipsHtml(arr) {
 // 构造单行 tr 的 HTML（被全量与虚拟两条路径共用）
 function _buildRowHtml(ri, tsIdColIdx) {
     var headers = (S.data && S.data.headers) || [];
+    var stepsCol = headers.indexOf('steps');
+    var hasSteps = (stepsCol >= 0);
+    var expanded = !!(S._stepsExpanded && hasSteps);
     var row = S.data.rows[ri] || [];
     var selCls = S.sel.has(ri) ? ' selected' : '';
     var rh = S.rowHeights[ri];
@@ -410,7 +451,15 @@ function _buildRowHtml(ri, tsIdColIdx) {
     //   - 多行模式（pre-wrap）下 \n 产生真实换行
     // 故此处无需任何额外内联样式补丁。
     var multilineClamp = clampVar;
-    var html = '<tr data-row="' + ri + '" class="' + (selCls + resizedCls + failCls).trim() + '"' + rowStyle + '>'
+    // 检测是否含有展开的步骤子表格（该行高度已被 sub-table 撑开，其他列应自适应换行）
+    var expandedStepsCls = '';
+    for (var _ec2 = 0; _ec2 < cells.length; _ec2++) {
+        if (cells[_ec2].inner && cells[_ec2].inner.indexOf('xs-step-expanded') >= 0) {
+            expandedStepsCls = ' xs-tr-expanded-steps';
+            break;
+        }
+    }
+    var html = '<tr data-row="' + ri + '" class="' + (selCls + resizedCls + failCls + expandedStepsCls).trim() + '"' + rowStyle + '>'
         + '<td class="xs-td xs-td-cb xs-td-rownum" data-row="' + ri + '" title="' + escapeHtml(rowNumTitle) + '">'
         +   '<span class="xs-rownum">' + (ri + 1) + '</span>'
         +   '<div class="xs-row-resizer" data-row="' + ri + '" title="拖动调整行高；双击自适应内容"></div>'
@@ -418,7 +467,8 @@ function _buildRowHtml(ri, tsIdColIdx) {
     for (var ci2 = 0; ci2 < cells.length; ci2++) {
         var c = cells[ci2];
         var wrapStyleAttr = multilineClamp ? ' style="' + multilineClamp + '"' : '';
-        html += '<td class="xs-td xs-editable' + c.modCls + c.colSelCls2 + c.frozenCls2 + c.hiliCls + (c.isDetail ? ' xs-detail-cell' : '') + c.arrCellCls + '" data-row="' + ri + '" data-col="' + ci2 + '"' + c.titleAttr + c.mkStyle + '>'
+        var spanAttr = (expanded && ci2 === stepsCol) ? ' colspan="5"' : '';
+        html += '<td class="xs-td xs-editable' + c.modCls + c.colSelCls2 + c.frozenCls2 + c.hiliCls + (c.isDetail ? ' xs-detail-cell' : '') + c.arrCellCls + '" data-row="' + ri + '" data-col="' + ci2 + '"' + spanAttr + c.titleAttr + c.mkStyle + '>'
             + '<div class="xs-cell-wrap"' + wrapStyleAttr + '>' + c.inner + '</div></td>';
     }
     html += '</tr>';
@@ -440,16 +490,31 @@ function _computeClampLines(rh, isFullyExpanded) {
 // 构造单元格内部 HTML 片段。为 _buildRowHtml / patchCell 共用。
 // 返回：{ inner, isDetail, isArrCol, arrCellCls, titleAttr, rawText }
 function _buildCellInner(ri, ci, v) {
-    var isDetail = (typeof hasDetailRowsAtCol === 'function') && hasDetailRowsAtCol(ri, ci);
-    var isArrCol = (typeof isArrayCol === 'function') && isArrayCol(ci);
     var rawText = formatCellValue(v);
-    // tooltip 统一计算：把字面 "\n"（两字符）转为真实换行符后再 escapeHtml，
-    // 这样原生 tooltip 的换行表现与单元格多行模式展开后的显示完全一致。
-    var titleAttr = rawText ? ' title="' + escapeHtml(rawText.replace(/\\n/g, '\n')) + '"' : '';
+    var isDetail = (typeof hasDetailRowsAtCol === 'function') && hasDetailRowsAtCol(ri, ci);
+    // 即使是空单元格，只要该列是 detail 列，也提供可点击入口（[空] 链接 → 打开弹窗初始化数据）
+    var isEmptyDetail = false;
+    if (!isDetail && (typeof isDetailColumn === 'function') && isDetailColumn(ci) && (rawText === '' || v == null || v === undefined)) {
+        isDetail = true;
+        isEmptyDetail = true;
+    }
+    var isArrCol = (typeof isArrayCol === 'function') && isArrayCol(ci);
+    // tooltip：展开模式 steps 子表格已内联展示，无需原生 tooltip 显示原始文本
+    var titleAttr = '';
+    if (rawText && !(isDetail && S._stepsExpanded && (rawText.indexOf('【步骤描述】') === 0 || rawText.indexOf('【预期结果】') >= 0))) {
+        titleAttr = ' title="' + escapeHtml(rawText.replace(/\\n/g, '\n')) + '"';
+    }
     var inner;
     var arrCellCls = '';
     if (isDetail) {
-        inner = '<span class="xs-detail-link" data-detail-row="' + ri + '" data-detail-col="' + ci + '">' + escapeHtml(rawText) + '</span>';
+        // 展开模式且内容为 steps 合并文本 → 四列内联子表格；否则显示为链接
+        if (S._stepsExpanded && rawText && (rawText.indexOf('【步骤描述】') === 0 || rawText.indexOf('【预期结果】') >= 0)) {
+            inner = '<div class="xs-step-expanded" data-detail-row="' + ri + '" data-detail-col="' + ci + '">' + _buildStepExpandedHtml(rawText) + '</div>';
+        } else {
+            var detailLinkCls = isEmptyDetail ? 'xs-detail-link xs-detail-empty' : 'xs-detail-link';
+            var detailDisplay = isEmptyDetail ? '[空]' : rawText;
+            inner = '<span class="' + detailLinkCls + '" data-detail-row="' + ri + '" data-detail-col="' + ci + '">' + escapeHtml(detailDisplay) + '</span>';
+        }
     } else if (isArrCol) {
         var arr = Array.isArray(v) ? v : [];
         inner = _buildArrayChipsHtml(arr);
@@ -463,6 +528,141 @@ function _buildCellInner(ri, ci, v) {
         inner = escapeHtml(rawText).replace(/\\n/g, '\n');
     }
     return { inner: inner, isDetail: isDetail, isArrCol: isArrCol, arrCellCls: arrCellCls, titleAttr: titleAttr, rawText: rawText };
+}
+
+// 将已展开的步骤合并文本解析为四列表格：序号 | 步骤描述 | 数据 | 预期结果
+function _buildStepExpandedHtml(text) {
+    if (!text) return '';
+    var lines = text.replace(/\\n/g, '\n').split(/\r?\n/);
+    var steps = [];
+    var cur = null;
+    var section = null; // 'desc' | 'data' | 'expected'
+
+    for (var i = 0; i < lines.length; i++) {
+        var t = lines[i].trim();
+        if (!t) continue;
+
+        // 新步骤起始
+        if (/^【步骤描述】$/.test(t)) {
+            if (cur) steps.push(cur);
+            cur = { id: '', desc: '', data: [], expected: [] };
+            section = 'desc';
+            continue;
+        }
+        if (!cur) continue;
+
+        // 区块切换
+        if (/^【数据】$/.test(t)) { section = 'data'; continue; }
+        if (/^【预期结果】$/.test(t)) { section = 'expected'; continue; }
+
+        // 步骤标题行：步骤N [操作内容]
+        var m = t.match(/^步骤(\d+)\s*(.*)/);
+        if (m && section === 'desc') {
+            cur.id = m[1];
+            cur.desc = (m[2] || '').trim();
+            continue;
+        }
+
+        // 内容收集
+        if (section === 'desc') {
+            cur.desc += (cur.desc ? '\n' : '') + t;
+        } else if (section === 'data') {
+            cur.data.push(t);
+        } else if (section === 'expected') {
+            cur.expected.push(t);
+        }
+    }
+    if (cur) steps.push(cur);
+    if (steps.length === 0) return '';
+
+    // ── 构建四列表格（无 thead，表头已合入主表）：序号 | 步骤描述 | 预期结果 | 数据
+    // colgroup 与主表 steps 子列完全一致（36px | 130px | 114px | 96px | 28px，总和=404）
+    var html = '<table class="xse-table">';
+    html += '<colgroup><col style="width:36px"><col style="width:130px"><col style="width:114px"><col style="width:96px"><col style="width:28px"></colgroup>';
+    html += '<tbody>';
+
+    for (var s = 0; s < steps.length; s++) {
+        var step = steps[s];
+        html += '<tr>';
+        // 序号（不可编辑）
+        html += '<td class="xse-td-id">' + escapeHtml(step.id || '-') + '</td>';
+        // 步骤描述（可编辑）
+        html += '<td class="xse-td-desc" contenteditable="true" data-xse-step="' + s + '" data-xse-section="desc">' + escapeHtml(step.desc || '') + '</td>';
+        // 预期结果（可编辑）
+        html += '<td class="xse-td-expected" contenteditable="true" data-xse-step="' + s + '" data-xse-section="expected">';
+        if (step.expected.length) {
+            var groups = [];
+            var curGroup = null;
+            for (var ei = 0; ei < step.expected.length; ei++) {
+                var el = step.expected[ei];
+                if (/^【(UI检查|接口调用|数据检查)】$/.test(el)) {
+                    if (curGroup) groups.push(curGroup);
+                    curGroup = { title: el, lines: [] };
+                } else if (curGroup) {
+                    curGroup.lines.push(el);
+                } else {
+                    // 无标题的 loose 行，兜底
+                    if (!groups.length) groups.push({ title: null, lines: [] });
+                    groups[groups.length - 1].lines.push(el);
+                }
+            }
+            if (curGroup) groups.push(curGroup);
+            for (var gi = 0; gi < groups.length; gi++) {
+                var g = groups[gi];
+                html += '<div class="xse-group">';
+                if (g.title) {
+                    html += '<div class="xse-sub" contenteditable="false">' + escapeHtml(g.title) + '</div>';
+                }
+                if (g.lines.length > 0) {
+                    for (var li2 = 0; li2 < g.lines.length; li2++) {
+                        html += '<div class="xse-line">' + escapeHtml(g.lines[li2]) + '</div>';
+                    }
+                } else {
+                    // 空分组也保留一条可编辑行，方便用户直接输入
+                    html += '<div class="xse-line"></div>';
+                }
+                html += '</div>';
+            }
+        } else {
+            html += '<div class="xse-group">'
+                + '<div class="xse-sub" contenteditable="false">【UI检查】</div>'
+                + '<div class="xse-line"></div>'
+                + '</div>'
+                + '<div class="xse-group">'
+                + '<div class="xse-sub" contenteditable="false">【接口调用】</div>'
+                + '<div class="xse-line"></div>'
+                + '</div>'
+                + '<div class="xse-group">'
+                + '<div class="xse-sub" contenteditable="false">【数据检查】</div>'
+                + '<div class="xse-line"></div>'
+                + '</div>';
+        }
+        html += '</td>';
+        // 数据（可编辑）
+        html += '<td class="xse-td-data" contenteditable="true" data-xse-step="' + s + '" data-xse-section="data">';
+        if (step.data.length) {
+            for (var di = 0; di < step.data.length; di++) {
+                html += '<div class="xse-line">' + escapeHtml(step.data[di]) + '</div>';
+            }
+        } else {
+            html += '<div class="xse-line"></div>';
+        }
+        html += '</td>';
+        // 操作（复制 / 向下插入 / 删除步骤）
+        html += '<td class="xse-td-op">';
+        html += '<div class="xse-row-actions">';
+        html += '<button class="xse-btn-copy" data-xse-copy="' + s + '" contenteditable="false" title="复制">' +
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>';
+        html += '<button class="xse-btn-add" data-xse-add="' + s + '" contenteditable="false" title="向下插入">' +
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg></button>';
+        html += '<button class="xse-btn-del" data-xse-del="' + s + '" contenteditable="false" title="删除">' +
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>';
+        html += '</div>';
+        html += '</td>';
+        html += '</tr>';
+    }
+    html += '</tbody></table>';
+    return html;
 }
 
 // 全量渲染（小表格）：把所有 view 行一次写入 tbody

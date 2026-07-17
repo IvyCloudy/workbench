@@ -249,7 +249,7 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
         description,
         expected,
         keyFlag: fieldOrDefault(row, '关键案例', '否'),
-        projextDes: fieldOrDefault(row, '项目说明', ''),
+        projectDes: fieldOrDefault(row, '项目说明', ''),
         planExecNum: fieldOrDefault(row, '计划执行次数', 1)
     };
 }
@@ -315,7 +315,7 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
         description,
         expected,
         keyFlag: fieldOrDefault(row, 'key_flag', '否'),
-        projextDes: fieldOrDefault(row, 'project_des', ''),
+        projectDes: fieldOrDefault(row, 'project_des', ''),
         planExecNum: fieldOrDefault(row, 'plan_exec_num', 1)
     };
 }

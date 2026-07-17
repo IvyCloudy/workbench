@@ -29,6 +29,7 @@
 import * as path from 'path';
 import type * as vscode from 'vscode';
 import { pushTestCase } from '../services/http';
+import { isMapError, ROW_INDEX_META } from '../utils/pushDataMapper';
 import { parsePushResponse, PushSuccessMapping, PushResponseFailure } from '../utils/pushResponse';
 import { getCurrentTaskInfo } from '../utils/commands';
 import {
@@ -149,7 +150,7 @@ export interface PushCoreHooks {
 type RowLike = Record<string, any>;
 
 // ============================================
-// 内部工具：traceId
+// 内部工具：小而美的通用辅助
 // ============================================
 
 /**
@@ -164,74 +165,136 @@ function newPushTraceId(): string {
 /** 单次推送行数默认上限（可通过 RunPushOptions.maxRows 覆盖）。 */
 const DEFAULT_MAX_PUSH_ROWS = 5000;
 
+/** 从行对象读取标准化后的 tsId（trim + 空值兜底为 ''）。 */
+function readTsId(rec: RowLike | undefined | null): string {
+    if (!rec) return '';
+    const raw = rec[TS_ID_COLUMN];
+    return raw == null ? '' : String(raw).trim();
+}
+
+/** 安全调用 hook：吞掉钩子异常，避免污染主流程；仅用于"通知型"钩子。 */
+function safeInvoke<T extends (...args: any[]) => any>(fn: T | undefined, ...args: Parameters<T>): void {
+    if (typeof fn !== 'function') return;
+    try { fn(...args); } catch (_) { /* 忽略钩子异常 */ }
+}
+
+/** 进度反馈统一入口，收敛 11 处 try/catch 样板。 */
+function emitProgress(
+    hooks: Pick<PushCoreHooks, 'onProgress'>,
+    stage: 'start' | 'pushing' | 'writingBack' | 'done',
+    payload?: { rows?: number },
+): void {
+    safeInvoke(hooks.onProgress, stage, payload);
+}
+
 // ============================================
-// 阶段 1：校验 —— TESTCASE_ID 占位
+// 阶段 1：可扩展的行级预校验（RowValidator 数组）
+// ============================================
+
+/**
+ * 单条行级预校验规则。返回失败明细或 null（通过）。
+ * 之所以采用"数组 + 驱动"结构：新加校验只需 push 一个对象，无需改动 runPush 本体。
+ */
+interface RowValidator {
+    /** 校验类型标识；用于埋点事件名与 aborted reason 归类 */
+    kind: 'placeholder' | 'empty' | (string & {});
+    /** 判定是否命中该失败；命中返回失败明细（不含 rowIndex，由调度器统一补上） */
+    check(row: RowLike, tsId: string): Omit<PushFailureItem, 'rowIndex'> | null;
+}
+
+/** 内置校验：占位 TESTCASE_ID（大写） */
+const PLACEHOLDER_VALIDATOR: RowValidator = {
+    kind: 'placeholder',
+    check(_row, tsId) {
+        if (tsId.toUpperCase() === 'TESTCASE_ID') {
+            return {
+                tsId,
+                reason: 'testcase_id 为占位值 TESTCASE_ID，请修改为真实的案例 ID 后再推送',
+            };
+        }
+        return null;
+    },
+};
+
+/** 内置校验：testcase_id 为空 */
+const EMPTY_VALIDATOR: RowValidator = {
+    kind: 'empty',
+    check(_row, tsId) {
+        if (tsId === '') {
+            // 稳定伪 tsId：便于持久化独立标记；用户可见字段只有 reason + rowIndex，不影响 UX
+            return {
+                tsId: '', // 占位；调度器会在补 rowIndex 时改成 `__EMPTY_TSID_ROW_${rowIndex}__`
+                reason: 'testcase_id 不能为空，请填写案例 ID 后再推送',
+            };
+        }
+        return null;
+    },
+};
+
+/** 内置校验器序列（按需扩展；语义即"按顺序对每行跑一遍所有校验"）。 */
+const DEFAULT_VALIDATORS: RowValidator[] = [PLACEHOLDER_VALIDATOR, EMPTY_VALIDATOR];
+
+/**
+ * 通用校验驱动：按 validators 顺序对每行跑一遍，收集失败并按 kind 分桶。
+ * 空 tsId 的失败项在此处补上 `__EMPTY_TSID_ROW_${rowIndex}__` 稳定伪 tsId。
+ */
+function runValidators(
+    rows: RowLike[],
+    resolveRowIndex: (i: number) => number,
+    validators: RowValidator[] = DEFAULT_VALIDATORS,
+): { failuresByKind: Record<string, PushFailureItem[]>; droppedIndex: Set<number> } {
+    const failuresByKind: Record<string, PushFailureItem[]> = {};
+    const droppedIndex = new Set<number>();
+    if (!Array.isArray(rows)) return { failuresByKind, droppedIndex };
+
+    for (let i = 0; i < rows.length; i++) {
+        const rec = rows[i];
+        const tsId = readTsId(rec);
+        for (const v of validators) {
+            const hit = v.check(rec, tsId);
+            if (hit) {
+                const rowIndex = resolveRowIndex(i);
+                const item: PushFailureItem = {
+                    tsId: v.kind === 'empty' ? `__EMPTY_TSID_ROW_${rowIndex}__` : hit.tsId,
+                    reason: hit.reason,
+                    rowIndex,
+                };
+                (failuresByKind[v.kind] ||= []).push(item);
+                droppedIndex.add(i);
+                break; // 同一行命中第一个校验即结束，避免重复 push
+            }
+        }
+    }
+    return { failuresByKind, droppedIndex };
+}
+
+// ============================================
+// 阶段 1（对外兼容层）：TESTCASE_ID 占位 & 空 tsId
 // ============================================
 
 /**
  * 校验：testcase_id 为占位值 TESTCASE_ID 时不允许推送。
- * 注意：调用方必须在 filterTemplateExampleRows 之前调用本函数，
- * 才能保证 resolveRowIndex(i) 返回的行号与主表原始行号一致，
- * 弹窗中"第 N 行"点击跳转才准确。
  *
- * 说明：中文样例占位（'案例唯一标识，不可修改' / '案例唯一标识'）不走此分支，
- *      由 extractSampleRows 静默过滤；只有全部行都是样例时才提示"为样例数据"。
- *
- * @param rows              待校验的原始行数组（未经样例过滤）
- * @param resolveRowIndex   下标 → 主表 1-based 行号 的解析函数：
- *                          - 右键推送：`i => i + 1`（整表原始下标）
- *                          - 编辑器推送：`i => pushIndexToRow[i] ?? (i + 1)`（前端下发映射）
+ * 内部委托 `runValidators([PLACEHOLDER_VALIDATOR])`；对外签名保持不变。
+ * 注意：调用方必须在 filterTemplateExampleRows 之前调用本函数，才能保证行号准确。
  */
 export function collectPlaceholderTestcaseIdFailures(
     rows: RowLike[],
     resolveRowIndex: (i: number) => number,
 ): PushFailureItem[] {
-    const failures: PushFailureItem[] = [];
-    if (!Array.isArray(rows)) return failures;
-    rows.forEach((rec, i) => {
-        const tsId = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]).trim() : '';
-        if (tsId.toUpperCase() === 'TESTCASE_ID') {
-            failures.push({
-                tsId,
-                reason: 'testcase_id 为占位值 TESTCASE_ID，请修改为真实的案例 ID 后再推送',
-                rowIndex: resolveRowIndex(i),
-            });
-        }
-    });
-    return failures;
+    return runValidators(rows, resolveRowIndex, [PLACEHOLDER_VALIDATOR]).failuresByKind['placeholder'] || [];
 }
 
 /**
  * 校验：testcase_id 为空时不允许推送。
- * 与 TESTCASE_ID 占位、样例占位并列的第三种前置校验，处理"用户漏填"场景。
- * 空 tsId 若放行到后端，会被判为 400 类失败，且弹窗中失败行的行号定位会因 tsId 缺失
- * 而三级降级都拿不到，导致用户看到"(无)"不可跳转。前置校验后可直接给出精确行号提示。
  *
- * 注意：与 collectPlaceholderTestcaseIdFailures 一样，需在 filterTemplateExampleRows 之前调用。
- *
- * @param rows              待校验行
- * @param resolveRowIndex   下标 → 主表 1-based 行号
+ * 内部委托 `runValidators([EMPTY_VALIDATOR])`；对外签名保持不变。
  */
 export function collectEmptyTestcaseIdFailures(
     rows: RowLike[],
     resolveRowIndex: (i: number) => number,
 ): PushFailureItem[] {
-    const failures: PushFailureItem[] = [];
-    if (!Array.isArray(rows)) return failures;
-    rows.forEach((rec, i) => {
-        const raw = rec ? rec[TS_ID_COLUMN] : undefined;
-        const tsId = raw == null ? '' : String(raw).trim();
-        if (tsId === '') {
-            failures.push({
-                // 用一个稳定的伪 tsId 便于持久化标记不冲突（每行独立）；
-                // 前端弹窗只显示 reason + rowIndex，用户看不到该字段，不影响 UX。
-                tsId: `__EMPTY_TSID_ROW_${resolveRowIndex(i)}__`,
-                reason: 'testcase_id 不能为空，请填写案例 ID 后再推送',
-                rowIndex: resolveRowIndex(i),
-            });
-        }
-    });
-    return failures;
+    return runValidators(rows, resolveRowIndex, [EMPTY_VALIDATOR]).failuresByKind['empty'] || [];
 }
 
 // ============================================
@@ -264,8 +327,7 @@ export function extractSampleRows(
     const sampleFailures: PushFailureItem[] = [];
     // 先按原始下标收集样例行号，再执行过滤；保证行号与主表原始行号一致
     for (let i = 0; i < src.length; i++) {
-        const rec = src[i];
-        const tsId = rec && rec[TS_ID_COLUMN] != null ? String(rec[TS_ID_COLUMN]).trim() : '';
+        const tsId = readTsId(src[i]);
         if (isSampleTsId(tsId)) {
             const rowIndex = resolveRowIndex(i);
             if (typeof rowIndex === 'number' && rowIndex > 0) {
@@ -279,19 +341,33 @@ export function extractSampleRows(
     }
     // 复用现有过滤实现（保持行为一致），同时按同一规则手动构建 filteredIndex → originalIndex 映射。
     // 注意：filterTemplateExampleRows 内部对未通过插件创建的文件是否过滤有独立判断，
-    // 我们这里只在"确实被过滤掉"时才建立映射差异，因此以最终 filtered 长度对齐来构建映射，
-    // 通过 tsId 是否命中 isSampleTsId + 与 filtered 顺序对齐 双重校验。
+    // 我们必须以同一判定为准，否则映射就会与实际过滤结果错位。
     const filtered = filterTemplateExampleRows(filePath, src);
+    // ⚠ 历史实现依赖 `src[i] === filtered[cursor]` 引用比对，一旦 filterTemplateExampleRows
+    //   走浅拷贝/spread 分支，引用就会断开：
+    //     - 场景 A（引用一致）：正常
+    //     - 场景 B（引用完全不同）：命中兜底 identity 映射
+    //     - 场景 C（部分对齐）：非样例行引用未变、样例行位置比对失败但 cursor 不推进 →
+    //       后续非样例行错位命中 → 映射错乱，rowIndex 会漂移
+    //   现改为「按 tsId 语义」构造映射：与 filterTemplateExampleRows 输入侧的过滤条件保持
+    //   一致（是否为样例 tsId + filtered 是否真的少于 src）。
     const filteredToOriginal: number[] = [];
-    let cursor = 0;
-    for (let i = 0; i < src.length && cursor < filtered.length; i++) {
-        if (src[i] === filtered[cursor]) {
-            filteredToOriginal.push(i);
-            cursor++;
+    if (filtered.length === src.length) {
+        // filterTemplateExampleRows 未过滤任何行（未通过插件创建 / 无样例行）
+        for (let i = 0; i < src.length; i++) filteredToOriginal.push(i);
+    } else {
+        // 按 tsId 是否为 sample 逐个决定是否保留下标；同时留 cursor 兜底避免映射长度不一致
+        let cursor = 0;
+        for (let i = 0; i < src.length && cursor < filtered.length; i++) {
+            const tsId = readTsId(src[i]);
+            if (!isSampleTsId(tsId)) {
+                filteredToOriginal.push(i);
+                cursor++;
+            }
         }
     }
-    // 兜底：若同一对象引用比对没能覆盖 filtered 全部（例如 filterTemplateExampleRows 做了浅拷贝），
-    // 退化为 identity 映射，等价于关闭错位修复；至少不会造成越界。
+    // 兜底：极端情况下（例如 filterTemplateExampleRows 逻辑与 isSampleTsId 语义漂移），
+    // 若映射长度仍与 filtered 不一致，退化为 identity 保证不越界。
     if (filteredToOriginal.length !== filtered.length) {
         filteredToOriginal.length = 0;
         for (let i = 0; i < filtered.length; i++) filteredToOriginal.push(i);
@@ -341,7 +417,7 @@ export async function resolveTaskInfoOrNull(filePath: string): Promise<ResolveTa
 }
 
 // ============================================
-// 阶段 4：失败行号汇总（三级降级）
+// 阶段 4：失败行号汇总（可扩展责任链）
 // ============================================
 
 /**
@@ -365,8 +441,7 @@ export function buildRowIndexMappings(
     const pushIndexToRow: number[] = [];
     if (!Array.isArray(rows)) return { rowIndexMap, pushIndexToRow };
     rows.forEach((rec, i) => {
-        const raw = rec ? rec[TS_ID_COLUMN] : undefined;
-        const tsId = raw == null ? '' : String(raw).trim();
+        const tsId = readTsId(rec);
         // 空 tsId 不建键（与前端一致：pushIndexToRow 兜底才起作用）
         if (tsId !== '') rowIndexMap[tsId] = i + 1;
         pushIndexToRow.push(i + 1);
@@ -389,16 +464,64 @@ export function buildTsIdToIndex(pushData: RowLike[]): Map<string, number> {
 }
 
 /**
- * 失败行号定位（三级降级）：
- *   1) frontRowIndexMap[tsId]        —— 前端 tsId → 主表 1-based 行号（最准）
- *   2) frontPushIndexToRow[originalIndex] —— 前端 payload 下标 → 主表行号（兜底 tsId 为空的场景）
- *      注意：后端返回的 bodyIndex 是"过滤后 rows"的下标；
- *            frontPushIndexToRow 是"过滤前 payload"的下标。
- *            若过滤过样例行，两者会错位。通过 filteredToOriginal[bodyIndex] 转换回原始下标后再查询。
- *   3) tsIdToRowIndex[tsId]          —— 扩展端自算（0-based → +1）
- * 三级都拿不到 → rowIndex=undefined，前端显示"(无)"不可跳转。
+ * 行号解析责任链上下文 —— 各 resolver 只读；由 buildFailureItems 一次组装。
+ */
+interface RowIndexResolveCtx {
+    failure: PushResponseFailure;
+    frontRowIndexMap: Record<string, number>;
+    frontPushIndexToRow: number[];
+    filteredToOriginal: number[];
+    tsIdToRowIndex: Map<string, number>;
+}
+
+/** 单个行号解析器：命中返回 1-based 行号；未命中返回 undefined，交给下一级。 */
+type RowIndexResolver = (ctx: RowIndexResolveCtx) => number | undefined;
+
+/** L1：前端 tsId → 主表行号（最准） */
+const resolveByFrontTsIdMap: RowIndexResolver = ({ failure, frontRowIndexMap }) => {
+    const v = frontRowIndexMap[failure.tsId];
+    return typeof v === 'number' && v > 0 ? v : undefined;
+};
+
+/** L2：后端 bodyIndex → filteredToOriginal → frontPushIndexToRow 主表行号（兜底 tsId 空/重复） */
+const resolveByBodyIndex: RowIndexResolver = ({ failure, frontPushIndexToRow, filteredToOriginal }) => {
+    if (typeof failure.bodyIndex !== 'number' || failure.bodyIndex < 0) return undefined;
+    if (frontPushIndexToRow.length === 0) return undefined;
+    // bodyIndex（过滤后下标）→ originalIndex（过滤前下标） → mainTableRowIndex
+    const originalIndex =
+        filteredToOriginal.length > failure.bodyIndex
+            ? filteredToOriginal[failure.bodyIndex]
+            : failure.bodyIndex;
+    if (
+        typeof originalIndex !== 'number' ||
+        originalIndex < 0 ||
+        originalIndex >= frontPushIndexToRow.length
+    ) return undefined;
+    const v = frontPushIndexToRow[originalIndex];
+    return typeof v === 'number' && v > 0 ? v : undefined;
+};
+
+/** L3：扩展端 tsId → 0-based → +1（最后兜底） */
+const resolveByExtensionTsIdIndex: RowIndexResolver = ({ failure, tsIdToRowIndex }) => {
+    if (!failure.tsId || !tsIdToRowIndex.has(failure.tsId)) return undefined;
+    return tsIdToRowIndex.get(failure.tsId)! + 1;
+};
+
+/**
+ * 默认的行号解析责任链，顺序即优先级。
+ * 未来若需要新增解析级（例如"后端直接返回 rowIndex"），push 一个新的 resolver 即可。
+ */
+const DEFAULT_ROW_INDEX_RESOLVERS: RowIndexResolver[] = [
+    resolveByFrontTsIdMap,
+    resolveByBodyIndex,
+    resolveByExtensionTsIdIndex,
+];
+
+/**
+ * 失败行号定位（三级降级）—— 责任链实现。
+ * 对外行为与旧版严格一致：L1 → L2 → L3 → undefined。
  *
- * @param filteredToOriginal  过滤后下标 → 原始下标 的映射；不传/空数组时视为 identity（不做转换）。
+ * @param filteredToOriginal  过滤后下标 → 原始下标 的映射；不传/空数组时视为 identity。
  */
 export function buildFailureItems(
     failures: PushResponseFailure[],
@@ -407,35 +530,19 @@ export function buildFailureItems(
     frontPushIndexToRow?: number[],
     filteredToOriginal?: number[],
 ): PushFailureItem[] {
-    const map1 = frontRowIndexMap || {};
-    const arr2: number[] = Array.isArray(frontPushIndexToRow) ? frontPushIndexToRow : [];
-    const idxMap: number[] = Array.isArray(filteredToOriginal) ? filteredToOriginal : [];
-    return failures.map(f => {
+    const ctxBase = {
+        frontRowIndexMap: frontRowIndexMap || {},
+        frontPushIndexToRow: Array.isArray(frontPushIndexToRow) ? frontPushIndexToRow : [],
+        filteredToOriginal: Array.isArray(filteredToOriginal) ? filteredToOriginal : [],
+        tsIdToRowIndex,
+    };
+    return failures.map(failure => {
         let rowIndex: number | undefined;
-        const front = map1[f.tsId];
-        if (typeof front === 'number' && front > 0) {
-            rowIndex = front;
-        } else if (
-            typeof f.bodyIndex === 'number' &&
-            f.bodyIndex >= 0 &&
-            arr2.length > 0
-        ) {
-            // bodyIndex（过滤后下标）→ originalIndex（过滤前下标） → mainTableRowIndex
-            const originalIndex = idxMap.length > f.bodyIndex ? idxMap[f.bodyIndex] : f.bodyIndex;
-            if (
-                typeof originalIndex === 'number' &&
-                originalIndex >= 0 &&
-                originalIndex < arr2.length &&
-                typeof arr2[originalIndex] === 'number' &&
-                arr2[originalIndex] > 0
-            ) {
-                rowIndex = arr2[originalIndex];
-            }
+        for (const resolver of DEFAULT_ROW_INDEX_RESOLVERS) {
+            rowIndex = resolver({ failure, ...ctxBase });
+            if (rowIndex !== undefined) break;
         }
-        if (rowIndex === undefined && f.tsId && tsIdToRowIndex.has(f.tsId)) {
-            rowIndex = tsIdToRowIndex.get(f.tsId)! + 1;
-        }
-        return { tsId: f.tsId, reason: f.reason, rowIndex };
+        return { tsId: failure.tsId, reason: failure.reason, rowIndex };
     });
 }
 
@@ -522,7 +629,7 @@ export async function writeBackTestCaseNos(opts: WriteBackOptions): Promise<void
 }
 
 // ============================================
-// 阶段 6：主流程编排
+// 阶段 6：主流程编排（拆分为若干私有 step）
 // ============================================
 
 export interface RunPushOptions {
@@ -556,373 +663,465 @@ export interface RunPushOptions {
 }
 
 /**
+ * runPush 内部状态。用类型收敛"跨 step 共享"的字段，避免 800 行大函数里满地飞的局部变量。
+ */
+interface PushContext {
+    readonly opts: RunPushOptions;
+    readonly baseName: string;
+    readonly fileExt: string;
+    readonly pushStart: number;
+    readonly traceId: string;
+    readonly maxRows: number;
+    readonly telemetryPrefix: string;
+    readonly hooks: PushCoreHooks;
+}
+
+/** 埋点事件的公共字段（ext + traceId），所有 step 共用。 */
+function baseTelemetryProps(ctx: PushContext): Record<string, string> {
+    return { ext: ctx.fileExt, traceId: ctx.traceId };
+}
+
+/** step 0：任务信息拉取 + 分派对应 hook。返回 taskInfo 或 null（表示已中断）。 */
+async function stepResolveTaskInfo(ctx: PushContext): Promise<{ testTaskNo: string; subTestTaskId: string } | null> {
+    const { filePath } = ctx.opts;
+    const result = await resolveTaskInfoOrNull(filePath);
+    if (result.status === 'unbound') {
+        TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, { ...baseTelemetryProps(ctx), reason: 'unbound' });
+        ctx.hooks.onUnbound();
+        return null;
+    }
+    if (result.status === 'error') {
+        console.error(`[推送][${ctx.traceId}] 获取任务信息异常:`, result.errorMessage);
+        TelemetryService.sendTelemetryErrorEvent(`${ctx.telemetryPrefix}.taskInfoFailed`, {
+            ...baseTelemetryProps(ctx),
+            ...telemetryErrProps(result.error),
+            errorMessage: result.errorMessage.slice(0, 500),
+            stackHead: stackHead(result.error),
+        });
+        const uiMsg = `未能获取任务信息，推送已中断：${result.errorMessage}`;
+        if (ctx.hooks.onTaskInfoFailed) ctx.hooks.onTaskInfoFailed(uiMsg);
+        else ctx.hooks.onBackendError(uiMsg);
+        return null;
+    }
+    return result.taskInfo;
+}
+
+/** step 1：贴 __rowIndex（浅注入，不改变行引用）。 */
+function stampRowIndex(rows: RowLike[], resolveRowIndex: (i: number) => number): RowLike[] {
+    return rows.map((r, i) => {
+        if (r && typeof r === 'object' && (r as any)[ROW_INDEX_META] === undefined) {
+            (r as any)[ROW_INDEX_META] = resolveRowIndex(i);
+        }
+        return r;
+    });
+}
+
+/** step 1.5：行数上限保护。命中返回 true 表示已中断。 */
+function stepCheckMaxRows(ctx: PushContext, rowCount: number): boolean {
+    if (rowCount <= ctx.maxRows) return false;
+    TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
+        ...baseTelemetryProps(ctx),
+        reason: 'exceedMaxRows',
+        totalRows: String(rowCount),
+        limit: String(ctx.maxRows),
+    });
+    const uiMsg = `本次待推送 ${rowCount} 行，超过单次上限 ${ctx.maxRows} 行。请分批选择后再推送，避免请求超时。`;
+    if (ctx.hooks.onExceedMaxRows) ctx.hooks.onExceedMaxRows({ rows: rowCount, limit: ctx.maxRows, message: uiMsg });
+    else ctx.hooks.onBackendError(uiMsg);
+    return true;
+}
+
+/** step 2 结果：预校验产出。 */
+interface PreValidationResult {
+    /** 预校验失败明细（占位 + 空，占位在前） */
+    failures: PushFailureItem[];
+    /** 需要从 payload 剔除的原始下标集合 */
+    droppedIndex: Set<number>;
+    /** 分桶明细（用于差异化埋点） */
+    byKind: Record<string, PushFailureItem[]>;
+}
+
+/**
+ * step 2：预校验 —— 通用 validators 驱动 + 差异化埋点 + 占位失败持久化。
+ */
+async function stepPreValidate(ctx: PushContext, rows: RowLike[]): Promise<PreValidationResult> {
+    const { failuresByKind, droppedIndex } = runValidators(rows, ctx.opts.resolveRowIndex);
+    const placeholderFailures = failuresByKind['placeholder'] || [];
+    const emptyFailures = failuresByKind['empty'] || [];
+    const failures: PushFailureItem[] = [...placeholderFailures, ...emptyFailures];
+    if (failures.length === 0) {
+        return { failures, droppedIndex, byKind: failuresByKind };
+    }
+    // 差异化埋点（保持事件名不变）
+    if (placeholderFailures.length > 0) {
+        TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.placeholderTestcaseIdSkipped`, {
+            ...baseTelemetryProps(ctx),
+            count: String(placeholderFailures.length),
+        });
+    }
+    if (emptyFailures.length > 0) {
+        TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.emptyTestcaseIdSkipped`, {
+            ...baseTelemetryProps(ctx),
+            count: String(emptyFailures.length),
+        });
+    }
+    // 只对"占位失败"做持久化红色高亮（空 tsId 无稳定 key，跳过）
+    if (placeholderFailures.length > 0) {
+        try {
+            const placeholderRows = placeholderFailures.map(f => ({ [TS_ID_COLUMN]: f.tsId } as RowLike));
+            await persistPushFailures(
+                ctx.opts.filePath,
+                placeholderRows,
+                placeholderFailures.map(f => ({ tsId: f.tsId, reason: f.reason })),
+                [],
+            );
+        } catch (err: any) {
+            console.error(`[推送][${ctx.traceId}] 持久化占位失败标记失败:`, err?.message || err);
+        }
+    }
+    return { failures, droppedIndex, byKind: failuresByKind };
+}
+
+/**
+ * step 2 收尾：从 rows 中剔除预校验失败下标，产出新 rows + preFilterToOriginal 映射。
+ */
+function applyPreValidationDrops(rows: RowLike[], droppedIndex: Set<number>): { rows: RowLike[]; preFilterToOriginal: number[] } {
+    if (droppedIndex.size === 0) {
+        return { rows, preFilterToOriginal: rows.map((_, i) => i) };
+    }
+    const kept: RowLike[] = [];
+    const preFilterToOriginal: number[] = [];
+    for (let i = 0; i < rows.length; i++) {
+        if (!droppedIndex.has(i)) {
+            kept.push(rows[i]);
+            preFilterToOriginal.push(i);
+        }
+    }
+    return { rows: kept, preFilterToOriginal };
+}
+
+/**
+ * 计算"全部行都被剔除"的 aborted reason（用于埋点归类）。
+ */
+function pickAllDroppedReason(byKind: Record<string, PushFailureItem[]>): string {
+    const p = (byKind['placeholder'] || []).length;
+    const e = (byKind['empty'] || []).length;
+    if (p > 0 && e > 0) return 'placeholderAndEmptyTestcaseId';
+    if (p > 0) return 'placeholderTestcaseIdOnly';
+    return 'emptyTestcaseIdOnly';
+}
+
+/**
+ * step 3：调用后端 & 校验 returnCode。成功返回 body，失败返回 null（已通知 hook）。
+ */
+async function stepInvokeBackend(
+    ctx: PushContext,
+    rows: RowLike[],
+    taskInfo: { testTaskNo: string; subTestTaskId: string },
+    pushSource: string,
+): Promise<any | null> {
+    console.log(`[推送][${ctx.traceId}] 文件: ${ctx.opts.filePath}, ${rows.length} 行`);
+    TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.start`, {
+        ...baseTelemetryProps(ctx), totalRows: String(rows.length),
+    });
+    emitProgress(ctx.hooks, 'start', { rows: rows.length });
+    emitProgress(ctx.hooks, 'pushing', { rows: rows.length });
+    const pushResult = await pushTestCase(
+        ctx.opts.extensionContext,
+        normalizePushData(rows),
+        taskInfo,
+        ctx.baseName,
+        pushSource as any,
+    );
+    if (pushResult.returnCode !== 'SUC0000') {
+        ctx.hooks.onBackendError(pushResult.errorMsg || '推送失败');
+        TelemetryService.sendTelemetryErrorEvent(`${ctx.telemetryPrefix}.failed`, {
+            ...baseTelemetryProps(ctx),
+            returnCode: pushResult.returnCode || '',
+            totalRows: String(rows.length),
+            costMs: String(Date.now() - ctx.pushStart),
+        });
+        return null;
+    }
+    return pushResult.body;
+}
+
+/**
+ * step 5：样例泄露清洗 —— 埋点 + 从成功/失败列表移除样例 tsId。
+ */
+function sanitizeSampleLeaks(
+    ctx: PushContext,
+    successMappings: PushSuccessMapping[],
+    failures: PushResponseFailure[],
+): { successMappings: PushSuccessMapping[]; failures: PushResponseFailure[] } {
+    const leakedSuccess = successMappings.filter(m => m && isSampleTsId(m.tsId)).length;
+    const leakedFailure = failures.filter(f => f && isSampleTsId(f.tsId)).length;
+    if (leakedSuccess === 0 && leakedFailure === 0) return { successMappings, failures };
+    TelemetryService.sendTelemetryErrorEvent(`${ctx.telemetryPrefix}.templateExampleLeaked`, {
+        ...baseTelemetryProps(ctx),
+        leakedSuccess: String(leakedSuccess),
+        leakedFailure: String(leakedFailure),
+    });
+    return {
+        successMappings: successMappings.filter(m => !(m && isSampleTsId(m.tsId))),
+        failures: failures.filter(f => !(f && isSampleTsId(f.tsId))),
+    };
+}
+
+/**
+ * step 6b：全部失败场景下，同样刷新一次快照基线并触发 onAllFailedSnapshot。
+ */
+async function refreshAllFailedSnapshot(ctx: PushContext): Promise<void> {
+    try {
+        let allFailParser: FileParser | undefined = ctx.opts.parser;
+        if (!allFailParser) {
+            const fileType = detectFileType(ctx.opts.filePath);
+            if (fileType) allFailParser = createParser(fileType);
+        }
+        if (!allFailParser) return;
+        const parsed = await allFailParser.parse(ctx.opts.filePath);
+        await savePushSnapshot(ctx.opts.filePath, parsed.tableData);
+        if (ctx.hooks.onAllFailedSnapshot) {
+            await ctx.hooks.onAllFailedSnapshot({
+                parsedTableData: parsed.tableData,
+                parsedSourceData: parsed.sourceData,
+            });
+        }
+    } catch (err: any) {
+        console.error(`[推送][${ctx.traceId}] 全部失败，快照更新失败:`, err?.message || err);
+        TelemetryService.sendTelemetryErrorEvent(`${ctx.telemetryPrefix}.allFailSnapshotFailed`, {
+            ...baseTelemetryProps(ctx),
+            errorMessage: String(err?.message || String(err)).slice(0, 500),
+            stackHead: stackHead(err),
+        });
+    }
+}
+
+/**
+ * 顶层未预期异常统一兜底 —— 区分 MapError（结构化）与普通 Error（纯文本）。
+ * 保证前端一定能解锁 loading。
+ */
+function handleUnexpectedError(
+    ctx: PushContext,
+    err: any,
+    originalRowsCount: number,
+): void {
+    const errorMessage = String(err?.message || err || '未知错误');
+    console.error(`[推送][${ctx.traceId}] runPush 未预期异常:`, errorMessage, err);
+
+    // 分支 A：MapError —— pushDataMapper 已把主表行号写到 err.rowIndex，直接组装 PushFailureItem
+    if (isMapError(err)) {
+        const mapFailure: PushFailureItem = {
+            tsId: err.caseTag || '',
+            reason: errorMessage,
+            rowIndex: err.rowIndex,
+        };
+        TelemetryService.sendTelemetryErrorEvent(`${ctx.telemetryPrefix}.mapError`, {
+            ...baseTelemetryProps(ctx),
+            mapErrorReason: err.reason || '',
+            mapErrorRowIndex: err.rowIndex !== undefined ? String(err.rowIndex) : '',
+            errorMessage: errorMessage.slice(0, 500),
+            costMs: String(Date.now() - ctx.pushStart),
+        });
+        try {
+            ctx.hooks.onComplete({ successCount: 0, failures: [mapFailure], total: 1 });
+        } catch (hookErr: any) {
+            console.error(`[推送][${ctx.traceId}] onComplete 钩子抛错:`, hookErr?.message || hookErr);
+        }
+        emitProgress(ctx.hooks, 'done', { rows: originalRowsCount });
+        return;
+    }
+
+    // 分支 B：非 MapError —— 弹纯文本
+    TelemetryService.sendTelemetryErrorEvent(`${ctx.telemetryPrefix}.unexpectedError`, {
+        ...baseTelemetryProps(ctx),
+        ...telemetryErrProps(err),
+        errorMessage: errorMessage.slice(0, 500),
+        stackHead: stackHead(err),
+        costMs: String(Date.now() - ctx.pushStart),
+    });
+    try {
+        const uiMsg = `推送异常：${errorMessage}`;
+        if (ctx.hooks.onUnexpectedError) ctx.hooks.onUnexpectedError(uiMsg);
+        else ctx.hooks.onBackendError(uiMsg);
+    } catch (hookErr: any) {
+        console.error(`[推送][${ctx.traceId}] onUnexpectedError 钩子抛错:`, hookErr?.message || hookErr);
+    }
+    emitProgress(ctx.hooks, 'done', { rows: originalRowsCount });
+}
+
+/**
  * 主推送流程。执行顺序（含短路）：
  *   0. taskInfo 未绑定 → onUnbound + return
  *   1. 空数据 → onNoData + return（右键场景才有 onNoData 钩子）
- *   2. TESTCASE_ID 占位命中 → onPlaceholderTestcaseId + persistPushFailures + return
+ *   2. 预校验失败（占位/空 tsId） → 分别埋点/持久化，全部剔除则短路走 onComplete
  *   3. 样例过滤后无剩余 → onOnlySampleRows + return
  *   4. pushTestCase → returnCode 失败 → onBackendError + return
- *   5. parsePushResponse → 泄露埋点
- *   6. 成功回写 testCaseNo（含快照更新）
- *   7. 全部失败兜底快照（onAllFailedSnapshot）
- *   8. 汇总 failureItems（三级降级） → onComplete + persistPushFailures
+ *   5. parsePushResponse → 泄露埋点 + 清洗
+ *   6. 成功回写 testCaseNo（含快照更新）/ 全部失败快照兜底
+ *   7. 汇总 failureItems（三级降级） → onComplete + persistPushFailures
  */
 export async function runPush(opts: RunPushOptions): Promise<void> {
-    const {
-        extensionContext,
-        filePath,
-        rows: originalRows,
-        resolveRowIndex,
-        frontRowIndexMap,
-        frontPushIndexToRow,
-        parser,
-        telemetryPrefix,
-        hooks,
-    } = opts;
-
-    const baseName = path.basename(filePath);
-    const fileExt = path.extname(filePath).toLowerCase();
-    const pushStart = Date.now();
-    // P2-1：贯穿本次流程的 traceId，全部埋点都会带上，方便定位同一次推送
-    const traceId = newPushTraceId();
-    // P3-1：行数上限（防御用户全选大文件）
-    const maxRows = typeof opts.maxRows === 'number' && opts.maxRows > 0 ? opts.maxRows : DEFAULT_MAX_PUSH_ROWS;
+    const ctx: PushContext = {
+        opts,
+        baseName: path.basename(opts.filePath),
+        fileExt: path.extname(opts.filePath).toLowerCase(),
+        pushStart: Date.now(),
+        traceId: newPushTraceId(),
+        maxRows: typeof opts.maxRows === 'number' && opts.maxRows > 0 ? opts.maxRows : DEFAULT_MAX_PUSH_ROWS,
+        telemetryPrefix: opts.telemetryPrefix,
+        hooks: opts.hooks,
+    };
+    const originalRowsCount = Array.isArray(opts.rows) ? opts.rows.length : 0;
 
     try {
+        // ---- 0. 任务绑定校验 ----
+        const taskInfo = await stepResolveTaskInfo(ctx);
+        if (!taskInfo) return;
 
-    // ---- 0. 任务绑定校验 ----
-    const taskInfoResult = await resolveTaskInfoOrNull(filePath);
-    if (taskInfoResult.status === 'unbound') {
-        TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.aborted`, { reason: 'unbound', ext: fileExt, traceId });
-        hooks.onUnbound();
-        return;
-    }
-    if (taskInfoResult.status === 'error') {
-        console.error(`[推送][${traceId}] 获取任务信息异常:`, taskInfoResult.errorMessage);
-        TelemetryService.sendTelemetryErrorEvent(`${telemetryPrefix}.taskInfoFailed`, {
-            ext: fileExt,
-            traceId,
-            ...telemetryErrProps(taskInfoResult.error),
-            errorMessage: taskInfoResult.errorMessage.slice(0, 500),
-            stackHead: stackHead(taskInfoResult.error),
-        });
-        const uiMsg = `未能获取任务信息，推送已中断：${taskInfoResult.errorMessage}`;
-        // 优先使用专用钩子；未实现时降级走 onBackendError 以保证前端能解锁按钮。
-        if (hooks.onTaskInfoFailed) hooks.onTaskInfoFailed(uiMsg);
-        else hooks.onBackendError(uiMsg);
-        return;
-    }
-    const taskInfo = taskInfoResult.taskInfo;
-
-    // ---- 1. 空数据 ----
-    let rows: RowLike[] = Array.isArray(originalRows) ? originalRows : [];
-    if (rows.length === 0) {
-        TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.aborted`, { reason: 'noData', ext: fileExt, traceId });
-        hooks.onNoData?.();
-        return;
-    }
-
-    // 判定推送来源：插件文件 → testAgentMA；含 TC 前缀 → testAgent；否则 → testAgentMA
-    const pushSource = getPushSource(filePath, rows);
-
-    // ---- 1.1 行数上限保护（P3-1） ----
-    if (rows.length > maxRows) {
-        TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.aborted`, {
-            reason: 'exceedMaxRows',
-            ext: fileExt,
-            traceId,
-            totalRows: String(rows.length),
-            limit: String(maxRows),
-        });
-        const uiMsg = `本次待推送 ${rows.length} 行，超过单次上限 ${maxRows} 行。请分批选择后再推送，避免请求超时。`;
-        if (hooks.onExceedMaxRows) hooks.onExceedMaxRows({ rows: rows.length, limit: maxRows, message: uiMsg });
-        else hooks.onBackendError(uiMsg);
-        return;
-    }
-
-    // ---- 2. 前置校验：TESTCASE_ID 占位 & 空 tsId ----
-    // 与旧逻辑（命中即整批中断）不同：现在把占位/空 tsId 行标记为"预校验失败"并从推送
-    // payload 中剔除，剩余合规行继续走后端；若全部行都命中，则跳过后端调用直接由
-    // onComplete 汇总输出。这样"部分合规 + 部分占位"的选中集能拿到完整结果。
-    // 注意：必须在 filterTemplateExampleRows 之前执行，行号才与主表原始行号一致。
-    const placeholderFailures = collectPlaceholderTestcaseIdFailures(rows, resolveRowIndex);
-    const emptyFailures = collectEmptyTestcaseIdFailures(rows, resolveRowIndex);
-    // 预校验失败合集：进入最终 onComplete 与失败弹窗；顺序 = 占位在前、空在后（人肉排查更直观）
-    const preValidationFailures: PushFailureItem[] = [...placeholderFailures, ...emptyFailures];
-    // 剔除标记：命中占位或空 tsId 的下标不再进入后端 payload
-    const droppedIndexSet = new Set<number>();
-    if (preValidationFailures.length > 0) {
-        rows.forEach((rec, i) => {
-            const raw = rec ? rec[TS_ID_COLUMN] : undefined;
-            const tsId = raw == null ? '' : String(raw).trim();
-            if (tsId === '' || tsId.toUpperCase() === 'TESTCASE_ID') {
-                droppedIndexSet.add(i);
-            }
-        });
-        // 埋点：不阻断，只记录预校验剔除数量（区别于旧的 aborted）
-        if (placeholderFailures.length > 0) {
-            TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.placeholderTestcaseIdSkipped`, {
-                ext: fileExt,
-                traceId,
-                count: String(placeholderFailures.length),
+        // ---- 1. 空数据短路 ----
+        let rows: RowLike[] = Array.isArray(opts.rows) ? opts.rows : [];
+        if (rows.length === 0) {
+            TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
+                ...baseTelemetryProps(ctx), reason: 'noData',
             });
-        }
-        if (emptyFailures.length > 0) {
-            TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.emptyTestcaseIdSkipped`, {
-                ext: fileExt,
-                traceId,
-                count: String(emptyFailures.length),
-            });
-        }
-        // 持久化占位失败标记：以真实占位 tsId 为 key 写盘，保证关闭弹窗/重开文件后
-        // 占位行仍保持红色高亮。空 tsId 行由于没有可用的 tsId 无法参与红色高亮。
-        // 只把"占位失败行"作为本次持久化 batch 传入，避免 batchTsIds 混入合规行 tsId
-        // 导致合规行的历史失败标记被误清（真正的推送结果持久化在 step 8 完成）。
-        if (placeholderFailures.length > 0) {
-            try {
-                const placeholderRows = placeholderFailures.map(f => ({ [TS_ID_COLUMN]: f.tsId } as RowLike));
-                await persistPushFailures(
-                    filePath,
-                    placeholderRows,
-                    placeholderFailures.map(f => ({ tsId: f.tsId, reason: f.reason })),
-                    [],
-                );
-            } catch (err: any) {
-                console.error(`[推送][${traceId}] 持久化占位失败标记失败:`, err?.message || err);
-            }
-        }
-    }
-    // 剔除占位/空 tsId 行，同时构建 preFilterToOriginal：新数组下标 → 原 rows 下标
-    // 后续如果还需要与前端 pushIndexToRow 对齐，需要把该映射与 filteredToOriginal 串联起来。
-    let preFilterToOriginal: number[];
-    if (droppedIndexSet.size > 0) {
-        const kept: RowLike[] = [];
-        preFilterToOriginal = [];
-        for (let i = 0; i < rows.length; i++) {
-            if (!droppedIndexSet.has(i)) {
-                kept.push(rows[i]);
-                preFilterToOriginal.push(i);
-            }
-        }
-        rows = kept;
-    } else {
-        preFilterToOriginal = rows.map((_, i) => i);
-    }
-
-    // 若剔除后已无可推送行 —— 直接由 onComplete 汇总输出，不再调后端
-    if (rows.length === 0) {
-        TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.aborted`, {
-            reason: placeholderFailures.length > 0 && emptyFailures.length > 0
-                ? 'placeholderAndEmptyTestcaseId'
-                : (placeholderFailures.length > 0 ? 'placeholderTestcaseIdOnly' : 'emptyTestcaseIdOnly'),
-            ext: fileExt,
-            traceId,
-            count: String(preValidationFailures.length),
-        });
-        hooks.onComplete({
-            successCount: 0,
-            failures: preValidationFailures,
-            total: preValidationFailures.length,
-        });
-        try { hooks.onProgress?.('done', { rows: 0 }); } catch (_) { /* 忽略 */ }
-        return;
-    }
-
-    // ---- 3. 静默过滤中文样例占位行 ----
-    const { filtered, sampleFailures, skipped, filteredToOriginal } = extractSampleRows(filePath, rows, resolveRowIndex);
-    if (filtered.length === 0) {
-        // 边界：过滤后无剩余行。
-        //   - 若同时存在预校验失败（占位/空 tsId），说明用户选的行是"样例 + 占位/空"混合，
-        //     不能只提示"为样例数据"，需把预校验失败一起在 onComplete 弹窗中展示；
-        //   - 否则（纯样例）维持原语义，走 onOnlySampleRows。
-        if (preValidationFailures.length > 0) {
-            TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.aborted`, {
-                reason: 'onlyTemplateExampleAndPreValidationFailed',
-                ext: fileExt,
-                traceId,
-                sampleCount: String(sampleFailures.length),
-                preValidationCount: String(preValidationFailures.length),
-            });
-            hooks.onComplete({
-                successCount: 0,
-                failures: [...preValidationFailures, ...sampleFailures],
-                total: preValidationFailures.length + sampleFailures.length,
-            });
-            try { hooks.onProgress?.('done', { rows: 0 }); } catch (_) { /* 忽略 */ }
+            ctx.hooks.onNoData?.();
             return;
         }
-        TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.aborted`, {
-            reason: 'onlyTemplateExample',
-            ext: fileExt,
-            traceId,
-            count: String(sampleFailures.length),
-        });
-        hooks.onOnlySampleRows(sampleFailures);
-        return;
-    }
-    if (skipped > 0) {
-        console.log(`[推送][${traceId}] 已过滤 ${skipped} 行模板示例数据`);
-        TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.skipTemplateExample`, {
-            ext: fileExt,
-            traceId,
-            skipped: String(skipped),
-        });
-    }
-    rows = filtered;
 
-    // ---- 4. 调用后端推送接口 ----
-    console.log(`[推送][${traceId}] 文件: ${filePath}, ${rows.length} 行`);
-    TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.start`, { ext: fileExt, traceId, totalRows: String(rows.length) });
-    // P3-2：进度反馈 —— 让调用方可选提示用户
-    try { hooks.onProgress?.('start', { rows: rows.length }); } catch (_) { /* 忽略 */ }
-    try { hooks.onProgress?.('pushing', { rows: rows.length }); } catch (_) { /* 忽略 */ }
-    const pushResult = await pushTestCase(
-        extensionContext,
-        normalizePushData(rows),
-        taskInfo,
-        baseName,
-        pushSource,
-    );
-    if (pushResult.returnCode !== 'SUC0000') {
-        hooks.onBackendError(pushResult.errorMsg || '推送失败');
-        TelemetryService.sendTelemetryErrorEvent(`${telemetryPrefix}.failed`, {
-            ext: fileExt,
-            traceId,
-            returnCode: pushResult.returnCode || '',
-            totalRows: String(rows.length),
-            costMs: String(Date.now() - pushStart),
-        });
-        return;
-    }
+        // ---- 1.a 贴 __rowIndex（早于任何过滤，行号永远跟着行走） ----
+        rows = stampRowIndex(rows, opts.resolveRowIndex);
 
-    // ---- 5. 解析响应 & 泄露埋点/清理 ----
-    let { successMappings, failures } = parsePushResponse(pushResult.body, rows);
+        const pushSource = getPushSource(opts.filePath, rows);
 
-    // 防御埋点：样例行按设计不应进入后端推送结果。一旦在 successMappings/failures 中出现样例 tsId，
-    // 说明过滤逻辑被绕过（文件标识丢失 / 上下文变量异常等），需以该事件快速定位问题。
-    const leakedSuccess = successMappings.filter(m => m && isSampleTsId(m.tsId)).length;
-    const leakedFailure = failures.filter(f => f && isSampleTsId(f.tsId)).length;
-    if (leakedSuccess > 0 || leakedFailure > 0) {
-        TelemetryService.sendTelemetryErrorEvent(`${telemetryPrefix}.templateExampleLeaked`, {
-            ext: fileExt,
-            traceId,
-            leakedSuccess: String(leakedSuccess),
-            leakedFailure: String(leakedFailure),
-        });
-        // P2-2：泄露自动清理 —— 避免样例 tsId 被写入 pushSnapshot / pushFailureStore 后污染高亮状态。
-        //        埋点已记录，后续处理只使用清理后的干净数据。
-        successMappings = successMappings.filter(m => !(m && isSampleTsId(m.tsId)));
-        failures = failures.filter(f => !(f && isSampleTsId(f.tsId)));
-    }
+        // ---- 1.b 行数上限保护 ----
+        if (stepCheckMaxRows(ctx, rows.length)) return;
 
-    // ---- 6. 成功回写 testCaseNo & 快照 ----
-    if (successMappings.length > 0) {
-        try { hooks.onProgress?.('writingBack', { rows: successMappings.length }); } catch (_) { /* 忽略 */ }
-        await writeBackTestCaseNos({
-            filePath,
-            successMappings,
-            parser,
-            hooks: {
-                markSelfSave: hooks.markSelfSave,
-                afterWriteBack: hooks.afterWriteBack,
-                onWriteBackFailed: hooks.onWriteBackFailed,
-            },
-            hasFailure: failures.length > 0,
-            // traceId 会自动带入 writeBackFailed 埋点
-            telemetryContext: { ext: fileExt, traceId },
-            telemetryPrefix,
-        });
-    } else if (failures.length > 0) {
-        // 全部推送失败：与"成功回写"路径保持一致的快照策略 —— 全量刷新快照基线，
-        // 避免用户在推送前编辑过的行残留旧快照，下次 diff 误判为"修改"黄色高亮。
-        // 失败行的红色高亮由 pushFailures 独立管理。
-        //   - 编辑器场景：parser 已注入 → 复用；同时触发 onAllFailedSnapshot 让 UI 层清高亮。
-        //   - 右键推送场景：外部无 parser → 内部按 fileType 自建（与 writeBackTestCaseNos 逻辑对齐）。
-        try {
-            let allFailParser: FileParser | undefined = parser;
-            if (!allFailParser) {
-                const fileType = detectFileType(filePath);
-                if (fileType) allFailParser = createParser(fileType);
+        // ---- 2. 预校验（占位 + 空 tsId） ----
+        const pre = await stepPreValidate(ctx, rows);
+        const preValidationFailures = pre.failures;
+
+        const applied = applyPreValidationDrops(rows, pre.droppedIndex);
+        rows = applied.rows;
+        const preFilterToOriginal = applied.preFilterToOriginal;
+
+        // 预校验剔除后已无可推送行 —— 直接短路
+        if (rows.length === 0) {
+            TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
+                ...baseTelemetryProps(ctx),
+                reason: pickAllDroppedReason(pre.byKind),
+                count: String(preValidationFailures.length),
+            });
+            ctx.hooks.onComplete({
+                successCount: 0,
+                failures: preValidationFailures,
+                total: preValidationFailures.length,
+            });
+            emitProgress(ctx.hooks, 'done', { rows: 0 });
+            return;
+        }
+
+        // ---- 3. 样例占位过滤 ----
+        const { filtered, sampleFailures, skipped, filteredToOriginal } = extractSampleRows(
+            opts.filePath, rows, opts.resolveRowIndex,
+        );
+        if (filtered.length === 0) {
+            // 混合场景：样例 + 预校验失败 → 一起在 onComplete 展示
+            if (preValidationFailures.length > 0) {
+                TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
+                    ...baseTelemetryProps(ctx),
+                    reason: 'onlyTemplateExampleAndPreValidationFailed',
+                    sampleCount: String(sampleFailures.length),
+                    preValidationCount: String(preValidationFailures.length),
+                });
+                ctx.hooks.onComplete({
+                    successCount: 0,
+                    failures: [...preValidationFailures, ...sampleFailures],
+                    total: preValidationFailures.length + sampleFailures.length,
+                });
+                emitProgress(ctx.hooks, 'done', { rows: 0 });
+                return;
             }
-            if (allFailParser) {
-                const parsed = await allFailParser.parse(filePath);
-                await savePushSnapshot(filePath, parsed.tableData);
-                if (hooks.onAllFailedSnapshot) {
-                    await hooks.onAllFailedSnapshot({
-                        parsedTableData: parsed.tableData,
-                        parsedSourceData: parsed.sourceData,
-                    });
-                }
-            }
-        } catch (err: any) {
-            console.error(`[推送][${traceId}] 全部失败，快照更新失败:`, err?.message || err);
-            TelemetryService.sendTelemetryErrorEvent(`${telemetryPrefix}.allFailSnapshotFailed`, {
-                ext: fileExt,
-                traceId,
-                errorMessage: String(err?.message || String(err)).slice(0, 500),
-                stackHead: stackHead(err),
+            TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
+                ...baseTelemetryProps(ctx),
+                reason: 'onlyTemplateExample',
+                count: String(sampleFailures.length),
+            });
+            ctx.hooks.onOnlySampleRows(sampleFailures);
+            return;
+        }
+        if (skipped > 0) {
+            console.log(`[推送][${ctx.traceId}] 已过滤 ${skipped} 行模板示例数据`);
+            TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.skipTemplateExample`, {
+                ...baseTelemetryProps(ctx), skipped: String(skipped),
             });
         }
-    }
+        rows = filtered;
 
-    // ---- 7. 汇总失败行号（三级降级）----
-    const tsIdToIndex = buildTsIdToIndex(rows);
-    // filteredToOriginal 的语义此处需要与"预剔除（占位/空）"级联：
-    //   extractSampleRows 返回的 filteredToOriginal 是"过滤后 rows 下标 → 预剔除后 rows 下标"，
-    //   我们再串上 preFilterToOriginal（"预剔除后下标 → 原始 rows 下标"），
-    //   得到"过滤后 rows 下标 → 原始 rows 下标"，供 buildFailureItems 与 frontPushIndexToRow 对齐。
-    const composedFilteredToOriginal: number[] = filteredToOriginal.map(idx => {
-        return typeof preFilterToOriginal[idx] === 'number' ? preFilterToOriginal[idx] : idx;
-    });
-    const failureItems = buildFailureItems(failures, tsIdToIndex, frontRowIndexMap, frontPushIndexToRow, composedFilteredToOriginal);
-    // 合并预校验失败（占位 / 空 tsId）与后端返回失败：预校验失败排在前面，便于用户按行号定位
-    const mergedFailures: PushFailureItem[] = [...preValidationFailures, ...failureItems];
-    // total 覆盖"用户最初选中的所有案例"：预校验失败行数 + 实际推送到后端的行数
-    const total = preValidationFailures.length + rows.length;
+        // ---- 4. 后端推送 ----
+        const body = await stepInvokeBackend(ctx, rows, taskInfo, pushSource);
+        if (body === null) return;
 
-    // ---- 8. 输出结果 & 持久化失败标记 ----
-    hooks.onComplete({ successCount: successMappings.length, failures: mergedFailures, total });
+        // ---- 5. 解析响应 & 泄露清洗 ----
+        const parsed = parsePushResponse(body, rows);
+        const cleaned = sanitizeSampleLeaks(ctx, parsed.successMappings, parsed.failures);
+        const successMappings = cleaned.successMappings;
+        const failures = cleaned.failures;
 
-    try {
-        await persistPushFailures(filePath, rows, failures, successMappings);
-    } catch (err: any) {
-        console.error(`[推送][${traceId}] 持久化失败标记失败:`, err?.message || err);
-    }
-
-    TelemetryService.sendTelemetryEvent(`${telemetryPrefix}.complete`, {
-        ext: fileExt,
-        traceId,
-        pushResult: mergedFailures.length === 0 ? 'allSuccess' : (successMappings.length === 0 ? 'allFail' : 'partial'),
-        totalRows: String(total),
-        successRows: String(successMappings.length),
-        failedRows: String(mergedFailures.length),
-        // 附带预校验剔除数量，方便对账
-        preValidationFailedRows: String(preValidationFailures.length),
-        costMs: String(Date.now() - pushStart),
-    });
-    try { hooks.onProgress?.('done', { rows: total }); } catch (_) { /* 忽略 */ }
-
-    } catch (err: any) {
-        // 顶层兜底：任何未处理的异常都不能冒泡到调用方，
-        // 否则前端推送按钮会永久 loading，用户看不到任何提示。
-        const errorMessage = String(err?.message || err || '未知错误');
-        console.error(`[推送][${traceId}] runPush 未预期异常:`, errorMessage, err);
-        TelemetryService.sendTelemetryErrorEvent(`${telemetryPrefix}.unexpectedError`, {
-            ext: fileExt,
-            traceId,
-            ...telemetryErrProps(err),
-            errorMessage: errorMessage.slice(0, 500),
-            stackHead: stackHead(err),
-            costMs: String(Date.now() - pushStart),
-        });
-        try {
-            const uiMsg = `推送异常：${errorMessage}`;
-            if (hooks.onUnexpectedError) hooks.onUnexpectedError(uiMsg);
-            else hooks.onBackendError(uiMsg);
-        } catch (hookErr: any) {
-            // 钩子也抛错：仅埋点，不再往外抛。
-            console.error(`[推送][${traceId}] onUnexpectedError 钩子抛错:`, hookErr?.message || hookErr);
+        // ---- 6. 成功回写 / 全部失败快照兜底 ----
+        if (successMappings.length > 0) {
+            emitProgress(ctx.hooks, 'writingBack', { rows: successMappings.length });
+            await writeBackTestCaseNos({
+                filePath: opts.filePath,
+                successMappings,
+                parser: opts.parser,
+                hooks: {
+                    markSelfSave: ctx.hooks.markSelfSave,
+                    afterWriteBack: ctx.hooks.afterWriteBack,
+                    onWriteBackFailed: ctx.hooks.onWriteBackFailed,
+                },
+                hasFailure: failures.length > 0,
+                telemetryContext: baseTelemetryProps(ctx),
+                telemetryPrefix: ctx.telemetryPrefix,
+            });
+        } else if (failures.length > 0) {
+            await refreshAllFailedSnapshot(ctx);
         }
-        try { hooks.onProgress?.('done', { rows: Array.isArray(originalRows) ? originalRows.length : 0 }); } catch (_) { /* 忽略 */ }
+
+        // ---- 7. 汇总失败行号（三级降级）----
+        const tsIdToIndex = buildTsIdToIndex(rows);
+        // 组合 filteredToOriginal（sample 过滤后 → preFilter 后）+ preFilterToOriginal（preFilter 后 → 原始）
+        const composedFilteredToOriginal: number[] = filteredToOriginal.map(idx =>
+            typeof preFilterToOriginal[idx] === 'number' ? preFilterToOriginal[idx] : idx,
+        );
+        const failureItems = buildFailureItems(
+            failures, tsIdToIndex, opts.frontRowIndexMap, opts.frontPushIndexToRow, composedFilteredToOriginal,
+        );
+        const mergedFailures: PushFailureItem[] = [...preValidationFailures, ...failureItems];
+        const total = preValidationFailures.length + rows.length;
+
+        // ---- 8. 输出结果 & 持久化 ----
+        ctx.hooks.onComplete({ successCount: successMappings.length, failures: mergedFailures, total });
+        try {
+            await persistPushFailures(opts.filePath, rows, failures, successMappings);
+        } catch (err: any) {
+            console.error(`[推送][${ctx.traceId}] 持久化失败标记失败:`, err?.message || err);
+        }
+
+        TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.complete`, {
+            ...baseTelemetryProps(ctx),
+            pushResult: mergedFailures.length === 0
+                ? 'allSuccess'
+                : (successMappings.length === 0 ? 'allFail' : 'partial'),
+            totalRows: String(total),
+            successRows: String(successMappings.length),
+            failedRows: String(mergedFailures.length),
+            preValidationFailedRows: String(preValidationFailures.length),
+            costMs: String(Date.now() - ctx.pushStart),
+        });
+        emitProgress(ctx.hooks, 'done', { rows: total });
+    } catch (err: any) {
+        // 顶层未预期异常兜底：MapError / 普通 Error
+        handleUnexpectedError(ctx, err, originalRowsCount);
     }
 }

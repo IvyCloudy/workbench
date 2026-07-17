@@ -222,8 +222,9 @@ function rebuildFindMatches(kw) {
     var needle = caseSensitive ? S._findKw : S._findKw.toLowerCase();
     var rows = (S.data && S.data.rows) || [];
     var headers = (S.data && S.data.headers) || [];
-    // 当 toggle 过滤（仅看失败/修改/新增/删除）激活时，find 只搜索可见行
-    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly;
+    // 当 toggle 过滤（仅看失败/修改/新增/删除/标记）激活时，find 只搜索可见行
+    // 与 02d-sel-utils.js:208/229 的 hasToggleFilter 保持同源，避免 _markedOnly 场景下匹配到隐藏行
+    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly || S._markedOnly;
     var visibleRows = null;
     if (hasToggle && S._viewRows && S._viewRows.length >= 0) {
         visibleRows = new Set(S._viewRows);
@@ -306,7 +307,36 @@ function clearFindHighlight() {
     });
 }
 
+// 匹配集一致性校验：面板打开期间若过滤/搜索状态变化，_matches 可能包含
+// 已被隐藏或已被暴露的行，导致「下一个/上一个」跳到不可见行或漏跳新可见行。
+// 消费端幂等重建，避开在每处 toggle 里嵌入 rebuild 调用（污染切换路径）。
+function _ensureFindMatchesConsistent() {
+    if (!S._findKw) return;
+    // 若过去从未构建过匹配集，无需处理；stepFind 内部有 empty 兜底重建。
+    if (!S._matches || S._matches.length === 0) return;
+    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly || S._markedOnly;
+    // 判定当前可见集与匹配集是否一致：若差集非空则需要重建
+    if (hasToggle && S._viewRows && S._viewRows.length >= 0) {
+        var vis = new Set(S._viewRows);
+        for (var i = 0; i < S._matches.length; i++) {
+            if (!vis.has(S._matches[i].r)) { rebuildFindMatches(S._findKw); return; }
+        }
+    } else if (!hasToggle) {
+        // 从过滤态切回全表：可能有新增可见行含关键字，也需重建
+        // 仅当 S._matches 长度小于全表可能命中数量时重建（简化判定：只要没有 toggle 就 rebuild 一次）
+        // 但如果每次 stepFind 都无脑 rebuild 会浪费；用 sig 缓存判定
+        var sig = 'nt|' + (S.data && S.data.rows ? S.data.rows.length : 0) + '|' + (S._findKw || '') + '|' + !!S._findCaseSensitive;
+        if (S._matchesLastSig !== sig) { S._matchesLastSig = sig; rebuildFindMatches(S._findKw); return; }
+    }
+    // 更新已构建匹配集的签名（在 toggle 态下 sig 反映过滤集）
+    if (hasToggle) {
+        var vsig = 'tg|' + (S._viewRows ? S._viewRows.length : 0) + '|' + (S._findKw || '') + '|' + !!S._findCaseSensitive;
+        if (S._matchesLastSig !== vsig) { S._matchesLastSig = vsig; rebuildFindMatches(S._findKw); }
+    }
+}
+
 function stepFind(dir) {
+    _ensureFindMatchesConsistent();
     if (S._matches.length === 0) {
         // 重新尝试构建一次（用户可能在面板中没触发 input）
         var fi = document.getElementById('findInput');
@@ -340,6 +370,8 @@ function updateFindInfo() {
 }
 
 function replaceCurrent() {
+    // 与 stepFind 同源校验：防止过滤态切换后 _matches 中含隐藏行导致误改
+    _ensureFindMatchesConsistent();
     if (S._matchIdx < 0 || S._matchIdx >= S._matches.length) {
         showToast('没有可替换项', 'error'); return;
     }
@@ -401,7 +433,7 @@ function replaceAll() {
     var needle = caseSensitive ? S._findKw : S._findKw.toLowerCase();
     var count = 0;
     pushHistory();
-    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly;
+    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly || S._markedOnly;
     var visibleRows = null;
     if (hasToggle && S._viewRows && S._viewRows.length >= 0) {
         visibleRows = new Set(S._viewRows);
@@ -792,8 +824,10 @@ function _parseStepsText(text) {
         if (!cur) continue;
         if (/^【数据】$/.test(t)) { section = 'data'; continue; }
         if (/^【预期结果】$/.test(t)) { section = 'expected'; continue; }
-        var m = t.match(/^步骤(\d+)\s*(.*)/);
-        if (m && section === 'desc') {
+        // 步骤标题行：拼接侧固定使用自然数序号，此处只匹配纯数字，
+        // guard 防多行 desc 首行以"步骤N"开头的正文被误覆盖，与渲染层完全同源。
+        var m = t.match(/^步骤(\d+)(?:\s+(.*))?$/);
+        if (m && section === 'desc' && cur.id === '' && cur.desc === '') {
             cur.id = m[1];
             cur.desc = (m[2] || '').trim();
             continue;
@@ -803,6 +837,17 @@ function _parseStepsText(text) {
         else if (section === 'expected') cur.expected.push(t);
     }
     if (cur) steps.push(cur);
+    // 与 _buildStepExpandedHtml 保持自愈同源：剥离 desc 中历史累积的
+    //"步骤<任意 id>"冗余前缀，让子列筛选统计等下游逻辑读取到干净的字段值。
+    var _cleanRE = /^步骤\S+(?:\s+|$)/;
+    for (var _cs = 0; _cs < steps.length; _cs++) {
+        var _cst = steps[_cs];
+        if (!_cst) continue;
+        var _guard = 0;
+        while (_cleanRE.test(_cst.desc) && _guard++ < 32) {
+            _cst.desc = _cst.desc.replace(_cleanRE, '');
+        }
+    }
     return steps;
 }
 
@@ -873,9 +918,15 @@ function _buildStepsSubValueStats(subIdx) {
     }
     var arr = [];
     map.forEach(function (cnt, key) { arr.push({ key: key, count: cnt }); });
+    // 排序规则（方案 B）：
+    //   1) 空值 __BLANK__ 永远置底（与主表列筛选保持一致的视觉习惯）
+    //   2) 按 count 倒序（高频命中优先，符合 Excel/表格类筛选器的"按频次"直觉）
+    //   3) count 相同时用 tiebreak：纯数字键按数值升序，其余按字典序升序
+    //   ——避免相同频次的项在两次打开弹窗时顺序抖动，也保留局部可预期性
     arr.sort(function (a, b) {
         if (a.key === '__BLANK__') return 1;
         if (b.key === '__BLANK__') return -1;
+        if (a.count !== b.count) return b.count - a.count; // 频次倒序
         var na = parseFloat(a.key), nb = parseFloat(b.key);
         if (!isNaN(na) && !isNaN(nb) && String(na) === a.key && String(nb) === b.key) return na - nb;
         return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0);

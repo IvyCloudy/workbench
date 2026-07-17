@@ -714,6 +714,54 @@ function bindTable() {
             }
             return;
         }
+        // 展开子表格 - 添加分组按钮（UI 检查 / 接口调用 / 数据检查）：
+        //   点击后仅在 DOM 层原地插入"chip 标题 + 空可编辑行"，
+        //   同时移除刚点击的按钮；若一行按钮全部被移除，则移除整行容器。
+        //   数据层不做修改：用户输入内容后 focusout 时会由 _handleSubTableCellEdit
+        //   按新 DOM 结构写回 step.ui_expected / api_expected / db_expected；
+        //   若用户不输入直接失焦，DOM 变更不进入数据模型，下次渲染回归按钮样式。
+        var xseBtnAddGroup = t.closest && t.closest('.xse-btn-add-group');
+        if (xseBtnAddGroup) {
+            e.stopPropagation();
+            e.preventDefault();
+            var _kind = xseBtnAddGroup.getAttribute('data-xse-add-group-kind');
+            var _titleByKind = { 'ui': '【UI检查】', 'api': '【接口调用】', 'data': '【数据检查】' };
+            var _title = _titleByKind[_kind];
+            if (!_title) return;
+            var _addRow = xseBtnAddGroup.closest('.xse-add-group-row');
+            var _td = xseBtnAddGroup.closest('.xse-td-expected');
+            if (!_td || !_addRow) return;
+            // 构造新分组 DOM
+            var _newGroup = document.createElement('div');
+            _newGroup.className = 'xse-group';
+            var _sub = document.createElement('div');
+            _sub.className = 'xse-sub';
+            _sub.setAttribute('contenteditable', 'false');
+            _sub.setAttribute('data-kind', _kind);
+            _sub.textContent = _title;
+            var _line = document.createElement('div');
+            _line.className = 'xse-line';
+            _newGroup.appendChild(_sub);
+            _newGroup.appendChild(_line);
+            // 插入到 add-row 之前，保持"已填在上、按钮在下"的视觉顺序
+            _td.insertBefore(_newGroup, _addRow);
+            // 移除本按钮；如果按钮行清空，整行移除
+            xseBtnAddGroup.parentNode.removeChild(xseBtnAddGroup);
+            if (!_addRow.querySelector('.xse-btn-add-group')) {
+                _addRow.parentNode.removeChild(_addRow);
+            }
+            // 聚焦到新空行，方便用户直接输入
+            try {
+                _td.focus();
+                var _range = document.createRange();
+                _range.selectNodeContents(_line);
+                _range.collapse(true);
+                var _sel = window.getSelection();
+                _sel.removeAllRanges();
+                _sel.addRange(_range);
+            } catch (_err) { /* 聚焦失败降级为无操作 */ }
+            return;
+        }
         // 2b) 明细链接（含已展开步骤的结构化块）：必须先于 cell click 处理
         var dlink = t.closest && t.closest('.xs-detail-link');
         if (!dlink) dlink = t.closest && t.closest('.xs-step-expanded');
@@ -910,10 +958,12 @@ function _buildStepCombined(raws) {
     return raws.map(function (step, _idx) {
         if (!step || typeof step !== 'object') return '';
         var lines = [];
-        // sid 兜底：id 缺失/为空时用数组索引 + 1，避免输出无数字的"步骤"，
-        // 该情况会让 _buildStepExpandedHtml 的解析正则 /^步骤(\d+)/ 匹配失败，
-        // 从而把"步骤"当作 desc 内容累积到 operation，形成 round-trip 污染。
-        var sid = String(step.id != null && step.id !== '' ? step.id : (_idx + 1));
+        // 序号统一用数组索引 + 1（自然数），不再读取 step.id：
+        //   历史上 step.id 可能是业务自定义标识符（如 "step001-1"），
+        //   拼进 "步骤step001-1 xxx" 后无法被解析器（要求 \d+）识别，
+        //   会把整行当作 desc 内容累积回 operation，形成 round-trip 污染。
+        //   固定使用自然数序号后，拼接 / 解析两端语义闭合，从根本上杜绝该类问题。
+        var sid = String(_idx + 1);
 
         // ── 【步骤描述】+ 序号 ──
         var op = (step.operation != null ? String(step.operation) : '').trim();
@@ -942,10 +992,24 @@ function _buildStepCombined(raws) {
         var api = _toExpectedLines(step.api_expected);
         var db = _toExpectedLines(step.db_expected);
         lines.push('【预期结果】');
-        // 始终输出三个分组头，空分组也保留标题，保证重新解析后展示完整
-        lines.push('【UI检查】'); ui.forEach(function (v) { lines.push(String(v)); });
-        lines.push('【接口调用】'); api.forEach(function (v) { lines.push(String(v)); });
-        lines.push('【数据检查】'); db.forEach(function (v) { lines.push(String(v)); });
+        // 只输出非空分组头（配合展开子表格的"+ 添加分组"按钮交互：
+        //   空分组不再渲染为撑高的 chip + 空行，改为单行按钮补齐，
+        //   因此拼接文本里也不再保留空分组头，避免解析回来时被识别为"已填但空"）。
+        //
+        // 注意：即使全空，【预期结果】标题仍然保留，作为步骤末尾的锚点，
+        //       保证 _buildStepExpandedHtml 的 section 状态机能正常推进。
+        if (ui.length > 0) {
+            lines.push('【UI检查】');
+            ui.forEach(function (v) { lines.push(String(v)); });
+        }
+        if (api.length > 0) {
+            lines.push('【接口调用】');
+            api.forEach(function (v) { lines.push(String(v)); });
+        }
+        if (db.length > 0) {
+            lines.push('【数据检查】');
+            db.forEach(function (v) { lines.push(String(v)); });
+        }
 
         return lines.join('\n');
     }).filter(function (s) { return s !== ''; }).join('\n');
@@ -968,11 +1032,9 @@ function _addSubStep(ri, ci, stepIdx) {
     if (!dt.rawRowGroups[ri]) dt.rawRowGroups[ri] = [];
     var raws = dt.rawRowGroups[ri];
     if (stepIdx < 0 || stepIdx >= raws.length) return;
-    raws.splice(stepIdx + 1, 0, { id: '', operation: '', data: [], ui_expected: [], api_expected: [], db_expected: [] });
-    // 重新编号
-    for (var i = 0; i < raws.length; i++) {
-        raws[i].id = String(i + 1);
-    }
+    // 不主动写 id 字段：业务自定义的 step.id 完全由 YAML 决定，
+    // 新增步骤保持无 id，避免 YAML 落盘出现噪音空字段（id: ''）。
+    raws.splice(stepIdx + 1, 0, { operation: '', data: [], ui_expected: [], api_expected: [], db_expected: [] });
     _syncSubSteps(ri, ci, raws);
 }
 
@@ -982,21 +1044,18 @@ function _copySubStep(ri, ci, stepIdx) {
     if (!dt || !dt.rawRowGroups) return;
     var raws = dt.rawRowGroups[ri];
     if (!Array.isArray(raws) || stepIdx < 0 || stepIdx >= raws.length) return;
-    // 深拷贝原步骤对象
+    // 深拷贝原步骤对象：保留源 step.id（若存在），符合"深拷贝"语义
     var src = raws[stepIdx];
     var cloned = {
-        id: '',
         operation: String(src.operation != null ? src.operation : ''),
         data: Array.isArray(src.data) ? src.data.slice() : [],
         ui_expected: Array.isArray(src.ui_expected) ? src.ui_expected.slice() : [],
         api_expected: Array.isArray(src.api_expected) ? src.api_expected.slice() : [],
         db_expected: Array.isArray(src.db_expected) ? src.db_expected.slice() : []
     };
+    // 仅当源 step 存在有效 id 时才拷贝，避免写入空 id
+    if (src.id != null && String(src.id).trim() !== '') cloned.id = src.id;
     raws.splice(stepIdx + 1, 0, cloned);
-    // 重新编号
-    for (var i = 0; i < raws.length; i++) {
-        raws[i].id = String(i + 1);
-    }
     _syncSubSteps(ri, ci, raws);
 }
 
@@ -1007,10 +1066,8 @@ function _delSubStep(ri, ci, stepIdx) {
     var raws = dt.rawRowGroups[ri];
     if (!Array.isArray(raws) || stepIdx < 0 || stepIdx >= raws.length) return;
     raws.splice(stepIdx, 1);
-    // 重新编号
-    for (var i = 0; i < raws.length; i++) {
-        raws[i].id = String(i + 1);
-    }
+    // 序号不再依赖 step.id（_buildStepCombined 统一使用数组索引 + 1 拼接），
+    // 不重新编号，保留剩余步骤用户业务自定义的 step.id 原值。
     _syncSubSteps(ri, ci, raws);
 }
 
@@ -1043,7 +1100,9 @@ function _handleSubTableCellEdit(td) {
     if (!dt.rawRowGroups[ri]) dt.rawRowGroups[ri] = [];
     var step = dt.rawRowGroups[ri][stepIdx];
     if (!step) {
-        step = { id: String(stepIdx + 1), operation: '', data: [], ui_expected: [], api_expected: [], db_expected: [] };
+        // 不主动写 id 字段：业务自定义的 step.id 完全由 YAML 决定，
+        // 兜底新建保持无 id，避免 YAML 落盘出现噪音（例如 id: '3'）。
+        step = { operation: '', data: [], ui_expected: [], api_expected: [], db_expected: [] };
         dt.rawRowGroups[ri][stepIdx] = step;
     }
 
@@ -1099,12 +1158,38 @@ function _handleSubTableCellEdit(td) {
         if (api.length === 0) delete step.api_expected;
         if (db.length === 0) delete step.db_expected;
         if (ui.length === 0) delete step.ui_expected;
-        // 兜底：没有任何 xse-group 时（用户可能删掉了分组结构），退化为按 innerText 切分，默认归入 ui_expected
+        // 兜底：没有任何 xse-group 时（用户可能删掉了分组结构），退化为按 innerText 切分，默认归入 ui_expected。
+        // 但需排除"纯占位态"：td 内只有 .xse-add-group-row（未填分组的按钮容器），
+        // 此时 innerText 会包含按钮文字（"+ UI检查"等），若不排除则会被误当作用户输入写回，
+        // 造成 step3 从空态被误填充为三行 "+ 分组名" 数据的 bug。
         if (groups.length === 0) {
-            var raw = (td.innerText || td.textContent || '').trim();
-            if (raw) {
-                ui = raw.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return !!l; });
-                step.ui_expected = ui;
+            var _addRowOnly = td.querySelector('.xse-add-group-row');
+            var _hasNonBtnContent = false;
+            if (_addRowOnly) {
+                // 检查 td 内除按钮行外是否还有实际文本节点/其他子元素
+                var _kids = td.childNodes;
+                for (var _ki = 0; _ki < _kids.length; _ki++) {
+                    var _kid = _kids[_ki];
+                    if (_kid === _addRowOnly) continue;
+                    if (_kid.nodeType === 3 && (_kid.nodeValue || '').trim()) { _hasNonBtnContent = true; break; }
+                    if (_kid.nodeType === 1) { _hasNonBtnContent = true; break; }
+                }
+            }
+            if (!_addRowOnly || _hasNonBtnContent) {
+                var raw = (td.innerText || td.textContent || '').trim();
+                // 若存在按钮行，需从 raw 中剔除按钮文字
+                if (_addRowOnly) {
+                    var _btnTexts = _addRowOnly.querySelectorAll('.xse-btn-add-group');
+                    for (var _bi = 0; _bi < _btnTexts.length; _bi++) {
+                        var _bt = (_btnTexts[_bi].innerText || _btnTexts[_bi].textContent || '').trim();
+                        if (_bt) raw = raw.split(_bt).join('');
+                    }
+                    raw = raw.trim();
+                }
+                if (raw) {
+                    ui = raw.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return !!l; });
+                    step.ui_expected = ui;
+                }
             }
         }
     }

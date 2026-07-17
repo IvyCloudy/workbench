@@ -67,7 +67,6 @@ function buildHandlers(): Record<string, Handler> {
         openTextEditor: handleOpenTextEditor,
         reload: handleReload,
         mark: handleMark,
-        unmark: handleUnmark,
         setMarkRects: handleSetMarkRects,
         clearAllMarks: handleClearAllMarks,
     };
@@ -115,6 +114,22 @@ async function handleSave(msg: any, ctx: EditorMsgCtx): Promise<void> {
     const _saveStart = Date.now();
     const _inRows = (msg.data?.rows || []).length;
     const _inHeaders = (msg.data?.headers || []).length;
+    // 空数据防御：如果前端发来的数据是 0 行且 cachedTableData 之前有 N>0 行，
+    // 大概率是前端异常状态（例如渲染中途/竞态），直接落盘会导致用户数据被清空。
+    // 与 pushDataToWebview 中的可疑空 reparse 拦截逻辑对称，是双向数据安全防线。
+    const _prevRows = (ctx.session.cachedTableData?.rows || []).length;
+    if (_prevRows > 0 && _inRows === 0 && _inHeaders === 0) {
+        ctx.log(`⚠ skip suspicious empty save (prev=${_prevRows}, in=0/0) — likely webview transient state`);
+        ctx.webviewPanel.webview.postMessage({
+            type: 'saveError',
+            message: '检测到异常的空数据保存请求，已跳过以避免覆盖磁盘内容。请刷新后重试。'
+        });
+        TelemetryService.sendTelemetryEvent('editor.save.skipEmpty', {
+            fileFormat: ctx.session.type,
+            prevRows: String(_prevRows),
+        });
+        return;
+    }
     ctx.log(`💾 save begin rows=${_inRows} cols=${_inHeaders}`);
     // 写盘前先打时间戳，覆盖 watcher 在 await 期间就回包的极端竞态
     ctx.onSelfSave();
@@ -192,26 +207,6 @@ async function handleMark(msg: any, ctx: EditorMsgCtx): Promise<void> {
     await setMarks(filePath, [...existing, ...newRects]);
     ctx.webviewPanel.webview.postMessage({ type: 'userMarksUpdated', userMarks: getMarks(filePath) });
     TelemetryService.sendTelemetryEvent('editor.marked', { fileFormat: ctx.session.type, count: String(newRects.length) });
-}
-
-async function handleUnmark(msg: any, ctx: EditorMsgCtx): Promise<void> {
-    if (!Array.isArray(msg?.rects)) return;
-    const filePath = ctx.getFilePath();
-    ctx.log(`🗑  unmark ${msg.rects.length} rects`);
-    const existing = getMarks(filePath);
-    const toRemove = msg.rects.filter((r: any) => r && typeof r.r1 === 'number');
-    const kept = existing.filter((er: any) => {
-        return !toRemove.some((tr: any) =>
-            tr.r1 === er.r1 && tr.c1 === er.c1 && tr.r2 === er.r2 && tr.c2 === er.c2
-        );
-    });
-    if (kept.length === 0) {
-        await clearMarks(filePath);
-    } else {
-        await setMarks(filePath, kept);
-    }
-    ctx.webviewPanel.webview.postMessage({ type: 'userMarksUpdated', userMarks: getMarks(filePath) });
-    TelemetryService.sendTelemetryEvent('editor.unmarked', { fileFormat: ctx.session.type, count: String(toRemove.length) });
 }
 
 async function handleSetMarkRects(msg: any, ctx: EditorMsgCtx): Promise<void> {

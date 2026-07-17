@@ -58,28 +58,59 @@ export interface SyncDeletedResult {
 
 let resolvedFilePath: string | null = null;
 let cachedStore: DeletedRowsStore | null = null;
+let cachedMtimeMs = 0;
 
 // ============================================
 // 内部方法
 // ============================================
 
+/**
+ * 读取并缓存删除行追踪数据。使用 mtime 校验，文件未变更时直接返回缓存。
+ * 与 markStore / highlightStore / pushFailureStore 保持一致的加载策略，
+ * 避免跨插件实例场景下缓存过期覆盖磁盘最新数据。
+ */
 function loadStore(): DeletedRowsStore {
     if (!resolvedFilePath) return {};
     try {
+        const stat = fs.statSync(resolvedFilePath);
+        if (cachedStore && stat.mtimeMs === cachedMtimeMs) {
+            return cachedStore;
+        }
         const text = fs.readFileSync(resolvedFilePath, 'utf-8');
         const parsed = JSON.parse(text);
-        if (typeof parsed !== 'object' || Array.isArray(parsed) || !parsed) return {};
-        cachedStore = parsed as DeletedRowsStore;
+        if (typeof parsed !== 'object' || Array.isArray(parsed) || !parsed) {
+            cachedStore = {};
+        } else {
+            cachedStore = parsed as DeletedRowsStore;
+        }
+        cachedMtimeMs = stat.mtimeMs;
         return cachedStore;
-    } catch {
+    } catch (err: any) {
+        if (err && err.code !== 'ENOENT') {
+            console.warn('[DeletedRowsStore] 读取失败:', err?.message || err);
+        }
         return {};
     }
 }
 
+/**
+ * 持久化写入，同时更新缓存与 mtime。
+ * 与其他 store 对齐：全 try/catch 包裹，避免向上传播 I/O 异常，
+ * 且写失败时不污染 cachedStore（保持与磁盘一致）。
+ */
 async function saveStore(store: DeletedRowsStore): Promise<void> {
     if (!resolvedFilePath) return;
-    await fs.promises.writeFile(resolvedFilePath, JSON.stringify(store, null, 2), 'utf-8');
-    cachedStore = store;
+    try {
+        const text = JSON.stringify(store, null, 2);
+        await fs.promises.writeFile(resolvedFilePath, text, 'utf-8');
+        cachedStore = store;
+        try {
+            const stat = fs.statSync(resolvedFilePath);
+            cachedMtimeMs = stat.mtimeMs;
+        } catch { /* ignore */ }
+    } catch (err: any) {
+        console.error('[DeletedRowsStore] 保存失败:', err?.message || err);
+    }
 }
 
 // ============================================
@@ -131,7 +162,8 @@ export async function markDeletedRows(filePath: string, tsIds: string[]): Promis
  */
 export function getPendingDeletedRows(filePath: string): DeletedRowRecord[] {
     if (!filePath) return [];
-    const store = cachedStore || loadStore();
+    // 统一走 loadStore()（内部已做 mtime 缓存校验），避免缓存过期读到旧数据
+    const store = loadStore();
     const fileRecords = store[filePath];
     if (!fileRecords) return [];
     return Object.entries(fileRecords).map(([tsId, deletedAt]) => ({
@@ -237,7 +269,7 @@ export async function syncDeletedRows(
  */
 export async function removeDeletedRowsFile(filePath: string): Promise<void> {
     if (!filePath) return;
-    const store = cachedStore || loadStore();
+    const store = loadStore();
     if (store[filePath]) {
         delete store[filePath];
         await saveStore(store);
@@ -246,12 +278,15 @@ export async function removeDeletedRowsFile(filePath: string): Promise<void> {
 
 /**
  * 清理已不存在的文件的孤儿删除行追踪记录。
+ * 使用异步 fs.promises.access 替代同步 existsSync，避免大量文件时阻塞事件循环。
  */
 export async function cleanupOrphanedDeletedRows(): Promise<void> {
-    const store = cachedStore || loadStore();
+    const store = loadStore();
     let changed = false;
     for (const fp of Object.keys(store)) {
-        if (!require('fs').existsSync(fp)) {
+        try {
+            await fs.promises.access(fp, fs.constants.F_OK);
+        } catch {
             delete store[fp];
             changed = true;
         }

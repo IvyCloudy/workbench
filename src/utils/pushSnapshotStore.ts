@@ -75,31 +75,46 @@ interface SnapshotStore {
 
 let resolvedFilePath: string | null = null;
 let cachedStore: SnapshotStore | null = null;
+let cachedMtimeMs = 0;
 
 // ============================================
 // 内部方法
 // ============================================
 
+/**
+ * 读取并缓存快照数据。使用 mtime 校验，文件未变更时直接返回缓存，
+ * 避免热路径（diff / save / init）每次读盘。同时统一多实例下读取策略：
+ * 若一个窗口先走旧模式直读磁盘、另一个先走 cachedStore 优先，可能读到不一致基线。
+ */
 function loadStore(): SnapshotStore {
     if (!resolvedFilePath) return {};
     try {
+        const stat = fs.statSync(resolvedFilePath);
+        if (cachedStore && stat.mtimeMs === cachedMtimeMs) {
+            return cachedStore;
+        }
         const text = fs.readFileSync(resolvedFilePath, 'utf-8');
         const parsed = JSON.parse(text);
         if (typeof parsed !== 'object' || Array.isArray(parsed) || !parsed) {
-            // 快照文件格式异常（被外部篡改 / 捯坏），需上报便于定位绿色高亮误判类问题
+            // 快照文件格式异常（被外部篡改 / 捐坏），需上报便于定位绿色高亮误判类问题
             TelemetryService.sendTelemetryErrorEvent('snapshot.load.invalidFormat', {
                 fileType: typeof parsed,
             });
-            return {};
+            cachedStore = {};
+        } else {
+            cachedStore = parsed as SnapshotStore;
         }
-        cachedStore = parsed as SnapshotStore;
+        cachedMtimeMs = stat.mtimeMs;
         return cachedStore;
     } catch (err: any) {
-        // 快照读取 / 反序列化异常：上报以便反查 "diff 异常 / 高亮误判" 问题
+        // ENOENT 属于正常初始态（activate 前首次调用），不上报
+        if (err && err.code !== 'ENOENT') {
+            // 快照读取 / 反序列化异常：上报以便反查 "diff 异常 / 高亮误判" 问题
             TelemetryService.sendTelemetryErrorEvent('snapshot.load.failed', {
-            errorMessage: String(err?.message || String(err)).slice(0, 500),
-            stackHead: stackHead(err),
-        });
+                errorMessage: String(err?.message || String(err)).slice(0, 500),
+                stackHead: stackHead(err),
+            });
+        }
         return {};
     }
 }
@@ -109,6 +124,11 @@ async function saveStore(store: SnapshotStore): Promise<void> {
     try {
         await fs.promises.writeFile(resolvedFilePath, JSON.stringify(store, null, 2), 'utf-8');
         cachedStore = store;
+        // 写完后同步刷新 mtime，避免紧接着的 loadStore 误判为"未变更"从而命中旧缓存
+        try {
+            const stat = fs.statSync(resolvedFilePath);
+            cachedMtimeMs = stat.mtimeMs;
+        } catch { /* ignore */ }
     } catch (err: any) {
         // 快照写入异常：磁盘 / 权限 / globalStorage 不可写。后续 diff 将不准确。
         TelemetryService.sendTelemetryErrorEvent('snapshot.save.failed', {
@@ -302,7 +322,9 @@ export function diffPushSnapshot(
     tableData: { headers: string[]; rows: any[][]; detailTables?: DetailTableData[] },
 ): DiffResult | null {
     if (!filePath || !tableData) return null;
-    const store = cachedStore || loadStore();
+    // 统一走 loadStore()（内部已做 mtime 缓存校验），避免 cachedStore 直取导致
+    // 多实例下读到其他窗口已写入前的旧缓存（隐患 γ）
+    const store = loadStore();
     const snapshots = store[filePath];
     if (!snapshots || Object.keys(snapshots).length === 0) return null;
 
@@ -482,10 +504,12 @@ export function diffPushSnapshot(
 }
 
 /**
- * 清除指定文件的推送快照。
- */
-/**
- * 删除指定文件的全部推送快照记录（文件被删除时调用）。
+ * 删除指定文件的全部推送快照记录（文件被删除或主动清高亮时调用）。
+ *
+ * 历史上曾存在 clearPushSnapshot 同名重复函数（与本函数完全等价），已删除以避免多入口分岐。
+ * 当前调用方：
+ *   - workspaceListeners 监听到文件删除事件
+ *   - clearHighlightHandler 用户主动清除高亮
  */
 export async function removeSnapshotFile(filePath: string): Promise<void> {
     if (!filePath) return;
@@ -496,23 +520,17 @@ export async function removeSnapshotFile(filePath: string): Promise<void> {
     }
 }
 
-export async function clearPushSnapshot(filePath: string): Promise<void> {
-    if (!filePath) return;
-    const store = loadStore();
-    if (store[filePath]) {
-        delete store[filePath];
-        await saveStore(store);
-    }
-}
-
 /**
  * 清理已不存在的文件的孤儿推送快照记录。
+ * 使用异步 fs.promises.access 替代同步 existsSync，避免大量文件时阻塞事件循环。
  */
 export async function cleanupOrphanedSnapshots(): Promise<void> {
     const store = loadStore();
     let changed = false;
     for (const fp of Object.keys(store)) {
-        if (!require('fs').existsSync(fp)) {
+        try {
+            await fs.promises.access(fp, fs.constants.F_OK);
+        } catch {
             delete store[fp];
             changed = true;
         }
@@ -532,7 +550,8 @@ export function getDeletedSnapshotIds(
     tableData: { headers: string[]; rows: any[][] },
 ): DeletedRowInfo[] {
     if (!filePath || !tableData) return [];
-    const store = cachedStore || loadStore();
+    // 统一走 loadStore()（内部已做 mtime 缓存校验）
+    const store = loadStore();
     const snapshots = store[filePath];
     if (!snapshots || Object.keys(snapshots).length === 0) return [];
 

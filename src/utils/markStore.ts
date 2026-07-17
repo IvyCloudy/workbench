@@ -163,12 +163,15 @@ export async function removeMarkFile(filePath: string): Promise<void> {
 
 /**
  * 清理已不存在的文件的孤儿标记记录。
+ * 使用异步 fs.promises.access 替代同步 existsSync，避免大量文件时阻塞事件循环。
  */
 export async function cleanupOrphanedMarks(): Promise<void> {
     const store = loadStore();
     let changed = false;
     for (const fp of Object.keys(store)) {
-        if (!require('fs').existsSync(fp)) {
+        try {
+            await fs.promises.access(fp, fs.constants.F_OK);
+        } catch {
             delete store[fp];
             changed = true;
         }

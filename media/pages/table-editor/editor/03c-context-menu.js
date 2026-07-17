@@ -41,9 +41,14 @@ function showContextMenu(e) {
             items.push({ label: '重命名列', action: function () { renameCol(S._ctxCol); }, disabled: isFrozenCol(S._ctxCol) });
         }
         if (S.colSel.size > 0) {
-            // 冻结列（testcase_id）不参与清空 / 批量填充：只统计可操作列数；全为冻结列时灰显
+            // 冻结列（testcase_id）与 detail 列（steps 等）不参与清空 / 批量填充：
+            // 只统计可操作列数；全为不可操作列时灰显。
             var _opCntH = 0;
-            S.colSel.forEach(function (ci) { if (!isFrozenCol(ci)) _opCntH++; });
+            S.colSel.forEach(function (ci) {
+                if (isFrozenCol(ci)) return;
+                if ((typeof isDetailColumn === 'function') && isDetailColumn(ci)) return;
+                _opCntH++;
+            });
             items.push({ divider: true });
             items.push({ label: '清空选中列 (' + _opCntH + ')', action: clearSelectedCols, disabled: _opCntH === 0 });
             items.push({ label: '批量填充选中列 (' + _opCntH + ')…', action: fillSelectedCols, disabled: _opCntH === 0 });
@@ -139,9 +144,14 @@ function showContextMenu(e) {
             items.push({ label: '删除选中行 (' + S.sel.size + ')', action: deleteSelectedRows });
         }
         if (S.colSel.size > 0) {
-            // 冻结列（testcase_id）不参与清空 / 批量填充：只统计可操作列数；全为冻结列时灰显
+            // 冻结列（testcase_id）与 detail 列（steps 等）不参与清空 / 批量填充：
+            // 只统计可操作列数；全为不可操作列时灰显。
             var _opCntC = 0;
-            S.colSel.forEach(function (ci) { if (!isFrozenCol(ci)) _opCntC++; });
+            S.colSel.forEach(function (ci) {
+                if (isFrozenCol(ci)) return;
+                if ((typeof isDetailColumn === 'function') && isDetailColumn(ci)) return;
+                _opCntC++;
+            });
             items.push({ divider: true });
             items.push({ label: '清空选中列 (' + _opCntC + ')', action: clearSelectedCols, disabled: _opCntC === 0 });
             items.push({ label: '批量填充选中列 (' + _opCntC + ')…', action: fillSelectedCols, disabled: _opCntC === 0 });

@@ -90,12 +90,10 @@ export function findYamlColon(line: string): number {
         if (c === '}' || c === ']') { if (flowDepth > 0) flowDepth--; continue; }
         if (flowDepth > 0) continue; // flow 内部的冒号归 YAML 解析器管辖
         if (c !== ':') continue;
-        // 排除 ://（URL 协议）
-        if (line.substring(i - 2, i) === 'ht' /* 大概率 http/https */ ||
-            (line[i + 1] === '/' && line[i + 2] === '/')) {
-            // 只跳过 :// 场景
-            if (line[i + 1] === '/' && line[i + 2] === '/') continue;
-        }
+        // 排除 URL 协议 ://（http://xxx / ftp:// / customscheme:// 等）
+        //   历史实现里有一个 `line.substring(i - 2, i) === 'ht'` 的外层判定，但进入分支后
+        //   仍然只有 `://` 命中才 continue，属于纯死代码；这里直接用统一的 `://` 判定。
+        if (line[i + 1] === '/' && line[i + 2] === '/') continue;
         // 排除 :: （时间戳、C++ 命名空间等）
         if (line[i + 1] === ':' || line[i - 1] === ':') continue;
         return i;

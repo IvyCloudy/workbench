@@ -45,6 +45,13 @@ function _xsLineHeight() {
 function renderTable() {
     var c = document.getElementById('tableContainer');
     if (!c) { dbg('❌ renderTable: tableContainer not found'); return; }
+    // 0) _modsTime 懒 GC：当 S.mods 已被整批 clear 时，同步重置时间戳映射避免历史 key 累积
+    if (S._modsTime && S.mods && S.mods.size === 0) {
+        // 用 typeof 检查快速判断非空对象，避免每次都 Object.keys 遍历
+        for (var _mtk in S._modsTime) { delete S._modsTime[_mtk]; break; }
+        // 若第一次 for 就 break 说明有键，此处兜底清干净
+        S._modsTime = {};
+    }
     // 1) 计算 view 行索引列表（应用搜索 + 列筛选）
     S._viewRows = _computeViewRows();
     // 1.1) 兜底：原数据非空但因"列筛选"过滤为 0 行（多见于编辑/清空/填充/删除/撤销
@@ -451,6 +458,10 @@ function _buildRowHtml(ri, tsIdColIdx) {
                 var _ft = S._pushFailedTime.get(String(rowTsId));
                 if (typeof _ft === 'number') rowFailTime = _ft;
             }
+            // 兜底：只要已确认在失败集合中，就一定要有一个非 0 时间。
+            //   否则 rowFailTime==0 会导致后续失败红底竞争永远不胜出 → 红底丢失。
+            //   历史快照遗漏 time 的情况（旧版本升级 / 数据损坏）会命中。
+            if (rowFailTime === 0) rowFailTime = 1;
         }
     }
     // 行号格 title：失败行显示「原始行号: N | 推送失败：<原因>」，便于鼠标悬停查看失败原因。
@@ -462,7 +473,14 @@ function _buildRowHtml(ri, tsIdColIdx) {
     var hasBr = false;
     for (var ci = 0; ci < headers.length; ci++) {
         var v = row[ci];
-        var modCls = (S.mods.has(ri + ',' + ci) || (S._detailModCellKeys && S._detailModCellKeys.has(ri + ',' + ci))) ? ' modified' : '';
+        var _modKey = ri + ',' + ci;
+        var _hasMod = (S.mods.has(_modKey) || (S._detailModCellKeys && S._detailModCellKeys.has(_modKey)));
+        // 懒补修改时间戳：有 mod 但无时间戳时补一个（兼容历史代码路径 / undo 恢复）
+        if (_hasMod && S._modsTime && S._modsTime[_modKey] == null) {
+            S._modsTime[_modKey] = Date.now();
+        }
+        var modCls = _hasMod ? ' modified' : '';
+        var _modTime = _hasMod ? ((S._modsTime && S._modsTime[_modKey]) || 0) : 0;
         // 按时间顺序选择高亮：最新操作的类型优先显示
         // bestTime 和 bestClass/bestStyle 记录当前生效的高亮
         var bestTime = 0;
@@ -472,6 +490,8 @@ function _buildRowHtml(ri, tsIdColIdx) {
 
         // 1) 推送变更高亮（行级橙 + 单元格级黄）：作为一组同时间戳的整体参与竞争
         //    同一次推送内，单元格级（黄）优先于行级（橙），保留"内层套外层"语义
+        //    但若该 cell 的修改时间晚于推送时间（推送后又改了），则放弃 pushUpdCls，
+        //    让 modified 黄底独立显示，直观提示"改动已产生但尚未再次推送"
         var pushUpdCls = '';
         if (S._highlightedCells) {
             if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
@@ -483,7 +503,12 @@ function _buildRowHtml(ri, tsIdColIdx) {
         }
         if (pushUpdCls) {
             var t = S._highlightedTime || 0;
-            if (t >= bestTime) { bestTime = t; bestClass = pushUpdCls; bestMkInfo = null; }
+            // 修改时间胜出：跳过 pushUpdCls，保留 modCls 独立生效
+            if (_modTime > t) {
+                pushUpdCls = '';
+            } else if (t >= bestTime) {
+                bestTime = t; bestClass = pushUpdCls; bestMkInfo = null;
+            }
         }
         // 2) 新增行高亮
         if (S._addedRowSet && S._addedRowSet.has(ri)) {
@@ -501,13 +526,20 @@ function _buildRowHtml(ri, tsIdColIdx) {
         // 5) 推送失败高亮：作为单元格级"红底"候选项参与时间竞争
         //    - 若失败时间 >= 其他高亮时间：失败色覆盖（清除 user-marked 内联色，加 xs-td-push-failed）
         //    - 否则：标记为 xs-td-overrides-fail，让 CSS 保留原高亮色（避免被 tr.xs-tr-push-failed 红底吞掉）
+        //    - 若修改时间晚于失败时间，保留 modCls 并追加 xs-td-overrides-fail，让 CSS 释放 modified 黄底
         var failOverridden = false;
         if (rowFailTime > 0) {
             if (rowFailTime >= bestTime) {
-                bestTime = rowFailTime;
-                bestClass = ' xs-td-push-failed';
-                bestMkInfo = null;          // 清除可能已挂上的用户标记色，让失败红底完全生效
-                modCls = '';
+                // 失败胜出临时斠标：但若本 cell 的 mod 时间更晚（失败后又改了），则保留 modified 叠加
+                if (_modTime > rowFailTime) {
+                    // 保留 modCls 不变，仅把失败当作“被覆盖”标记
+                    failOverridden = true;
+                } else {
+                    bestTime = rowFailTime;
+                    bestClass = ' xs-td-push-failed';
+                    bestMkInfo = null;          // 清除可能已挂上的用户标记色，让失败红底完全生效
+                    modCls = '';
+                }
             } else {
                 failOverridden = true;       // 其他高亮时间更新 → 让其覆盖失败色
             }
@@ -643,8 +675,12 @@ function _buildStepExpandedHtml(text) {
         if (/^【预期结果】$/.test(t)) { section = 'expected'; continue; }
 
         // 步骤标题行：步骤N [操作内容]
-        var m = t.match(/^步骤(\d+)\s*(.*)/);
-        if (m && section === 'desc') {
+        //   拼接侧固定使用自然数序号（见 _buildStepCombined），
+        //   所以此处只匹配纯数字，避免把 desc 里的"步骤xxx"正文误识别。
+        //   guard：仅在 section='desc' 且 cur.id/cur.desc 均为空时吸收，
+        //   防止多行 desc 中首行以"步骤N"开头的正文覆盖已解析结果。
+        var m = t.match(/^步骤(\d+)(?:\s+(.*))?$/);
+        if (m && section === 'desc' && cur.id === '' && cur.desc === '') {
             cur.id = m[1];
             cur.desc = (m[2] || '').trim();
             continue;
@@ -662,7 +698,22 @@ function _buildStepExpandedHtml(text) {
     if (cur) steps.push(cur);
     if (steps.length === 0) return '';
 
-    // 子步骤筛选（方案 B：折叠不匹配的子步骤，保留整行）。
+    // 自愈：剥离 desc 中历史累积的"步骤<任意 id>"冗余前缀
+    //   历史 bug：拼接侧曾把 step.id 直接嵌入"步骤<id>"，当 id 为非纯数字时
+    //   （如 step001-1）无法被旧解析器识别，focusout 会把整行当作 desc 存回
+    //   operation，下轮拼接再叠加，形成累积污染。
+    //   拼接侧已改用自然数序号从根本上杜绝，但历史文件仍可能存在多次累积的脏 desc，
+    //   这里以宽松匹配（步骤 + 任意非空白 token + 空白/行尾）循环剥离，
+    //   保证渲染稳定；下次编辑保存后即写回干净数据。
+    var _cleanRE = /^步骤\S+(?:\s+|$)/;
+    for (var _cs = 0; _cs < steps.length; _cs++) {
+        var _cst = steps[_cs];
+        if (!_cst) continue;
+        var _guard = 0;
+        while (_cleanRE.test(_cst.desc) && _guard++ < 32) {
+            _cst.desc = _cst.desc.replace(_cleanRE, '');
+        }
+    }
     // 关键点：`data-xse-step` 必须使用**原始索引**（在完整 steps 数组中的位置），
     // 否则编辑时 `steps-editor.js` 的 splice 会串行到错误的步骤上，导致数据丢失。
     // 因此我们保留 `origIdx`，用它绑定 data-xse-step / data-xse-copy 等，
@@ -712,53 +763,79 @@ function _buildStepExpandedHtml(text) {
         // 步骤描述（可编辑）：data-xse-step 使用原始索引，保证编辑映射到源文本正确位置
         html += '<td class="xse-td-desc" contenteditable="true" data-xse-step="' + _origIdx + '" data-xse-section="desc">' + escapeHtml(step.desc || '') + '</td>';
         // 预期结果（可编辑）
+        // 交互优化（方案 A + 分组标题优化）：
+        //   1) 全空 → 仅显示一行"+ 添加分组"按钮组（UI/接口/数据），占 1 行而非原来的 6 行
+        //   2) 半填 → 只渲染有内容的分组（chip + 内容行），未填分组以合并的"+ 分组名"按钮补齐
+        //   3) 全填 → 保持三个 chip + 内容行原有布局
+        // 数据层无破坏：_handleSubTableCellEdit 依据 DOM 中存在的 .xse-group + .xse-sub 识别分组，
+        // 未渲染的分组会自然回写为空数组（并被清理为 delete step.xxx_expected），符合"未填"语义。
         html += '<td class="xse-td-expected" contenteditable="true" data-xse-step="' + _origIdx + '" data-xse-section="expected">';
-        if (step.expected.length) {
-            var groups = [];
-            var curGroup = null;
-            for (var ei = 0; ei < step.expected.length; ei++) {
-                var el = step.expected[ei];
-                if (/^【(UI检查|接口调用|数据检查)】$/.test(el)) {
-                    if (curGroup) groups.push(curGroup);
-                    curGroup = { title: el, lines: [] };
-                } else if (curGroup) {
-                    curGroup.lines.push(el);
-                } else {
-                    // 无标题的 loose 行，兜底
-                    if (!groups.length) groups.push({ title: null, lines: [] });
-                    groups[groups.length - 1].lines.push(el);
-                }
+        // 解析 step.expected 到三个具名分组
+        var _groupMap = { 'ui': null, 'api': null, 'data': null };
+        var _titleMap = { 'ui': '【UI检查】', 'api': '【接口调用】', 'data': '【数据检查】' };
+        var _kindByTitle = function (t) {
+            if (t === '【接口调用】') return 'api';
+            if (t === '【数据检查】') return 'data';
+            if (t === '【UI检查】') return 'ui';
+            return null;
+        };
+        var _curKind = null;
+        var _looseLines = [];
+        for (var _ei = 0; _ei < step.expected.length; _ei++) {
+            var _el = step.expected[_ei];
+            var _k = null;
+            if (/^【(UI检查|接口调用|数据检查)】$/.test(_el)) {
+                _k = _kindByTitle(_el);
             }
-            if (curGroup) groups.push(curGroup);
-            for (var gi = 0; gi < groups.length; gi++) {
-                var g = groups[gi];
-                html += '<div class="xse-group">';
-                if (g.title) {
-                    html += '<div class="xse-sub" contenteditable="false" data-kind="' + _subKind(g.title) + '">' + escapeHtml(g.title) + '</div>';
-                }
-                if (g.lines.length > 0) {
-                    for (var li2 = 0; li2 < g.lines.length; li2++) {
-                        html += '<div class="xse-line">' + escapeHtml(g.lines[li2]) + '</div>';
-                    }
-                } else {
-                    // 空分组也保留一条可编辑行，方便用户直接输入
-                    html += '<div class="xse-line"></div>';
-                }
-                html += '</div>';
+            if (_k) {
+                _curKind = _k;
+                if (!_groupMap[_curKind]) _groupMap[_curKind] = [];
+            } else if (_curKind) {
+                _groupMap[_curKind].push(_el);
+            } else {
+                _looseLines.push(_el);
             }
-        } else {
-            html += '<div class="xse-group">'
-                + '<div class="xse-sub" contenteditable="false" data-kind="ui">【UI检查】</div>'
-                + '<div class="xse-line"></div>'
-                + '</div>'
-                + '<div class="xse-group">'
-                + '<div class="xse-sub" contenteditable="false" data-kind="api">【接口调用】</div>'
-                + '<div class="xse-line"></div>'
-                + '</div>'
-                + '<div class="xse-group">'
-                + '<div class="xse-sub" contenteditable="false" data-kind="data">【数据检查】</div>'
-                + '<div class="xse-line"></div>'
-                + '</div>';
+        }
+        // 兜底：无任何分组标题但有内容行 → 归入 ui
+        if (_looseLines.length > 0 && !_groupMap.ui) _groupMap.ui = _looseLines;
+        else if (_looseLines.length > 0) _groupMap.ui = _looseLines.concat(_groupMap.ui);
+
+        var _order = ['ui', 'api', 'data'];
+        var _filledKinds = [];
+        var _missingKinds = [];
+        for (var _oi = 0; _oi < _order.length; _oi++) {
+            var _kk = _order[_oi];
+            if (_groupMap[_kk] !== null && _groupMap[_kk] !== undefined) _filledKinds.push(_kk);
+            else _missingKinds.push(_kk);
+        }
+        // 渲染已填分组（chip + 内容行）
+        for (var _fi = 0; _fi < _filledKinds.length; _fi++) {
+            var _fk = _filledKinds[_fi];
+            var _flines = _groupMap[_fk] || [];
+            html += '<div class="xse-group">';
+            html += '<div class="xse-sub" contenteditable="false" data-kind="' + _fk + '">' + escapeHtml(_titleMap[_fk]) + '</div>';
+            if (_flines.length > 0) {
+                for (var _li = 0; _li < _flines.length; _li++) {
+                    html += '<div class="xse-line">' + escapeHtml(_flines[_li]) + '</div>';
+                }
+            } else {
+                // 用户主动添加了分组但内容为空：仍保留一条可编辑行
+                html += '<div class="xse-line"></div>';
+            }
+            html += '</div>';
+        }
+        // 渲染未填分组：合并到一行"+ 分组名"按钮
+        if (_missingKinds.length > 0) {
+            html += '<div class="xse-add-group-row" contenteditable="false">';
+            for (var _mi = 0; _mi < _missingKinds.length; _mi++) {
+                var _mk = _missingKinds[_mi];
+                html += '<button type="button" class="xse-btn-add-group" contenteditable="false"'
+                    + ' data-xse-add-group-step="' + _origIdx + '"'
+                    + ' data-xse-add-group-kind="' + _mk + '"'
+                    + ' data-kind="' + _mk + '"'
+                    + ' title="添加' + escapeHtml(_titleMap[_mk]) + '">+ ' + escapeHtml(_titleMap[_mk].replace(/[【】]/g, '')) + '</button>';
+            }
+            html += '</div>';
         }
         html += '</td>';
         // 数据（可编辑）
@@ -986,8 +1063,14 @@ function patchCell(ri, ci) {
     // 内容中的换行符 \n 由 CSS white-space 控制（nowrap 单行 / pre-wrap 多行），
     // 无需任何额外内联样式兜底。
     td.innerHTML = '<div class="xs-cell-wrap"' + clampVar2 + '>' + inner + '</div>';
-    // class 同步
-    if (S.mods.has(ri + ',' + ci)) td.classList.add('modified'); else td.classList.remove('modified');
+    // class 同步：懒补修改时间戳，用于下面的失败-修改时间竞争
+    var _mKey2 = ri + ',' + ci;
+    var _hasMod2 = S.mods.has(_mKey2);
+    if (_hasMod2 && S._modsTime && S._modsTime[_mKey2] == null) {
+        S._modsTime[_mKey2] = Date.now();
+    }
+    var _modTime2 = _hasMod2 ? ((S._modsTime && S._modsTime[_mKey2]) || 0) : 0;
+    if (_hasMod2) td.classList.add('modified'); else td.classList.remove('modified');
     if (isDetail) td.classList.add('xs-detail-cell'); else td.classList.remove('xs-detail-cell');
     if (isArrCol) td.classList.add('xs-arr-cell'); else td.classList.remove('xs-arr-cell');
     var frozen = (String(headers[ci]) === 'testcase_id');
@@ -1010,12 +1093,23 @@ function patchCell(ri, ci) {
     }
     if (_pushUpdCls) {
         var _t1 = S._highlightedTime || 0;
-        if (_t1 >= _bestTime) { _bestTime = _t1; _bestClass = _pushUpdCls; _bestMkInfo = null; }
+        // 修改时间胜出：跳过 pushUpdCls，保留 modified 独立生效
+        if (_modTime2 > _t1) {
+            _pushUpdCls = '';
+        } else if (_t1 >= _bestTime) {
+            _bestTime = _t1; _bestClass = _pushUpdCls; _bestMkInfo = null;
+        }
     }
     // 2) 新增行高亮
     if (S._addedRowSet && S._addedRowSet.has(ri)) {
         var _t3 = S._addedRowTime || 0;
-        if (_t3 >= _bestTime) { _bestTime = _t3; _bestClass = 'xs-td-push-added'; _bestMkInfo = null; }
+        if (_t3 >= _bestTime) {
+            _bestTime = _t3;
+            _bestClass = 'xs-td-push-added';
+            _bestMkInfo = null;
+            // 新增行胜出时与 _buildRowHtml 对齐：清除 modified 类（避免绿底上叠加黄底）
+            td.classList.remove('modified');
+        }
     }
     // 3) 用户手动标记高亮
     var _mkInfo = (typeof isUserMarked === 'function') ? isUserMarked(ri, ci) : null;
@@ -1034,15 +1128,23 @@ function patchCell(ri, ci) {
                     var _ftv = S._pushFailedTime.get(String(_tid));
                     if (typeof _ftv === 'number') _rowFailTime = _ftv;
                 }
+                // 兜底：与 _buildRowHtml 对齐，命中失败集合但缺失时间时给非 0 值
+                if (_rowFailTime === 0) _rowFailTime = 1;
             }
         }
     }
     var _failOverridden = false;
     if (_rowFailTime > 0) {
         if (_rowFailTime >= _bestTime) {
-            _bestTime = _rowFailTime;
-            _bestClass = 'xs-td-push-failed';
-            _bestMkInfo = null;
+            // 失败胜出临界：但若本 cell 的 mod 时间更晚（失败后又改了），则保留 modified 叠加
+            if (_modTime2 > _rowFailTime) {
+                _failOverridden = true;      // 保留 modified 类，让 CSS 应用叠加色
+            } else {
+                _bestTime = _rowFailTime;
+                _bestClass = 'xs-td-push-failed';
+                _bestMkInfo = null;
+                td.classList.remove('modified');  // 失败完全胜出时清 modified
+            }
         } else {
             _failOverridden = true;
         }

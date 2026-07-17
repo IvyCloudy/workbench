@@ -647,15 +647,22 @@ function applyColumnsBulk(fillVal) {
     var headers = (S.data && S.data.headers) || [];
     var rows = (S.data && S.data.rows) || [];
     if (rows.length === 0) { showToast('当前表格为空', 'error'); return; }
-    // tsId 列保护（冻结）
+    // tsId 列保护（冻结）+ detail 列保护（steps 等嵌套结构）
+    // detail 列语义为"多个步骤对象"，标量清空/填充无合理语义，且会破坏 rawRowGroups
+    // 与主表 text 的一致性；无论展开态或收起态，都统一在批量列操作中跳过。
     var targets = [];
     var skippedTsId = false;
+    var skippedDetail = false;
     S.colSel.forEach(function (ci) {
         if (isFrozenCol(ci)) { skippedTsId = true; return; }
+        if ((typeof isDetailColumn === 'function') && isDetailColumn(ci)) { skippedDetail = true; return; }
         targets.push(ci);
     });
     if (targets.length === 0) {
-        showToast('testcase_id 列不允许清空/填充，已跳过', 'error');
+        var _tips = [];
+        if (skippedTsId) _tips.push('testcase_id');
+        if (skippedDetail) _tips.push('steps 等明细列');
+        showToast((_tips.join(' / ') || '所选列') + '不允许清空/填充', 'error');
         return;
     }
     pushHistory();
@@ -708,7 +715,10 @@ function applyColumnsBulk(fillVal) {
     renderTable();
     var verb = (fillVal === undefined) ? '清空' : '填充';
     var msg = '已' + verb + ' ' + targets.length + ' 列、' + changed + ' 个单元格';
-    if (skippedTsId) msg += '（testcase_id 已自动跳过）';
+    var _skips = [];
+    if (skippedTsId) _skips.push('testcase_id');
+    if (skippedDetail) _skips.push('steps 等明细列');
+    if (_skips.length) msg += '（' + _skips.join(' / ') + ' 已自动跳过）';
     showToast(msg, 'success');
 }
 
@@ -941,10 +951,18 @@ function _expandRowToFitContent(tr, ri) {
     ruler.className = 'xs-row-measure-ruler';
     document.body.appendChild(ruler);
 
-    // 单元格 padding(6+6=12) + 边框(1+1=2) = 14px；内容可用宽 = 列宽 - 14
+    // 单元格 padding(7+7=14) + 边框(1+1=2) ≈ 14px（边框走 border-box）；内容可用宽 = 列宽 - 14
     var CELL_PAD_V = 14;
     var CELL_PAD_H = 14;
     var maxContentH = 0;
+    // ⚠ finalRowH 用于收集"已含 td padding 的完整高度候选"，与 maxContentH（纯内容，
+    //   需要额外补 CELL_PAD_V）走两条平行链路。函数末尾统一取 max：
+    //     finalH = max(maxContentH + CELL_PAD_V, finalRowH, DEFAULT_H)
+    //   步骤展开态下 td padding=0（见 CSS .xs-td.xs-detail-cell:has(.xs-step-expanded)），
+    //   此时 wrap.offsetHeight 已经就是「该 td 对应的完整行高候选」，
+    //   若再走 maxContentH + CELL_PAD_V 会多出 14px 的假 padding，
+    //   造成双击 # 后行高被撑高一小截、内容下方留白 —— 本次修复的根因。
+    var finalRowH = 0;
     try {
         var tds = tr.querySelectorAll('td.xs-editable');
         for (var i = 0; i < tds.length; i++) {
@@ -959,6 +977,18 @@ function _expandRowToFitContent(tr, ri) {
             // 清空上一轮内容
             while (ruler.firstChild) ruler.removeChild(ruler.firstChild);
             if (!wrap) continue;
+
+            // ⚠ 展开步骤态特例：如果单元格内嵌了 .xs-step-expanded（内含 .xse-table），
+            //   1) 离屏克隆到 ruler 时会丢失 <colgroup> 列宽约束，浏览器重新分配子列宽，
+            //      测得高度与实际渲染高度不符 → 必须读 wrap.offsetHeight 兜底；
+            //   2) 此时 td padding=0（CSS 已清零），wrap 高度即整个 td 内容高度，
+            //      不再需要 + CELL_PAD_V —— 直接进 finalRowH 通道，绕过默认加法。
+            var stepExpanded = wrap.querySelector('.xs-step-expanded');
+            if (stepExpanded) {
+                var stepH = wrap.offsetHeight || stepExpanded.offsetHeight;
+                if (stepH > finalRowH) finalRowH = stepH;
+                continue;
+            }
 
             // 克隆整个 wrap 子树，保留所有 class，从而能继承字体/排版/chip 样式
             var clone = wrap.cloneNode(true);
@@ -996,7 +1026,12 @@ function _expandRowToFitContent(tr, ri) {
 
     var needH = Math.ceil(maxContentH) + CELL_PAD_V;
     var DEFAULT_H = _measureDefaultRowH(tr);
-    var finalH = Math.max(DEFAULT_H, Math.min(600, needH));
+    // ⚠ 三方竞争：
+    //   - needH：普通 td 纯内容测量 + 14px td padding
+    //   - finalRowH：步骤展开态 td 的 wrap.offsetHeight（td padding=0，已是完整高度）
+    //   - DEFAULT_H：默认行高兜底
+    // 用 max 让"最高的那个 td"决定行高，避免任一方向欠账/超支
+    var finalH = Math.max(DEFAULT_H, Math.min(600, Math.max(needH, Math.ceil(finalRowH))));
 
     // 若结果接近默认行高（差异 ≤ 3px），视为单行内容，回归默认
     if (finalH - DEFAULT_H <= 3) {

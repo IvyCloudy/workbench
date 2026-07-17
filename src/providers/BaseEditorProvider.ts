@@ -129,7 +129,14 @@ export class PushViaHttpClient implements PushStrategy {
             const sourceByTsId = new Map<string, any>();
             sourceRecords.forEach((rec: any) => {
                 const id = rec?.[TS_ID_COLUMN];
-                if (id != null && id !== '') sourceByTsId.set(String(id), rec);
+                if (id != null && id !== '') {
+                    // ⚠ 关键：这里必须浅拷贝一份再入 Map。
+                    //   下游 pushCore.stampRowIndex 会往每个 row 上原地写 `__rowIndex` 字段，
+                    //   直接返回 parse 返回的原对象引用意味着 __rowIndex 会污染 parser 内部结构。
+                    //   当前 parser 每次都新解析（无缓存）尚不显现，但一旦未来加缓存就会踩坑；
+                    //   浅拷贝的开销远小于新增一次 parse，因此这里以防御性拷贝一劳永逸。
+                    sourceByTsId.set(String(id), (rec && typeof rec === 'object') ? { ...rec } : rec);
+                }
             });
 
             if (Array.isArray(data)) {
@@ -297,15 +304,23 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
     static waitReady(filePath: string, timeoutMs = 5000): Promise<void> {
         const entry = BaseEditorProvider.panelMap.get(filePath);
         if (!entry) return Promise.reject(new Error('panel 未注册: ' + filePath));
-        return Promise.race([
-            entry.ready,
-            new Promise<void>((_, reject) =>
-                setTimeout(() => {
-                    TelemetryService.sendTelemetryErrorEvent('editor.waitReady.timeout', { targetFile: filePath });
-                    reject(new Error('等待 webview 就绪超时'));
-                }, timeoutMs)
-            ),
-        ]);
+        // ⚠ 关键：Promise.race 的败者不会自动结算——原始的 setTimeout 句柄需要显式 clear，
+        //   否则 ready 先 resolve 时定时器仍会走到 5s 才触发（回调无害但持有引用），
+        //   频繁批量调用（如资源管理器右键批量推送）会累积大量定时器句柄。
+        let timer: NodeJS.Timeout | null = null;
+        const timeoutPromise = new Promise<void>((_, reject) => {
+            timer = setTimeout(() => {
+                timer = null;
+                TelemetryService.sendTelemetryErrorEvent('editor.waitReady.timeout', { targetFile: filePath });
+                reject(new Error('等待 webview 就绪超时'));
+            }, timeoutMs);
+        });
+        return Promise.race([entry.ready, timeoutPromise]).finally(() => {
+            if (timer !== null) {
+                clearTimeout(timer);
+                timer = null;
+            }
+        });
     }
 
     /**

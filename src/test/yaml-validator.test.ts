@@ -403,4 +403,59 @@ describe('YAML 校验规则', () => {
         );
         expect(destructiveSameLine).toHaveLength(0);
     });
+
+    // ------------------------------------------------------------------
+    // findYamlColon: URL 协议 :// 判定回归（第 9 轮检视 ρ 修复）
+    // ------------------------------------------------------------------
+    //  历史实现有 `line.substring(i - 2, i) === 'ht'` 的死代码分支，简化后
+    //  仅靠 `://` 判定 —— 需保证：
+    //   1) http / https / ftp / 自定义协议  → 全部正确跳过
+    //   2) 不再依赖 'ht' 前缀假设（例如 `scheme://` 也要能识别）
+    //   3) `key: http://xxx` 场景下第一个 `:` 仍能被正确定位为分隔冒号
+    // ------------------------------------------------------------------
+    describe('findYamlColon URL 场景', () => {
+        it('key: http://xxx —— 正确识别 key 后第一个冒号，且不误报 R4', () => {
+            clearYamlValidationCache();
+            const src = 'homepage: http://example.com/path\n';
+            const issues = validateYamlContent(src);
+            // 第一个 `:` 后已有空格，R4 不应命中
+            expect(findByTitle(issues, '冒号')).toBeUndefined();
+        });
+
+        it('https/ftp/自定义协议 —— 内联 :// 不应触发任何 kv 相关规则', () => {
+            clearYamlValidationCache();
+            const src =
+                'a: https://a.com\n' +
+                'b: ftp://b.com\n' +
+                'c: git://c.com/repo\n' +
+                'd: customscheme://payload\n';
+            const issues = validateYamlContent(src);
+            // 任何一行的 URL 部分都不应被误识为 kv 冒号缺空格
+            expect(findByTitle(issues, '冒号')).toBeUndefined();
+        });
+
+        it('非 http 前缀的协议（关键：证明不再依赖 ht 前缀）', () => {
+            clearYamlValidationCache();
+            // hello://world 这种奇怪但合法的字符串，简化后的实现应仍能识别 ://
+            const src = 'weird: hello://world\n';
+            const issues = validateYamlContent(src);
+            expect(findByTitle(issues, '冒号')).toBeUndefined();
+        });
+
+        it('http://xxx 出现在值内且无 key 冒号 —— 不误报', () => {
+            clearYamlValidationCache();
+            // 顶层出现单独的 URL 字面量（不是 kv 结构）应该被 parser 处理，不应触发 R4
+            // 这里用 - 序列元素承载 URL 字面量做测试
+            const src = '- http://example.com\n- ftp://foo\n';
+            const issues = validateYamlContent(src);
+            expect(findByTitle(issues, '冒号')).toBeUndefined();
+        });
+
+        it('引号内的 URL —— 双重保护：引号跳过 + :// 跳过', () => {
+            clearYamlValidationCache();
+            const src = 'link: "http://example.com/a:b"\n';
+            const issues = validateYamlContent(src);
+            expect(findByTitle(issues, '冒号')).toBeUndefined();
+        });
+    });
 });

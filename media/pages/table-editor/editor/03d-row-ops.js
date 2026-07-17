@@ -3,7 +3,7 @@
  * -----------------------------------------------------------------------------
  * 由原 03d-row-col-ops.js 拆分而来：
  *   insertRow / deleteRow / deleteSelectedRows
- *   copyRow / copyRowInline / copySelectedRows
+ *   copyRowInline / copySelectedRows
  *   pushFromContextMenu
  *
  * 列操作 → 03f-col-ops.js
@@ -13,6 +13,97 @@
  * ========================================================================== */
 
 // ==================== 行操作 ====================
+
+/**
+ * 统一处理"行索引依赖的高亮集合"随行操作的移位。
+ * @param {'insert'|'delete'|'deleteBatch'} op
+ * @param {number|number[]} at insert: 插入位置; delete: 被删行; deleteBatch: 降序数组
+ *
+ * 涉及集合（key 中含行索引）：
+ *   - S.mods           (Set, key='row,col')
+ *   - S._modsTime      (Object, key='row,col')
+ *   - S._detailModCellKeys (Set, key='row,col')
+ *   - S._highlightedCells.cells   (Set, key='row:col')
+ *   - S._highlightedCells.rowSet  (Set, key=row)
+ *
+ * 注：_addedRowSet / rowHeights / _rowExpanded / S.sel 由各调用方就地处理（历史逻辑内联，不动）。
+ */
+function _shiftRowIdxHighlights(op, at) {
+    function _shiftKey(key, sep, shiftFn) {
+        var p = key.indexOf(sep);
+        if (p < 0) return null;
+        var r = parseInt(key.substring(0, p), 10);
+        if (isNaN(r)) return null;
+        var nr = shiftFn(r);
+        if (nr < 0) return null; // -1 表示丢弃（被删行本身）
+        return nr + sep + key.substring(p + 1);
+    }
+    function _reshapeSet(setRef, sep, shiftFn) {
+        if (!setRef || !setRef.size) return;
+        var next = new Set();
+        setRef.forEach(function (k) {
+            var nk = _shiftKey(k, sep, shiftFn);
+            if (nk !== null) next.add(nk);
+        });
+        setRef.clear();
+        next.forEach(function (k) { setRef.add(k); });
+    }
+    function _reshapeObj(objRef, sep, shiftFn) {
+        if (!objRef) return;
+        var keys = Object.keys(objRef);
+        if (!keys.length) return;
+        var next = {};
+        keys.forEach(function (k) {
+            var nk = _shiftKey(k, sep, shiftFn);
+            if (nk !== null) next[nk] = objRef[k];
+        });
+        // 原地清空后回填，避免调用方持有旧引用失效
+        keys.forEach(function (k) { delete objRef[k]; });
+        Object.keys(next).forEach(function (k) { objRef[k] = next[k]; });
+    }
+    function _reshapeRowSet(setRef, shiftFn) {
+        if (!setRef || !setRef.size) return;
+        var next = new Set();
+        setRef.forEach(function (r) {
+            var nr = shiftFn(r);
+            if (nr >= 0) next.add(nr);
+        });
+        setRef.clear();
+        next.forEach(function (r) { setRef.add(r); });
+    }
+
+    var shiftFn;
+    if (op === 'insert') {
+        var atI = at;
+        shiftFn = function (r) { return r >= atI ? r + 1 : r; };
+    } else if (op === 'delete') {
+        var atD = at;
+        shiftFn = function (r) { if (r === atD) return -1; return r > atD ? r - 1 : r; };
+    } else if (op === 'deleteBatch') {
+        // at 为降序数组（例如 [5,3,1]）
+        var sortedDesc = at;
+        var sortedAsc = sortedDesc.slice().sort(function (a, b) { return a - b; });
+        shiftFn = function (r) {
+            if (sortedAsc.indexOf(r) >= 0) return -1;
+            var s = 0;
+            for (var i = 0; i < sortedAsc.length; i++) { if (sortedAsc[i] < r) s++; }
+            return r - s;
+        };
+    } else {
+        return;
+    }
+
+    // key='row,col' 的集合
+    _reshapeSet(S.mods, ',', shiftFn);
+    _reshapeSet(S._detailModCellKeys, ',', shiftFn);
+    _reshapeObj(S._modsTime, ',', shiftFn);
+    // _highlightedCells 若不存在则直接跳过
+    if (S._highlightedCells) {
+        _reshapeSet(S._highlightedCells.cells, ':', shiftFn);
+        _reshapeRowSet(S._highlightedCells.rowSet, shiftFn);
+    }
+}
+
 function insertRow(at) {
     var headers = S.data.headers || [];
     var width = headers.length;
@@ -65,6 +156,8 @@ function insertRow(at) {
         S._addedRowSet.forEach(function (ri) { if (ri >= at) toShift.push(ri); });
         toShift.forEach(function (ri) { S._addedRowSet.delete(ri); S._addedRowSet.add(ri + 1); });
     }
+    // 同步转移高亮集合（S.mods / _modsTime / _detailModCellKeys / _highlightedCells.cells / _highlightedCells.rowSet）
+    _shiftRowIdxHighlights('insert', at);
     // 仅当文件已被推送过时才标绿（与关闭重开后扩展端 diff 行为一致）：
     // 未推送的文件没有快照基线，重开后所有行都会被视为初始数据 → 不应有“新增”概念。
     if (_filePushedBefore()) {
@@ -137,6 +230,8 @@ function deleteRow(ri) {
         S._addedRowSet.forEach(function (i) { if (i > ri) toShiftBack.push(i); });
         toShiftBack.forEach(function (i) { S._addedRowSet.delete(i); S._addedRowSet.add(i - 1); });
     }
+    // 同步转移高亮集合（S.mods / _modsTime / _detailModCellKeys / _highlightedCells.cells / _highlightedCells.rowSet）
+    _shiftRowIdxHighlights('delete', ri);
     var ns = new Set();
     S.sel.forEach(function (i) { if (i !== ri) ns.add(i > ri ? i - 1 : i); });
     S.sel = ns;
@@ -213,6 +308,8 @@ function deleteSelectedRows() {
         });
         S._addedRowSet = newAdded;
     }
+    // 同步转移高亮集合（S.mods / _modsTime / _detailModCellKeys / _highlightedCells.cells / _highlightedCells.rowSet）
+    _shiftRowIdxHighlights('deleteBatch', sorted);
     // 同步行高索引：依次处理所有被删行（已按降序，逐个 -1 调整后续索引）
     if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
         var rhArr = Object.keys(S.rowHeights).map(function (k) { return { i: parseInt(k, 10), v: S.rowHeights[k] }; });
@@ -241,22 +338,6 @@ function deleteSelectedRows() {
     renderTable();
 }
 
-function copyRow() {
-    // 兼容保留：当前菜单已合并为一步式 copyRowInline，可通过 Ctrl+C 行级扩展使用
-    if (S._ctxRow < 0 || S._ctxRow >= S.data.rows.length) return;
-    var row = S.data.rows[S._ctxRow] || [];
-    S.rowClip = row.slice();
-    var dt = S.data.detailTable;
-    if (dt && dt.rowGroups && dt.rowGroups[S._ctxRow]) {
-        S.rowClipDetail = (dt.rowGroups[S._ctxRow] || []).map(function (dr) { return dr.slice(); });
-        S.rowClipDetailRaw = (dt.rawRowGroups && dt.rawRowGroups[S._ctxRow])
-            ? JSON.parse(JSON.stringify(dt.rawRowGroups[S._ctxRow])) : [];
-    } else {
-        S.rowClipDetail = null;
-        S.rowClipDetailRaw = null;
-    }
-}
-
 // 一步式复制：在当前行下方直接插入一份副本
 function copyRowInline() {
     if (S._ctxRow < 0 || S._ctxRow >= S.data.rows.length) return;
@@ -269,9 +350,37 @@ function copyRowInline() {
     var headers0 = S.data.headers || [];
     var tsCol0 = headers0.indexOf('testcase_id');
     var tcCol0 = headers0.indexOf('testCaseNo');
-    if (tsCol0 >= 0) newRow[tsCol0] = genUuidV4();
-    if (tcCol0 >= 0) newRow[tcCol0] = '';
     S.data.rows.splice(at, 0, newRow);
+    // 同步转移高亮/修改集合（与 insertRow 一致）
+    _shiftRowIdxHighlights('insert', at);
+    // 同步新增行集合：插入位置后方的新增行索引+1
+    if (S._addedRowSet && S._addedRowSet.size > 0) {
+        var toShiftCI = [];
+        S._addedRowSet.forEach(function (rr) { if (rr >= at) toShiftCI.push(rr); });
+        toShiftCI.forEach(function (rr) { S._addedRowSet.delete(rr); S._addedRowSet.add(rr + 1); });
+    }
+    // 复制行也属于“新增行”（與 insertRow 同步待推送语义）
+    if (typeof _filePushedBefore === 'function' && _filePushedBefore()) {
+        if (!S._addedRowSet) S._addedRowSet = new Set();
+        S._addedRowSet.add(at);
+        S._addedRowTime = Date.now();
+    }
+    // 同步 rowHeights / _rowExpanded 下移
+    if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
+        var nrhCI = {};
+        for (var rkCI in S.rowHeights) {
+            if (!S.rowHeights.hasOwnProperty(rkCI)) continue;
+            var riCI = parseInt(rkCI, 10);
+            if (isNaN(riCI)) continue;
+            nrhCI[riCI >= at ? riCI + 1 : riCI] = S.rowHeights[rkCI];
+        }
+        S.rowHeights = nrhCI;
+    }
+    if (S._rowExpanded && S._rowExpanded.size > 0) {
+        var nreCI = new Set();
+        S._rowExpanded.forEach(function (i) { nreCI.add(i >= at ? i + 1 : i); });
+        S._rowExpanded = nreCI;
+    }
     // 同步复制所有明细表的行
     var dts = getDetailTables();
     dts.forEach(function (dt) {
@@ -310,10 +419,35 @@ function copySelectedRows() {
     selRows.forEach(function (rowIdx) {
         var src = S.data.rows[rowIdx] || [];
         var newRow = src.map(function (v) { return Array.isArray(v) ? v.slice() : v; });
-        if (tsCol0 >= 0) newRow[tsCol0] = genUuidV4();
-        if (tcCol0 >= 0) newRow[tcCol0] = '';
-        var at = rowIdx + 1;
         S.data.rows.splice(at, 0, newRow);
+        // 同步转移高亮/修改集合（逐行累加，与 insertRow 一致）
+        _shiftRowIdxHighlights('insert', at);
+        // 同步 _addedRowSet：插入位置后方的新增行索引+1，自身可选入集
+        if (S._addedRowSet && S._addedRowSet.size > 0) {
+            var toShiftCS = [];
+            S._addedRowSet.forEach(function (rr) { if (rr >= at) toShiftCS.push(rr); });
+            toShiftCS.forEach(function (rr) { S._addedRowSet.delete(rr); S._addedRowSet.add(rr + 1); });
+        }
+        if (typeof _filePushedBefore === 'function' && _filePushedBefore()) {
+            if (!S._addedRowSet) S._addedRowSet = new Set();
+            S._addedRowSet.add(at);
+        }
+        // 同步 rowHeights / _rowExpanded 下移
+        if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
+            var nrhCS = {};
+            for (var rkCS in S.rowHeights) {
+                if (!S.rowHeights.hasOwnProperty(rkCS)) continue;
+                var riCS = parseInt(rkCS, 10);
+                if (isNaN(riCS)) continue;
+                nrhCS[riCS >= at ? riCS + 1 : riCS] = S.rowHeights[rkCS];
+            }
+            S.rowHeights = nrhCS;
+        }
+        if (S._rowExpanded && S._rowExpanded.size > 0) {
+            var nreCS = new Set();
+            S._rowExpanded.forEach(function (i) { nreCS.add(i >= at ? i + 1 : i); });
+            S._rowExpanded = nreCS;
+        }
         // 同步复制明细表
         dts.forEach(function (dt) {
             if (!dt || !dt.rowGroups) return;
@@ -328,6 +462,10 @@ function copySelectedRows() {
             }
         });
     });
+    // 复制多行结束后统一刷新新增行时间戳
+    if (S._addedRowSet && S._addedRowSet.size > 0 && typeof _filePushedBefore === 'function' && _filePushedBefore()) {
+        S._addedRowTime = Date.now();
+    }
     // 重建选中集：原索引 r → r + (选中行中 < r 的个数)
     if (S.sel && S.sel.size > 0) {
         var newSel = new Set();

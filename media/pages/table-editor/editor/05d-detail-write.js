@@ -212,6 +212,8 @@ function dv2AddStep() {
             newStep[k] = REQUIRED_STEP_KINDS[k] === 'array' ? [] : '';
         }
     });
+    // 序号不再写入 step.id：_buildStepCombined 已改为统一使用数组索引 + 1
+    // 作为自然数序号拼接，无需与 step.id 同步（避免业务自定义 id 与拼接序号耦合）。
     dt.rawRowGroups[ri].push(newStep);
     S._dv2ActiveStep = dt.rawRowGroups[ri].length - 1;
     if (!S._dv2StepMods) S._dv2StepMods = new Set();
@@ -333,6 +335,8 @@ function saveDetailModal() {
 
     // 1) 从 rawRowGroups 反向同步 rowGroups（字符串二维结构，兼容主表显示路径）
     rawRows = (dt.rawRowGroups && dt.rawRowGroups[ri]) || [];
+    // 注：序号已不再依赖 step.id（_buildStepCombined 改为统一使用数组索引 + 1），
+    //       因此无需在保存时对 steps 重新编号。step.id 作为业务自定义标识符保留原值写回 YAML。
     var headers = dt.headers || [];
     var newRowGroup = rawRows.map(function (raw) {
         return headers.map(function (h) {
@@ -377,9 +381,22 @@ function saveDetailModal() {
         // 关键：把新 displayText 写回主表 S.data.rows，
         // 否则 renderTable() 仍会用旧值渲染，导致用户在弹窗中"添加项/删除项"后
         // 主表对应单元格的项数不刷新（例如保持旧的 "[2 项]"，新增后未变成 "[3 项]"）。
+        //
+        // 展开态感知（防塌缩）：若当前 steps 列处于展开态，
+        // 直接写入 _buildStepCombined(rawRows) 的展开长文本，
+        // 否则 renderTable() 会因主表变为 "[N 项]" 而丢失内联子表格样式。
+        // 触发路径：展开态下 steps 为空的行（主表 = '[]'）→ 双击单元格 → onCellDblClick
+        // 检测到 hasDetailRowsAtCol=true（因 '[]' 占位）→ 打开弹窗 → 新增步骤保存。
+        var _writeText = displayText;
+        if (S._stepsExpanded && dt.field === 'steps'
+            && rawRows.length > 0
+            && typeof _buildStepCombined === 'function') {
+            var _combined = _buildStepCombined(rawRows);
+            if (_combined) _writeText = _combined;
+        }
         if (S.data && Array.isArray(S.data.rows)
             && S.data.rows[ri] && colIdx < S.data.rows[ri].length) {
-            S.data.rows[ri][colIdx] = displayText;
+            S.data.rows[ri][colIdx] = _writeText;
         }
         S.mods.add(ri + ',' + colIdx);
         S._detailModCellKeys.add(ri + ',' + colIdx);

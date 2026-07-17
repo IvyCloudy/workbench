@@ -274,13 +274,28 @@ function showPushResultModal(payload) {
             colIdx: p.highlightedCells.colIdx,
             rowSet: new Set(p.highlightedCells.rowIndices)
         };
+        // ⚠ 格式契约：扩展端 payload.cells 是 Array<[row, col]>；
+        //   而消费方（02a-render.js / _getModifiedRowSet）统一读的是 "row:col" 字符串。
+        //   这里必须序列化为字符串，否则 Set.has('row:col') 永远为 false，
+        //   导致修改行高亮/仅看修改行按钮统计失效（历史 bug）。
         if (p.highlightedCells.cells && Array.isArray(p.highlightedCells.cells)) {
-            hl.cells = new Set(p.highlightedCells.cells);
+            hl.cells = new Set();
+            for (var _hci = 0; _hci < p.highlightedCells.cells.length; _hci++) {
+                var _hc = p.highlightedCells.cells[_hci];
+                if (Array.isArray(_hc) && _hc.length >= 2) {
+                    hl.cells.add(_hc[0] + ':' + _hc[1]);
+                }
+            }
         }
         S._highlightedCells = hl;
+        // ⚠ 必须同步刷新 _highlightedTime，否则后续 render 时新推送的高亮会被历史修改时间
+        //   (_modsTime > _highlightedTime) 判为“陈旧的推送”→ 放弃 pushUpdCls，
+        //   导致「推送成功后重新推送成功」的黄底不显示（对偶于「推送成功后修改」的 modified 显示逻辑）
+        S._highlightedTime = Date.now();
     } else if ('highlightedCells' in p) {
         // 扩展端明确传了空的 highlightedCells，表示无高亮
         S._highlightedCells = null;
+        S._highlightedTime = 0;
     }
 
     try { renderTable(); } catch (_) { /* ignore */ }
@@ -296,10 +311,15 @@ function showPushResultModal(payload) {
 }
 
 function closePushResultModal() {
+    _dismissPushResultModal(true);
+}
+
+// 仅隐藏弹窗，不触发 reload；用于跳转行号场景（reload 会覆盖 S.data 并清空 S.sel，破坏跳转）
+function _dismissPushResultModal(triggerReload) {
     var modal = document.getElementById('pushResultModal');
     if (modal) modal.classList.remove('show');
-    // 弹窗关闭后请求扩展端重新推送最新高亮结果（含服务器回写的 testCaseNo 等字段）
-    if (S.vscode) {
+    if (triggerReload && S.vscode) {
+        // 弹窗关闭后请求扩展端重新推送最新高亮结果（含服务器回写的 testCaseNo 等字段）
         S.vscode.postMessage({ type: 'reload' });
     }
 }
@@ -351,12 +371,31 @@ function fallbackCopy(text) {
 }
 
 // 关闭推送结果弹窗后，按"显示行号"（用户视觉上从 1 开始的物理行号）滚动并高亮主表
+// 注意：本函数走 _dismissPushResultModal(false) 而非 closePushResultModal()，
+// 避免触发 reload 消息导致 S.data 重建、S.sel 被清空、跳转失败的连锁反应。
 function jumpToRowByDisplayIndex(rowIndex) {
-    closePushResultModal();
+    _dismissPushResultModal(false);
     var r = rowIndex - 1; // 转成 0-based 索引
-    if (r < 0 || r >= (S.data && S.data.rows ? S.data.rows.length : 0)) {
-        showToast('该行已不在当前表格中（可能已被筛选或删除）', 'error');
+    var totalRows = (S.data && S.data.rows ? S.data.rows.length : 0);
+    if (r < 0 || r >= totalRows) {
+        showToast('该行已不在当前表格中（可能已被删除）', 'error');
         return;
+    }
+    // 视图态检测：目标行若不在 _viewRows 中（被筛选/搜索/仅看X隐藏），自动退出筛选
+    // 否则 querySelector('tr[data-row=r]') 找不到目标行 → 用户看不到任何反馈（静默失败）
+    var _vr = S._viewRows;
+    var _inView = !_vr || _vr.length === 0 || _vr.length === totalRows || _vr.indexOf(r) !== -1;
+    if (!_inView) {
+        // 依次尝试关闭所有可能隐藏该行的过滤开关，尽量保留列筛选/搜索等精细过滤
+        var _cleared = [];
+        if (S._failedOnly) { S._failedOnly = false; _cleared.push('仅看推送失败'); }
+        if (S._modifiedOnly) { S._modifiedOnly = false; _cleared.push('仅看修改'); }
+        if (S._addedOnly) { S._addedOnly = false; _cleared.push('仅看新增'); }
+        if (S._deletedOnly) { S._deletedOnly = false; _cleared.push('仅看删除'); }
+        if (S._markedOnly) { S._markedOnly = false; _cleared.push('仅看标记'); }
+        if (_cleared.length > 0 && typeof showToast === 'function') {
+            showToast('已退出「' + _cleared.join('、') + '」以定位目标行', 'info');
+        }
     }
     // 选中该行并滚动到可见
     S.sel = new Set([r]);
@@ -367,7 +406,12 @@ function jumpToRowByDisplayIndex(rowIndex) {
             ensureRowVisible(r);
         }
         var tr = document.querySelector('tr[data-row="' + r + '"]');
-        if (tr && tr.scrollIntoView) tr.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        if (tr && tr.scrollIntoView) {
+            tr.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        } else if (!_inView) {
+            // 兜底：清筛选后仍找不到 DOM 节点（可能列筛选/搜索仍在生效）
+            showToast('目标行被列筛选/搜索隐藏，请手动清除筛选后重试', 'info');
+        }
     }, 50);
 }
 

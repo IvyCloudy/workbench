@@ -255,6 +255,15 @@ tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-push-updated-row{background:#fbd
 tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-push-updated-row{background:#fbd9d9 !important;box-shadow:inset 3px 0 0 #ff9800 !important}
 tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-push-updated-row{background:#fde8e8 !important;box-shadow:inset 3px 0 0 #ff9800 !important}
 
+/* CSS 兜底：同时挂了推送成功高亮 + modified 时（推送后再修改），让 modified 黄底赢 */
+/* 与 xs-td-push-updated(#fff9c4) / xs-td-push-updated-row(#fff3e0) 的浅黄/橙做区分：modified 用 #fffbe6 + 金色左边条 */
+.xs-td.xs-td-push-updated.modified,
+.xs-td.xs-td-push-updated-row.modified{background:#fffbe6 !important;box-shadow:inset 3px 0 0 #fbc02d !important}
+tbody tr:hover td.xs-td.xs-td-push-updated.modified,
+tbody tr:hover td.xs-td.xs-td-push-updated-row.modified{background:#fff59d !important;box-shadow:inset 3px 0 0 #fbc02d !important}
+tbody tr.selected td.xs-td.xs-td-push-updated.modified,
+tbody tr.selected td.xs-td.xs-td-push-updated-row.modified{background:#fff9c4 !important;box-shadow:inset 3px 0 0 #fbc02d,inset -2px 0 0 var(--p) !important}
+
 /* 新增行高亮（推送后新增的行）：绿色系 */
 .xs-td.xs-td-push-added{background:#e8f5e9 !important}
 tbody tr:hover td.xs-td.xs-td-push-added{background:#c8e6c9 !important}
@@ -309,6 +318,10 @@ tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-overrides-fail.xs-td-push-upd
 tbody tr.xs-tr-push-failed td.xs-td.xs-td-overrides-fail.xs-td-push-added{background:#e8f5e9 !important;box-shadow:none !important}
 tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-overrides-fail.xs-td-push-added{background:#c8e6c9 !important}
 tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-overrides-fail.xs-td-push-added{background:#a5d6a7 !important}
+/* 推送失败后再修改：modified 黄底叠加，直观提示"改动已产生但尚未再次推送" */
+tbody tr.xs-tr-push-failed td.xs-td.xs-td-overrides-fail.modified{background:#fffbe6 !important;box-shadow:inset 3px 0 0 #fbc02d !important}
+tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-overrides-fail.modified{background:#fff59d !important;box-shadow:inset 3px 0 0 #fbc02d !important}
+tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-overrides-fail.modified{background:#fff9c4 !important;box-shadow:inset 3px 0 0 #fbc02d,inset -2px 0 0 var(--p) !important}
 
 /* 列选中（Excel 风格）：表头加深、单元格浅蓝；不覆盖行选中（同时存在时使用渐变叠加色） */
 .xs-th.xs-col-selected{background:#cfe4f8 !important;box-shadow:inset 0 3px 0 var(--p)}
@@ -629,6 +642,14 @@ tbody tr.xs-tr-push-failed .xse-table .xse-td-id .xse-idx-dot,
 .xse-group .xse-sub[data-kind="data"]{background:#e6ffec;color:#1a7f37;border-color:#b4ecc4}
 .xse-group .xse-line{color:#444;padding-left:6px;white-space:pre-wrap;word-break:break-word;font-size:10px;line-height:1.5;min-height:1.5em}
 .xse-group .xse-line:empty::after{content:"点击添加检查项";color:#c0c0c0;font-style:italic}
+/* 未填分组的紧凑按钮：与 chip 视觉呼应但更弱化（虚线边框 + 前缀 "+" ），
+   避免撑高空行；点击后 DOM 内联替换为真实分组 chip + 可编辑空行。 */
+.xse-add-group-row{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;padding-left:0}
+.xse-add-group-row:first-child{margin-top:0}
+.xse-btn-add-group{display:inline-flex;align-items:center;font-family:inherit;font-weight:600;font-size:10px;line-height:1.2;padding:1px 7px;border-radius:8px;letter-spacing:.2px;cursor:pointer;background:#f6f8fa;color:#6a737d;border:1px dashed #d0d7de;transition:background .12s,color .12s,border-color .12s}
+.xse-btn-add-group:hover{background:#e7f1ff;color:#0550ae;border-color:#c8dcf7;border-style:solid}
+.xse-btn-add-group[data-kind="api"]:hover{background:#f2ebff;color:#5b21b6;border-color:#d8caf5}
+.xse-btn-add-group[data-kind="data"]:hover{background:#e6ffec;color:#1a7f37;border-color:#b4ecc4}
 /* 主表空 detail 链接：灰色虚线，与有内容链路区分 */
 .xs-detail-link.xs-detail-empty{color:#aaa;background:#f5f5f5;border:1px dashed #ddd}
 .xs-detail-link.xs-detail-empty:hover{color:#999;background:#e8e8e8}

@@ -131,6 +131,13 @@ export function registerYamlValidation(): vscode.Disposable[] {
         vscode.workspace.onDidCloseTextDocument((doc) => {
             const key = doc.uri.toString();
             validatedUris.delete(key);
+            // ⚠ 关键：文档关闭窗口内可能存在未 fire 的防抖定时器，闭包持有 doc 引用，
+            //   不清理会导致 doc 无法 GC、且定时器 fire 后仍会向已关闭文档发布 diagnostics（无用副作用）。
+            const pending = yamlChangeTimers.get(key);
+            if (pending) {
+                clearTimeout(pending);
+                yamlChangeTimers.delete(key);
+            }
             if (isYamlFile(doc.uri)) {
                 clearYamlFix(doc.uri);
             }

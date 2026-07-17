@@ -58,8 +58,10 @@ var S = {
     sel: new Set(),         // 选中的行号集合
     cell: null,             // 当前激活单元格 {r, c}
     clip: null,             // 单元格剪贴板
-    rowClip: null,          // 行剪贴板
     mods: new Set(),        // 修改过的单元格 key="r,c"
+    // 修改时间戳映射：key="r,c" -> timestamp(ms)，由 render 层懒补，用于参与
+    // "推送失败 vs 用户修改" 的时间竞争，保证失败后再修改能叠加显示 modified 黄底
+    _modsTime: {},
     colWidths: {},          // 列宽
     rowHeights: {},         // 行高（key=行索引，value=高度像素），仅在内存中保留
     // "已完全展开"行的索引集合：由双击/拖动触发的 _expandRowToFitContent 写入。
@@ -1205,8 +1207,10 @@ window.addEventListener('message', function (e) {
         S._pushFailedTsIds = new Set();
         S._pushFailedReasons = new Map();
         S._pushFailedTime = new Map();
+        // 与 _lastPushBatchTsIds 成对清空：避免 pushDone/pushResult/pushError 兜底
+        // 逻辑读到过期的批次行号，误清与本次无关的 mods/detailMods/addedRowSet。
         S._lastPushBatchTsIds = new Set();
-        S._addedRowSet = null;
+        S._lastPushBatchRowIndices = null;
         S._addedRowSet = new Set();
         S._addedInfos = [];
         S._deletedInfos = [];
@@ -1217,6 +1221,14 @@ window.addEventListener('message', function (e) {
         S._userMarks.cellTime = null;
         S._userMarks.rowTime = null;
         if (S._detailModCellKeys) S._detailModCellKeys.clear();
+        // 高亮源全清后，与之绑定的过滤开关也需要复位，否则页面变空但按钮仍激活，
+        // 用户看不到任何行且无提示。与 _restorePushFailures / addedInfos / deletedInfos
+        // 分支「数据没了就关 toggle」保持一致的语义。
+        if (S._failedOnly) S._failedOnly = false;
+        if (S._modifiedOnly) S._modifiedOnly = false;
+        if (S._addedOnly) S._addedOnly = false;
+        if (S._deletedOnly) S._deletedOnly = false;
+        if (S._markedOnly) S._markedOnly = false;
         try { renderTable(); } catch (_) {}
     }
 });

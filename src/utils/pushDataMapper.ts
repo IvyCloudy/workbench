@@ -55,6 +55,60 @@
  * ============================================================================
  */
 
+// ============================================================================
+// 结构化映射错误
+// ----------------------------------------------------------------------------
+// 目的：让调用侧（pushCore.ts）可以在 catch 时判定错误来源、直接拿到"主表 1-based 行号"，
+//       再拼接出"第 N 行 案例 [xxx] 的第 K 个步骤缺少 operation ..."这样的
+//       用户友好文案，而不需要用正则去匹配 message。
+//
+// 行号来源：
+//   上层会在每行 row 对象上预贴 __rowIndex 字段（主表 1-based 行号），
+//   该字段仅作为"本地元数据"横穿整条映射链路，不会被拼接到推送后端 body 中
+//   （mapper 只读特定业务字段，未知字段天然被忽略）。
+//
+// 字段说明：
+//   caseTag  —— 案例标识（testcase_id / 名称 / (未命名案例)），保持与 message 一致
+//   reason   —— 错误原因短标签，便于埋点归类（如 'missingTestcaseId' / 'missingOperation'）
+//   stepIdx  —— 步骤下标（0-based），仅在 reason='missingOperation' 时有值
+//   rowIndex —— 主表行号（1-based），从 row.__rowIndex 读取；上层未预贴时为 undefined
+// ============================================================================
+export interface MapErrorFields {
+    caseTag: string;
+    reason: 'missingTestcaseId' | 'missingOperation' | 'missingStepDesc' | 'invalidPath';
+    stepIdx?: number;
+    rowIndex?: number;
+}
+
+/** 用于识别映射错误的品牌字段，避免 instanceof 跨 realm 不可靠 */
+export const MAP_ERROR_BRAND = '__pushDataMapperError__';
+
+/** row 上预贴主表行号的隐藏字段名（双下划线 + 英文：不会与任何业务字段冲突） */
+export const ROW_INDEX_META = '__rowIndex';
+
+/** 从 row 中安全提取主表行号（不存在 / 非正整数 → undefined） */
+function pickRowIndex(row: any): number | undefined {
+    if (!row || typeof row !== 'object') return undefined;
+    const v = (row as any)[ROW_INDEX_META];
+    return typeof v === 'number' && v > 0 && Number.isInteger(v) ? v : undefined;
+}
+
+/** 创建带结构化字段的映射错误（Error 子类，保留原 message 兼容旧日志） */
+function makeMapError(message: string, fields: MapErrorFields): Error {
+    const err = new Error(message) as Error & MapErrorFields & { [MAP_ERROR_BRAND]: true };
+    err.caseTag = fields.caseTag;
+    err.reason = fields.reason;
+    if (fields.stepIdx !== undefined) err.stepIdx = fields.stepIdx;
+    if (fields.rowIndex !== undefined) err.rowIndex = fields.rowIndex;
+    (err as any)[MAP_ERROR_BRAND] = true;
+    return err;
+}
+
+/** 判断是否是映射错误（可跨 realm，基于品牌字段） */
+export function isMapError(err: any): err is Error & MapErrorFields {
+    return !!(err && err[MAP_ERROR_BRAND] === true);
+}
+
 /** 将任意值安全转为字符串（null / undefined → ''；对象 → JSON） */
 export function toStr(v: any): string {
     if (v == null) return '';
@@ -212,10 +266,14 @@ function parseStepBlocks(text: string): Array<{ num: number; content: string }> 
 function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> {
     const sourceId = toStr(row['testcase_id']).trim();
     const caseTag = sourceId || toStr(row['名称']) || '(未命名案例)';
+    const rowIndex = pickRowIndex(row);
 
     // sourceId（testcase_id）必填
     if (sourceId === '') {
-        throw new Error(`案例 [${caseTag}] 缺少 testcase_id，请补全后再推送。`);
+        throw makeMapError(
+            `案例 [${caseTag}] 缺少 testcase_id，请补全后再推送。`,
+            { caseTag, reason: 'missingTestcaseId', rowIndex }
+        );
     }
 
     // description：解析「步骤x[:：]\n内容」格式，按步骤号排序
@@ -223,7 +281,10 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
     const descBlocks = parseStepBlocks(stepsText);
     const description: string[] = descBlocks.map(b => nl2br(b.content));
     if (description.length === 0) {
-        throw new Error(`案例 [${caseTag}] 缺少「步骤描述」内容，请补全后再推送。`);
+        throw makeMapError(
+            `案例 [${caseTag}] 缺少「步骤描述」内容，请补全后再推送。`,
+            { caseTag, reason: 'missingStepDesc', rowIndex }
+        );
     }
 
     // expected：解析同格式文本，按 description 的步骤号顺序对齐，
@@ -269,17 +330,24 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
     const sourceId = toStr(row['testcase_id']).trim();
     // 案例标识，用于报错定位
     const caseTag = sourceId || toStr(row['name']) || '(未命名案例)';
+    const rowIndex = pickRowIndex(row);
 
     // sourceId（testcase_id）必填
     if (sourceId === '') {
-        throw new Error(`案例 [${caseTag}] 缺少 testcase_id，请补全后再推送。`);
+        throw makeMapError(
+            `案例 [${caseTag}] 缺少 testcase_id，请补全后再推送。`,
+            { caseTag, reason: 'missingTestcaseId', rowIndex }
+        );
     }
 
     // description：每个 step 拼为 operation + <br> + data；operation 必填，为空抛错；与 steps 一一对应
     const description: string[] = steps.map((s, idx) => {
         const op = toStr(s && s.operation).trim();
         if (op === '') {
-            throw new Error(`案例 [${caseTag}] 的第 ${idx + 1} 个步骤缺少 operation（操作步骤），请补全后再推送。`);
+            throw makeMapError(
+                `案例 [${caseTag}] 的第 ${idx + 1} 个步骤缺少 operation（操作步骤），请补全后再推送。`,
+                { caseTag, reason: 'missingOperation', stepIdx: idx, rowIndex }
+            );
         }
         const dataLines = toLines(s && s.data).filter((l) => l.trim() !== '');
         return dataLines.length ? `${nl2br(op)}<br>${dataLines.join('<br>')}` : nl2br(op);

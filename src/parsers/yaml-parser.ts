@@ -402,28 +402,29 @@ export class YamlFileParser implements FileParser {
     private extractDetailTables(data: any[]): DetailTableData[] {
         if (!Array.isArray(data) || data.length === 0) return [];
 
-        // 收集每个顶层字段在各行中的形态（数组 / 对象 / 其它）
-        const fieldShapes = new Map<string, { hasArray: boolean; hasObject: boolean }>();
-        data.forEach(item => {
-            if (!item || typeof item !== 'object') return;
+        // 收集"疑似明细列"的字段名。判定规则：
+        //   - 至少某一行是 元素为对象的非空数组（对象数组明细）
+        //   - 或至少某一行是非空对象（嵌套对象明细）
+        // 只需要字段名 Set，具体形态判断留给 buildDetailTable 逐行分派——
+        // 历史版本这里额外维护 hasArray/hasObject 标记但从未消费，属于死状态，已简化。
+        const detailFields = new Set<string>();
+        for (const item of data) {
+            if (!item || typeof item !== 'object') continue;
             for (const key of Object.keys(item)) {
+                if (detailFields.has(key)) continue;
                 const val = (item as any)[key];
                 if (Array.isArray(val)) {
                     if (val.length > 0 && typeof val[0] === 'object' && val[0] !== null) {
-                        const s = fieldShapes.get(key) || { hasArray: false, hasObject: false };
-                        s.hasArray = true;
-                        fieldShapes.set(key, s);
+                        detailFields.add(key);
                     }
                 } else if (val && typeof val === 'object') {
-                    const s = fieldShapes.get(key) || { hasArray: false, hasObject: false };
-                    s.hasObject = true;
-                    fieldShapes.set(key, s);
+                    detailFields.add(key);
                 }
             }
-        });
+        }
 
         const tables: DetailTableData[] = [];
-        fieldShapes.forEach((_shape, key) => {
+        detailFields.forEach(key => {
             const t = this.buildDetailTable(data, key);
             if (t) tables.push(t);
         });

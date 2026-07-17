@@ -56,7 +56,7 @@
  */
 
 /** 将任意值安全转为字符串（null / undefined → ''；对象 → JSON） */
-function toStr(v: any): string {
+export function toStr(v: any): string {
     if (v == null) return '';
     if (typeof v === 'object') {
         try { return JSON.stringify(v); } catch { return ''; }
@@ -77,7 +77,7 @@ function nl2br(v: any): string {
  * - 其他：String(v) 后按 \r?\n 拆行
  * - 最终统一剔除空字符串
  */
-function toLines(v: any): string[] {
+export function toLines(v: any): string[] {
     if (v == null) return [];
     if (Array.isArray(v)) {
         const out: string[] = [];
@@ -101,7 +101,7 @@ function toLines(v: any): string[] {
 }
 
 /** 把任意值按 \n 拼成单字符串（空值 → ''） */
-function joinLines(v: any): string {
+export function joinLines(v: any): string {
     return toLines(v).join('\n');
 }
 

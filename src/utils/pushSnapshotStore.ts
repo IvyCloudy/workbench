@@ -210,6 +210,19 @@ export async function savePushSnapshot(
     const oldSnapshots = store[filePath] || {};
     const snapshots: RowSnapshots = pushedTsIds ? { ...oldSnapshots } : {};
 
+    // 收集所有 detail 字段对应的主表列下标：主表签名中这些列一律置空，
+    // 因为它们只承载展示态文本（'[N 项]' / 展开步骤合并文本），会随「展开/收起步骤」按钮切换而变化，
+    // 属于纯 UI 状态，不代表实际数据变化；数据变化由 buildRowDetailSignature 独立捕获。
+    const detailColIdxSetForSave = new Set<number>();
+    if (Array.isArray(tableData.detailTables)) {
+        for (const dt of tableData.detailTables) {
+            if (dt && dt.field) {
+                const ci = headers.indexOf(dt.field);
+                if (ci >= 0) detailColIdxSetForSave.add(ci);
+            }
+        }
+    }
+
     rows.forEach((row, rowIdx) => {
         const id = row[tsIdIdx] != null ? String(row[tsIdIdx]) : '';
         if (!id) return;
@@ -220,7 +233,9 @@ export async function savePushSnapshot(
         // 增量模式：只更新已推送的行，未推送行 skip（保留旧快照）
         if (pushedTsIds && !pushedTsIds.has(id)) return;
         // 标准化行数据：以 headers 长度为准，防止 CSV 解析时尾随空字段导致长度不一致
+        // detail 字段列一律置空，避免展开态展示文本进入基线
         const cells = headers.map((_, i) => {
+            if (detailColIdxSetForSave.has(i)) return '';
             const v = i < row.length ? row[i] : undefined;
             return v == null ? '' : String(v);
         });
@@ -352,8 +367,12 @@ export function diffPushSnapshot(
         // 无黄色高亮"的死角。
 
         // 1) 构建当前数据的主表单元格序列化
+        //    - testCaseNo 列：排除（后端生成的编号不参与 diff）
+        //    - detail 字段列：排除，避免「展开/收起步骤」按钮切换主表展示文本后误判为数据变化
+        //      （真实明细变化由 detailSig 独立捕获，见步骤 4）
         const cells = headers.map((_, i) => {
-            if (i === tcIdx) return '';           // 排除 testCaseNo
+            if (i === tcIdx) return '';
+            if (detailColIdxByField.has(headers[i])) return '';
             const v = i < row.length ? row[i] : undefined;
             return v == null ? '' : String(v);
         });
@@ -372,6 +391,10 @@ export function diffPushSnapshot(
         if (tcIdx >= 0 && tcIdx < oldCells.length) {
             oldCells[tcIdx] = '';
         }
+        // 兼容老基线：老版本快照的 detail 列写入了 '[N 项]' 展示文本，diff 时同样置空对齐
+        for (let ci = 0; ci < oldCells.length && ci < headers.length; ci++) {
+            if (detailColIdxByField.has(headers[ci])) oldCells[ci] = '';
+        }
         const oldMainNormalized = oldCells.slice(0, headers.length).join('\x00');
 
         // 3) 对比主表单元格
@@ -383,6 +406,7 @@ export function diffPushSnapshot(
             mainChanged = true;
             for (let ci = 0; ci < cells.length; ci++) {
                 if (ci === tcIdx) continue;
+                if (detailColIdxByField.has(headers[ci])) continue;
                 const oldVal = ci < oldCells.length ? oldCells[ci] : '';
                 if (oldVal !== cells[ci]) {
                     changedCols.push(ci);

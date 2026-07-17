@@ -231,6 +231,11 @@ function rebuildFindMatches(kw) {
     rows.forEach(function (row, ri) {
         if (visibleRows && !visibleRows.has(ri)) return;
         headers.forEach(function (_, ci) {
+            // detail 列（steps 等）跳过：
+            //   - 折叠态下主表显示为 [N 项]，用户搜关键词无意义命中
+            //   - 展开态下主表是长文本，命中后 td 高亮而内部子表格无高亮，视觉困惑
+            //   - detail 列已禁止查找替换（见 replaceCurrent/replaceAll），命中反而误导
+            if (typeof isDetailColumn === 'function' && isDetailColumn(ci)) return;
             var v = row[ci];
             if (v === null || v === undefined) return;
             // 数组列：以 '; ' 拼接后参与查找（与主表 chip 走同一拼接规则）
@@ -352,6 +357,14 @@ function replaceCurrent() {
         stepFind(1);
         return;
     }
+    // 明细列（steps 等）：主表单元格仅是显示文本（[N 项]/【步骤描述】...），
+    // 真实数据在 rawRowGroups。写字符串到主表会与 rawRowGroups 不一致
+    // （yaml-parser 优先 raw → 视觉替换但 YAML 未变）。跳过并提示用户改用弹窗。
+    if (typeof isDetailColumn === 'function' && isDetailColumn(m.c)) {
+        showToast('明细列不支持查找替换，请通过弹窗编辑', 'error');
+        stepFind(1);
+        return;
+    }
     var oldCell = String(S.data.rows[m.r][m.c] === undefined ? '' : S.data.rows[m.r][m.c]);
     // 仅替换该单元格中第一处匹配（按用户预期：单步替换）
     var caseSensitive = !!S._findCaseSensitive;
@@ -399,6 +412,9 @@ function replaceAll() {
             if (isFrozenCol(ci)) return; // tsId 列跳过
             // 标量数组列跳过全量替换，避免语义窜乱
             if (typeof isArrayCol === 'function' && isArrayCol(ci)) return;
+            // 明细列跳过：主表仅显示文本，真实数据在 rawRowGroups，
+            // 写字符串会与 raw 不一致（yaml-parser 优先 raw → 视觉替换但数据未变）。
+            if (typeof isDetailColumn === 'function' && isDetailColumn(ci)) return;
             var v = row[ci];
             if (v === null || v === undefined) return;
             var s = String(v);
@@ -742,4 +758,244 @@ function closeColFilter() {
         sf.innerHTML = '';
     }
     S._filterUI = null;
+}
+
+// ==================== steps 子列筛选（方案 B：折叠不匹配的子步骤） ====================
+//
+// 与主表列筛选 `_colFilters` 的关系：
+//   - 主表列筛选决定「哪些整行显示」，作用于 rows
+//   - steps 子筛选决定「已显示行的 steps 单元格里，哪些子步骤显示」，作用于 sub-steps
+//   - 两者相互正交，同时生效
+// 数据源：`S._stepsSubFilters = { subIdx: Set<string> }`，subIdx ∈ {1,2,3}
+//   - 1 = 步骤描述（对应 step.desc）
+//   - 2 = 预期结果（对应 step.expected[] 拼接后的完整字符串）
+//   - 3 = 数据（对应 step.data[] 拼接后的完整字符串）
+// 与 buildColValueStats 保持相同的空值键（'__BLANK__'）和格式化风格，让弹窗 UI 完全复用。
+
+// 把 steps 文本解析成 { id, desc, expected: [], data: [] } 数组。
+// 与 _buildStepExpandedHtml 的解析逻辑同源，但独立于渲染层，避免相互 require。
+function _parseStepsText(text) {
+    if (!text) return [];
+    var lines = String(text).replace(/\\n/g, '\n').split(/\r?\n/);
+    var steps = [];
+    var cur = null;
+    var section = null;
+    for (var i = 0; i < lines.length; i++) {
+        var t = lines[i].trim();
+        if (!t) continue;
+        if (/^【步骤描述】$/.test(t)) {
+            if (cur) steps.push(cur);
+            cur = { id: '', desc: '', data: [], expected: [] };
+            section = 'desc';
+            continue;
+        }
+        if (!cur) continue;
+        if (/^【数据】$/.test(t)) { section = 'data'; continue; }
+        if (/^【预期结果】$/.test(t)) { section = 'expected'; continue; }
+        var m = t.match(/^步骤(\d+)\s*(.*)/);
+        if (m && section === 'desc') {
+            cur.id = m[1];
+            cur.desc = (m[2] || '').trim();
+            continue;
+        }
+        if (section === 'desc') cur.desc += (cur.desc ? '\n' : '') + t;
+        else if (section === 'data') cur.data.push(t);
+        else if (section === 'expected') cur.expected.push(t);
+    }
+    if (cur) steps.push(cur);
+    return steps;
+}
+
+// 从子步骤对象里取出用于筛选的"字段字符串"。
+// subIdx=1 描述 / 2 预期 / 3 数据。空值返回 '__BLANK__'，与 buildColValueStats 对齐。
+function _stepFieldKey(step, subIdx) {
+    var raw;
+    if (subIdx === 1) raw = (step.desc || '').trim();
+    else if (subIdx === 2) raw = (step.expected || []).join('\n').trim();
+    else if (subIdx === 3) raw = (step.data || []).join('\n').trim();
+    else raw = '';
+    return raw === '' ? '__BLANK__' : raw;
+}
+
+// 判断一个子步骤在当前 _stepsSubFilters 下是否显示（对所有已启用的 subIdx 做 AND）。
+// 未启用（Set 不存在或 size=0）的子列跳过，等价于该维度不过滤。
+function stepPassesSubFilters(step) {
+    var f = S._stepsSubFilters || {};
+    for (var subIdx = 1; subIdx <= 3; subIdx++) {
+        var set = f[subIdx];
+        if (!(set instanceof Set) || set.size === 0) continue;
+        var key = _stepFieldKey(step, subIdx);
+        if (!set.has(key)) return false;
+    }
+    return true;
+}
+
+// 计算某个 subIdx 在「所有通过主表筛选的行」的子步骤上，去重后的候选值与计数。
+// 参考 buildColValueStats：使用 __BLANK__ 空值键，按字典序排序、空值置底。
+// 注意：为避免弹窗里"看到的候选值"和"真实筛选后的分布"错位——
+//   本次统计**仅忽略当前 subIdx 自身的筛选**，其他 subIdx 的筛选依然生效（与 buildColValueStats 的
+//   getRowsPassingOtherFilters 语义等价，都遵循 Excel "候选值取决于其他筛选" 的直觉）
+function _buildStepsSubValueStats(subIdx) {
+    var headers = (S.data && S.data.headers) || [];
+    var stepsCol = headers.indexOf('steps');
+    if (stepsCol < 0) return [];
+    // _viewRows 存的是原始行号数组（Array<number>），而非行数据本身；
+    // 真实行内容需通过 S.data.rows[rowIdx] 二次取值。若无 _viewRows（首帧或未筛选），退化为遍历全表。
+    var allRows = (S.data && S.data.rows) || [];
+    var rowIdxs;
+    if (Array.isArray(S._viewRows) && S._viewRows.length > 0) {
+        rowIdxs = S._viewRows;
+    } else {
+        rowIdxs = [];
+        for (var _fi = 0; _fi < allRows.length; _fi++) rowIdxs.push(_fi);
+    }
+    // 暂时隐藏当前 subIdx 的筛选，让候选值反映"未加此维度筛选前"的分布
+    var savedSet = (S._stepsSubFilters && S._stepsSubFilters[subIdx]) || null;
+    if (savedSet) { delete S._stepsSubFilters[subIdx]; }
+    var map = new Map();
+    try {
+        for (var i = 0; i < rowIdxs.length; i++) {
+            var row = allRows[rowIdxs[i]];
+            if (!row) continue;
+            var cellText = row[stepsCol];
+            if (cellText === null || cellText === undefined) continue;
+            var steps = _parseStepsText(String(cellText));
+            for (var si = 0; si < steps.length; si++) {
+                var step = steps[si];
+                // 其他 subIdx 的筛选依旧影响候选值分布（对齐主表 getRowsPassingOtherFilters 语义）
+                if (!stepPassesSubFilters(step)) continue;
+                var key = _stepFieldKey(step, subIdx);
+                map.set(key, (map.get(key) || 0) + 1);
+            }
+        }
+    } finally {
+        if (savedSet) S._stepsSubFilters[subIdx] = savedSet;
+    }
+    var arr = [];
+    map.forEach(function (cnt, key) { arr.push({ key: key, count: cnt }); });
+    arr.sort(function (a, b) {
+        if (a.key === '__BLANK__') return 1;
+        if (b.key === '__BLANK__') return -1;
+        var na = parseFloat(a.key), nb = parseFloat(b.key);
+        if (!isNaN(na) && !isNaN(nb) && String(na) === a.key && String(nb) === b.key) return na - nb;
+        return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0);
+    });
+    return arr;
+}
+
+// 打开 steps 子列筛选弹窗。UI 骨架、事件绑定与 openColFilter 保持一致（用户操作无感），
+// 只是数据源换成 `S._stepsSubFilters[subIdx]` + `_buildStepsSubValueStats`。
+// 抽出成独立函数而非重构 openColFilter，是为了不干扰主列筛选路径的稳定性。
+function openStepsSubFilter(subIdx, anchorEl) {
+    var sf = document.getElementById('sortFilter');
+    if (!sf) return;
+    if (subIdx !== 1 && subIdx !== 2 && subIdx !== 3) return;
+    var stats = _buildStepsSubValueStats(subIdx);
+    var existing = (S._stepsSubFilters && S._stepsSubFilters[subIdx]) || null;
+    var selected = new Set();
+    if (existing instanceof Set) existing.forEach(function (v) { selected.add(v); });
+    else stats.forEach(function (s) { selected.add(s.key); });
+    // 复用 _filterUI 结构（供 renderColFilterList / syncSelectedToSearch 共用），
+    // 但用 mode='subStep' 区分应用路径
+    S._filterUI = { mode: 'subStep', subIdx: subIdx, kw: '', selected: selected, stats: stats };
+    sf.innerHTML = ''
+        + '<div class="xs-sf-search">'
+        +   '<input type="text" id="sfSearch" placeholder="搜索值...">'
+        +   '<span class="xs-sf-clear" id="sfSearchClear" title="清除">✕</span>'
+        +   '<span class="xs-sf-reset" id="sfSearchReset" title="重置：恢复全选所有项">⟳</span>'
+        + '</div>'
+        + '<div class="xs-sf-list" id="sfList"></div>'
+        + '<div class="xs-sf-footer">'
+        +   '<button class="xs-sf-clear-btn" id="sfClearFilter">清除筛选</button>'
+        +   '<div class="xs-sf-actions">'
+        +     '<button class="xs-btn" id="sfCancel">取消</button>'
+        +     '<button class="xs-btn xs-btn-p" id="sfApply">确定</button>'
+        +   '</div>'
+        + '</div>';
+    sf.classList.add('show');
+    positionColFilter(sf, anchorEl);
+    var input = document.getElementById('sfSearch');
+    var clear = document.getElementById('sfSearchClear');
+    if (input) {
+        input.addEventListener('input', function () {
+            var kw = (input.value || '');
+            S._filterUI.kw = kw;
+            if (clear) clear.classList.toggle('show', !!kw);
+            syncSelectedToSearch();
+            renderColFilterList();
+        });
+        input.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter') { ev.preventDefault(); applyStepsSubFilter(); }
+            else if (ev.key === 'Escape') { ev.preventDefault(); closeColFilter(); }
+            ev.stopPropagation();
+        });
+        input.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
+    }
+    if (clear) {
+        clear.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            if (input) { input.value = ''; input.focus(); }
+            S._filterUI.kw = '';
+            clear.classList.remove('show');
+            syncSelectedToSearch();
+            renderColFilterList();
+        });
+    }
+    var cancelBtn = document.getElementById('sfCancel');
+    if (cancelBtn) cancelBtn.addEventListener('click', function (ev) { ev.stopPropagation(); closeColFilter(); });
+    var resetBtn = document.getElementById('sfSearchReset');
+    if (resetBtn) {
+        resetBtn.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
+        resetBtn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            if (input) { input.value = ''; }
+            S._filterUI.kw = '';
+            if (clear) clear.classList.remove('show');
+            var _st = (S._filterUI && S._filterUI.stats) || [];
+            S._filterUI.selected = new Set();
+            _st.forEach(function (s) { S._filterUI.selected.add(s.key); });
+            renderColFilterList();
+            if (input) input.focus();
+        });
+    }
+    var applyBtn = document.getElementById('sfApply');
+    if (applyBtn) applyBtn.addEventListener('click', function (ev) { ev.stopPropagation(); applyStepsSubFilter(); });
+    var clearFilterBtn = document.getElementById('sfClearFilter');
+    if (clearFilterBtn) clearFilterBtn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        if (S._stepsSubFilters && S._stepsSubFilters[subIdx]) {
+            delete S._stepsSubFilters[subIdx];
+            if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
+            renderTable();
+        }
+        closeColFilter();
+    });
+    sf.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
+    renderColFilterList();
+    if (input) setTimeout(function () { input.focus(); }, 0);
+}
+
+function applyStepsSubFilter() {
+    var ui = S._filterUI;
+    if (!ui || ui.mode !== 'subStep') { closeColFilter(); return; }
+    var subIdx = ui.subIdx;
+    var stats = ui.stats || [];
+    var totalKeys = stats.length;
+    var sel = ui.selected;
+    if (sel.size === 0) {
+        showToast('至少需要选中一项', 'error');
+        return;
+    }
+    if (!S._stepsSubFilters) S._stepsSubFilters = {};
+    if (sel.size === totalKeys) {
+        // 全选 = 无筛选
+        if (S._stepsSubFilters[subIdx]) delete S._stepsSubFilters[subIdx];
+    } else {
+        var keep = new Set();
+        stats.forEach(function (s) { if (sel.has(s.key)) keep.add(s.key); });
+        S._stepsSubFilters[subIdx] = keep;
+    }
+    if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
+    closeColFilter();
+    renderTable();
 }

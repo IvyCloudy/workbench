@@ -85,6 +85,90 @@ function startColResize(e) {
     document.addEventListener('mouseup', onUp);
 }
 
+// ==================== steps 子列宽拖动 ====================
+// 拖动 steps 展开态子表头右边界（.xs-sub-resizer[data-sub-idx="0..3"]）改变该子列宽度。
+//
+// 交互约定（与 Excel 拖列宽一致）：
+//   - 只调整被拖手柄的那一列宽度，其他子列宽度不变；
+//   - 因此 5 子列总和会随之变化 → 同步刷新 S.colWidths[stepsCol]，让主表列表格布局重排，
+//     水平出现滚动条时也能正常滚动；
+//   - 序号(0)/描述(1)/预期(2)/数据(3) 均可拖；操作列(4) 无手柄（防止拖到主表外面）；
+//   - 每列有最小宽 STEPS_SUB_MIN[i]（见 02a-render.js），避免拖到不可读。
+//
+// 数据流：
+//   S._stepsSubW[idx] 实时更新（内存） → onUp 时 S.colWidths[stepsCol] 同步 → persistUiState 持久化。
+// DOM 实时刷新：
+//   1) 主表 colgroup 中 steps 对应的第 idx 个 <col>
+//   2) 主表 thead 中 .xs-th-sub[data-sub-idx=idx] 的宽度（用 class 兜底）
+//   3) 所有已渲染的内层子表格 .xse-table > colgroup > col:nth-child(idx+1)
+function startSubColResize(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var idx = parseInt(e.currentTarget.getAttribute('data-sub-idx'), 10);
+    if (isNaN(idx) || idx < 0 || idx > 3) return;
+
+    var startX = e.clientX;
+    var startW = (typeof _getStepsSubWSafe === 'function') ? _getStepsSubWSafe() : [32, 132, 128, 72, 60];
+    var startTarget = startW[idx];
+    var minW = (typeof STEPS_SUB_MIN !== 'undefined' && STEPS_SUB_MIN[idx]) ? STEPS_SUB_MIN[idx] : 24;
+
+    var headers = (S.data && S.data.headers) || [];
+    var stepsCol = headers.indexOf('steps');
+    if (stepsCol < 0) return;
+    // 主表 colgroup 中该子列 <col> 的位置：首列 cb 占 1 位，前 stepsCol 个数据列各 1 位；
+    // 展开态下 steps 列在此偏移下有 5 个 <col>，第 idx 个 = cb(1) + stepsCol(N) + idx，
+    // 转成 nth-child 从 1 开始要再 +1。
+    var mainColNthChild = 1 + stepsCol + idx + 1;
+
+    function onMove(ev) {
+        var w = Math.max(minW, startTarget + (ev.clientX - startX));
+        if (!Array.isArray(S._stepsSubW) || S._stepsSubW.length !== 5) {
+            S._stepsSubW = startW.slice();
+        }
+        S._stepsSubW[idx] = w;
+
+        // 1) 主表 colgroup 中的 <col>
+        var mainCol = document.querySelector('.xs-table > colgroup > col:nth-child(' + mainColNthChild + ')');
+        if (mainCol) mainCol.style.width = w + 'px';
+
+        // 2) 主表 thead 中子表头 span：优先 data-sub-idx，找不到则按 class 兜底
+        var subHead = document.querySelector('.xs-th-group .xs-th-sub[data-sub-idx="' + idx + '"]');
+        if (!subHead) {
+            var cls = ['xs-th-sub-id', 'xs-th-sub-desc', 'xs-th-sub-expected', 'xs-th-sub-data'][idx];
+            subHead = document.querySelector('.xs-th-group .xs-th-sub.' + cls);
+        }
+        if (subHead) subHead.style.width = w + 'px';
+
+        // 3) 所有已渲染的内层子表格 colgroup 中的 <col>
+        var innerCols = document.querySelectorAll('.xse-table > colgroup > col:nth-child(' + (idx + 1) + ')');
+        for (var ic = 0; ic < innerCols.length; ic++) {
+            innerCols[ic].style.width = w + 'px';
+        }
+
+        // 4) 同步"总宽锚点"：xs-th-sub-row 与 xse-table 的 inline width
+        //    这是消除表头/数据对齐错位的关键 —— 两者宽度必须与 colgroup 5 子列之和严格一致，
+        //    否则 table-layout:fixed 会等比缩放，产生累积偏差。
+        var _totalNow = S._stepsSubW[0] + S._stepsSubW[1] + S._stepsSubW[2] + S._stepsSubW[3] + S._stepsSubW[4];
+        var subRow = document.querySelector('.xs-th-group .xs-th-sub-row');
+        if (subRow) subRow.style.width = _totalNow + 'px';
+        var innerTables = document.querySelectorAll('.xse-table');
+        for (var it = 0; it < innerTables.length; it++) {
+            innerTables[it].style.width = _totalNow + 'px';
+        }
+    }
+    function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        if (Array.isArray(S._stepsSubW) && S._stepsSubW.length === 5) {
+            var total = S._stepsSubW[0] + S._stepsSubW[1] + S._stepsSubW[2] + S._stepsSubW[3] + S._stepsSubW[4];
+            S.colWidths[stepsCol] = total;
+        }
+        if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+}
+
 // 双击列宽拖手柄：在"自适应内容宽度"和"默认列宽"之间切换（与双击行号格切换行高的体验一致）。
 //   - 第奇数次双击：按当前可见行内容自适应展宽
 //   - 第偶数次双击：恢复默认列宽（160px，与渲染层 `_buildSkeletonHtml` 中的默认值保持一致）
@@ -102,6 +186,33 @@ function autoFitColumn(e) {
     // 统一用 closest('th') 拿到列头元素，避免 parentElement 在后一种情况下指向 <tr>
     var th = (e.currentTarget.closest && e.currentTarget.closest('th'))
         || e.currentTarget.parentElement;
+
+    // ---- 特判：steps 展开态下双击主表头顶部条 ----
+    // 展开态下 steps 的 colgroup 由 5 个子 col 组成，且 tbody 是内嵌 .xse-table。
+    // 若走通用 autoFitColumn 会：
+    //   1) 测到 steps 原始拼接文本的超宽（不真实）；
+    //   2) 只改主表 <col> 而不改 5 个子 col、子表 colgroup、子表头/子表总宽锚点；
+    // 结果就是"外壳被撑很宽、里面 5 列没变、中间大片空白"。
+    // 正确行为：对每个子列逐个执行 autoFitStepsSubCol（内部会 toggle 展宽/回退，且联动所有 DOM）。
+    var _headers0 = (S && S.data && S.data.headers) || [];
+    if (_headers0[col] === 'steps' && S && S._stepsExpanded
+        && typeof autoFitStepsSubCol === 'function') {
+        // 整体 toggle：以第 0 个子列的展宽状态为准 —— 若已展宽则本次全部回退，否则全部展宽。
+        if (!S._stepsSubExpanded) S._stepsSubExpanded = new Set();
+        // 无论当前处于何种混合状态，都先统一朝"全部回退→再全部展宽"的方向前进：
+        //   - 若已有任意子列处于展宽态，则本次全部回退到默认宽
+        //   - 否则全部展宽到内容自适应
+        var _anyExpanded = S._stepsSubExpanded.size > 0;
+        for (var _si = 0; _si < 5; _si++) {
+            var _isExp = S._stepsSubExpanded.has(_si);
+            if (_anyExpanded && _isExp) {
+                autoFitStepsSubCol(_si); // toggle 回退
+            } else if (!_anyExpanded && !_isExp) {
+                autoFitStepsSubCol(_si); // toggle 展宽
+            }
+        }
+        return;
+    }
 
     // 列宽相关常量
     // - DEFAULT_COL_WIDTH 必须与 02a-render.js 中 `S.colWidths[i] || 160` 保持一致
@@ -243,6 +354,160 @@ function autoFitColumn(e) {
     S._colExpanded.add(col); // 标记"已展宽" → 下次双击走 toggle 回退分支
     var colEl = getColEl();
     if (colEl) colEl.style.width = finalW + 'px';
+    if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
+}
+
+// ==================== steps 子列宽双击自适应 ====================
+// 双击 steps 展开态子表头（.xs-th-sub[data-sub-idx=0..4]）：
+//   - 第奇数次双击：按当前可见 tbody 中该子列所有 <td class="xse-td-*"> 内容的真实宽度自适应
+//   - 第偶数次双击：回退到默认宽（STEPS_SUB_W_DEFAULT[idx]）
+// 与主表 autoFitColumn 的思路一致：离屏量尺 + 遍历 DOM td 测 offsetWidth，
+// 但因 steps 子列内容位于内层 .xse-table 中，选择器路径不同。
+//
+// 联动更新：
+//   1) S._stepsSubW[idx] 内存态
+//   2) 主表 colgroup 中 steps 对应子列的 <col>
+//   3) 主表 thead 中 .xs-th-sub[data-sub-idx=idx] 的 inline width
+//   4) 所有内层 .xse-table > colgroup > col:nth-child(idx+1)
+//   5) 表头子表头条 .xs-th-sub-row 与内层表 .xse-table 的总宽锚点
+//   6) S.colWidths[stepsCol] = 5 子列总和（让主表 colgroup 的 steps 列宽同步刷新）
+function autoFitStepsSubCol(idx) {
+    if (typeof idx !== 'number' || idx < 0 || idx > 4) return;
+
+    var headers = (S.data && S.data.headers) || [];
+    var stepsCol = headers.indexOf('steps');
+    if (stepsCol < 0) return;
+
+    // 常量：子表单元格 padding（CSS: .xse-table tbody td{padding:6px 8px}）+ 边框 1px
+    var SUB_CELL_PAD = 18;   // 左右 padding 8+8 + 边框预留 2
+    var SUB_HEAD_PAD = 16;   // 子表头 padding 6+6 + 漏斗预留（若有）
+    var MIN_W = (typeof STEPS_SUB_MIN !== 'undefined' && STEPS_SUB_MIN[idx]) ? STEPS_SUB_MIN[idx] : 24;
+    var MAX_W = 600;
+    var DEFAULT_W = (typeof STEPS_SUB_W_DEFAULT !== 'undefined' && STEPS_SUB_W_DEFAULT[idx])
+        ? STEPS_SUB_W_DEFAULT[idx] : [32, 132, 128, 72, 60][idx];
+
+    // toggle：若已展宽，则回退默认宽
+    if (!S._stepsSubExpanded) S._stepsSubExpanded = new Set();
+    var finalW;
+    if (S._stepsSubExpanded.has(idx)) {
+        S._stepsSubExpanded.delete(idx);
+        finalW = DEFAULT_W;
+    } else {
+        // 首次双击：测量内容真实宽度
+        var tdClass = ['xse-td-id', 'xse-td-desc', 'xse-td-expected', 'xse-td-data', 'xse-td-op'][idx];
+        var cells = document.querySelectorAll('.xse-table tbody td.' + tdClass);
+
+        // 离屏量尺
+        var ruler = document.createElement('div');
+        ruler.style.cssText = 'position:absolute;left:-99999px;top:-99999px;visibility:hidden;'
+            + 'white-space:nowrap;display:inline-block;font:inherit;padding:0;border:0;'
+            + 'box-sizing:content-box;pointer-events:none';
+        // 用一个子表实际 td 作为字体参考
+        var refCell = cells[0];
+        if (refCell) {
+            var cs = window.getComputedStyle(refCell);
+            ruler.style.font = cs.font;
+            ruler.style.fontSize = cs.fontSize;
+            ruler.style.fontFamily = cs.fontFamily;
+            ruler.style.fontWeight = cs.fontWeight;
+            ruler.style.letterSpacing = cs.letterSpacing;
+        }
+        document.body.appendChild(ruler);
+
+        var dataMax = 0;
+        try {
+            for (var i = 0; i < cells.length; i++) {
+                var clone = cells[i].cloneNode(true);
+                var all = [clone].concat(Array.prototype.slice.call(clone.querySelectorAll('*')));
+                for (var k = 0; k < all.length; k++) {
+                    var node = all[k];
+                    if (!node || !node.style) continue;
+                    node.style.overflow = 'visible';
+                    node.style.textOverflow = 'clip';
+                    node.style.whiteSpace = 'nowrap';
+                    node.style.maxWidth = 'none';
+                    node.style.width = 'auto';
+                    node.style.minWidth = '0';
+                    node.style.wordBreak = 'normal';
+                    node.style.flexShrink = '0';
+                    node.style.flexWrap = 'nowrap';
+                    node.style.webkitLineClamp = 'unset';
+                    if (node.classList && (
+                        node.classList.contains('xs-detail-link') ||
+                        node.classList.contains('xs-chip') ||
+                        node.classList.contains('xse-sub')
+                    )) {
+                        node.style.display = 'inline-block';
+                        node.style.boxSizing = 'content-box';
+                        node.style.verticalAlign = 'middle';
+                    }
+                }
+                clone.style.display = 'inline-block';
+                clone.style.padding = '0';
+                clone.style.border = '0';
+                ruler.appendChild(clone);
+                var w = clone.offsetWidth;
+                if (w > dataMax) dataMax = w;
+                ruler.removeChild(clone);
+            }
+
+            // 表头文字兜底
+            var headTxt = ['序号', '步骤描述', '预期结果', '数据', '操作'][idx];
+            ruler.textContent = headTxt;
+            var headW = ruler.offsetWidth;
+            if (headW + SUB_HEAD_PAD > dataMax) dataMax = headW + SUB_HEAD_PAD - SUB_CELL_PAD;
+        } finally {
+            document.body.removeChild(ruler);
+        }
+
+        finalW = Math.max(MIN_W, Math.min(MAX_W, Math.ceil(dataMax) + SUB_CELL_PAD));
+        S._stepsSubExpanded.add(idx);
+    }
+
+    // 写入运行时状态
+    if (!Array.isArray(S._stepsSubW) || S._stepsSubW.length !== 5) {
+        S._stepsSubW = (typeof _getStepsSubWSafe === 'function') ? _getStepsSubWSafe() : [32, 132, 128, 72, 60];
+    }
+    S._stepsSubW[idx] = finalW;
+
+    // 联动 DOM 刷新（与 startSubColResize 的 onMove 保持一致）
+    // 1) 主表 colgroup 中 steps 子列的 <col>
+    var mainColNthChild = 1 + stepsCol + idx + 1;
+    var mainCol = document.querySelector('.xs-table > colgroup > col:nth-child(' + mainColNthChild + ')');
+    if (mainCol) mainCol.style.width = finalW + 'px';
+
+    // 2) 主表 thead 中子表头 span
+    var subHead = document.querySelector('.xs-th-group .xs-th-sub[data-sub-idx="' + idx + '"]');
+    if (!subHead) {
+        var cls2 = ['xs-th-sub-id', 'xs-th-sub-desc', 'xs-th-sub-expected', 'xs-th-sub-data', 'xs-th-sub-op'][idx];
+        subHead = document.querySelector('.xs-th-group .xs-th-sub.' + cls2);
+    }
+    if (subHead) subHead.style.width = finalW + 'px';
+
+    // 3) 所有已渲染的内层子表格 colgroup 中的 <col>
+    var innerCols = document.querySelectorAll('.xse-table > colgroup > col:nth-child(' + (idx + 1) + ')');
+    for (var ic = 0; ic < innerCols.length; ic++) {
+        innerCols[ic].style.width = finalW + 'px';
+    }
+
+    // 4) 同步总宽锚点
+    var _totalNow = S._stepsSubW[0] + S._stepsSubW[1] + S._stepsSubW[2] + S._stepsSubW[3] + S._stepsSubW[4];
+    var subRow = document.querySelector('.xs-th-group .xs-th-sub-row');
+    if (subRow) subRow.style.width = _totalNow + 'px';
+    var innerTables = document.querySelectorAll('.xse-table');
+    for (var it = 0; it < innerTables.length; it++) {
+        innerTables[it].style.width = _totalNow + 'px';
+    }
+
+    // 5) 主表 steps 大列宽度同步（让水平滚动条正确出现/消失）
+    S.colWidths[stepsCol] = _totalNow;
+    var stepsMainCol = document.querySelector('.xs-table > colgroup > col:nth-child(' + (stepsCol + 2) + ')');
+    // 注意：steps 展开时 colgroup 是 5 col 占 5 位，没有单独的合并 col，无需再改；
+    // 但当 steps 未展开时，只有 1 个 col，此时按 total 更新即可。
+    if (stepsMainCol && !(S._collapse && S._collapse.steps === false && true)) {
+        // 仅在未展开态改单 col 宽；展开态由 5 个子 col 之和自然生效
+    }
+
     if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
 }
 

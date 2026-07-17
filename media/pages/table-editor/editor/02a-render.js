@@ -216,14 +216,42 @@ function _buildGhostRowsHtml(headers) {
 }
 
 // 构建表格骨架（colgroup + thead + 空 tbody），不含具体 tr
-// 展开模式：colgroup 拆 5 子列，thead 两行均显式列出所有列（不使用 rowspan），
-//           通过空占位 th 保证 table-layout:fixed 下浏览器正确对齐子表头。
+// 展开模式：colgroup 拆 5 子列，thead 仅一行；steps 列的 th 用 colspan=5，
+//           内部纵向堆叠"顶部主标题条(步骤/steps + 筛选)"和"底部子表头条(序号|步骤描述|预期结果|数据|操作)"。
+//           底部子表头条通过精确像素宽度与 colgroup 子列对齐。
+
+// steps 子列默认宽（序号|步骤描述|预期结果|数据|操作），总和=404
+var STEPS_SUB_W_DEFAULT = [32, 132, 128, 72, 60];
+var STEPS_SUB_MIN = [24, 60, 60, 40, 56]; // 每列最小宽，防止拖到不可读；操作列需容纳单列排布的 3 个 22px 图标
+
+// 读取 steps 5 子列宽：优先用 S._stepsSubW，否则返回默认值副本。
+// 返回值一定是长度 5 的正数数组，供渲染层与拖动逻辑共享。
+function _getStepsSubWSafe() {
+    var w = S && S._stepsSubW;
+    if (Array.isArray(w) && w.length === 5) {
+        var ok = true;
+        for (var i = 0; i < 5; i++) {
+            if (typeof w[i] !== 'number' || w[i] < STEPS_SUB_MIN[i]) { ok = false; break; }
+        }
+        if (ok) return w.slice();
+    }
+    return STEPS_SUB_W_DEFAULT.slice();
+}
+
+// 计算 steps 主列总宽（5 子列之和），供拖动时同步主表 colWidths[stepsCol]
+function _getStepsTotalW() {
+    var w = _getStepsSubWSafe();
+    return w[0] + w[1] + w[2] + w[3] + w[4];
+}
+
 function _buildSkeletonHtml() {
     var headers = (S.data && S.data.headers) || [];
     var stepsCol = headers.indexOf('steps');
     var hasSteps = (stepsCol >= 0);
     var expanded = !!(S._stepsExpanded && hasSteps);
-    var stepsSubW = expanded ? [36, 130, 114, 96, 28] : []; // 序号|步骤描述|预期结果|数据|操作（固定像素，总和=404）
+    // steps 子列宽：优先用 S._stepsSubW（拖动后持久化），后退到默认。
+    // 默认列宽：[序号 32, 步骤描述 132, 预期结果 128, 数据 72, 操作 40]，总和 404
+    var stepsSubW = expanded ? _getStepsSubWSafe() : []; // 序号|步骤描述|预期结果|数据|操作
     var html = '<table class="xs-table"><colgroup>';
     html += '<col style="width:50px">';
     for (var i = 0; i < headers.length; i++) {
@@ -240,7 +268,7 @@ function _buildSkeletonHtml() {
         }
     }
     html += '</colgroup><thead>';
-    // Row 1: 主表头（不使用 rowspan，row2 用占位 th 匹配列结构）
+    // 单行表头：非 steps 列常规 th；steps 列 th 用 colspan=5，内部两层堆叠。
     html += '<tr>';
     html += '<th class="xs-th xs-th-cb xs-th-rownum" title="点击全选整表">#</th>';
     var labels = (S && S.headerLabels) || {};
@@ -258,40 +286,99 @@ function _buildSkeletonHtml() {
             ? '<span class="xs-th-cn" title="' + escapeHtml(cnLabel) + '">' + escapeHtml(cnLabel) + '</span>'
             : '';
         var keyCls = hasCn ? 'xs-th-text' : 'xs-th-text xs-th-text-only';
-        var colSpanAttr = (expanded && j === stepsCol) ? ' colspan="5"' : '';
-        html += '<th class="xs-th' + colSelCls + frozenCls + (expanded && j === stepsCol ? ' xs-th-group-top' : '') + '" data-col="' + j + '" title="' + escapeHtml(titleLabel) + '"' + colSpanAttr + '>'
-            + '<div class="xs-th-inner">'
-            +   '<div class="xs-th-labels">'
-            +     cnHtml
-            +     '<span class="' + keyCls + '">' + escapeHtml(String(hdr)) + '</span>'
+        var isStepsGroup = (expanded && j === stepsCol);
+        var colSpanAttr = isStepsGroup ? ' colspan="5"' : '';
+        // steps 展开时：主 th 加 xs-th-group 类，内部结构 = 顶部主标题条(.xs-th-top) + 底部子表头条(.xs-th-sub-row)
+        // 顶部条保留筛选漏斗；底部条用固定像素宽度对齐 colgroup 子列，与内层表格 tbody 完全对齐。
+        // 非 steps 列保持原有单层结构，避免对既有布局产生任何影响。
+        var stepsGroupCls = isStepsGroup ? ' xs-th-group' : '';
+        var topOpen = isStepsGroup ? '<div class="xs-th-top">' : '';
+        var topClose = isStepsGroup ? '</div>' : '';
+        // 顶部条右上角就近收起按钮（仅步骤展开态提供）：位于步骤/steps 主表头内，方便用户就近点击退出展开模式
+        // 实现依赖顶部工具栏的 #expandStepsBtn.click()，避免重复实现切换逻辑
+        var collapseBtnHtml = isStepsGroup
+            ? '<span class="xs-th-group-collapse" data-collapse-steps="1" title="收起步骤">'
+                + '<svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">'
+                +   '<path fill="currentColor" d="M3 7.2l3-3 3 3-.7.7L6 5.6 3.7 7.9z"/>'
+                + '</svg>'
+              + '</span>'
+            : '';
+        // 未展开态下的 steps 列：内嵌"就近展开"按钮（向下箭头），与展开态的"就近收起"按钮
+        // 形成一对镜像交互 —— 用户无需回到顶部工具栏就能就地展开/收起。
+        // 依然复用 #expandStepsBtn.click() 复用切换逻辑；用 xs-th-inline-expand 类作为 flex 内联项，
+        // 排在筛选漏斗右侧，天然对齐、不与列宽 resizer 冲突。
+        var inlineExpandBtnHtml = (!isStepsGroup && hasSteps && j === stepsCol)
+            ? '<span class="xs-th-inline-expand" data-collapse-steps="1" title="展开步骤">'
+                + '<svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">'
+                +   '<path fill="currentColor" d="M3 4.8l3 3 3-3-.7-.7L6 6.4 3.7 4.1z"/>'
+                + '</svg>'
+              + '</span>'
+            : '';
+        var subHeaderHtml = '';
+        if (isStepsGroup) {
+            // 子表头前 4 列右侧内嵌拖手柄：data-sub-idx="0..3"，拖动时修改 S._stepsSubW[i] 与 [i+1]。
+            // 最后一列（操作）不需内嵌拖手柄，避免拖到主表外。
+            var _w = stepsSubW;
+            // 子表头条总宽 = 5 子列之和，写入 inline width，保证与内层子表 xse-table 的 colgroup 总宽完全一致。
+            // 不再依赖 flex 与外层 th border-box 的隐式撑开（两者压缩比不一致会导致表头/数据错位）。
+            var _subRowTotalW = _getStepsTotalW();
+            // 子列筛选漏斗：只对 描述(1) / 预期(2) / 数据(3) 提供；序号(0) / 操作(4) 无筛选。
+            // 生成漏斗 HTML 的辅助：subIdx 传当前子列索引；hasFilter 从 S._stepsSubFilters 读取
+            function _subFilterBtn(idx) {
+                var sf = S._stepsSubFilters || {};
+                var active = (sf[idx] instanceof Set && sf[idx].size > 0);
+                var cls = 'xs-sub-filter' + (active ? ' active' : '');
+                var t = active ? '已应用筛选 (点击修改)' : '筛选此子列';
+                return '<span class="' + cls + '" data-sub-filter-idx="' + idx + '" title="' + t + '">'
+                    +   '<svg class="xs-funnel-icon" viewBox="0 0 16 16" width="9" height="9" aria-hidden="true">'
+                    +     '<path fill="currentColor" d="M2 3a1 1 0 0 1 1-1h10a1 1 0 0 1 .8 1.6L10 8.5V13a1 1 0 0 1-1.45.9l-2-1A1 1 0 0 1 6 12V8.5L2.2 3.6A1 1 0 0 1 2 3z"/>'
+                    +   '</svg>'
+                    + '</span>';
+            }
+            subHeaderHtml = ''
+                + '<div class="xs-th-sub-row" style="width:' + _subRowTotalW + 'px">'
+                +   '<span class="xs-th-sub xs-th-sub-id" data-sub-idx="0" style="width:' + _w[0] + 'px">序号'
+                +     '<span class="xs-sub-resizer" data-sub-idx="0" title="拖动调整子列宽"></span>'
+                +   '</span>'
+                +   '<span class="xs-th-sub xs-th-sub-desc" data-sub-idx="1" style="width:' + _w[1] + 'px">'
+                +     '<span class="xs-th-sub-text">步骤描述</span>'
+                +     _subFilterBtn(1)
+                +     '<span class="xs-sub-resizer" data-sub-idx="1" title="拖动调整子列宽"></span>'
+                +   '</span>'
+                +   '<span class="xs-th-sub xs-th-sub-expected" data-sub-idx="2" style="width:' + _w[2] + 'px">'
+                +     '<span class="xs-th-sub-text">预期结果</span>'
+                +     _subFilterBtn(2)
+                +     '<span class="xs-sub-resizer" data-sub-idx="2" title="拖动调整子列宽"></span>'
+                +   '</span>'
+                +   '<span class="xs-th-sub xs-th-sub-data" data-sub-idx="3" style="width:' + _w[3] + 'px">'
+                +     '<span class="xs-th-sub-text">数据</span>'
+                +     _subFilterBtn(3)
+                +     '<span class="xs-sub-resizer" data-sub-idx="3" title="拖动调整子列宽"></span>'
+                +   '</span>'
+                +   '<span class="xs-th-sub xs-th-sub-op" data-sub-idx="4" style="width:' + _w[4] + 'px">操作</span>'
+                + '</div>';
+        }
+        html += '<th class="xs-th' + colSelCls + frozenCls + stepsGroupCls + '" data-col="' + j + '" title="' + escapeHtml(titleLabel) + '"' + colSpanAttr + '>'
+            + topOpen
+            +   '<div class="xs-th-inner">'
+            +     '<div class="xs-th-labels">'
+            +       cnHtml
+            +       '<span class="' + keyCls + '">' + escapeHtml(String(hdr)) + '</span>'
+            +     '</div>'
+            +     '<span class="xs-th-filter' + filterCls + '" data-filter-col="' + j + '" title="' + filterTitle + '">'
+            +       '<svg class="xs-funnel-icon" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">'
+            +         '<path fill="currentColor" d="M2 3a1 1 0 0 1 1-1h10a1 1 0 0 1 .8 1.6L10 8.5V13a1 1 0 0 1-1.45.9l-2-1A1 1 0 0 1 6 12V8.5L2.2 3.6A1 1 0 0 1 2 3z"/>'
+            +       '</svg>'
+            +     '</span>'
+            +     inlineExpandBtnHtml
             +   '</div>'
-            +   '<span class="xs-th-filter' + filterCls + '" data-filter-col="' + j + '" title="' + filterTitle + '">'
-            +     '<svg class="xs-funnel-icon" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">'
-            +       '<path fill="currentColor" d="M2 3a1 1 0 0 1 1-1h10a1 1 0 0 1 .8 1.6L10 8.5V13a1 1 0 0 1-1.45.9l-2-1A1 1 0 0 1 6 12V8.5L2.2 3.6A1 1 0 0 1 2 3z"/>'
-            +     '</svg>'
-            +   '</span>'
-            + '</div>'
-            + (j !== stepsCol ? '<div class="xs-resizer" data-col="' + j + '" title="拖动调整列宽；双击自适应"></div>' : '')
+            + collapseBtnHtml
+            + topClose
+            + subHeaderHtml
+            + (isStepsGroup ? '' : '<div class="xs-resizer" data-col="' + j + '" title="拖动调整列宽；双击自适应"></div>')
             + '</th>';
     }
     html += '</tr>';
-    // Row 2: 占位 th 填充非 steps 列 + 5 个子列标题（仅展开模式）
-    if (expanded) {
-        html += '<tr>';
-        html += '<th class="xs-th-placeholder"></th>'; // 序号列占位
-        for (var k = 0; k < headers.length; k++) {
-            if (k === stepsCol) {
-                html += '<th class="xs-th-sub xs-th-sub-id">序号</th>';
-                html += '<th class="xs-th-sub xs-th-sub-desc">步骤描述</th>';
-                html += '<th class="xs-th-sub xs-th-sub-expected">预期结果</th>';
-                html += '<th class="xs-th-sub xs-th-sub-data">数据</th>';
-                html += '<th class="xs-th-sub xs-th-sub-op">操作</th>';
-            } else {
-                html += '<th class="xs-th-placeholder"></th>';
-            }
-        }
-        html += '</tr>';
-    }
     html += '</thead><tbody id="xsTbody"></tbody></table>';
     // 展开模式添加标记 class，允许表格超出容器宽度（避免列被挤压）
     if (expanded) {
@@ -575,21 +662,57 @@ function _buildStepExpandedHtml(text) {
     if (cur) steps.push(cur);
     if (steps.length === 0) return '';
 
-    // ── 构建四列表格（无 thead，表头已合入主表）：序号 | 步骤描述 | 预期结果 | 数据
-    // colgroup 与主表 steps 子列完全一致（36px | 130px | 114px | 96px | 28px，总和=404）
-    var html = '<table class="xse-table">';
-    html += '<colgroup><col style="width:36px"><col style="width:130px"><col style="width:114px"><col style="width:96px"><col style="width:28px"></colgroup>';
+    // 子步骤筛选（方案 B：折叠不匹配的子步骤，保留整行）。
+    // 关键点：`data-xse-step` 必须使用**原始索引**（在完整 steps 数组中的位置），
+    // 否则编辑时 `steps-editor.js` 的 splice 会串行到错误的步骤上，导致数据丢失。
+    // 因此我们保留 `origIdx`，用它绑定 data-xse-step / data-xse-copy 等，
+    // 显示用的序号 `step.id` 保持解析出来的原值不变。
+    var visibleSteps = [];
+    for (var _si = 0; _si < steps.length; _si++) {
+        var _step = steps[_si];
+        _step.origIdx = _si;
+        if (typeof stepPassesSubFilters !== 'function' || stepPassesSubFilters(_step)) {
+            visibleSteps.push(_step);
+        }
+    }
+
+    // 子标题 chip 分色：data-kind 属性驱动 CSS 颜色（UI=蓝、接口=紫、数据=绿）
+    function _subKind(title) {
+        if (title === '【接口调用】') return 'api';
+        if (title === '【数据检查】') return 'data';
+        return 'ui';
+    }
+    // colgroup 与主表 steps 子列完全一致（从 S._stepsSubW 读取运行时宽度）
+    var _sw = _getStepsSubWSafe();
+    var _totalW = _sw[0] + _sw[1] + _sw[2] + _sw[3] + _sw[4];
+    // 内层表格宽度直接锁定为 colgroup 总和，避免 width:100% 导致的等比缩放（与主表头子表头条归一，确保严格对齐）
+    var html = '<table class="xse-table" style="width:' + _totalW + 'px">';
+    html += '<colgroup>'
+        + '<col style="width:' + _sw[0] + 'px">'
+        + '<col style="width:' + _sw[1] + 'px">'
+        + '<col style="width:' + _sw[2] + 'px">'
+        + '<col style="width:' + _sw[3] + 'px">'
+        + '<col style="width:' + _sw[4] + 'px">'
+        + '</colgroup>';
     html += '<tbody>';
 
-    for (var s = 0; s < steps.length; s++) {
-        var step = steps[s];
+    // 全部被过滤：显示占位提示，避免空表格视觉断裂
+    if (visibleSteps.length === 0) {
+        html += '<tr><td class="xse-td-empty" colspan="5">（当前子列筛选下，该单元格所有步骤均被隐藏）</td></tr>';
+        html += '</tbody></table>';
+        return html;
+    }
+
+    for (var s = 0; s < visibleSteps.length; s++) {
+        var step = visibleSteps[s];
+        var _origIdx = step.origIdx;
         html += '<tr>';
-        // 序号（不可编辑）
-        html += '<td class="xse-td-id">' + escapeHtml(step.id || '-') + '</td>';
-        // 步骤描述（可编辑）
-        html += '<td class="xse-td-desc" contenteditable="true" data-xse-step="' + s + '" data-xse-section="desc">' + escapeHtml(step.desc || '') + '</td>';
+        // 序号（不可编辑）：小圆点风格，与列头序号位置一致
+        html += '<td class="xse-td-id"><span class="xse-idx-dot">' + escapeHtml(step.id || '-') + '</span></td>';
+        // 步骤描述（可编辑）：data-xse-step 使用原始索引，保证编辑映射到源文本正确位置
+        html += '<td class="xse-td-desc" contenteditable="true" data-xse-step="' + _origIdx + '" data-xse-section="desc">' + escapeHtml(step.desc || '') + '</td>';
         // 预期结果（可编辑）
-        html += '<td class="xse-td-expected" contenteditable="true" data-xse-step="' + s + '" data-xse-section="expected">';
+        html += '<td class="xse-td-expected" contenteditable="true" data-xse-step="' + _origIdx + '" data-xse-section="expected">';
         if (step.expected.length) {
             var groups = [];
             var curGroup = null;
@@ -611,7 +734,7 @@ function _buildStepExpandedHtml(text) {
                 var g = groups[gi];
                 html += '<div class="xse-group">';
                 if (g.title) {
-                    html += '<div class="xse-sub" contenteditable="false">' + escapeHtml(g.title) + '</div>';
+                    html += '<div class="xse-sub" contenteditable="false" data-kind="' + _subKind(g.title) + '">' + escapeHtml(g.title) + '</div>';
                 }
                 if (g.lines.length > 0) {
                     for (var li2 = 0; li2 < g.lines.length; li2++) {
@@ -625,21 +748,21 @@ function _buildStepExpandedHtml(text) {
             }
         } else {
             html += '<div class="xse-group">'
-                + '<div class="xse-sub" contenteditable="false">【UI检查】</div>'
+                + '<div class="xse-sub" contenteditable="false" data-kind="ui">【UI检查】</div>'
                 + '<div class="xse-line"></div>'
                 + '</div>'
                 + '<div class="xse-group">'
-                + '<div class="xse-sub" contenteditable="false">【接口调用】</div>'
+                + '<div class="xse-sub" contenteditable="false" data-kind="api">【接口调用】</div>'
                 + '<div class="xse-line"></div>'
                 + '</div>'
                 + '<div class="xse-group">'
-                + '<div class="xse-sub" contenteditable="false">【数据检查】</div>'
+                + '<div class="xse-sub" contenteditable="false" data-kind="data">【数据检查】</div>'
                 + '<div class="xse-line"></div>'
                 + '</div>';
         }
         html += '</td>';
         // 数据（可编辑）
-        html += '<td class="xse-td-data" contenteditable="true" data-xse-step="' + s + '" data-xse-section="data">';
+        html += '<td class="xse-td-data" contenteditable="true" data-xse-step="' + _origIdx + '" data-xse-section="data">';
         if (step.data.length) {
             for (var di = 0; di < step.data.length; di++) {
                 html += '<div class="xse-line">' + escapeHtml(step.data[di]) + '</div>';
@@ -651,11 +774,11 @@ function _buildStepExpandedHtml(text) {
         // 操作（复制 / 向下插入 / 删除步骤）
         html += '<td class="xse-td-op">';
         html += '<div class="xse-row-actions">';
-        html += '<button class="xse-btn-copy" data-xse-copy="' + s + '" contenteditable="false" title="复制">' +
+        html += '<button class="xse-btn-copy" data-xse-copy="' + _origIdx + '" contenteditable="false" title="复制">' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>';
-        html += '<button class="xse-btn-add" data-xse-add="' + s + '" contenteditable="false" title="向下插入">' +
+        html += '<button class="xse-btn-add" data-xse-add="' + _origIdx + '" contenteditable="false" title="向下插入">' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg></button>';
-        html += '<button class="xse-btn-del" data-xse-del="' + s + '" contenteditable="false" title="删除">' +
+        html += '<button class="xse-btn-del" data-xse-del="' + _origIdx + '" contenteditable="false" title="删除">' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>';
         html += '</div>';
         html += '</td>';

@@ -105,18 +105,23 @@ function updateCellSelClasses() {
         else dbg('🟦 cellSelRect=null dragging=' + !!S._cellDragging);
     }
     // 热路径：在高频 mousemove 拖选下只会重启诊断扫描，这里只需要同步 class。
+    // 优化：从 inline border 迁移到 xs-cs-t/r/b/l 类 + CSS box-shadow 方案，
+    //       避免 !important border 挤占单元格宽度，且颜色统一走主题变量 --p
     var visited = 0, marked = 0;
     var leakList = debug ? [] : null;
     document.querySelectorAll('.xs-table td.xs-td[data-col]').forEach(function (td) {
         if (debug) visited++;
-        if (!rc) {
-            if (debug && td.classList.contains('xs-cell-selected')) leakList.push(td.getAttribute('data-row') + ',' + td.getAttribute('data-col'));
-            td.classList.remove('xs-cell-selected');
-            // 选区消失 → 清掉选区边框
+        // 无论 rc 是否存在，先清掉旧的方向类和残留 inline border（兼容旧版本残留）
+        td.classList.remove('xs-cs-t', 'xs-cs-r', 'xs-cs-b', 'xs-cs-l');
+        if (td.style.borderLeft || td.style.borderRight || td.style.borderTop || td.style.borderBottom) {
             td.style.removeProperty('border-left');
             td.style.removeProperty('border-right');
             td.style.removeProperty('border-top');
             td.style.removeProperty('border-bottom');
+        }
+        if (!rc) {
+            if (debug && td.classList.contains('xs-cell-selected')) leakList.push(td.getAttribute('data-row') + ',' + td.getAttribute('data-col'));
+            td.classList.remove('xs-cell-selected');
             return;
         }
         var r = parseInt(td.getAttribute('data-row'), 10);
@@ -125,23 +130,14 @@ function updateCellSelClasses() {
         if (inRect) {
             td.classList.add('xs-cell-selected');
             if (debug) marked++;
-            // 选区外侧边缘：2px 蓝色实线（collapse 下相邻格共享同一边）
-            var atLeft  = (c === rc.c1);
-            var atRight = (c === rc.c2);
-            var atTop   = (r === rc.r1);
-            var atBot   = (r === rc.r2);
-            td.style.setProperty('border-left',  atLeft  ? '2px solid #1976d2' : '', 'important');
-            td.style.setProperty('border-right', atRight ? '2px solid #1976d2' : '', 'important');
-            td.style.setProperty('border-top',   atTop   ? '2px solid #1976d2' : '', 'important');
-            td.style.setProperty('border-bottom',atBot   ? '2px solid #1976d2' : '', 'important');
+            // 矩形外沿：给 4 条边的最外圈格子加方向类，CSS 用 box-shadow inset 绘制蓝色描边
+            if (c === rc.c1) td.classList.add('xs-cs-l');
+            if (c === rc.c2) td.classList.add('xs-cs-r');
+            if (r === rc.r1) td.classList.add('xs-cs-t');
+            if (r === rc.r2) td.classList.add('xs-cs-b');
         } else {
             if (debug && td.classList.contains('xs-cell-selected')) leakList.push(r + ',' + c);
             td.classList.remove('xs-cell-selected');
-            // 离开选区 → 清掉选区边框
-            td.style.removeProperty('border-left');
-            td.style.removeProperty('border-right');
-            td.style.removeProperty('border-top');
-            td.style.removeProperty('border-bottom');
         }
     });
     if (!debug) return;
@@ -173,6 +169,10 @@ function updateRowSelClasses() {
 function updateSelectionInfo() {
     var info = document.getElementById('selInfo');
     if (!info) return;
+    // 写入内部 text span（保留左侧图标）；旧代码兼容：无 text span 时写外层 textContent
+    var textEl = document.getElementById('selInfoText') || info;
+    // 是否处于"有实际选中"状态（用于视觉突出：亮蓝底 vs 灰底）
+    var isSel = false;
     var total = (S.data.rows || []).length;
     // 1) 单元格矩形选区 > 1 格：优先展示矩形规格
     var rc = (typeof getCellSelRect === 'function') ? getCellSelRect() : null;
@@ -192,12 +192,16 @@ function updateSelectionInfo() {
             rows = rc.r2 - rc.r1 + 1;
         }
         var cols = rc.c2 - rc.c1 + 1;
-        info.textContent = '已选 ' + rows + ' 行 × ' + cols + ' 列（' + (rows * cols) + ' 单元格）/ 共 ' + total + ' 行';
+        textEl.textContent = '已选 ' + rows + ' 行 × ' + cols + ' 列（' + (rows * cols) + ' 单元格）/ 共 ' + total + ' 行';
+        isSel = true;
+        info.classList.toggle('has-selection', isSel);
         return;
     }
     // 2) 列选 > 0 且未选行：展示选中列数
     if ((!S.sel || S.sel.size === 0) && S.colSel && S.colSel.size > 0) {
-        info.textContent = '已选 ' + S.colSel.size + ' 列 / 共 ' + total + ' 行';
+        textEl.textContent = '已选 ' + S.colSel.size + ' 列 / 共 ' + total + ' 行';
+        isSel = true;
+        info.classList.toggle('has-selection', isSel);
         return;
     }
     var hasColFilters = S._colFilters && Object.keys(S._colFilters).length > 0;
@@ -209,10 +213,13 @@ function updateSelectionInfo() {
             var viewSet = new Set(S._viewRows || []);
             S.sel.forEach(function (ri) { if (viewSet.has(ri)) visibleSelected++; });
         }
-        info.textContent = '已选 ' + visibleSelected + ' 行，筛选 ' + matched + ' / ' + total + ' 行';
+        textEl.textContent = '已选 ' + visibleSelected + ' 行，筛选 ' + matched + ' / ' + total + ' 行';
+        isSel = visibleSelected > 0;
     } else {
-        info.textContent = '已选 ' + S.sel.size + ' 行，共 ' + total + ' 行';
+        textEl.textContent = '已选 ' + S.sel.size + ' 行，共 ' + total + ' 行';
+        isSel = S.sel.size > 0;
     }
+    info.classList.toggle('has-selection', isSel);
 }
 
 function countMatchedRows() {

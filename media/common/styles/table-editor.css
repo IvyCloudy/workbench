@@ -29,6 +29,12 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 
 /* 工具栏样式 */
 .xs-toolbar{display:flex;align-items:center;padding:8px 12px;background:var(--bg);border-bottom:1px solid var(--bd);gap:8px;flex-shrink:0}
+
+/* 选区信息胶囊（Toolbar 右侧）：默认淡灰底、图标灰；有选中时切换到蓝底/白字+左侧图标同色，用户一眼可见"当前有选区" */
+.xs-sel-info{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;font-size:12px;color:#666;background:#f0f2f5;border:1px solid #e1e4e8;border-radius:12px;flex-shrink:0;white-space:nowrap;transition:background .18s ease,color .18s ease,border-color .18s ease}
+.xs-sel-info svg{color:#9aa2ad;transition:color .18s ease}
+.xs-sel-info.has-selection{background:var(--p);color:#fff;border-color:var(--p);box-shadow:0 1px 3px rgba(0,120,212,.25)}
+.xs-sel-info.has-selection svg{color:#fff}
 .xs-title{font-weight:600;color:#333}
 
 /* 按钮样式 */
@@ -122,8 +128,10 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 .xs-table{border-collapse:collapse;table-layout:fixed;width:100%}
 /* 展开步骤时：表格使用自然宽度，不强制 100%，避免列被挤压；容器 overflow:auto 处理横向滚动 */
 .xs-table.xs-steps-expanded{width:min-content}
-/* 表头：浅灰底 + 强底部分割线，与 tbody 视觉分层 */
-.xs-th{background:#fafbfc;border:1px solid #e1e4e8;border-bottom:2px solid #d0d7de;padding:8px 8px 8px 10px;position:relative;user-select:none;font-weight:500;text-align:left;white-space:normal;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box;vertical-align:top}
+/* 表头：浅灰底 + 强底部分割线，与 tbody 视觉分层
+   vertical-align:middle 使 steps 展开态下（该 th 双层高度）其它列表头内容垂直居中，
+   避免与右侧双层步骤表头顶部对齐时出现「顶天空一半」的视觉错位 */
+.xs-th{background:#fafbfc;border:1px solid #e1e4e8;border-bottom:2px solid #d0d7de;padding:8px 8px 8px 10px;position:relative;user-select:none;font-weight:500;text-align:left;white-space:normal;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box;vertical-align:middle}
 .xs-th[data-sort]{background:#e3f2fd}
 .xs-th[data-sort]::after{content:'\25b2';margin-left:4px;font-size:10px;opacity:.6;color:var(--p)}
 .xs-th[data-sort="desc"]::after{content:'\25bc'}
@@ -269,8 +277,9 @@ tbody tr.selected td.xs-td.xs-td-user-marked{background:#90caf9}
 tbody tr.xs-tr-push-failed td.xs-td.xs-td-user-marked{background:#f5d7e0;box-shadow:inset 3px 0 0 #1976d2}
 tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-user-marked{background:#f0c5d5;box-shadow:inset 3px 0 0 #1976d2}
 tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-user-marked{background:#f5d7e0;box-shadow:inset 3px 0 0 #1976d2}
-/* 标记格被单元格/列拖选时：取消四边内圈 box-shadow，避免每个单元格各自画圈导致视觉分割 */
-.xs-td.xs-td-user-marked.xs-cell-selected{box-shadow:none !important}
+/* 标记格被单元格/列拖选时：取消四边内圈 box-shadow，避免每个单元格各自画圈导致视觉分割；
+   例外：如果是矩形选区**最外圈**（xs-cs-* 方向类），仍需保留描边表现选区边界 */
+.xs-td.xs-td-user-marked.xs-cell-selected:not(.xs-cs-t):not(.xs-cs-r):not(.xs-cs-b):not(.xs-cs-l){box-shadow:none !important}
 .xs-td.xs-td-user-marked.xs-col-selected{box-shadow:none !important}
 
 /* ========================================================================
@@ -307,11 +316,28 @@ tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-overrides-fail.xs-td-push-add
 tbody tr.selected td.xs-td.xs-col-selected{background:#d3e6f7}
 tbody tr.xs-tr-push-failed td.xs-td.xs-col-selected{background:#f5dadc}
 
-/* 单元格矩形选区（Excel 风格）：拖动鼠标形成的矩形高亮，比单点 active 弱 */
-.xs-td.xs-cell-selected{background:#eaf3fb}
+/* 单元格矩形选区（Excel 风格）：拖动鼠标形成的矩形高亮，比单点 active 弱。
+   为提升"矩形选区"的视觉层次（避免与行选 selected #e3f2fd 混淆），
+   矩形内所有格用浅蓝底色，同时**矩形外沿**通过 4 条方向类拼接出 Excel 蓝色实线边框。 */
+.xs-td.xs-cell-selected{background:#eaf3fb;position:relative}
 tbody tr.selected td.xs-td.xs-cell-selected{background:#d3e6f7}
 tbody tr.xs-tr-push-failed td.xs-td.xs-cell-selected{background:#f5dadc}
 .xs-td.xs-cell-selected.xs-col-selected{background:#cfe4f8}
+/* 矩形选区外沿（4 条边）：由 JS 在 updateCellSelClasses 中给最外圈格子加 xs-cs-t/r/b/l 类，
+   利用 box-shadow inset 拼出连续蓝色边框，视觉上等同于 Excel 的选区框 */
+.xs-td.xs-cs-t{box-shadow:inset 0 2px 0 var(--p)}
+.xs-td.xs-cs-r{box-shadow:inset -2px 0 0 var(--p)}
+.xs-td.xs-cs-b{box-shadow:inset 0 -2px 0 var(--p)}
+.xs-td.xs-cs-l{box-shadow:inset 2px 0 0 var(--p)}
+.xs-td.xs-cs-t.xs-cs-r{box-shadow:inset 0 2px 0 var(--p),inset -2px 0 0 var(--p)}
+.xs-td.xs-cs-t.xs-cs-l{box-shadow:inset 0 2px 0 var(--p),inset 2px 0 0 var(--p)}
+.xs-td.xs-cs-b.xs-cs-r{box-shadow:inset 0 -2px 0 var(--p),inset -2px 0 0 var(--p)}
+.xs-td.xs-cs-b.xs-cs-l{box-shadow:inset 0 -2px 0 var(--p),inset 2px 0 0 var(--p)}
+.xs-td.xs-cs-t.xs-cs-r.xs-cs-b{box-shadow:inset 0 2px 0 var(--p),inset -2px 0 0 var(--p),inset 0 -2px 0 var(--p)}
+.xs-td.xs-cs-t.xs-cs-l.xs-cs-b{box-shadow:inset 0 2px 0 var(--p),inset 2px 0 0 var(--p),inset 0 -2px 0 var(--p)}
+.xs-td.xs-cs-t.xs-cs-r.xs-cs-l{box-shadow:inset 0 2px 0 var(--p),inset -2px 0 0 var(--p),inset 2px 0 0 var(--p)}
+.xs-td.xs-cs-b.xs-cs-r.xs-cs-l{box-shadow:inset 0 -2px 0 var(--p),inset -2px 0 0 var(--p),inset 2px 0 0 var(--p)}
+.xs-td.xs-cs-t.xs-cs-r.xs-cs-b.xs-cs-l{box-shadow:inset 0 2px 0 var(--p),inset -2px 0 0 var(--p),inset 0 -2px 0 var(--p),inset 2px 0 0 var(--p)}
 /* 矩形锚点格：保持现有 active 高亮（outline 由 .xs-editable.active 提供） */
 
 /* 冻结列（如 tsId）：浅灰底 + 浅灰文字 + 禁止鼠标编辑光标，提示用户该列只读；
@@ -427,61 +453,201 @@ tbody tr.xs-tr-resized .xs-td.xs-detail-cell:has(.xs-step-expanded) .xs-cell-wra
 tbody tr.xs-tr-expanded-steps > .xs-td:not(.xs-detail-cell){white-space:normal;overflow:hidden;vertical-align:top}
 tbody tr.xs-tr-expanded-steps > .xs-td:not(.xs-detail-cell) .xs-cell-wrap{white-space:pre-wrap;word-break:break-word;overflow:hidden;display:block}
 
-/* 容器：填满外层单元格，无横向滚动 */
-.xs-step-expanded{font-size:10px;line-height:1.5;color:#333;padding:0;width:100%;box-sizing:border-box}
-/* 内层表格：无独立边框，与主表完全融合 */
-.xse-table{border-collapse:collapse;table-layout:fixed !important;width:100%;border:none;overflow:visible}
-/* 主表双层表头：Steps 合并列 + 第二行子列标题 */
-.xs-th-group-top{text-align:center !important}
-.xs-th-sub{background:#f0f4f8;color:#667;font-weight:600;padding:3px 6px;border-right:1px solid #dce4ec;border-bottom:2px solid #c5cdd5;text-align:left;font-size:10px;white-space:nowrap}
-/* 展开模式 row2 占位 th：无内容无边框，仅用于 table-layout:fixed 列对齐 */
-.xs-th-placeholder{padding:0;border:none;border-bottom:2px solid #c5cdd5}
+/* 容器：宽度由内部 xse-table 的 colgroup 决定（width:auto），避免被外层 td 内容盒压缩到 100% 后触发 table-layout:fixed 的等比缩放 */
+.xs-step-expanded{font-size:10px;line-height:1.5;color:#333;padding:0;width:auto;box-sizing:border-box}
+/* 内层表格：宽度由 colgroup 精确决定；不再 width:100%（否则受外层 td padding/border 影响缩放，与表头子表头条错位） */
+.xse-table{border-collapse:collapse;table-layout:fixed !important;width:auto;border:none;overflow:visible}
+/* 主表双层表头：Steps 合并列 + 子列标题（融合到同一个 th 内的两层结构）
+   - .xs-th-group：steps 展开时的主 th，padding:0 让内部两层各自控制间距
+   - .xs-th-top：顶部主标题条（步骤/steps + 筛选漏斗 + 就近收起按钮）
+   - .xs-th-sub-row：底部子表头条，flex 布局，用像素宽度与 colgroup 5 子列精确对齐
+   - .xs-th-sub：底部子表头单元（改为 span 内嵌元素）
+   子列宽（新）：序号 32 + 步骤描述 132 + 预期结果 128 + 数据 72 + 操作 40 = 404 */
+.xs-th-group{padding:0 !important;vertical-align:top}
+.xs-th-group .xs-th-top{padding:10px 8px 8px 10px;text-align:center;border-bottom:1px dashed #d0d7de;min-height:52px;display:flex;align-items:center;justify-content:center;position:relative}
+.xs-th-group .xs-th-top .xs-th-inner{justify-content:center;align-items:center}
+.xs-th-group .xs-th-top .xs-th-labels{flex:0 1 auto;text-align:center;align-items:center}
+/* 顶部条右上角"就近收起"按钮：只在步骤展开态显示 */
+.xs-th-group-collapse{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:#8b95a1;background:transparent;border:1px solid transparent;border-radius:3px;font-size:11px;line-height:1;user-select:none;transition:all .12s}
+.xs-th-group-collapse:hover{background:rgba(0,120,212,.12);color:var(--p);border-color:rgba(0,120,212,.2)}
+.xs-th-group-collapse svg{display:block;pointer-events:none}
+/* 未展开态 steps 列的"就近展开"按钮：作为 .xs-th-inner 的 flex 内联项，紧挨筛选漏斗右侧
+   与 .xs-th-group-collapse 形成一对镜像交互（一个收起、一个展开），复用相同视觉样式。 */
+.xs-th-inline-expand{flex-shrink:0;cursor:pointer;color:#8b95a1;opacity:.55;padding:2px 3px;border-radius:3px;line-height:0;user-select:none;display:inline-flex;align-items:center;justify-content:center;margin-top:1px;transition:all .12s}
+.xs-th:hover .xs-th-inline-expand{opacity:1}
+.xs-th-inline-expand:hover{background:rgba(0,120,212,.12);color:var(--p);opacity:1}
+.xs-th-inline-expand svg{display:block;pointer-events:none}
+/* 底部子表头条：贴近主表头色（#f6f8fa 替代 #f0f4f8），字号 11px 与英文 key 一致 */
+.xs-th-sub-row{display:flex;align-items:stretch;background:#f6f8fa;border-top:1px solid #dce4ec;font-size:11px;line-height:1.4;color:#57606a}
+.xs-th-sub{display:flex;align-items:center;font-weight:600;padding:4px 6px;border-right:1px solid #dce4ec;text-align:left;white-space:nowrap;box-sizing:border-box;flex-shrink:0;position:relative;overflow:hidden}
 .xs-th-sub:last-child{border-right:none}
-.xs-th-sub-id{width:36px;text-align:center !important}
-.xs-th-sub-desc{width:130px}
-.xs-th-sub-data{width:100px}
-.xs-th-sub-expected{width:114px}
-.xs-th-sub-op{width:28px;text-align:center !important}
-/* 数据行：与主表单元格边框一致，偶数行交替背景，行间实线 */
-.xse-table tbody td{padding:5px 8px;border-right:1px solid #eaecef;border-bottom:1px solid #eaecef;vertical-align:top;white-space:pre-wrap;word-break:break-word}
+.xs-th-sub-id{width:32px;justify-content:center;text-align:center;padding:4px 2px}
+.xs-th-sub-desc{width:132px}
+.xs-th-sub-expected{width:128px}
+.xs-th-sub-data{width:72px}
+.xs-th-sub-op{width:60px;justify-content:center;text-align:center;padding:4px 2px}
+/* 子表头文字容器：与漏斗并排布局。text 占据可用空间并截断；漏斗紧贴右侧、拖手柄贴最右边 */
+.xs-th-sub-text{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 子列筛选漏斗：仅在 描述/预期/数据 三个子表头显示；hover 变蓝；active（已启用筛选）填充蓝色底 */
+.xs-sub-filter{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:14px;height:14px;margin-left:3px;margin-right:6px;color:#8a94a3;cursor:pointer;border-radius:3px;opacity:.7;transition:background .15s,color .15s,opacity .15s}
+.xs-sub-filter:hover{background:rgba(0,120,212,.1);color:#0078d4;opacity:1}
+.xs-sub-filter.active{background:#0078d4;color:#fff;opacity:1}
+.xs-sub-filter .xs-funnel-icon{pointer-events:none}
+/* 子列宽拖手柄：位于每个子表头右边界，视觉透明，鼠标 hover 时显示浅色分割线，与主表 .xs-resizer 体验一致
+   高度撑满 xs-th-sub-row（父级 .xs-th-sub 已 position:relative） */
+.xs-sub-resizer{position:absolute;right:-3px;top:0;bottom:0;width:6px;cursor:col-resize;background:transparent;z-index:4}
+.xs-sub-resizer:hover{background:rgba(0,120,212,.2)}
+body.xs-col-resizing .xs-sub-resizer{background:rgba(0,120,212,.35)}
+/* 子步骤全部被过滤时的占位提示，居中弱化 */
+.xse-td-empty{text-align:center;padding:10px 6px;color:#8a94a3;font-size:12px;font-style:italic;background:#fafbfc}
+/* 兼容：老代码路径若仍输出 xs-th-placeholder / xs-th-group-top，样式无害保留占位 */
+.xs-th-group-top{text-align:center !important}
+.xs-th-placeholder{padding:0;border:none;border-bottom:2px solid #c5cdd5}
+/* 数据行：与主表单元格边框一致，行间加深分割（步骤间视觉分隔）
+   统一 padding 6px 8px，各子列内保留自己的 !important 覆盖（如 xse-td-id / xse-td-op） */
+.xse-table tbody td{padding:6px 8px;border-right:1px solid #eaecef;border-bottom:1px solid #d0d7de;vertical-align:top;white-space:pre-wrap;word-break:break-word}
 .xse-table tbody td:last-child{border-right:none}
 .xse-table tbody tr:last-child td{border-bottom:none}
 .xse-table tbody tr:nth-child(even) td{background:#fafbfc}
+/* 步骤间悬停高亮，方便定位 */
+.xse-table tbody tr:hover td{background:#f0f6ff}
+.xse-table tbody tr:nth-child(even):hover td{background:#e8f1ff}
 /* 编辑态：可编辑单元格交互样式 */
 .xse-table tbody td[contenteditable="true"]{cursor:text;outline:none;transition:background-color .12s,box-shadow .12s}
 .xse-table tbody td[contenteditable="true"]:hover{background-color:rgba(9,105,218,.06)}
 .xse-table tbody td[contenteditable="true"]:focus,
 .xse-table tbody td[contenteditable="true"]:focus-within{background-color:#fff;box-shadow:inset 0 0 0 2px #0969da;border-radius:3px}
+/* -----------------------------------------------------------------------------
+ * 高亮透传：外层 <tr>/<td> 上的所有高亮类 → steps 展开态下的 .xse-table 子单元格
+ * -----------------------------------------------------------------------------
+ * 展开态下，steps 主 td 内嵌一整张 .xse-table 子表；子表 td 自带斑马纹/hover/focus
+ * 白底或浅色背景，会遮住外层 <td>/<tr> 的高亮背景色。此处让子表所有 td 背景变透明、
+ * 字体色继承，把外层高亮色（失败粉、更新黄/橙、新增绿、用户标记、列选择等）透传到
+ * 每一个子单元格，让 steps 展开时依然与主表整体视觉一致。
+ *
+ * 触发条件（外层任一即生效）：
+ *   [行级] tr.xs-tr-push-failed
+ *   [格级] td.xs-td-push-failed / .xs-td-push-updated / .xs-td-push-updated-row
+ *          / .xs-td-push-added / .xs-td-user-marked / .xs-col-selected
+ *
+ * 优先级：以选择器特异性 + !important 稳定压过 .xse-table 自身的斑马纹/hover/focus。
+ * 例外：操作图标按钮（.xse-btn-*）不受影响，保持自己的蓝/绿/红颜色。
+ * ============================================================================= */
+/* -- 1) 让子表所有 td 背景变透明（含斑马纹/hover/focus 组合态）-- */
+tbody tr.xs-tr-push-failed .xse-table tbody td,
+tbody tr.xs-tr-push-failed .xse-table tbody tr:nth-child(even) td,
+tbody tr.xs-tr-push-failed .xse-table tbody tr:hover td,
+tbody tr.xs-tr-push-failed .xse-table tbody tr:nth-child(even):hover td,
+tbody tr.xs-tr-push-failed .xse-table tbody td[contenteditable="true"]:hover,
+tbody tr.xs-tr-push-failed .xse-table tbody td[contenteditable="true"]:focus,
+tbody tr.xs-tr-push-failed .xse-table tbody td[contenteditable="true"]:focus-within,
+.xs-td-push-failed .xse-table tbody td,
+.xs-td-push-failed .xse-table tbody tr:nth-child(even) td,
+.xs-td-push-failed .xse-table tbody tr:hover td,
+.xs-td-push-failed .xse-table tbody tr:nth-child(even):hover td,
+.xs-td-push-failed .xse-table tbody td[contenteditable="true"]:hover,
+.xs-td-push-failed .xse-table tbody td[contenteditable="true"]:focus,
+.xs-td-push-failed .xse-table tbody td[contenteditable="true"]:focus-within,
+.xs-td-push-updated .xse-table tbody td,
+.xs-td-push-updated .xse-table tbody tr:nth-child(even) td,
+.xs-td-push-updated .xse-table tbody tr:hover td,
+.xs-td-push-updated .xse-table tbody tr:nth-child(even):hover td,
+.xs-td-push-updated .xse-table tbody td[contenteditable="true"]:hover,
+.xs-td-push-updated .xse-table tbody td[contenteditable="true"]:focus,
+.xs-td-push-updated .xse-table tbody td[contenteditable="true"]:focus-within,
+.xs-td-push-updated-row .xse-table tbody td,
+.xs-td-push-updated-row .xse-table tbody tr:nth-child(even) td,
+.xs-td-push-updated-row .xse-table tbody tr:hover td,
+.xs-td-push-updated-row .xse-table tbody tr:nth-child(even):hover td,
+.xs-td-push-updated-row .xse-table tbody td[contenteditable="true"]:hover,
+.xs-td-push-updated-row .xse-table tbody td[contenteditable="true"]:focus,
+.xs-td-push-updated-row .xse-table tbody td[contenteditable="true"]:focus-within,
+.xs-td-push-added .xse-table tbody td,
+.xs-td-push-added .xse-table tbody tr:nth-child(even) td,
+.xs-td-push-added .xse-table tbody tr:hover td,
+.xs-td-push-added .xse-table tbody tr:nth-child(even):hover td,
+.xs-td-push-added .xse-table tbody td[contenteditable="true"]:hover,
+.xs-td-push-added .xse-table tbody td[contenteditable="true"]:focus,
+.xs-td-push-added .xse-table tbody td[contenteditable="true"]:focus-within,
+.xs-td-user-marked .xse-table tbody td,
+.xs-td-user-marked .xse-table tbody tr:nth-child(even) td,
+.xs-td-user-marked .xse-table tbody tr:hover td,
+.xs-td-user-marked .xse-table tbody tr:nth-child(even):hover td,
+.xs-td-user-marked .xse-table tbody td[contenteditable="true"]:hover,
+.xs-td-user-marked .xse-table tbody td[contenteditable="true"]:focus,
+.xs-td-user-marked .xse-table tbody td[contenteditable="true"]:focus-within,
+.xs-col-selected .xse-table tbody td,
+.xs-col-selected .xse-table tbody tr:nth-child(even) td,
+.xs-col-selected .xse-table tbody tr:hover td,
+.xs-col-selected .xse-table tbody tr:nth-child(even):hover td,
+.xs-col-selected .xse-table tbody td[contenteditable="true"]:hover,
+.xs-col-selected .xse-table tbody td[contenteditable="true"]:focus,
+.xs-col-selected .xse-table tbody td[contenteditable="true"]:focus-within{background:transparent !important;background-color:transparent !important;color:inherit}
+
+/* -- 2) 子表内的文字元素继承外层颜色（chip 背景保留分类标识，仅字色跟随）-- */
+tbody tr.xs-tr-push-failed .xse-table .xse-line,
+tbody tr.xs-tr-push-failed .xse-table .xse-td-id,
+tbody tr.xs-tr-push-failed .xse-table .xse-td-id .xse-idx-dot,
+.xs-td-push-failed .xse-table .xse-line,
+.xs-td-push-failed .xse-table .xse-td-id,
+.xs-td-push-failed .xse-table .xse-td-id .xse-idx-dot,
+.xs-td-push-updated .xse-table .xse-line,
+.xs-td-push-updated .xse-table .xse-td-id,
+.xs-td-push-updated .xse-table .xse-td-id .xse-idx-dot,
+.xs-td-push-updated-row .xse-table .xse-line,
+.xs-td-push-updated-row .xse-table .xse-td-id,
+.xs-td-push-updated-row .xse-table .xse-td-id .xse-idx-dot,
+.xs-td-push-added .xse-table .xse-line,
+.xs-td-push-added .xse-table .xse-td-id,
+.xs-td-push-added .xse-table .xse-td-id .xse-idx-dot,
+.xs-td-user-marked .xse-table .xse-line,
+.xs-td-user-marked .xse-table .xse-td-id,
+.xs-td-user-marked .xse-table .xse-td-id .xse-idx-dot,
+.xs-col-selected .xse-table .xse-line,
+.xs-col-selected .xse-table .xse-td-id,
+.xs-col-selected .xse-table .xse-td-id .xse-idx-dot{color:inherit !important}
+
+/* -- 3) xs-td-overrides-fail：失败行内被更新单元格恢复原色时，也要让子表跟随 -- */
+/* overrides-fail 已通过外层 td 的独立高亮背景（黄/橙/绿/蓝）表达，
+   子表在 rule (1) 里已透明化 → 自动跟随外层色，无需额外规则 */
 /* 不可编辑子元素（分组标题） */
 .xse-sub[contenteditable="false"]{cursor:default;-webkit-user-select:none;user-select:none}
-/* 列宽：与主表 thead 子列完全一致（序号 36px | 步骤描述 130px | 预期结果 114px | 数据 96px | 操作 28px，总和=404） */
-.xse-td-id{width:36px;text-align:center;color:#666;font-weight:600;white-space:nowrap;font-size:10px}
-.xse-td-desc{width:130px}
-.xse-td-expected{width:114px}
-.xse-td-data{width:96px;position:relative}
-.xse-td-op{width:28px;position:relative;text-align:center;vertical-align:middle}
+/* 列宽由 <colgroup> 中的 <col> 权威决定（table-layout:fixed）；
+   .xse-td-* 只负责非宽度的样式（padding/位置等），避免与运行时的子列宽拖动数据源冲突。
+   序号：小圆点风格（背景灰圆 + 白色数字），比纯数字更聚焦，且与旧宽度视觉更紧凑
+   操作：40px 支持三个图标横向排列，避免竖排拥挤 */
+.xse-td-id{text-align:center;color:#666;font-weight:600;white-space:nowrap;font-size:10px;padding:5px 2px !important;vertical-align:middle}
+.xse-td-id .xse-idx-dot{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:#eef1f4;color:#57606a;font-size:10px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.xse-td-data{position:relative}
+.xse-td-op{position:relative;text-align:center;vertical-align:middle;padding:4px 2px !important}
 /* 检查项分组：每个检查类型为一个独立组，组间自然间距 */
-.xse-group{margin-top:4px}
+.xse-group{margin-top:6px}
 .xse-group:first-child{margin-top:0}
-.xse-group .xse-sub{font-weight:700;color:#0969da;font-size:10px;padding-left:2px}
-.xse-group .xse-line{color:#444;padding-left:10px;white-space:pre-wrap;word-break:break-word;font-size:10px;line-height:1.45;min-height:1.45em}
+/* 分组标题改成小徽章 chip：不同类别不同色（UI=蓝、接口=紫、数据=绿），视觉分层更清晰 */
+.xse-group .xse-sub{display:inline-block;font-weight:600;font-size:10px;line-height:1.2;padding:1px 7px;border-radius:8px;letter-spacing:.2px;margin-bottom:2px;background:#e7f1ff;color:#0550ae;border:1px solid #c8dcf7}
+.xse-group .xse-sub[data-kind="api"]{background:#f2ebff;color:#5b21b6;border-color:#d8caf5}
+.xse-group .xse-sub[data-kind="data"]{background:#e6ffec;color:#1a7f37;border-color:#b4ecc4}
+.xse-group .xse-line{color:#444;padding-left:6px;white-space:pre-wrap;word-break:break-word;font-size:10px;line-height:1.5;min-height:1.5em}
 .xse-group .xse-line:empty::after{content:"点击添加检查项";color:#c0c0c0;font-style:italic}
 /* 主表空 detail 链接：灰色虚线，与有内容链路区分 */
 .xs-detail-link.xs-detail-empty{color:#aaa;background:#f5f5f5;border:1px dashed #ddd}
 .xs-detail-link.xs-detail-empty:hover{color:#999;background:#e8e8e8}
 /* 空占位：斜体淡化 */
 .xse-empty{color:#bbb;font-style:italic}
-/* 操作按钮：独立「操作」列内，纵向排列 */
-.xse-row-actions{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;opacity:1;z-index:2}
+/* 操作列图标按钮：竞列排列（每行一个），尺寸从 14px 提升到 22px，默认即带颜色（避免图标失色） */
+.xse-row-actions{display:flex;flex-direction:column;flex-wrap:nowrap;align-items:center;justify-content:center;gap:3px;opacity:1;z-index:2}
 .xse-table tbody tr:hover .xse-row-actions{opacity:1}
-/* 操作图标按钮统一样式 */
-.xse-btn-copy,.xse-btn-add,.xse-btn-del{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:1px solid transparent;border-radius:3px;cursor:pointer;background:transparent;line-height:1;flex-shrink:0;transition:background .12s,border-color .12s,color .12s}
-.xse-btn-copy{color:#8b949e}
-.xse-btn-copy:hover{background:#ddf4ff;border-color:#b6e3ff;color:#0969da}
-.xse-btn-add{color:#8b949e}
-.xse-btn-add:hover{background:#e6ffec;border-color:#b4ecc4;color:#1a7f37}
-.xse-btn-del{color:#8b949e}
-.xse-btn-del:hover{background:#ffebe9;border-color:#ffc1bb;color:#cf222e}
+/* 操作图标按钮统一尺寸：22×22，hover 时背景加深、颜色致色。
+   默认颜色不再使用中性灰，而是直接给与含义匹配的颜色（蓝/绿/红），使能力一眼可识 */
+.xse-btn-copy,.xse-btn-add,.xse-btn-del{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:1px solid transparent;border-radius:4px;cursor:pointer;background:transparent;line-height:1;flex-shrink:0;transition:background .12s,border-color .12s,color .12s,transform .12s}
+.xse-btn-copy svg,.xse-btn-add svg,.xse-btn-del svg{width:14px;height:14px}
+/* 仅通过字体颜色区分功能，无默认背景/边框；hover 时叠加淡背景以提示可点击 */
+.xse-btn-copy{color:#0969da}
+.xse-btn-copy:hover{background:#ddf4ff;color:#0550ae;transform:scale(1.06)}
+.xse-btn-add{color:#1a7f37}
+.xse-btn-add:hover{background:#e6ffec;color:#116329;transform:scale(1.06)}
+.xse-btn-del{color:#cf222e}
+.xse-btn-del:hover{background:#ffebe9;color:#a40e26;transform:scale(1.06)}
 .xs-detail-row-cb{width:36px;text-align:center;position:relative;padding:0 4px}
 .xs-detail-row-cb input{width:14px;height:14px;cursor:pointer}
 .xs-detail-rownum{display:inline-block;color:#888;font-size:11px;line-height:18px}

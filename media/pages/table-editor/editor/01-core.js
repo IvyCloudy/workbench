@@ -66,6 +66,15 @@ var S = {
     // 渲染层（_buildRowHtml / patchCell）会跳过 --xs-clamp 行数限制，让 CSS 默认值（99）
     // 接管，避免"行高已是多行，但 cell-wrap 还在按 floor(rowH/lineH) 截断"的不一致。
     _rowExpanded: new Set(),
+    // steps 展开模式下 5 个子列的宽度（像素）：[序号, 步骤描述, 预期结果, 数据, 操作]
+    // null 表示使用默认宽度；拖动后写入数组。总宽需保持与 S.colWidths[stepsCol] 同步。
+    _stepsSubW: null,
+    // steps 展开模式下子列独立筛选（折叠不匹配的子步骤，整行仍显示）：
+    //   { subIdx: Set<string> }，subIdx ∈ {1:描述, 2:预期, 3:数据}；
+    //   序号(0)/操作(4) 不参与筛选。空对象 = 无筛选。
+    //   语义：对当前所有 view 行的 steps 单元格，解析出的每个子步骤，如果对应字段的值
+    //   不在白名单里则从该行的子表格中剔除（不影响主表行数）；若某行剔除后全空，显示占位提示。
+    _stepsSubFilters: {},
     vscode: null,
     editing: false,
     _ctxRow: -1,            // 右键当前行
@@ -367,6 +376,47 @@ function _restoreData(snap) {
     S.mods = new Set(snap.mods || []);
 }
 
+// ── 展开步骤「视图对齐」公用函数 ──
+// 在数据主体（S.data.rows）被任何来源覆盖（外部数据帧 / undo / redo）后调用。
+// 根据当前 S._stepsExpanded 状态，把主表 steps 列刷回一致的呈现形态：
+//   - 展开态：写入 _buildStepCombined(raws) 的展开文本
+//   - 折叠态：写入 '[N 项]' 折叠文本
+// 若 steps 列缺失（切到其他类型文件），静默降级为折叠态并同步按钮文案，
+// 避免视图/按钮/数据三者不一致。setState 不在这里触发，交由上层调用点决定。
+function _alignStepsExpansion() {
+    try {
+        var headers = (S.data && S.data.headers) || [];
+        var stepsCol = headers.indexOf('steps');
+        // steps 列不存在：静默降级折叠态（切到非 case 文件时的兜底）
+        if (stepsCol < 0) {
+            if (S._stepsExpanded) {
+                S._stepsExpanded = false;
+                var btnMiss = document.getElementById('expandStepsBtn');
+                if (btnMiss) btnMiss.textContent = '展开步骤';
+            }
+            return;
+        }
+        var dt = (typeof getDetailTableByCol === 'function') ? getDetailTableByCol(stepsCol) : null;
+        if (!dt || !dt.rawRowGroups) return;
+        var rows = (S.data && S.data.rows) || [];
+        if (S._stepsExpanded && typeof _buildStepCombined === 'function') {
+            for (var ri = 0; ri < rows.length; ri++) {
+                var raws = dt.rawRowGroups[ri];
+                if (!Array.isArray(raws) || raws.length === 0) continue;
+                var combined = _buildStepCombined(raws);
+                if (combined) rows[ri][stepsCol] = combined;
+            }
+        } else {
+            // 折叠态：恢复 '[N 项]' 展示，覆盖可能残留在 snapshot 中的展开文本
+            for (var ri2 = 0; ri2 < rows.length; ri2++) {
+                var raws2 = dt.rawRowGroups[ri2];
+                if (!Array.isArray(raws2) || raws2.length === 0) continue;
+                rows[ri2][stepsCol] = '[' + raws2.length + ' 项]';
+            }
+        }
+    } catch (_e) { /* 静默降级，视图仍能渲染 */ }
+}
+
 // 清理选区相关状态（行/列/单元格矩形选区/锚点）
 function _restoreClearSel() {
     S.sel.clear();
@@ -442,6 +492,11 @@ function restoreSnapshot(snap) {
     _restorePushFailures(snap);
     _restoreAddedAndTimes(snap);
     _restoreUserMarks(snap);
+    // undo/redo 会把 snapshot 里保存的 rows 覆盖回 S.data.rows。
+    // 若 snapshot 拍摄时的展开态与当前 _stepsExpanded 不一致（例如展开态拍照后收起，再 undo），
+    // rows 里 steps 列会残留展开文本，与折叠按钮状态冲突。
+    // 交由 _alignStepsExpansion 统一按当前状态刷回一致形态。
+    _alignStepsExpansion();
     renderTable();
     _scheduleRestoreSave();
 }
@@ -562,6 +617,17 @@ function loadUiState() {
                 }
             }
         }
+        // 恢复 steps 子列筛选（键=subIdx，值=白名单数组 → Set）；空对象=无筛选
+        if (snap.stepsSubFilters && typeof snap.stepsSubFilters === 'object') {
+            S._stepsSubFilters = {};
+            for (var _ssk in snap.stepsSubFilters) {
+                if (!snap.stepsSubFilters.hasOwnProperty(_ssk)) continue;
+                var _ssarr = snap.stepsSubFilters[_ssk] || [];
+                if (Array.isArray(_ssarr) && _ssarr.length > 0) {
+                    S._stepsSubFilters[_ssk] = new Set(_ssarr);
+                }
+            }
+        }
         if (typeof snap.searchKw === 'string') {
             S._searchKw = snap.searchKw;
             // 同步填回输入框：DOM 可能尚未就绪，统一在 DOMContentLoaded / 下一帧写回
@@ -586,6 +652,14 @@ function loadUiState() {
             S._stepsExpanded = snap.stepsExpanded;
             var _expandBtn2 = document.getElementById('expandStepsBtn');
             if (_expandBtn2) _expandBtn2.textContent = S._stepsExpanded ? '收起步骤' : '展开步骤';
+        }
+        // 恢复 steps 子列宽：仅当数组长度=5 且元素均为正数时才接受，避免臏数据引发布局错位
+        if (Array.isArray(snap.stepsSubW) && snap.stepsSubW.length === 5) {
+            var _ok = true;
+            for (var _si = 0; _si < 5; _si++) {
+                if (typeof snap.stepsSubW[_si] !== 'number' || snap.stepsSubW[_si] < 20) { _ok = false; break; }
+            }
+            if (_ok) S._stepsSubW = snap.stepsSubW.slice();
         }
     } catch (err) { dbg('loadUiState error', err && err.message); }
 }
@@ -612,14 +686,25 @@ function persistUiStateNow() {
                 }
             }
         }
+        // 序列化 steps 子列筛选：Set → 数组；空 Set/无键跳过
+        var ssf = {};
+        if (S._stepsSubFilters) {
+            for (var _ssk2 in S._stepsSubFilters) {
+                if (!S._stepsSubFilters.hasOwnProperty(_ssk2)) continue;
+                var _sset = S._stepsSubFilters[_ssk2];
+                if (_sset instanceof Set && _sset.size > 0) ssf[_ssk2] = Array.from(_sset);
+            }
+        }
         raw[_stateKey()] = {
             colWidths: S.colWidths || {},
             rowHeights: S.rowHeights || {},
             rowExpanded: (S._rowExpanded instanceof Set) ? Array.from(S._rowExpanded) : [],
             colFilters: cf,
+            stepsSubFilters: ssf,
             searchKw: S._searchKw || '',
             scrollTop: cont ? cont.scrollTop : 0,
-            stepsExpanded: !!S._stepsExpanded
+            stepsExpanded: !!S._stepsExpanded,
+            stepsSubW: (Array.isArray(S._stepsSubW) && S._stepsSubW.length === 5) ? S._stepsSubW.slice() : null
         };
         S.vscode.setState(raw);
     } catch (err) { dbg('persistUiState error', err && err.message); }
@@ -658,6 +743,8 @@ window.addEventListener('message', function (e) {
             S.rowHeights = {};
             S._rowExpanded = new Set();
             S._colFilters = {};
+            S._stepsSubFilters = {};
+            S._stepsSubW = null;
             S._searchKw = '';
             S._pendingScrollTop = 0;
             // 用新 key 重新加载该文件自己的 UI 状态（首次打开则全部为空，即默认单行）
@@ -802,12 +889,10 @@ window.addEventListener('message', function (e) {
             S.mods.clear();
             S._detailModCellKeys.clear();
         }
-        // 外部数据覆盖后，步骤展开标记已失效（磁盘数据不含展开格式），重置为折叠态
-        if (!_selfReboundReasons && S._stepsExpanded) {
-            S._stepsExpanded = false;
-            var _expandBtn = document.getElementById('expandStepsBtn');
-            if (_expandBtn) _expandBtn.textContent = '展开步骤';
-        }
+        // 外部数据覆盖后，主表 steps 列已被磁盘原始文本覆盖（不再是展开格式）。
+        // 但如果持久化状态是「已展开」，我们不再打回折叠态；
+        // 稍后在 renderTable() 之前基于最新 detailTables.rawRowGroups 同步重新展开一次，
+        // 实现「外部/可见切换/推送反弹后展开状态自愈」，无闪烁、无 toast。
         // 数据重装载：仅当列结构发生变化时才清空列筛选（避免抹掉持久化恢复的筛选）
         var _newHeadSig = (S.data.headers || []).join('\u0001');
         if (S._lastHeadSig !== _newHeadSig) {
@@ -816,6 +901,10 @@ window.addEventListener('message', function (e) {
             // 列结构变化：行列宽度/高度的索引已失去意义，旧的推送失败/批次集合也归零，避免穿透到新文件
             S.colWidths = {};
             S.rowHeights = {};
+            S._stepsSubW = null;
+            // 子列筛选与主表列筛选正交，列结构变化不影响子列 idx（永远是 1/2/3），故不清空
+            // 若希望列结构变化时也重置子列筛选，取消下一行注释即可
+            // S._stepsSubFilters = {};
             S._pushFailedTsIds = new Set();
             S._pushFailedReasons = new Map();
             S._pushFailedTime = new Map();
@@ -944,6 +1033,11 @@ window.addEventListener('message', function (e) {
         } else {
             dbg('🛡 keep history/future (reason=' + (m.reason || '') + ' history=' + S._history.length + ' future=' + S._future.length + ')');
         }
+        // ── 展开步骤「视图对齐」──
+        // 外部/切回/推送反弹场景，S.data 已被磁盘原始文本覆盖，steps 列此刻是折叠形态。
+        // 若持久化的 _stepsExpanded 为 true，_alignStepsExpansion 会在下面 renderTable 之前
+        // 同步把展开文本写回，实现「切回/首屏/推送后展开态自愈」，无闪烁、无 toast、无重复渲染。
+        _alignStepsExpansion();
         renderTable();
         // 用户主动点击 “重置筛选并获取最新数据” 时，给出明确的成功反馈
         if (m.reason === 'reload' && typeof showToast === 'function') {

@@ -111,7 +111,10 @@
         <div class="xs-icon-btn" id="findBtn" title="查找">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         </div>
-        <span id="selInfo" style="font-size:12px;color:#666">已选 0 行，共 0 行</span>
+        <span id="selInfo" class="xs-sel-info" title="当前选区规格：行数 × 列数 / 总行数">
+            <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true" style="flex-shrink:0"><path fill="currentColor" d="M2 2h5v5H2V2zm7 0h5v5H9V2zM2 9h5v5H2V9zm7 0h5v5H9V9z"/></svg>
+            <span id="selInfoText">已选 0 行，共 0 行</span>
+        </span>
     </div>
     <div class="xs-container" id="tableContainer"></div>
     <div class="xs-modal-overlay" id="detailModal">

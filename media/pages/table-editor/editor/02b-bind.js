@@ -226,6 +226,9 @@ function bindToolbar() {
                 }
                 S._stepsExpanded = false;
                 expandStepsBtn.textContent = '展开步骤';
+                // 立即持久化：避免用户点击后立刻关闭 Tab 导致 debounce（600ms）窗口未完成、
+                // 展开态记忆丢失。renderTable 之前调用即可，setState 是同步 API。
+                if (typeof persistUiStateNow === 'function') persistUiStateNow();
                 if (collapsedCount > 0) { renderTable(); }
                 if (collapsedCount > 0 && typeof showToast === 'function') {
                     showToast('已收起 ' + collapsedCount + ' 行步骤', 'info');
@@ -244,14 +247,16 @@ function bindToolbar() {
                 }
                 S._stepsExpanded = true;
                 expandStepsBtn.textContent = '收起步骤';
+                // 立即持久化：同收起分支，防止 debounce 窗口内关 Tab 丢失展开态。
+                if (typeof persistUiStateNow === 'function') persistUiStateNow();
                 if (expandedCount > 0) { renderTable(); }
-                // 展开后记录 steps 列宽为 404px（5 子列之和），供持久化和收起/重新展开时使用
-                // 注意：DOM 列宽由 _buildSkeletonHtml 的 colgroup 直接设置（stepsSubW 硬编码），
-                //       无需再操作 <col> 元素，避免时序问题导致首次展开重叠。
+                // 展开后：主 steps 列宽 = 5 子列之和（默认 404，若用户之前拖过则为持久化值）。
+                // 注意：DOM 列宽由 _buildSkeletonHtml 的 colgroup 直接设置，无需再操作 <col> 元素，避免时序问题。
                 setTimeout(function () {
+                    var totalW = (typeof _getStepsTotalW === 'function') ? _getStepsTotalW() : 404;
                     var currentW = S.colWidths && S.colWidths[stepsCol] ? S.colWidths[stepsCol] : 160;
-                    if (currentW < 404) {
-                        S.colWidths[stepsCol] = 404;
+                    if (currentW !== totalW) {
+                        S.colWidths[stepsCol] = totalW;
                         if (typeof persistUiStateDebounced === 'function') persistUiStateDebounced();
                     }
                 }, 100);
@@ -399,7 +404,7 @@ function bindDocument() {
                 var singleCell = grid.length === 1 && grid[0].length === 1;
                 var multiSel = (_rcPaste.r1 !== _rcPaste.r2 || _rcPaste.c1 !== _rcPaste.c2);
                 pushHistory();
-                var changed = 0, skippedTsId = false;
+                var changed = 0, skippedTsId = false, skippedDetailSysPaste1 = false, skippedDetailSysPaste2 = false;
                 if (singleCell && multiSel) {
                     var src0 = grid[0][0];
                     // 过滤模式（仅看失败/列筛选/搜索）下行号在原始空间跳号；
@@ -432,6 +437,12 @@ function bindDocument() {
                                     changed++;
                                     continue;
                                 }
+                            }
+                            // 明细列 + 非对象/对象数组剪贴板（如 Excel 纯 TSV）：
+                            // 写字符串会与 rawRowGroups 不一致（yaml-parser 优先 raw），跳过。
+                            if (_isDetailT) {
+                                skippedDetailSysPaste1 = true;
+                                continue;
                             }
                             var nv;
                             if (isArrT) {
@@ -505,6 +516,11 @@ function bindDocument() {
                                     continue;
                                 }
                             }
+                            // 同上：明细列 + 非对象/对象数组剪贴板跳过
+                            if (_isDetailT2) {
+                                skippedDetailSysPaste2 = true;
+                                continue;
+                            }
                             var nv2;
                             if (isArrT2) {
                                 if (Array.isArray(_parsed)) {
@@ -538,7 +554,10 @@ function bindDocument() {
                 saveFile();
                 renderTable();
                 var msg = '已粘贴 ' + changed + ' 个单元格';
-                if (skippedTsId) msg += '（testcase_id 列已跳过）';
+                var sysPasteSuffix = [];
+                if (skippedTsId) sysPasteSuffix.push('testcase_id 列已跳过');
+                if (skippedDetailSysPaste1 || skippedDetailSysPaste2) sysPasteSuffix.push('明细列已跳过，请通过弹窗编辑');
+                if (sysPasteSuffix.length > 0) msg += '（' + sysPasteSuffix.join('；') + '）';
                 if (typeof showToast === 'function') showToast(msg, 'success');
             }).catch(function (err) {
                 if (typeof showToast === 'function') showToast('读取剪贴板失败：' + (err && err.message ? err.message : err), 'error');
@@ -617,6 +636,34 @@ function bindTable() {
     cont.addEventListener('click', function (e) {
         var t = e.target;
         if (!t) return;
+
+        // 0) 就近收起/展开步骤按钮（位于 steps 主表头内）：
+        //    - .xs-th-group-collapse: 展开态下的收起按钮（顶部条右上角）
+        //    - .xs-th-inline-expand:  未展开态下的展开按钮（xs-th-inner 内 flex 项）
+        //    两者都触发工具栏 #expandStepsBtn 的 click，复用同一套展开/收起逻辑
+        var cbtn = t.closest && (t.closest('.xs-th-group-collapse') || t.closest('.xs-th-inline-expand'));
+        if (cbtn) {
+            e.stopPropagation();
+            e.preventDefault();
+            var toolBtn = document.getElementById('expandStepsBtn');
+            if (toolBtn) toolBtn.click();
+            return;
+        }
+        // 0.5) 子列宽拖手柄：只在 mousedown 生效，click 阻止冒泡即可，防止误触发筛选/列选
+        var subRz0 = t.closest && t.closest('.xs-sub-resizer');
+        if (subRz0) { e.stopPropagation(); e.preventDefault(); return; }
+
+        // 0.8) steps 子列筛选漏斗（.xs-sub-filter，含内部 svg/path）：
+        //      必须放在 .xs-th-filter 之前判断——两者都在 steps 主 th 内，
+        //      但 .xs-sub-filter 是子表头漏斗（data-sub-filter-idx），走独立 openStepsSubFilter
+        var sfb = t.closest && t.closest('.xs-sub-filter');
+        if (sfb) {
+            e.stopPropagation();
+            e.preventDefault();
+            var subFI = parseInt(sfb.getAttribute('data-sub-filter-idx'), 10);
+            if (!isNaN(subFI) && typeof openStepsSubFilter === 'function') openStepsSubFilter(subFI, sfb);
+            return;
+        }
 
         // 1) 列筛选漏斗（含内部 svg/path）
         var fb = t.closest && t.closest('.xs-th-filter');
@@ -709,9 +756,22 @@ function bindTable() {
         // 与 Excel 体验一致：列头空白处或文字处双击均可触发，不必精确命中右侧 8px 拖手柄
         var thHit = t.closest && t.closest('th.xs-th');
         if (thHit && thHit.hasAttribute('data-col')) {
-            // 排除：漏斗按钮（避免与筛选交互冲突）
+            // 排除：漏斗按钮（避免与筛选交互冲突）与子列漏斗，与子列宽拖手柄
             var inFilter = t.closest && t.closest('.xs-th-filter');
-            if (!inFilter && typeof autoFitColumn === 'function') {
+            var inSubFilter = t.closest && t.closest('.xs-sub-filter');
+            var inSubRz = t.closest && t.closest('.xs-sub-resizer');
+            // 双击 steps 展开态子表头 → 自适应该子列宽（先于主列 autoFit 拦截）
+            var subTh = t.closest && t.closest('.xs-th-sub');
+            if (subTh && subTh.hasAttribute('data-sub-idx') && !inSubFilter && !inSubRz) {
+                var _subIdx = parseInt(subTh.getAttribute('data-sub-idx'), 10);
+                if (!isNaN(_subIdx) && typeof autoFitStepsSubCol === 'function') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    autoFitStepsSubCol(_subIdx);
+                }
+                return;
+            }
+            if (!inFilter && !inSubFilter && !inSubRz && typeof autoFitColumn === 'function') {
                 // autoFitColumn 内部以 e.currentTarget 的 data-col 为准；
                 // 用列头自身的 .xs-resizer 作为 currentTarget 以拿到 data-col；
                 // 若不存在 resizer，则用 th 本身（th 上同样含 data-col）。
@@ -740,12 +800,21 @@ function bindTable() {
     cont.addEventListener('mousedown', function (e) {
         var t = e.target;
         if (!t) return;
+        // 就近收起/展开按钮：阻止冒泡，避免触发列头 mousedown / 列选
+        var cbtn2 = t.closest && (t.closest('.xs-th-group-collapse') || t.closest('.xs-th-inline-expand'));
+        if (cbtn2) { e.stopPropagation(); return; }
+        // steps 子列宽拖动 resizer：优先于主 resizer 处理，避免手柄冲突
+        var subRz = t.closest && t.closest('.xs-sub-resizer');
+        if (subRz) { startSubColResize(_pseudoEvt(e, subRz)); return; }
         // 列宽拖动 resizer
         var rz = t.closest && t.closest('.xs-resizer');
         if (rz) { startColResize(_pseudoEvt(e, rz)); return; }
         // 漏斗按钮：阻止冒泡，避免触发列头 mousedown
         var fb2 = t.closest && t.closest('.xs-th-filter');
         if (fb2) { e.stopPropagation(); return; }
+        // 子列漏斗按钮：同样阻止冒泡，避免触发列头 mousedown/列选
+        var subFb2 = t.closest && t.closest('.xs-sub-filter');
+        if (subFb2) { e.stopPropagation(); return; }
         // 左上角 # 角格：点击 = 全选整表（与 Excel 一致）
         var corner = t.closest && t.closest('th.xs-th-rownum');
         if (corner && e.button === 0) {
@@ -768,15 +837,45 @@ function bindTable() {
             onRowNumMouseDown(_pseudoEvt(e, cbTd2));
             return;
         }
-        // 单元格 mousedown：矩形选区拖选（展开模式子表格内不触发外层选区）
+        // 单元格 mousedown：矩形选区拖选（展开模式子表格内不触发外层选区拖选，
+        // 但需将主表 active/cellSel 同步到外层 steps 单元格，实现"子表点击 = 外层大格选中"的视觉一致性）
         var inSubTable3 = t.closest && t.closest('.xse-table');
-        if (!inSubTable3) {
-            var cellEl2 = t.closest && t.closest('.xs-editable');
-            if (cellEl2) {
-                // 主键才启动拖选；右键交给 contextmenu 处理
-                if (e.button === 0) onCellMouseDown(_pseudoEvt(e, cellEl2));
-                return;
+        if (inSubTable3) {
+            // 子表内点击：找到外层 steps 大单元格，同步主表选区，
+            // 让外层格子呈现 active/xs-cell-selected 样式；但不阻止 contenteditable 的原生编辑体验
+            if (e.button === 0) {
+                var outerTd = t.closest && t.closest('td.xs-editable');
+                if (outerTd) {
+                    var _oRi = parseInt(outerTd.getAttribute('data-row'), 10);
+                    var _oCi = parseInt(outerTd.getAttribute('data-col'), 10);
+                    if (!isNaN(_oRi) && !isNaN(_oCi)) {
+                        // 清除旧 active，标记外层 td
+                        document.querySelectorAll('.xs-editable.active').forEach(function (n) { n.classList.remove('active'); });
+                        outerTd.classList.add('active');
+                        S.cell = { r: _oRi, c: _oCi };
+                        S.cellSel = { anchor: { r: _oRi, c: _oCi }, focus: { r: _oRi, c: _oCi } };
+                        // 与主表单元格 mousedown 同规则：清行选/列选（不带 shift 时）
+                        if (!e.shiftKey) {
+                            S.sel.clear();
+                            S.colSel.clear();
+                            S._colSelAnchor = -1;
+                            S._rowSelAnchor = -1;
+                        }
+                        if (typeof updateColSelClasses === 'function') updateColSelClasses();
+                        if (typeof updateRowSelClasses === 'function') updateRowSelClasses();
+                        if (typeof updateCellSelClasses === 'function') updateCellSelClasses();
+                        if (typeof updateSelectionInfo === 'function') updateSelectionInfo();
+                        if (typeof updatePushBtn === 'function') updatePushBtn();
+                    }
+                }
             }
+            return;
+        }
+        var cellEl2 = t.closest && t.closest('.xs-editable');
+        if (cellEl2) {
+            // 主键才启动拖选；右键交给 contextmenu 处理
+            if (e.button === 0) onCellMouseDown(_pseudoEvt(e, cellEl2));
+            return;
         }
     });
 }
@@ -808,10 +907,13 @@ function _pseudoEvt(e, currentTarget) {
 // 每步骤用【步骤描述】标记起始，【数据】【预期结果】分隔后续内容
 function _buildStepCombined(raws) {
     if (!Array.isArray(raws) || raws.length === 0) return '';
-    return raws.map(function (step) {
+    return raws.map(function (step, _idx) {
         if (!step || typeof step !== 'object') return '';
         var lines = [];
-        var sid = String(step.id != null ? step.id : '');
+        // sid 兜底：id 缺失/为空时用数组索引 + 1，避免输出无数字的"步骤"，
+        // 该情况会让 _buildStepExpandedHtml 的解析正则 /^步骤(\d+)/ 匹配失败，
+        // 从而把"步骤"当作 desc 内容累积到 operation，形成 round-trip 污染。
+        var sid = String(step.id != null && step.id !== '' ? step.id : (_idx + 1));
 
         // ── 【步骤描述】+ 序号 ──
         var op = (step.operation != null ? String(step.operation) : '').trim();

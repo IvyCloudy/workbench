@@ -121,7 +121,7 @@ function pasteCell() {
         var rows = (S.data && S.data.rows) || [];
         var headers = (S.data && S.data.headers) || [];
         pushHistory();
-        var changed = 0, skippedTsId = false;
+        var changed = 0, skippedTsId = false, skippedDetailPaste = false;
         // 过滤模式（仅看失败/列筛选/搜索）下，被隐藏的行不接收粘贴；
         // 按 _viewRows 顺序找到 ctxRow 后的连续可见行作为目标行序列（与 Excel AutoFilter 行为一致）。
         var _allLenPC = rows.length;
@@ -157,17 +157,24 @@ function pasteCell() {
                 var isArrTarget = typeof isArrayCol === 'function' && isArrayCol(cIdx);
                 // detail 列：若源是对象 / 对象数组，走写入 detail 表的路径，同步 rawRowGroups / rowGroups / rawRowTypes
                 var _isDetailTarget = (typeof isDetailColumn === 'function') && isDetailColumn(cIdx);
-                if (_isDetailTarget && src && (Array.isArray(src) || (typeof src === 'object'))) {
+                if (_isDetailTarget) {
                     var _hasObjSrc = false;
-                    if (Array.isArray(src)) {
-                        for (var _xoi = 0; _xoi < src.length; _xoi++) { if (src[_xoi] && typeof src[_xoi] === 'object') { _hasObjSrc = true; break; } }
-                    } else { _hasObjSrc = true; }
+                    if (src && (Array.isArray(src) || typeof src === 'object')) {
+                        if (Array.isArray(src)) {
+                            for (var _xoi = 0; _xoi < src.length; _xoi++) { if (src[_xoi] && typeof src[_xoi] === 'object') { _hasObjSrc = true; break; } }
+                        } else { _hasObjSrc = true; }
+                    }
                     if (_hasObjSrc) {
                         if (typeof _writeDetailCellFromRaw === 'function' && _writeDetailCellFromRaw(rIdx, cIdx, src)) {
                             changed++;
                             continue;
                         }
                     }
+                    // 明细列剪贴板非对象/对象数组（例如从 Excel 复制的纯文本）：
+                    // 若直接写字符串会与 rawRowGroups 不一致（yaml-parser 优先 raw → 视觉粘贴成功但数据未变）。
+                    // 保守做法：跳过该单元格。
+                    skippedDetailPaste = true;
+                    continue;
                 }
                 var nv;
                 if (isArrTarget && !Array.isArray(src)) {
@@ -196,7 +203,10 @@ function pasteCell() {
         saveFile();
         renderTable();
         var msg = '已粘贴 ' + changed + ' 个单元格';
-        if (skippedTsId) msg += '（testcase_id 列已跳过）';
+        var pasteSuffix = [];
+        if (skippedTsId) pasteSuffix.push('testcase_id 列已跳过');
+        if (skippedDetailPaste) pasteSuffix.push('明细列已跳过，请通过弹窗编辑');
+        if (pasteSuffix.length > 0) msg += '（' + pasteSuffix.join('；') + '）';
         showToast(msg, 'success');
         return;
     }
@@ -218,6 +228,13 @@ function pasteCell() {
             showToast('已粘贴', 'success');
             return;
         }
+    }
+    // 明细列剪贴板非对象/对象数组（如从 Excel 复制的纯文本）：
+    // 直接写字符串会与 rawRowGroups 不一致（yaml-parser 优先 raw → 视觉粘贴成功但数据未变）。
+    // 拒绝该操作并给出提示，引导用户通过弹窗编辑。
+    if (_isDetailTargetSingle) {
+        showToast('明细列不支持粘贴文本，请通过弹窗编辑', 'error');
+        return;
     }
     if (isArr && !Array.isArray(target)) {
         var s2 = (target === null || target === undefined) ? '' : (typeof target === 'object' ? (function () { try { return JSON.stringify(target); } catch (_e) { return ''; } })() : String(target));
@@ -262,6 +279,18 @@ function clearCell() {
             for (var c = rc.c1; c <= rc.c2; c++) {
                 if (isFrozenCol(c)) { skippedTsId = true; continue; }
                 var row = rows[r]; if (!row) continue;
+                // detail 列（steps 等）：同步清空 rawRowGroups，避免 yaml-parser 回写旧数据
+                var _isDetailB = (typeof isDetailColumn === 'function') && isDetailColumn(c);
+                if (_isDetailB && typeof _writeDetailCellFromRaw === 'function') {
+                    var _rawsB = (typeof _readDetailCellRaw === 'function') ? _readDetailCellRaw(r, c) : null;
+                    var _hadContentB = Array.isArray(_rawsB) ? _rawsB.length > 0
+                        : (_rawsB && typeof _rawsB === 'object' && Object.keys(_rawsB).length > 0);
+                    if (_hadContentB) {
+                        _writeDetailCellFromRaw(r, c, null);
+                        changed++;
+                    }
+                    continue;
+                }
                 var isArr = typeof isArrayCol === 'function' && isArrayCol(c);
                 var nv = isArr ? [] : '';
                 var ov = row[c];
@@ -284,6 +313,16 @@ function clearCell() {
     if (S._ctxRow < 0 || S._ctxCol < 0) return;
     if (isFrozenCol(S._ctxCol)) { showToast('testcase_id 列不允许清空', 'error'); return; }
     pushHistory();
+    // detail 列（steps 等）清空：必须同步清空 rawRowGroups，
+    // 否则 yaml-parser 优先信任 rawRowGroups → YAML 中旧数据不会被删除，
+    // 导致"视觉清空但数据未清"的一致性 bug（展开态下尤为明显）。
+    var _isDetailC = (typeof isDetailColumn === 'function') && isDetailColumn(S._ctxCol);
+    if (_isDetailC && typeof _writeDetailCellFromRaw === 'function') {
+        _writeDetailCellFromRaw(S._ctxRow, S._ctxCol, null);
+        saveFile();
+        renderTable();
+        return;
+    }
     // 标量数组列清空 → 空数组，保持列类型不变
     if (typeof isArrayCol === 'function' && isArrayCol(S._ctxCol)) {
         S.data.rows[S._ctxRow][S._ctxCol] = [];
@@ -310,13 +349,19 @@ function fillSelectedCells() {
             rowList = [];
             for (var rr = rc.r1; rr <= rc.r2; rr++) rowList.push(rr);
         }
-        var changed = 0, skippedTsId = false;
+        var changed = 0, skippedTsId = false, skippedDetail = false;
         pushHistory();
         for (var i = 0; i < rowList.length; i++) {
             var r = rowList[i];
             for (var c = rc.c1; c <= rc.c2; c++) {
                 if (isFrozenCol(c)) { skippedTsId = true; continue; }
                 var row = rows[r]; if (!row) continue;
+                // detail 列（steps 等）：填充字符串到嵌套结构无合理语义，直接跳过
+                // 用户如果确实想批量清空，请用 Delete/Backspace（clearCell 已支持 detail 列同步清空）
+                if ((typeof isDetailColumn === 'function') && isDetailColumn(c)) {
+                    skippedDetail = true;
+                    continue;
+                }
                 var isArr = typeof isArrayCol === 'function' && isArrayCol(c);
                 var nv;
                 if (isArr) {
@@ -337,7 +382,10 @@ function fillSelectedCells() {
         saveFile();
         renderTable();
         var msg = '已批量填充 ' + changed + ' 个单元格';
-        if (skippedTsId) msg += '（testcase_id 列已跳过）';
+        var suffix = [];
+        if (skippedTsId) suffix.push('testcase_id 列已跳过');
+        if (skippedDetail) suffix.push('明细列已跳过，请通过弹窗编辑');
+        if (suffix.length > 0) msg += '（' + suffix.join('；') + '）';
         showToast(msg, 'success');
     });
 }

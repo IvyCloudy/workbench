@@ -10,6 +10,7 @@ import { TelemetryService } from './telemetry';
 import { telemetryErrProps } from './extensionHelpers';
 import { cleanupRecords } from './fileIdentifier';
 import { ensureBindingsFile } from './taskInfoStore';
+import { ensureAllWorkspaceStores as ensurePointCaseBindings } from './pointCaseBindingStore';
 import { ensureHighlightFile, cleanupOrphanedHighlights } from './highlightStore';
 import { ensurePushFailureFile, cleanupOrphanedFailures } from './pushFailureStore';
 import { ensureSnapshotFile, cleanupOrphanedSnapshots } from './pushSnapshotStore';
@@ -48,6 +49,11 @@ export async function initializeStorages(context: vscode.ExtensionContext): Prom
     // markStore 单独处理
     await ensureMarkFile(context).catch(err => {
         console.error('[Storage] 初始化标记存储文件失败:', err?.message || err);
+    });
+
+    // 工作区级：测试要点↔测试案例 绑定文件（每个 workspace 独立）
+    await ensurePointCaseBindings().catch(err => {
+        console.error('[Storage] 初始化 point-case-bindings 失败:', err?.message || err);
     });
 }
 

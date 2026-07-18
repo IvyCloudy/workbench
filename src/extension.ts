@@ -24,7 +24,9 @@ import * as fs from 'fs';
 import { TableBrowserProvider } from './providers/TableBrowserProvider';
 import { TestCaseProvider } from './providers/TestCaseProvider';
 import { UnifiedEditorProvider } from './providers/UnifiedEditorProvider';
-import { registerBindTaskFeatures } from './providers/BindTaskProvider';
+import { registerBindTaskFeatures, refreshBindDecorations } from './providers/BindTaskProvider';
+import { BindDialogProvider } from './providers/BindDialogProvider';
+import { handleBindCases, handleBindPoints } from './handlers/bindHandler';
 import { showModal, showToast } from './utils/message';
 import { BaseEditorProvider } from './providers/BaseEditorProvider';
 import { TelemetryService } from './utils/telemetry';
@@ -70,6 +72,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // 注册核心功能
     const bindTaskDisposables = registerBindTaskFeatures(context);
+    const bindDialogProvider = new BindDialogProvider(context.extensionUri, context, () => refreshBindDecorations());
     const tableBrowserProvider = new TableBrowserProvider(context.extensionUri, context);
     const testCaseProvider = new TestCaseProvider(context.extensionUri, context);
     const unifiedEditorProvider = new UnifiedEditorProvider(context.extensionUri, context);
@@ -295,6 +298,34 @@ export async function activate(context: vscode.ExtensionContext) {
             'workbench.syncDeletedRows',
             async () => {
                 await handleSyncDeletedRows();
+            }
+        ),
+
+        // ---- 绑定测试案例（右键测试要点 .md/.xmind） ----
+        vscode.commands.registerCommand(
+            'testcaseViewer.bindTestCases',
+            async (uri: vscode.Uri) => {
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.bindTestCases' });
+                try {
+                    await handleBindCases(uri, bindDialogProvider);
+                } catch (err: any) {
+                    TelemetryService.sendTelemetryErrorEvent('bindTestCases.commandError', telemetryErrProps(err));
+                    showToast(undefined, 'error', `绑定失败: ${err.message || err}`);
+                }
+            }
+        ),
+
+        // ---- 绑定测试要点（右键测试案例 .csv/.yaml/.json） ----
+        vscode.commands.registerCommand(
+            'testcaseViewer.bindTestPoints',
+            async (uri: vscode.Uri) => {
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.bindTestPoints' });
+                try {
+                    await handleBindPoints(uri, bindDialogProvider);
+                } catch (err: any) {
+                    TelemetryService.sendTelemetryErrorEvent('bindTestPoints.commandError', telemetryErrProps(err));
+                    showToast(undefined, 'error', `绑定失败: ${err.message || err}`);
+                }
             }
         ),
     );

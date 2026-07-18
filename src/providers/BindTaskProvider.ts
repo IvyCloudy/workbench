@@ -15,6 +15,15 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getAllBoundItems, getAllBoundFolderPaths, clearBindingsCache, type CurrentTask } from '../utils/taskInfoStore';
+import {
+    getAllBoundFilePaths as getAllPointCaseBoundFiles,
+    getWorkspaceRoots as getPCBWorkspaceRoots,
+    getStoreFilePath as getPCBStorePath,
+    clearCache as clearPointCaseBindingCache,
+    isPathBound as isPointCaseBound,
+    getBoundCasesOfPoint,
+    getBoundPointsOfCase,
+} from '../utils/pointCaseBindingStore';
 import { TelemetryService } from '../utils/telemetry';
 
 // ============================================
@@ -81,14 +90,38 @@ class TaskFolderDecorationProvider implements vscode.FileDecorationProvider {
         const fsPath = uri.fsPath;
         if (!fsPath) return undefined;
 
+        const fsPathNorm = fsPath.replace(/\\/g, '/');
+
+        // ---- (A) 优先：point ↔ case 文件级绑定标记（.md/.xmind/.csv/.yaml/.json 参与绑定时） ----
+        try {
+            if (isPointCaseBound(fsPath)) {
+                const ext = path.extname(fsPath).toLowerCase();
+                if (['.md', '.xmind'].includes(ext)) {
+                    const cases = getBoundCasesOfPoint(fsPath);
+                    return {
+                        badge: '🔗',
+                        color: new vscode.ThemeColor('charts.green'),
+                        tooltip: `已绑定 ${cases.length} 个测试案例`,
+                    };
+                }
+                if (['.csv', '.yaml', '.yml', '.json'].includes(ext)) {
+                    const points = getBoundPointsOfCase(fsPath);
+                    return {
+                        badge: '🔗',
+                        color: new vscode.ThemeColor('charts.green'),
+                        tooltip: `已绑定 ${points.length} 个测试要点`,
+                    };
+                }
+            }
+        } catch (_) { /* ignore */ }
+
+        // ---- (B) 原逻辑：任务文件夹徽标 ----
         const boundPaths = getAllBoundFolderPaths(effectiveContext!);
         // 只保留当前工作区内的绑定路径
         const roots = getWorkspaceRoots();
         const workspaceBoundPaths = roots.length === 0
             ? boundPaths
             : boundPaths.filter(bp => roots.some(r => bp.startsWith(r + '/') || bp === r));
-
-        const fsPathNorm = fsPath.replace(/\\/g, '/');
 
         // 找到 exact 匹配的绑定文件夹路径
         let matchedPath = '';
@@ -103,8 +136,6 @@ class TaskFolderDecorationProvider implements vscode.FileDecorationProvider {
 
         // 只有当前 URI 就是绑定子任务文件夹本身时才着色
         const isExactTaskFolder = fsPathNorm === matchedPath;
-
-        console.log('[Decorator] uri=', fsPath, 'isExact=', isExactTaskFolder);
 
         return {
             badge: '🔗',
@@ -242,17 +273,47 @@ export function registerBindTaskFeatures(context: vscode.ExtensionContext): vsco
     // 4. 监听绑定文件变更，自动刷新装饰器 + TreeView
     disposables.push(
         vscode.workspace.onDidSaveTextDocument(doc => {
-            if (doc.uri.fsPath.includes('task-bindings.json')) {
+            const p = doc.uri.fsPath.replace(/\\/g, '/');
+            if (p.includes('task-bindings.json')) {
                 TelemetryService.sendTelemetryEvent('bindings.fileChanged', {});
                 clearBindingsCache(); // 强制清除缓存，确保读到最新数据
                 taskFolderDecorationProvider.refresh();
                 bindTasksTreeProvider.refresh();
+            } else if (p.endsWith('/.plugin/.tms/point-case-bindings.json')) {
+                TelemetryService.sendTelemetryEvent('pointCaseBindings.fileChanged', {});
+                clearPointCaseBindingCache();
+                taskFolderDecorationProvider.refresh();
             }
         })
     );
+
+    // 5. 监听 point-case 绑定文件的外部改动（非文本编辑器保存路径，例如 fs 直接写）
+    try {
+        const pcbWatcher = vscode.workspace.createFileSystemWatcher('**/.plugin/.tms/point-case-bindings.json');
+        const onChange = () => {
+            clearPointCaseBindingCache();
+            taskFolderDecorationProvider.refresh();
+        };
+        pcbWatcher.onDidChange(onChange);
+        pcbWatcher.onDidCreate(onChange);
+        pcbWatcher.onDidDelete(onChange);
+        disposables.push(pcbWatcher);
+    } catch (_) { /* ignore */ }
 
     // 初始刷新（绑定文件已就绪）
     taskFolderDecorationProvider.refresh();
 
     return disposables;
+}
+
+// ============================================
+// 对外：供 BindDialogProvider 在保存后触发装饰器与 TreeView 刷新
+// ============================================
+
+export function refreshBindDecorations(): void {
+    try {
+        clearPointCaseBindingCache();
+        taskFolderDecorationProvider.refresh();
+        bindTasksTreeProvider.refresh();
+    } catch (_) { /* ignore */ }
 }

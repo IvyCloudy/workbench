@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource} 'nonce-${nonce}';">
+    <title>绑定</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            padding: 0;
+            color: var(--vscode-editor-foreground, #1a1a1a);
+            background: var(--vscode-editor-background, #f5f6f8);
+            font-size: 13px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        /* 顶部信息条 */
+        .dialog-header {
+            padding: 14px 20px 12px;
+            border-bottom: 1px solid #e5e9ef;
+            background: #fff;
+        }
+        .dialog-header h2 {
+            font-size: 15px;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 8px;
+        }
+        .source-info {
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap;
+            font-size: 12px;
+            color: #666;
+        }
+        .source-info .label {
+            color: #888;
+            margin-right: 4px;
+        }
+        .source-info .val {
+            color: #0052d9;
+            font-weight: 500;
+            word-break: break-all;
+        }
+        .source-info .val-scope { color: #e37318; }
+
+        /* 当前已绑定提示条 */
+        .current-bound {
+            margin-top: 8px;
+            padding: 6px 10px;
+            background: #f0faf5;
+            border: 1px solid #b8e5cf;
+            border-radius: 4px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .current-bound .cb-label { color: #1b8b5c; font-weight: 500; flex-shrink: 0; }
+        .current-bound .cb-val {
+            color: #2ba471;
+            font-weight: 600;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            word-break: break-all;
+        }
+        .current-bound .cb-locate {
+            background: transparent;
+            border: none;
+            color: #2ba471;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 2px 5px;
+            border-radius: 3px;
+            flex-shrink: 0;
+        }
+        .current-bound .cb-locate:hover { background: rgba(43,164,113,0.15); }
+
+        /* 工具栏 */
+        .toolbar {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            padding: 10px 20px;
+            background: #f7f8fa;
+            border-bottom: 1px solid #e5e9ef;
+            flex-wrap: wrap;
+        }
+        .search-box {
+            display: flex;
+            align-items: center;
+            background: #fff;
+            border: 1px solid #dde3ea;
+            border-radius: 4px;
+            padding: 0 8px;
+            height: 28px;
+            min-width: 240px;
+            flex: 1;
+            max-width: 400px;
+        }
+        .search-box .ic { color: #999; font-size: 12px; margin-right: 4px; }
+        .search-box input {
+            border: none;
+            outline: none;
+            background: transparent;
+            font-size: 12.5px;
+            color: #333;
+            width: 100%;
+            height: 100%;
+        }
+        .filter-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            font-size: 12px;
+            border-radius: 14px;
+            border: 1px solid #dde3ea;
+            background: #fff;
+            color: #666;
+            cursor: pointer;
+            user-select: none;
+        }
+        .filter-chip.active {
+            background: #e8f3ff;
+            border-color: #0052d9;
+            color: #0052d9;
+        }
+        .filter-chip input {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .count-info {
+            margin-left: auto;
+            font-size: 12px;
+            color: #888;
+            white-space: nowrap;
+        }
+        .count-info .num { color: #0052d9; font-weight: 600; }
+
+        /* 列表 */
+        .list-wrap {
+            flex: 1;
+            overflow: auto;
+            padding: 8px 20px 12px;
+        }
+        .cand-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .cand-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            border: 1px solid #e5e9ef;
+            border-radius: 6px;
+            background: #fff;
+            cursor: pointer;
+            transition: all .15s;
+        }
+        .cand-item:hover {
+            border-color: #0052d9;
+            background: #f0f6ff;
+        }
+        .cand-item.checked {
+            border-color: #0052d9;
+            background: #e8f3ff;
+        }
+        .cand-item.was-bound {
+            border-left: 3px solid #2ba471;
+            background: #f0faf5;
+        }
+        .cand-item.was-bound:hover {
+            background: #e6f6ee;
+            border-color: #2ba471;
+        }
+        .cand-item.was-bound .name > span:first-child {
+            font-weight: 600;
+            color: #1b8b5c;
+        }
+        .cand-item.disabled {
+            background: #fafbfc;
+            cursor: not-allowed;
+            opacity: 0.75;
+        }
+        .cand-item.disabled:hover {
+            border-color: #e5e9ef;
+            background: #fafbfc;
+        }
+        .cand-item input[type=radio] {
+            width: 15px;
+            height: 15px;
+            cursor: pointer;
+            accent-color: #0052d9;
+            flex-shrink: 0;
+        }
+        .cand-item.disabled input[type=radio] {
+            cursor: not-allowed;
+        }
+        .cand-item input[type=checkbox] {
+            width: 15px;
+            height: 15px;
+            cursor: pointer;
+            accent-color: #0052d9;
+            flex-shrink: 0;
+        }
+        .cand-item .info {
+            flex: 1;
+            min-width: 0;
+        }
+        .cand-item .name {
+            font-size: 13px;
+            font-weight: 500;
+            color: #1a1a1a;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 2px;
+        }
+        .cand-item .ext-badge {
+            display: inline-block;
+            font-size: 10px;
+            padding: 1px 5px;
+            border-radius: 2px;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+        .badge-md { background: #e8f8f0; color: #2ba471; }
+        .badge-xmind { background: #f3e8ff; color: #7b3fe4; }
+        .badge-csv { background: #fff3e0; color: #e37318; }
+        .badge-yaml, .badge-yml { background: #e8f3ff; color: #0052d9; }
+        .badge-json { background: #fde2e3; color: #e34d59; }
+        .cand-item .path {
+            font-size: 11px;
+            color: #999;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .cand-item .status-tag {
+            display: inline-block;
+            font-size: 10px;
+            padding: 1px 6px;
+            border-radius: 2px;
+            font-weight: 500;
+            background: #fff3e0;
+            color: #e37318;
+            margin-left: 4px;
+        }
+        .cand-item .status-tag.bound {
+            background: #e8f8f0;
+            color: #2ba471;
+        }
+        .cand-item .status-tag.occupied {
+            background: #fde2e3;
+            color: #e34d59;
+        }
+        .cand-item .reveal-btn {
+            background: transparent;
+            border: none;
+            color: #999;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 3px 6px;
+            border-radius: 3px;
+            flex-shrink: 0;
+        }
+        .cand-item .reveal-btn:hover {
+            color: #0052d9;
+            background: rgba(0,82,217,0.08);
+        }
+
+        .empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+            font-size: 13px;
+        }
+        .empty .em-title { font-size: 14px; margin-bottom: 6px; color: #666; }
+
+        /* 底部按钮栏 */
+        .footer {
+            padding: 12px 20px;
+            border-top: 1px solid #e5e9ef;
+            background: #fff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .footer .sel-hint {
+            color: #666;
+            font-size: 12px;
+            margin-right: auto;
+        }
+        .footer .sel-hint .num { color: #0052d9; font-weight: 600; }
+        .btn {
+            height: 30px;
+            padding: 0 16px;
+            border-radius: 4px;
+            font-size: 12.5px;
+            cursor: pointer;
+            border: 1px solid #dde3ea;
+            background: #fff;
+            color: #333;
+        }
+        .btn:hover { border-color: #0052d9; color: #0052d9; }
+        .btn-primary {
+            background: #0052d9;
+            color: #fff;
+            border-color: #0052d9;
+        }
+        .btn-primary:hover { background: #003cab; color: #fff; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary:disabled { background: #99b8e8; border-color: #99b8e8; color: #fff; }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <div class="dialog-header">
+        <h2 id="dialogTitle">绑定</h2>
+        <div class="source-info">
+            <div><span class="label">当前文件：</span><span class="val" id="srcName">-</span></div>
+            <div><span class="label">所在任务：</span><span class="val val-scope" id="scopeName">-</span></div>
+        </div>
+        <div class="current-bound hidden" id="currentBoundBar">
+            <span class="cb-label">当前已绑定：</span>
+            <span class="cb-val" id="currentBoundVal">-</span>
+            <button class="cb-locate" id="currentBoundLocate" title="在资源管理器中定位">↗</button>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <div class="search-box">
+            <span class="ic">&#128269;</span>
+            <input id="searchInput" placeholder="搜索文件名或路径..." />
+        </div>
+        <label class="filter-chip active" id="onlyUnboundChip">
+            <input type="checkbox" id="onlyUnbound" checked />
+            <span>隐藏已被占用</span>
+        </label>
+        <button class="filter-chip" id="clearAllBtn" title="清除当前源文件的绑定">取消绑定</button>
+        <span class="count-info" id="countInfo">共 <span class="num">0</span> 项</span>
+    </div>
+
+    <div class="list-wrap">
+        <ul class="cand-list" id="candList"></ul>
+        <div class="empty hidden" id="emptyState">
+            <div class="em-title">未找到<span id="targetLabel">目标文件</span></div>
+            <div>请先在同一测试任务子目录下创建对应文件</div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <div class="sel-hint" id="selHint">未选择</div>
+        <button class="btn" id="cancelBtn">取消</button>
+        <button class="btn btn-primary" id="saveBtn">保存绑定</button>
+    </div>
+
+    <script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>

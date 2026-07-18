@@ -26,7 +26,7 @@ import { TestCaseProvider } from './providers/TestCaseProvider';
 import { UnifiedEditorProvider } from './providers/UnifiedEditorProvider';
 import { registerBindTaskFeatures, refreshBindDecorations } from './providers/BindTaskProvider';
 import { BindDialogProvider } from './providers/BindDialogProvider';
-import { handleBindCases, handleBindPoints } from './handlers/bindHandler';
+import { handleBindCases, handleBindPoints, handleJumpToBoundCase, handleJumpToBoundPoint } from './handlers/bindHandler';
 import { showModal, showToast } from './utils/message';
 import { BaseEditorProvider } from './providers/BaseEditorProvider';
 import { TelemetryService } from './utils/telemetry';
@@ -325,6 +325,34 @@ export async function activate(context: vscode.ExtensionContext) {
                 } catch (err: any) {
                     TelemetryService.sendTelemetryErrorEvent('bindTestPoints.commandError', telemetryErrProps(err));
                     showToast(undefined, 'error', `绑定失败: ${err.message || err}`);
+                }
+            }
+        ),
+
+        // ---- 跳转到已绑定的测试案例（右键 .md/.xmind） ----
+        vscode.commands.registerCommand(
+            'testcaseViewer.jumpToBoundCase',
+            async (uri: vscode.Uri) => {
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.jumpToBoundCase' });
+                try {
+                    await handleJumpToBoundCase(uri, bindDialogProvider);
+                } catch (err: any) {
+                    TelemetryService.sendTelemetryErrorEvent('jumpToBoundCase.commandError', telemetryErrProps(err));
+                    showToast(undefined, 'error', `跳转失败: ${err.message || err}`);
+                }
+            }
+        ),
+
+        // ---- 跳转到已绑定的测试要点（右键 .csv/.yaml/.json） ----
+        vscode.commands.registerCommand(
+            'testcaseViewer.jumpToBoundPoint',
+            async (uri: vscode.Uri) => {
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.jumpToBoundPoint' });
+                try {
+                    await handleJumpToBoundPoint(uri, bindDialogProvider);
+                } catch (err: any) {
+                    TelemetryService.sendTelemetryErrorEvent('jumpToBoundPoint.commandError', telemetryErrProps(err));
+                    showToast(undefined, 'error', `跳转失败: ${err.message || err}`);
                 }
             }
         ),

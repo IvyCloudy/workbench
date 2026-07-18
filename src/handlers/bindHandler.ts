@@ -7,8 +7,14 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { showToast } from '../utils/message';
 import { BindDialogProvider, BindDirection } from '../providers/BindDialogProvider';
+import {
+    getCaseOfPoint,
+    getPointOfCase,
+} from '../utils/pointCaseBindingStore';
+import { TelemetryService } from '../utils/telemetry';
 
 /**
  * 校验源文件是否符合规则并推断绑定方向。
@@ -80,4 +86,102 @@ export async function handleBindPoints(
     const direction = inferDirection(uri, 'case-to-points');
     if (!direction) return;
     await provider.open(uri, direction);
+}
+
+// ============================================
+// 一键跳转到对端（P1 ④）
+// ============================================
+
+function extOf(uri: vscode.Uri): string {
+    return path.extname(uri.fsPath).toLowerCase();
+}
+
+async function jumpTo(absPath: string): Promise<void> {
+    // 打开文件（若是 md/xmind 走默认编辑器，csv/yaml/json 走自定义编辑器）
+    try {
+        await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(absPath));
+    } catch {
+        try {
+            const doc = await vscode.workspace.openTextDocument(absPath);
+            await vscode.window.showTextDocument(doc);
+        } catch { /* ignore */ }
+    }
+    try {
+        await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(absPath));
+    } catch { /* ignore */ }
+}
+
+async function offerBindDialog(uri: vscode.Uri, direction: BindDirection, provider: BindDialogProvider) {
+    const pick = await vscode.window.showInformationMessage(
+        direction === 'point-to-cases'
+            ? '当前测试要点尚未绑定测试案例，是否立即绑定？'
+            : '当前测试案例尚未绑定测试要点，是否立即绑定？',
+        { modal: false },
+        '立即绑定',
+    );
+    if (pick === '立即绑定') {
+        await provider.open(uri, direction);
+    }
+}
+
+/**
+ * 右键 .md/.xmind → "跳转到已绑定的测试案例"
+ */
+export async function handleJumpToBoundCase(
+    uri: vscode.Uri,
+    provider: BindDialogProvider,
+): Promise<void> {
+    if (!uri) {
+        showToast(undefined, 'warning', '请在资源管理器中右键测试要点文件（.md/.xmind）');
+        return;
+    }
+    const ext = extOf(uri);
+    if (!['.md', '.xmind'].includes(ext)) {
+        showToast(undefined, 'warning', '当前文件不是测试要点（.md / .xmind）');
+        return;
+    }
+    const target = getCaseOfPoint(uri.fsPath);
+    if (!target) {
+        TelemetryService.sendTelemetryEvent('jumpToBound.miss', { direction: 'point-to-cases' });
+        await offerBindDialog(uri, 'point-to-cases', provider);
+        return;
+    }
+    if (!fs.existsSync(target)) {
+        TelemetryService.sendTelemetryEvent('jumpToBound.notExist', { direction: 'point-to-cases' });
+        vscode.window.showWarningMessage(`绑定的测试案例文件不存在：${target}`);
+        return;
+    }
+    TelemetryService.sendTelemetryEvent('jumpToBound.hit', { direction: 'point-to-cases' });
+    await jumpTo(target);
+}
+
+/**
+ * 右键 .csv/.yaml/.json → "跳转到已绑定的测试要点"
+ */
+export async function handleJumpToBoundPoint(
+    uri: vscode.Uri,
+    provider: BindDialogProvider,
+): Promise<void> {
+    if (!uri) {
+        showToast(undefined, 'warning', '请在资源管理器中右键测试案例文件（.csv/.yaml/.json）');
+        return;
+    }
+    const ext = extOf(uri);
+    if (!['.csv', '.yaml', '.yml', '.json'].includes(ext)) {
+        showToast(undefined, 'warning', '当前文件不是测试案例（.csv / .yaml / .json）');
+        return;
+    }
+    const target = getPointOfCase(uri.fsPath);
+    if (!target) {
+        TelemetryService.sendTelemetryEvent('jumpToBound.miss', { direction: 'case-to-points' });
+        await offerBindDialog(uri, 'case-to-points', provider);
+        return;
+    }
+    if (!fs.existsSync(target)) {
+        TelemetryService.sendTelemetryEvent('jumpToBound.notExist', { direction: 'case-to-points' });
+        vscode.window.showWarningMessage(`绑定的测试要点文件不存在：${target}`);
+        return;
+    }
+    TelemetryService.sendTelemetryEvent('jumpToBound.hit', { direction: 'case-to-points' });
+    await jumpTo(target);
 }

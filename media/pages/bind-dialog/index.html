@@ -24,13 +24,33 @@
             padding: 14px 20px 12px;
             border-bottom: 1px solid #e5e9ef;
             background: #fff;
+            position: relative;
         }
         .dialog-header h2 {
             font-size: 15px;
             font-weight: 600;
             color: #1a1a1a;
             margin-bottom: 8px;
+            padding-right: 36px; /* 给右上角关闭按钮留位置 */
         }
+        .header-close {
+            position: absolute;
+            top: 10px;
+            right: 14px;
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            border: none;
+            background: transparent;
+            color: #888;
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .header-close:hover { background: #eef1f5; color: #333; }
         .source-info {
             display: flex;
             gap: 14px;
@@ -70,18 +90,60 @@
             text-overflow: ellipsis;
             white-space: nowrap;
             word-break: break-all;
+            cursor: pointer;
+            text-decoration: underline dotted transparent;
         }
-        .current-bound .cb-locate {
+        .current-bound .cb-val:hover {
+            text-decoration-color: #2ba471;
+        }
+        .current-bound .cb-locate,
+        .current-bound .cb-unbind {
             background: transparent;
             border: none;
-            color: #2ba471;
             cursor: pointer;
             font-size: 12px;
-            padding: 2px 5px;
+            padding: 2px 8px;
             border-radius: 3px;
             flex-shrink: 0;
+            height: 22px;
+        }
+        .current-bound .cb-locate {
+            color: #2ba471;
         }
         .current-bound .cb-locate:hover { background: rgba(43,164,113,0.15); }
+        .current-bound .cb-unbind {
+            color: #e34d59;
+            border: 1px solid #f5c6c8;
+            background: #fff;
+            margin-left: 4px;
+        }
+        .current-bound .cb-unbind:hover {
+            background: #fde2e3;
+        }
+
+        /* 内联错误 banner */
+        .banner-error {
+            margin-top: 8px;
+            padding: 8px 12px;
+            background: #fde2e3;
+            border: 1px solid #f5c6c8;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #a11923;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .banner-error .banner-icon { font-size: 14px; }
+        .banner-error .banner-close {
+            margin-left: auto;
+            border: none;
+            background: transparent;
+            color: #a11923;
+            cursor: pointer;
+            font-size: 14px;
+            padding: 0 4px;
+        }
 
         /* 工具栏 */
         .toolbar {
@@ -151,6 +213,7 @@
             flex: 1;
             overflow: auto;
             padding: 8px 20px 12px;
+            position: relative;
         }
         .cand-list {
             list-style: none;
@@ -197,6 +260,13 @@
         .cand-item.disabled:hover {
             border-color: #e5e9ef;
             background: #fafbfc;
+        }
+        .cand-item.pulse {
+            animation: pulse-highlight 1.2s ease-out;
+        }
+        @keyframes pulse-highlight {
+            0%   { box-shadow: 0 0 0 3px rgba(43,164,113,0.5); }
+            100% { box-shadow: 0 0 0 0 rgba(43,164,113,0); }
         }
         .cand-item input[type=radio] {
             width: 15px;
@@ -288,6 +358,56 @@
             font-size: 13px;
         }
         .empty .em-title { font-size: 14px; margin-bottom: 6px; color: #666; }
+        .empty .em-dir {
+            margin-top: 8px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 11.5px;
+            color: #666;
+            background: #f2f4f7;
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 3px;
+            word-break: break-all;
+            max-width: 90%;
+        }
+        .empty .em-open-dir {
+            margin-top: 12px;
+            display: inline-block;
+            padding: 5px 14px;
+            border-radius: 4px;
+            border: 1px solid #0052d9;
+            background: #fff;
+            color: #0052d9;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .empty .em-open-dir:hover { background: #e8f3ff; }
+
+        /* Loading 骨架 */
+        .skeleton-wrap {
+            position: absolute;
+            inset: 0;
+            padding: 8px 20px;
+            background: #f5f6f8;
+        }
+        .skeleton-row {
+            height: 44px;
+            border-radius: 6px;
+            background: linear-gradient(90deg, #ecf0f4 0%, #dfe4ea 40%, #ecf0f4 80%);
+            background-size: 200% 100%;
+            margin-bottom: 6px;
+            animation: shimmer 1.2s infinite;
+        }
+        @keyframes shimmer {
+            0% { background-position: 100% 0; }
+            100% { background-position: -100% 0; }
+        }
+        .loading-text {
+            text-align: center;
+            color: #888;
+            font-size: 12px;
+            margin: 8px 0 12px;
+        }
 
         /* 底部按钮栏 */
         .footer {
@@ -321,14 +441,22 @@
             border-color: #0052d9;
         }
         .btn-primary:hover { background: #003cab; color: #fff; }
+        .btn-danger {
+            background: #e34d59;
+            color: #fff;
+            border-color: #e34d59;
+        }
+        .btn-danger:hover { background: #c8384e; border-color: #c8384e; color: #fff; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .btn-primary:disabled { background: #99b8e8; border-color: #99b8e8; color: #fff; }
+        .btn-danger:disabled { background: #f5a4ab; border-color: #f5a4ab; color: #fff; }
 
         .hidden { display: none !important; }
     </style>
 </head>
 <body>
     <div class="dialog-header">
+        <button class="header-close" id="headerClose" title="关闭 (Esc)">×</button>
         <h2 id="dialogTitle">绑定</h2>
         <div class="source-info">
             <div><span class="label">当前文件：</span><span class="val" id="srcName">-</span></div>
@@ -336,8 +464,14 @@
         </div>
         <div class="current-bound hidden" id="currentBoundBar">
             <span class="cb-label">当前已绑定：</span>
-            <span class="cb-val" id="currentBoundVal">-</span>
+            <span class="cb-val" id="currentBoundVal" title="点击滚动到候选列表对应项">-</span>
             <button class="cb-locate" id="currentBoundLocate" title="在资源管理器中定位">↗</button>
+            <button class="cb-unbind" id="currentBoundUnbind" title="解除当前绑定">解除绑定</button>
+        </div>
+        <div class="banner-error hidden" id="errorBanner">
+            <span class="banner-icon">⚠</span>
+            <span id="errorBannerMsg">-</span>
+            <button class="banner-close" id="errorBannerClose">×</button>
         </div>
     </div>
 
@@ -359,6 +493,16 @@
         <div class="empty hidden" id="emptyState">
             <div class="em-title">未找到<span id="targetLabel">目标文件</span></div>
             <div>请先在同一测试任务子目录下创建对应文件</div>
+            <div class="em-dir hidden" id="emptyTargetDir">-</div>
+            <button class="em-open-dir hidden" id="emptyOpenDirBtn">打开该目录</button>
+        </div>
+        <div class="skeleton-wrap hidden" id="skeletonWrap">
+            <div class="loading-text" id="loadingText">正在扫描候选文件...</div>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
         </div>
     </div>
 

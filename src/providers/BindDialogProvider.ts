@@ -34,6 +34,14 @@ import {
     buildPointOccupancyMap,
 } from '../utils/pointCaseBindingStore';
 
+/** 是否开启 point-case 绑定的调试日志（受 settings.testcaseViewer.debug.pointCaseBinding 控制） */
+function isBindDebug(): boolean {
+    try {
+        return !!vscode.workspace.getConfiguration('testcaseViewer').get<boolean>('debug.pointCaseBinding', false);
+    } catch { return false; }
+}
+function dbg(...args: any[]) { if (isBindDebug()) console.log('[BindDialog]', ...args); }
+
 // ============================================
 // 类型
 // ============================================
@@ -77,6 +85,8 @@ interface InitPayload {
     currentBoundRel?: string;
     /** store 中源文件当前已绑定的对端绝对路径 */
     currentBoundAbs?: string;
+    /** 候选目录的绝对路径（用于空态提示 + 快捷打开） */
+    targetDirAbs?: string;
 }
 
 // ============================================
@@ -100,11 +110,16 @@ function locateTaskRoot(sourceAbsPath: string): { taskRoot: string; taskName: st
 /**
  * 在 "测试任务/<xxx>/测试案例" 或 "测试任务/<xxx>/测试大纲" 目录下递归扫描目标文件。
  * dirName = '测试案例' 时返回 csv/yaml/yml/json；'测试大纲' 时返回 md/xmind。
+ *
+ * 【异步版】主线程零阻塞，大目录不再假死。
  */
-function scanCandidateFiles(taskRoot: string, dirName: '测试案例' | '测试大纲'): string[] {
+async function scanCandidateFilesAsync(taskRoot: string, dirName: '测试案例' | '测试大纲'): Promise<string[]> {
     const targetDir = path.join(taskRoot, dirName);
     let exists = false;
-    try { exists = fs.statSync(targetDir).isDirectory(); } catch { /* ignore */ }
+    try {
+        const st = await fs.promises.stat(targetDir);
+        exists = st.isDirectory();
+    } catch { /* ignore */ }
     if (!exists) return [];
 
     const okExts = dirName === '测试案例'
@@ -112,21 +127,22 @@ function scanCandidateFiles(taskRoot: string, dirName: '测试案例' | '测试�
         : new Set(['.md', '.xmind']);
     const results: string[] = [];
 
-    function walk(dir: string) {
+    async function walk(dir: string): Promise<void> {
         let entries: fs.Dirent[] = [];
-        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-        for (const ent of entries) {
-            if (ent.name.startsWith('.')) continue;
+        try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+        // 并发访问子项（同层并行）
+        await Promise.all(entries.map(async ent => {
+            if (ent.name.startsWith('.')) return;
             const full = path.join(dir, ent.name);
             if (ent.isDirectory()) {
-                walk(full);
+                await walk(full);
             } else if (ent.isFile()) {
                 const ext = path.extname(ent.name).toLowerCase();
                 if (okExts.has(ext)) results.push(full);
             }
-        }
+        }));
     }
-    walk(targetDir);
+    await walk(targetDir);
     return results;
 }
 
@@ -149,104 +165,30 @@ export class BindDialogProvider {
      * @param direction 绑定方向
      */
     async open(sourceUri: vscode.Uri, direction: BindDirection): Promise<void> {
+        const _openStart = Date.now();
         const sourceAbsPath = sourceUri.fsPath;
 
         // 1) 校验：必须在 测试任务/<子任务>/ 下
         const loc = locateTaskRoot(sourceAbsPath);
         if (!loc) {
             showToast(undefined, 'warning', '当前文件不在 "测试任务/<子任务>" 目录结构下');
+            TelemetryService.sendTelemetryEvent('bindDialog.abort', { reason: 'notInTaskDir' });
             return;
         }
 
         const root = findWorkspaceRootFor(sourceAbsPath);
         if (!root) {
             showToast(undefined, 'warning', '当前文件不在已打开的工作区内');
+            TelemetryService.sendTelemetryEvent('bindDialog.abort', { reason: 'notInWorkspace' });
             return;
         }
 
-        // 2) 扫描候选
-        const candidateAbsList = direction === 'point-to-cases'
-            ? scanCandidateFiles(loc.taskRoot, '测试案例')
-            : scanCandidateFiles(loc.taskRoot, '测试大纲');
-
-        // 3) 计算已绑定集合：直接用相对路径匹配，避免绝对路径拼接过程中的分隔符/大小写差异
-        const sourceRelForCompare = toRelPath(sourceAbsPath, root) || '';
-        const boundRelSet = new Set<string>(
-            (direction === 'point-to-cases'
-                ? getBoundCasesOfPoint(sourceAbsPath)
-                : getBoundPointsOfCase(sourceAbsPath)
-            )
-                .map(abs => toRelPath(abs, root))
-                .filter((r): r is string => !!r),
-        );
-
-        // 3.5) 计算候选项占用映射（1:1）：
-        //   - point-to-cases：候选是 case，若某 case 已被某 point 绑定则占用
-        //   - case-to-points：候选是 point，若某 point 已绑定某 case 则占用
-        const occupancyMap = direction === 'point-to-cases'
-            ? buildCaseOccupancyMap(root)   // caseRel -> pointRel
-            : buildPointOccupancyMap(root); // pointRel -> caseRel
-
-        // 4) 组装 candidates
-        const candidates: CandidateItem[] = candidateAbsList.map(abs => {
-            const relPath = toRelPath(abs, root) || abs.replace(/\\/g, '/');
-            const ext = path.extname(abs).toLowerCase().replace(/^\./, '');
-            const boundToSource = boundRelSet.has(relPath);
-
-            // 1:1 占用判定：查候选项在占用映射中的绑定方；若绑定方 ≠ 当前源文件则视为被别人占用
-            let boundToOthers = false;
-            let boundToOwnerRel: string | undefined;
-            const owner = occupancyMap.get(relPath);
-            if (owner && owner !== sourceRelForCompare) {
-                boundToOthers = true;
-                boundToOwnerRel = owner;
-            }
-
-            return {
-                absPath: abs,
-                relPath,
-                name: path.basename(abs),
-                ext,
-                boundToSource,
-                boundToOthers,
-                boundToOwnerRel,
-            };
-        }).sort((a, b) => a.relPath.localeCompare(b.relPath, 'zh-CN'));
-
-        // 诊断日志（在 Output → 面板中查看）
-        try {
-            console.log('[BindDialog] open', {
-                direction,
-                sourceRel: sourceRelForCompare,
-                boundRelSet: Array.from(boundRelSet),
-                occupancyEntries: Array.from(occupancyMap.entries()).slice(0, 20),
-                candidateRels: candidates.map(c => ({ rel: c.relPath, boundToSource: c.boundToSource, boundToOthers: c.boundToOthers })),
-            });
-        } catch { /* ignore */ }
-
-        const sourceRelPath = toRelPath(sourceAbsPath, root) || sourceAbsPath;
         const targetLabel = direction === 'point-to-cases' ? '测试案例' : '测试要点';
         const title = direction === 'point-to-cases' ? '绑定测试案例' : '绑定测试要点';
+        const targetDir = direction === 'point-to-cases' ? '测试案例' : '测试大纲';
+        const targetDirAbs = path.join(loc.taskRoot, targetDir);
 
-        // 从 boundRelSet 中取当前 1:1 绑定的对端（若有）；不在候选扫描范围内也能显示
-        const boundRelArr = Array.from(boundRelSet);
-        const currentBoundRel = boundRelArr.length > 0 ? boundRelArr[0] : undefined;
-        const currentBoundAbs = currentBoundRel ? path.join(root, currentBoundRel) : undefined;
-
-        const payload: InitPayload = {
-            direction,
-            sourceAbsPath,
-            sourceRelPath,
-            sourceName: path.basename(sourceAbsPath),
-            scopeTaskName: loc.taskName,
-            candidates,
-            title,
-            targetLabel,
-            currentBoundRel,
-            currentBoundAbs,
-        };
-
-        // 5) 打开或复用 Panel
+        // 2) 先打开 Panel + 展示 loading（避免大目录扫描时假死）
         if (BindDialogProvider.activePanel) {
             try { BindDialogProvider.activePanel.dispose(); } catch { /* ignore */ }
             BindDialogProvider.activePanel = undefined;
@@ -272,17 +214,106 @@ export class BindDialogProvider {
 
         panel.webview.html = await this.getHtml(panel.webview);
 
+        // 3) 异步扫描候选（不阻塞主线程）
+        let payload: InitPayload | undefined;
+        let payloadReady = false;
+        let readyReceived = false;
+
+        const buildPayload = async () => {
+            const candidateAbsList = await scanCandidateFilesAsync(loc.taskRoot, targetDir);
+
+            const sourceRelForCompare = toRelPath(sourceAbsPath, root) || '';
+            const boundRelSet = new Set<string>(
+                (direction === 'point-to-cases'
+                    ? getBoundCasesOfPoint(sourceAbsPath)
+                    : getBoundPointsOfCase(sourceAbsPath)
+                )
+                    .map(abs => toRelPath(abs, root))
+                    .filter((r): r is string => !!r),
+            );
+
+            const occupancyMap = direction === 'point-to-cases'
+                ? buildCaseOccupancyMap(root)
+                : buildPointOccupancyMap(root);
+
+            const candidates: CandidateItem[] = candidateAbsList.map(abs => {
+                const relPath = toRelPath(abs, root) || abs.replace(/\\/g, '/');
+                const ext = path.extname(abs).toLowerCase().replace(/^\./, '');
+                const boundToSource = boundRelSet.has(relPath);
+                let boundToOthers = false;
+                let boundToOwnerRel: string | undefined;
+                const owner = occupancyMap.get(relPath);
+                if (owner && owner !== sourceRelForCompare) {
+                    boundToOthers = true;
+                    boundToOwnerRel = owner;
+                }
+                return {
+                    absPath: abs,
+                    relPath,
+                    name: path.basename(abs),
+                    ext,
+                    boundToSource,
+                    boundToOthers,
+                    boundToOwnerRel,
+                };
+            }).sort((a, b) => a.relPath.localeCompare(b.relPath, 'zh-CN'));
+
+            dbg('open', {
+                direction,
+                sourceRel: sourceRelForCompare,
+                boundRelSet: Array.from(boundRelSet),
+                occupancyEntries: Array.from(occupancyMap.entries()).slice(0, 20),
+                candidateRels: candidates.map(c => ({ rel: c.relPath, boundToSource: c.boundToSource, boundToOthers: c.boundToOthers })),
+            });
+
+            const sourceRelPath = toRelPath(sourceAbsPath, root) || sourceAbsPath;
+            const boundRelArr = Array.from(boundRelSet);
+            const currentBoundRel = boundRelArr.length > 0 ? boundRelArr[0] : undefined;
+            const currentBoundAbs = currentBoundRel ? path.join(root, currentBoundRel) : undefined;
+
+            payload = {
+                direction,
+                sourceAbsPath,
+                sourceRelPath,
+                sourceName: path.basename(sourceAbsPath),
+                scopeTaskName: loc.taskName,
+                candidates,
+                title,
+                targetLabel,
+                currentBoundRel,
+                currentBoundAbs,
+                targetDirAbs,
+            };
+            payloadReady = true;
+
+            // 若 webview 已 ready，则立即发送；否则等待 ready 触发
+            if (readyReceived) {
+                panel.webview.postMessage({ command: 'init', payload });
+            }
+
+            TelemetryService.sendTelemetryEvent('bindDialog.opened', {
+                direction,
+                candidateCount: String(candidates.length),
+                scanMs: String(Date.now() - _openStart),
+            });
+        };
+
         // 消息处理
         panel.webview.onDidReceiveMessage(async (msg: any) => {
             try {
                 if (!msg) return;
                 if (msg.command === 'ready') {
-                    panel.webview.postMessage({ command: 'init', payload });
+                    readyReceived = true;
+                    if (payloadReady && payload) {
+                        panel.webview.postMessage({ command: 'init', payload });
+                    } else {
+                        // 提示前端进入 loading 状态
+                        panel.webview.postMessage({ command: 'loading', message: '正在扫描候选文件...' });
+                    }
                     return;
                 }
                 if (msg.command === 'save') {
                     const selectedAbsPaths: string[] = Array.isArray(msg.selected) ? msg.selected : [];
-                    // 1:1 前置校验（后端 store 也会再校验一次）
                     if (selectedAbsPaths.length > 1) {
                         panel.webview.postMessage({
                             command: 'saveError',
@@ -297,7 +328,9 @@ export class BindDialogProvider {
                             await setCasePoints(sourceAbsPath, selectedAbsPaths);
                         }
                         TelemetryService.sendTelemetryEvent('bindDialog.save.success', {
-                            direction, count: String(selectedAbsPaths.length),
+                            direction,
+                            count: String(selectedAbsPaths.length),
+                            action: selectedAbsPaths.length === 0 ? 'unbind' : 'bind',
                         });
                         this.refreshDecorations();
                         const tip = selectedAbsPaths.length === 0
@@ -309,28 +342,49 @@ export class BindDialogProvider {
                     } catch (err: any) {
                         TelemetryService.sendTelemetryErrorEvent('bindDialog.save.error', {
                             errorMessage: String(err?.message || err).slice(0, 500),
+                            direction,
                         });
                         panel.webview.postMessage({ command: 'saveError', message: err?.message || String(err) });
                     }
                     return;
                 }
                 if (msg.command === 'cancel') {
+                    TelemetryService.sendTelemetryEvent('bindDialog.cancel', { direction });
                     panel.dispose();
                     return;
                 }
                 if (msg.command === 'reveal' && typeof msg.absPath === 'string') {
                     try {
                         await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(msg.absPath));
+                        TelemetryService.sendTelemetryEvent('bindDialog.reveal', { direction });
+                    } catch { /* ignore */ }
+                    return;
+                }
+                if (msg.command === 'openTargetDir' && typeof msg.absPath === 'string') {
+                    // 空态时"打开目录"按钮：在资源管理器中定位目录本身
+                    try {
+                        await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(msg.absPath));
+                        TelemetryService.sendTelemetryEvent('bindDialog.openTargetDir', { direction });
                     } catch { /* ignore */ }
                     return;
                 }
             } catch (err: any) {
                 console.error('[BindDialog] 消息处理异常:', err?.message || err);
+                TelemetryService.sendTelemetryErrorEvent('bindDialog.messageError', {
+                    errorMessage: String(err?.message || err).slice(0, 500),
+                });
             }
         });
 
-        TelemetryService.sendTelemetryEvent('bindDialog.opened', {
-            direction, candidateCount: String(candidates.length),
+        // 触发异步扫描（不 await，避免阻塞返回；出错也上报）
+        buildPayload().catch(err => {
+            TelemetryService.sendTelemetryErrorEvent('bindDialog.scanError', {
+                errorMessage: String(err?.message || err).slice(0, 500),
+            });
+            panel.webview.postMessage({
+                command: 'saveError',
+                message: `扫描失败：${err?.message || err}`,
+            });
         });
     }
 

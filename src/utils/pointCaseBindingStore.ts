@@ -174,9 +174,28 @@ export function loadBindings(root: string): PointCaseBindingsFile {
 /**
  * 写入绑定文件（自动创建目录）。
  * 写完后刷新缓存。
+ *
+ * expectedMtimeMs 用于乐观锁：若提供且当前磁盘 mtime 与之不一致，
+ * 说明期间被其它进程/窗口改动，抛出 ConcurrentWriteError 让上层决定重试或提示。
  */
-export async function saveBindings(root: string, data: PointCaseBindingsFile): Promise<void> {
+export class ConcurrentWriteError extends Error {
+    constructor(msg: string) { super(msg); this.name = 'ConcurrentWriteError'; }
+}
+
+export async function saveBindings(root: string, data: PointCaseBindingsFile, expectedMtimeMs?: number): Promise<void> {
     const filePath = await ensureStoreFile(root);
+    // 乐观锁：写前重新 stat，与调用者读到的基线对比
+    if (typeof expectedMtimeMs === 'number') {
+        try {
+            const stat = fs.statSync(filePath);
+            if (stat.mtimeMs !== expectedMtimeMs) {
+                throw new ConcurrentWriteError('绑定文件已被其它进程改动，请刷新后重试');
+            }
+        } catch (e) {
+            if (e instanceof ConcurrentWriteError) throw e;
+            // ENOENT 或其它 → 视为无基线，继续写入
+        }
+    }
     const normalized: PointCaseBindingsFile = {
         version: CURRENT_VERSION,
         bindings: (data.bindings || [])
@@ -194,10 +213,28 @@ export async function saveBindings(root: string, data: PointCaseBindingsFile): P
     } catch { /* ignore */ }
 }
 
+/** 读取绑定文件的同时返回当前磁盘 mtime（用于乐观锁基线）。
+ *  若文件不存在，会先 ensureStoreFile 建空文件，让基线 mtime 与后续 saveBindings 检查值一致。
+ */
+export async function loadBindingsWithMtime(root: string): Promise<{ data: PointCaseBindingsFile; mtimeMs: number }> {
+    const filePath = getStoreFilePath(root);
+    try {
+        await fs.promises.access(filePath, fs.constants.F_OK);
+    } catch {
+        await ensureStoreFile(root);
+    }
+    const data = loadBindings(root);
+    let mtimeMs = 0;
+    try { mtimeMs = fs.statSync(filePath).mtimeMs; } catch { /* ignore */ }
+    return { data, mtimeMs };
+}
+
 /** 清除某工作区的缓存（供外部监听器调用） */
 export function clearCache(root?: string): void {
     if (root) cacheByRoot.delete(root);
     else cacheByRoot.clear();
+    // 同步失效装饰器的全局映射（避免装饰器读到过时数据）
+    invalidateGlobalBoundFileMap();
 }
 
 // ============================================
@@ -279,7 +316,7 @@ export async function setPointCases(pointAbsPath: string, caseAbsPaths: string[]
         if (cr) caseRels.push(cr);
     }
 
-    const data = loadBindings(root);
+    const { data, mtimeMs } = await loadBindingsWithMtime(root);
 
     // 1:1 占用校验：若目标 case 已被其他 point 占用，则拒绝
     for (const cr of caseRels) {
@@ -302,7 +339,8 @@ export async function setPointCases(pointAbsPath: string, caseAbsPaths: string[]
             data.bindings[idx].updatedAt = Date.now();
         }
     }
-    await saveBindings(root, data);
+    await saveBindings(root, data, mtimeMs);
+    invalidateGlobalBoundFileMap();
 }
 
 /**
@@ -333,7 +371,7 @@ export async function setCasePoints(caseAbsPath: string, pointAbsPaths: string[]
         if (pr) newPointRels.push(pr);
     }
 
-    const data = loadBindings(root);
+    const { data, mtimeMs } = await loadBindingsWithMtime(root);
 
     // 1:1 占用校验：若目标 point 已经绑定了其它非空 case（且不是当前 caseRel），则拒绝
     for (const pr of newPointRels) {
@@ -363,7 +401,8 @@ export async function setCasePoints(caseAbsPath: string, pointAbsPaths: string[]
     }
     // 清理空 point 记录
     data.bindings = data.bindings.filter(b => b.cases.length > 0);
-    await saveBindings(root, data);
+    await saveBindings(root, data, mtimeMs);
+    invalidateGlobalBoundFileMap();
 }
 
 /**
@@ -414,6 +453,67 @@ export function buildPointOccupancyMap(root: string): Map<string, string> {
 }
 
 /**
+ * 【装饰器高性能路径】构建"某工作区所有已绑定文件"的绝对路径 → 元信息映射，
+ * 供 provideFileDecoration O(1) 查询。value 中区分角色：
+ *   role='point'  → 该文件是要点，boundToRel 是其绑定的案例相对路径
+ *   role='case'   → 该文件是案例，boundToRel 是其绑定的要点相对路径
+ */
+export interface BoundFileMeta {
+    role: 'point' | 'case';
+    /** 对端相对路径 */
+    boundToRel: string;
+    /** 对端文件名（用于 tooltip 展示） */
+    boundToName: string;
+}
+
+export function buildBoundFileMap(root: string): Map<string, BoundFileMeta> {
+    const data = loadBindings(root);
+    const m = new Map<string, BoundFileMeta>();
+    for (const b of data.bindings) {
+        if (!b.point || b.cases.length === 0) continue;
+        const caseRel = b.cases[0]; // 1:1
+        const pointAbs = toAbsPath(root, b.point);
+        const caseAbs = toAbsPath(root, caseRel);
+        m.set(toPosix(pointAbs), {
+            role: 'point',
+            boundToRel: caseRel,
+            boundToName: path.basename(caseRel),
+        });
+        m.set(toPosix(caseAbs), {
+            role: 'case',
+            boundToRel: b.point,
+            boundToName: path.basename(b.point),
+        });
+    }
+    return m;
+}
+
+/**
+ * 全工作区聚合的 O(1) 装饰器映射（跨多个 workspaceFolder）。
+ * key: POSIX 绝对路径。
+ */
+let globalBoundFileMapCache: { data: Map<string, BoundFileMeta>; builtAt: number } | null = null;
+const GLOBAL_MAP_TTL_MS = 5_000; // 装饰器高频调用，用短 TTL 削峰
+
+export function getGlobalBoundFileMap(force = false): Map<string, BoundFileMeta> {
+    const now = Date.now();
+    if (!force && globalBoundFileMapCache && (now - globalBoundFileMapCache.builtAt) < GLOBAL_MAP_TTL_MS) {
+        return globalBoundFileMapCache.data;
+    }
+    const merged = new Map<string, BoundFileMeta>();
+    for (const r of getWorkspaceRoots()) {
+        const m = buildBoundFileMap(r);
+        for (const [k, v] of m.entries()) merged.set(k, v);
+    }
+    globalBoundFileMapCache = { data: merged, builtAt: now };
+    return merged;
+}
+
+export function invalidateGlobalBoundFileMap(): void {
+    globalBoundFileMapCache = null;
+}
+
+/**
  * 返回该工作区内所有涉及绑定的文件路径集合（绝对路径），供装饰器批量刷新。
  */
 export function getAllBoundFilePaths(root: string): string[] {
@@ -425,6 +525,102 @@ export function getAllBoundFilePaths(root: string): string[] {
         for (const c of b.cases) set.add(toAbsPath(root, c));
     }
     return Array.from(set);
+}
+
+// ============================================
+// 文件级增量维护接口（供 workspace 监听器调用）
+// ============================================
+
+/**
+ * 文件重命名/移动时同步更新绑定库。
+ * 若旧路径出现在 point 或 cases 中，一并替换成新相对路径。
+ * 返回是否实际修改了绑定库。
+ */
+export async function renamePathInBindings(oldAbs: string, newAbs: string): Promise<boolean> {
+    const oldRoot = findWorkspaceRootFor(oldAbs);
+    const newRoot = findWorkspaceRootFor(newAbs);
+    if (!oldRoot) return false;
+    // 允许跨工作区移动？为简单起见，若新旧不同 root 视为删除+新增（当前实现：仅在同一 root 时更新）
+    if (newRoot !== oldRoot) {
+        // 视为删除
+        return removePathInBindings(oldAbs);
+    }
+    const oldRel = toRelPath(oldAbs, oldRoot);
+    const newRel = toRelPath(newAbs, oldRoot);
+    if (!oldRel || !newRel || oldRel === newRel) return false;
+
+    const { data, mtimeMs } = await loadBindingsWithMtime(oldRoot);
+    let changed = false;
+    for (const b of data.bindings) {
+        if (b.point === oldRel) {
+            b.point = newRel;
+            b.updatedAt = Date.now();
+            changed = true;
+        }
+        const idx = b.cases.indexOf(oldRel);
+        if (idx !== -1) {
+            b.cases[idx] = newRel;
+            b.updatedAt = Date.now();
+            changed = true;
+        }
+    }
+    if (!changed) return false;
+    try {
+        await saveBindings(oldRoot, data, mtimeMs);
+    } catch (e: any) {
+        // 冲突时重试一次（不用乐观锁基线）
+        if (e && e.name === 'ConcurrentWriteError') {
+            await saveBindings(oldRoot, data);
+        } else {
+            throw e;
+        }
+    }
+    invalidateGlobalBoundFileMap();
+    return true;
+}
+
+/**
+ * 文件被删除时同步清理绑定库中所有引用。
+ * 返回是否实际修改了绑定库。
+ */
+export async function removePathInBindings(absPath: string): Promise<boolean> {
+    const root = findWorkspaceRootFor(absPath);
+    if (!root) return false;
+    const rel = toRelPath(absPath, root);
+    if (!rel) return false;
+
+    const { data, mtimeMs } = await loadBindingsWithMtime(root);
+    let changed = false;
+    // 1) 删掉所有 point === rel 的整条记录
+    const before1 = data.bindings.length;
+    data.bindings = data.bindings.filter(b => b.point !== rel);
+    if (data.bindings.length !== before1) changed = true;
+    // 2) 从 cases 中剔除
+    for (const b of data.bindings) {
+        const before2 = b.cases.length;
+        b.cases = b.cases.filter(c => c !== rel);
+        if (b.cases.length !== before2) {
+            b.updatedAt = Date.now();
+            changed = true;
+        }
+    }
+    // 3) 清空 cases 的 point 记录一并删除
+    const before3 = data.bindings.length;
+    data.bindings = data.bindings.filter(b => b.cases.length > 0);
+    if (data.bindings.length !== before3) changed = true;
+
+    if (!changed) return false;
+    try {
+        await saveBindings(root, data, mtimeMs);
+    } catch (e: any) {
+        if (e && e.name === 'ConcurrentWriteError') {
+            await saveBindings(root, data);
+        } else {
+            throw e;
+        }
+    }
+    invalidateGlobalBoundFileMap();
+    return true;
 }
 
 /**

@@ -706,8 +706,13 @@ async function stepResolveTaskInfo(ctx: PushContext): Promise<{ testTaskNo: stri
     return result.taskInfo;
 }
 
-/** step 1：贴 __rowIndex（浅注入，不改变行引用）。 */
-function stampRowIndex(rows: RowLike[], resolveRowIndex: (i: number) => number): RowLike[] {
+/**
+ * step 1：贴 __rowIndex（浅注入，不改变行引用）。
+ *
+ * 导出仅供测试用（ν 修复回归）：验证浅注入不改变行引用、幂等（已有 __rowIndex 不覆盖）、
+ * 对非对象行安全跳过。生产代码请勿在本文件外调用。
+ */
+export function stampRowIndex(rows: RowLike[], resolveRowIndex: (i: number) => number): RowLike[] {
     return rows.map((r, i) => {
         if (r && typeof r === 'object' && (r as any)[ROW_INDEX_META] === undefined) {
             (r as any)[ROW_INDEX_META] = resolveRowIndex(i);

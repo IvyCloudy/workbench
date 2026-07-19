@@ -42,6 +42,7 @@ import { openOrCreateHeaderLabelsSettings } from './utils/headerLabels';
 import { initYamlDiagnostics } from './utils/yamlValidator';
 import { registerYamlValidation, disposeYamlValidation } from './handlers/yamlValidationHandler';
 import { registerYamlPreOpenInterceptor } from './handlers/yamlPreOpenInterceptor';
+import { handleLinkerDiagnostic, handleViewLinkedCases } from './handlers/linkerDiagnosticHandler';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
@@ -353,6 +354,34 @@ export async function activate(context: vscode.ExtensionContext) {
                 } catch (err: any) {
                     TelemetryService.sendTelemetryErrorEvent('jumpToBoundPoint.commandError', telemetryErrProps(err));
                     showToast(undefined, 'error', `跳转失败: ${err.message || err}`);
+                }
+            }
+        ),
+
+        // ---- 关联匹配诊断（命令面板独立入口，不改动任何 UI/存储） ----
+        vscode.commands.registerCommand(
+            'testcaseViewer.diagnosticLinker',
+            async () => {
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.diagnosticLinker' });
+                try {
+                    await handleLinkerDiagnostic();
+                } catch (err: any) {
+                    TelemetryService.sendTelemetryErrorEvent('diagnosticLinker.commandError', telemetryErrProps(err));
+                    showToast(undefined, 'error', `诊断失败: ${err.message || err}`);
+                }
+            }
+        ),
+
+        // ---- 查看关联案例（右键测试要点 .md 一键触发，Output 打印） ----
+        vscode.commands.registerCommand(
+            'testcaseViewer.viewLinkedCases',
+            async (uri: vscode.Uri) => {
+                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.viewLinkedCases' });
+                try {
+                    await handleViewLinkedCases(uri);
+                } catch (err: any) {
+                    TelemetryService.sendTelemetryErrorEvent('viewLinkedCases.commandError', telemetryErrProps(err));
+                    showToast(undefined, 'error', `查看关联案例失败: ${err.message || err}`);
                 }
             }
         ),

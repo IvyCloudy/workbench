@@ -175,6 +175,18 @@
         "title": "YAML · 更多修复操作...",
         "icon": "$(wrench)",
         "category": "YAML"
+      },
+      {
+        "command": "testcaseViewer.diagnosticLinker",
+        "title": "诊断：测试要点 ⇄ 案例 关联匹配",
+        "icon": "$(debug-console)",
+        "category": "测试案例"
+      },
+      {
+        "command": "testcaseViewer.viewLinkedCases",
+        "title": "查看关联案例",
+        "icon": "$(list-tree)",
+        "category": "测试案例"
       }
     ],
     "menus": {
@@ -210,6 +222,11 @@
           "command": "testcaseViewer.jumpToBoundCase",
           "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试大纲[\\\\/].+\\.(md|xmind)$/i",
           "group": "2_workspace@4b"
+        },
+        {
+          "command": "testcaseViewer.viewLinkedCases",
+          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试大纲[\\\\/].+\\.md$/i",
+          "group": "2_workspace@4c"
         },
         {
           "command": "testcaseViewer.bindTestPoints",
@@ -277,6 +294,10 @@
         },
         {
           "command": "testcaseViewer.jumpToBoundPoint",
+          "when": "false"
+        },
+        {
+          "command": "testcaseViewer.viewLinkedCases",
           "when": "false"
         }
       ],

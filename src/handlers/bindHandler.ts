@@ -125,14 +125,30 @@ async function offerBindDialog(uri: vscode.Uri, direction: BindDirection, provid
 }
 
 /**
+ * 从当前活动编辑器 / tab 兑底取 uri（兼容自定义编辑器）。
+ * 仅当命令未从右键传入 uri 时使用，例如从命令面板、状态栏按钮触发。
+ */
+function fallbackUriFromActive(): vscode.Uri | undefined {
+    try {
+        const fromEditor = vscode.window.activeTextEditor?.document?.uri;
+        if (fromEditor) return fromEditor;
+        const activeTab = vscode.window.tabGroups?.activeTabGroup?.activeTab;
+        const input: any = activeTab?.input;
+        if (input?.uri) return input.uri as vscode.Uri;
+    } catch (_) { /* ignore */ }
+    return undefined;
+}
+
+/**
  * 右键 .md/.xmind → "跳转到已绑定的测试案例"
  */
 export async function handleJumpToBoundCase(
     uri: vscode.Uri,
     provider: BindDialogProvider,
 ): Promise<void> {
+    if (!uri) uri = fallbackUriFromActive() as vscode.Uri;
     if (!uri) {
-        showToast(undefined, 'warning', '请在资源管理器中右键测试要点文件（.md/.xmind）');
+        showToast(undefined, 'warning', '请先打开一个测试要点文件（.md / .xmind）');
         return;
     }
     const ext = extOf(uri);
@@ -162,8 +178,9 @@ export async function handleJumpToBoundPoint(
     uri: vscode.Uri,
     provider: BindDialogProvider,
 ): Promise<void> {
+    if (!uri) uri = fallbackUriFromActive() as vscode.Uri;
     if (!uri) {
-        showToast(undefined, 'warning', '请在资源管理器中右键测试案例文件（.csv/.yaml/.json）');
+        showToast(undefined, 'warning', '请先打开一个测试案例文件（.csv / .yaml / .json）');
         return;
     }
     const ext = extOf(uri);

@@ -16,18 +16,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { getAllBoundItems, getAllBoundFolderPaths, clearBindingsCache, type CurrentTask } from '../utils/taskInfoStore';
 import {
-    getAllBoundFilePaths as getAllPointCaseBoundFiles,
-    getWorkspaceRoots as getPCBWorkspaceRoots,
-    getStoreFilePath as getPCBStorePath,
     clearCache as clearPointCaseBindingCache,
-    isPathBound as isPointCaseBound,
-    getBoundCasesOfPoint,
-    getBoundPointsOfCase,
     getGlobalBoundFileMap,
     invalidateGlobalBoundFileMap,
-    loadBindings as loadPCBBindings,
-    findWorkspaceRootFor as findPCBRoot,
-    toRelPath as toPCBRelPath,
 } from '../utils/pointCaseBindingStore';
 import { TelemetryService } from '../utils/telemetry';
 
@@ -200,80 +191,6 @@ class BindTasksTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
 const bindTasksTreeProvider = new BindTasksTreeProvider();
 
 // ============================================
-// 「测试要点↔案例 绑定」总览 TreeView
-// ============================================
-
-class PointCaseBindingsTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
-    private _onDidChange = new vscode.EventEmitter<vscode.TreeItem | undefined | void>();
-    readonly onDidChangeTreeData = this._onDidChange.event;
-
-    refresh() { this._onDidChange.fire(); }
-
-    getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
-        return element;
-    }
-
-    getChildren(element?: vscode.TreeItem): vscode.TreeItem[] {
-        // 顶级：列出所有 point，二级：其绑定的 case
-        const roots = getPCBWorkspaceRoots();
-        if (roots.length === 0) return [];
-
-        if (!element) {
-            // 顶级：遍历所有 workspace root 里的 bindings
-            const items: vscode.TreeItem[] = [];
-            for (const root of roots) {
-                const data = loadPCBBindings(root);
-                for (const b of data.bindings) {
-                    if (!b.point || b.cases.length === 0) continue;
-                    const pointAbs = path.join(root, b.point);
-                    const label = `📄 ${path.basename(b.point)}`;
-                    const ti = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Expanded);
-                    ti.description = b.point;
-                    ti.tooltip = `测试要点\n${pointAbs}`;
-                    ti.contextValue = 'pcbPoint';
-                    ti.resourceUri = vscode.Uri.file(pointAbs);
-                    (ti as any)._pcbRoot = root;
-                    (ti as any)._pcbBinding = b;
-                    ti.command = {
-                        command: 'testcaseViewer.pcb.revealFile',
-                        title: '定位',
-                        arguments: [pointAbs],
-                    };
-                    items.push(ti);
-                }
-            }
-            if (items.length === 0) {
-                const empty = new vscode.TreeItem('（暂无绑定关系）', vscode.TreeItemCollapsibleState.None);
-                empty.tooltip = '在测试大纲的 md/xmind 或测试案例的 csv/yaml/json 上右键即可创建绑定';
-                return [empty];
-            }
-            return items;
-        }
-
-        // 二级：point 的 case
-        const b = (element as any)._pcbBinding;
-        const root = (element as any)._pcbRoot;
-        if (!b || !root) return [];
-        return (b.cases || []).map((caseRel: string) => {
-            const caseAbs = path.join(root, caseRel);
-            const child = new vscode.TreeItem(`📎 ${path.basename(caseRel)}`, vscode.TreeItemCollapsibleState.None);
-            child.description = caseRel;
-            child.tooltip = `测试案例\n${caseAbs}`;
-            child.contextValue = 'pcbCase';
-            child.resourceUri = vscode.Uri.file(caseAbs);
-            child.command = {
-                command: 'testcaseViewer.pcb.revealFile',
-                title: '定位',
-                arguments: [caseAbs],
-            };
-            return child;
-        });
-    }
-}
-
-const pointCaseBindingsTreeProvider = new PointCaseBindingsTreeProvider();
-
-// ============================================
 // revealBoundTask 命令（点击面板跳转并展开）
 // ============================================
 
@@ -349,37 +266,7 @@ export function registerBindTaskFeatures(context: vscode.ExtensionContext): vsco
     // 3. revealBoundTask 命令
     disposables.push(registerRevealBoundTaskCommand());
 
-    // 3b. 「测试要点↔案例 绑定」总览 TreeView
-    const pcbTreeView = vscode.window.createTreeView('pointCaseBindings', {
-        treeDataProvider: pointCaseBindingsTreeProvider,
-    });
-    disposables.push(pcbTreeView);
-    disposables.push(
-        pcbTreeView.onDidChangeVisibility(e => {
-            if (e.visible) {
-                clearPointCaseBindingCache();
-                pointCaseBindingsTreeProvider.refresh();
-            }
-        })
-    );
-    // 定位命令（用于 TreeView 单击）
-    disposables.push(
-        vscode.commands.registerCommand('testcaseViewer.pcb.revealFile', async (absPath: string) => {
-            if (!absPath) return;
-            try {
-                await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(absPath));
-                TelemetryService.sendTelemetryEvent('command.executed', {
-                    command: 'testcaseViewer.pcb.revealFile',
-                });
-            } catch (err: any) {
-                TelemetryService.sendTelemetryErrorEvent('pcb.revealFile.error', {
-                    errorMessage: String(err?.message || err).slice(0, 500),
-                });
-            }
-        })
-    );
-
-    // 4. 监听绑定文件变更，自动刷新装饰器 + TreeView
+    // 4. 监听绑定文件变更，自动刷新装饰器与任务 TreeView
     disposables.push(
         vscode.workspace.onDidSaveTextDocument(doc => {
             const p = doc.uri.fsPath.replace(/\\/g, '/');
@@ -392,18 +279,16 @@ export function registerBindTaskFeatures(context: vscode.ExtensionContext): vsco
                 TelemetryService.sendTelemetryEvent('pointCaseBindings.fileChanged', {});
                 clearPointCaseBindingCache();
                 taskFolderDecorationProvider.refresh();
-                pointCaseBindingsTreeProvider.refresh();
             }
         })
     );
 
-    // 5. 监听 point-case 绑定文件的外部改动（非文本编辑器保存路径，例如 fs 直接写）
+    // 5. 监听 point-case 绑定文件的外部改动（非文本编辑器保存路径，例如 fs 直接写），刷新装饰器
     try {
         const pcbWatcher = vscode.workspace.createFileSystemWatcher('**/.plugin/.tms/point-case-bindings.json');
         const onChange = () => {
             clearPointCaseBindingCache();
             taskFolderDecorationProvider.refresh();
-            pointCaseBindingsTreeProvider.refresh();
         };
         pcbWatcher.onDidChange(onChange);
         pcbWatcher.onDidCreate(onChange);
@@ -426,6 +311,5 @@ export function refreshBindDecorations(): void {
         clearPointCaseBindingCache();
         taskFolderDecorationProvider.refresh();
         bindTasksTreeProvider.refresh();
-        pointCaseBindingsTreeProvider.refresh();
     } catch (_) { /* ignore */ }
 }

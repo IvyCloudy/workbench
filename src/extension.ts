@@ -25,6 +25,7 @@ import { TableBrowserProvider } from './providers/TableBrowserProvider';
 import { TestCaseProvider } from './providers/TestCaseProvider';
 import { UnifiedEditorProvider } from './providers/UnifiedEditorProvider';
 import { registerBindTaskFeatures, refreshBindDecorations } from './providers/BindTaskProvider';
+import { registerBindStatusBar, refreshBindStatusBar } from './providers/BindStatusBarProvider';
 import { BindDialogProvider } from './providers/BindDialogProvider';
 import { handleBindCases, handleBindPoints, handleJumpToBoundCase, handleJumpToBoundPoint } from './handlers/bindHandler';
 import { showModal, showToast } from './utils/message';
@@ -73,7 +74,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // 注册核心功能
     const bindTaskDisposables = registerBindTaskFeatures(context);
-    const bindDialogProvider = new BindDialogProvider(context.extensionUri, context, () => refreshBindDecorations());
+    const bindStatusBarDisposables = registerBindStatusBar();
+    const bindDialogProvider = new BindDialogProvider(context.extensionUri, context, () => { refreshBindDecorations(); refreshBindStatusBar(); });
     const tableBrowserProvider = new TableBrowserProvider(context.extensionUri, context);
     const testCaseProvider = new TestCaseProvider(context.extensionUri, context);
     const unifiedEditorProvider = new UnifiedEditorProvider(context.extensionUri, context);
@@ -89,6 +91,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         ...bindTaskDisposables,
+        ...bindStatusBarDisposables,
         ...workspaceListeners,
         tabChangeListener,
         yamlPreOpenInterceptor,

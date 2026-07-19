@@ -219,11 +219,6 @@
           "group": "2_workspace@4"
         },
         {
-          "command": "testcaseViewer.jumpToBoundCase",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试大纲[\\\\/].+\\.(md|xmind)$/i",
-          "group": "2_workspace@4b"
-        },
-        {
           "command": "testcaseViewer.viewLinkedCases",
           "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试大纲[\\\\/].+\\.md$/i",
           "group": "2_workspace@4c"
@@ -232,11 +227,6 @@
           "command": "testcaseViewer.bindTestPoints",
           "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i",
           "group": "2_workspace@5"
-        },
-        {
-          "command": "testcaseViewer.jumpToBoundPoint",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i",
-          "group": "2_workspace@5b"
         }
       ],
       "commandPalette": [
@@ -289,14 +279,6 @@
           "when": "false"
         },
         {
-          "command": "testcaseViewer.jumpToBoundCase",
-          "when": "false"
-        },
-        {
-          "command": "testcaseViewer.jumpToBoundPoint",
-          "when": "false"
-        },
-        {
           "command": "testcaseViewer.viewLinkedCases",
           "when": "false"
         }
@@ -328,10 +310,6 @@
         {
           "id": "boundTasks",
           "name": "已绑定任务"
-        },
-        {
-          "id": "pointCaseBindings",
-          "name": "要点⇄案例 绑定"
         }
       ]
     },

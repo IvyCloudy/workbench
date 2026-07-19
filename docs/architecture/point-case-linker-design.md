@@ -567,16 +567,132 @@ flowchart TD
 
 ## 八、埋点事件（关联案例部分）
 
-| 事件 | 触发点 | 用途 |
+### 8.1 事件全景
+
+按发出方分为三层，各事件间通过 `mdFile` / `caseFile` / `fileExt` 关联串起完整链路：
+
+```
+┌───────────── 应用层（linkerDiagnosticHandler.ts） ─────────────┐
+│  viewLinkedCases.done            右键"查看关联案例"结束（成功/失败均发） │
+│  viewLinkedCases.error           右键路径出现 errorMsg（Error 事件）  │
+│  linkerDiagnostic.done           命令面板诊断完成                     │
+│  linkerDiagnostic.linkerError    命令面板诊断遇到 errorMsg（Error）   │
+└────────────────────────────────────────────────────────────────┘
+                     │ 每次 linkPointsToCases 调用都会级联下面 1~3 个事件
+                     ▼
+┌───────────── 引擎层（pointCaseLinker.ts） ─────────────────────┐
+│  pointCaseLinker.done            单文件匹配完成（必发）               │
+│  pointCaseLinker.duplicatePointId 输入含重复 pointId（Error，条件发）  │
+│  pointCaseLinker.multiHitCase    同 case 被多点命中（Error，条件发）   │
+│  pointCaseLinker.fileError       预留：批量下单文件解析失败            │
+└────────────────────────────────────────────────────────────────┘
+```
+
+> **约定**：`sendTelemetryEvent` 用于正常业务事件；`sendTelemetryErrorEvent` 用于错误/告警事件（后端告警面板会单独观察）。所有字段均为 **String 类型**（Telemetry SDK 要求）。
+
+### 8.2 事件字段详表
+
+#### `viewLinkedCases.done`（应用层 · 正常事件）
+**位置**：[linkerDiagnosticHandler.ts:176](../../src/handlers/linkerDiagnosticHandler.ts) · `handleViewLinkedCases` 出口
+**触发**：右键"查看关联案例"命令**每次**结束（含 `errorMsg` 的失败路径）
+
+| 字段 | 类型 | 含义 | 备注 |
+|---|---|---|---|
+| `mdFile` | string | 测试要点 md 的**文件名**（不含目录） | `path.basename(mdPath)`，避免全路径泄露 |
+| `totalRecords` | string | 案例文件解析出的总记录数 | 来自 `envelope.stats.totalRecords`，未匹配路径为 `"0"` |
+| `matched` | string | 命中的记录数 | = `envelope.total` |
+| `pointCount` | string | 输出 `data` 里的 point 键数 | 反映"实际有命中案例的要点数" |
+
+#### `viewLinkedCases.error`（应用层 · 错误事件）
+**位置**：[linkerDiagnosticHandler.ts:155](../../src/handlers/linkerDiagnosticHandler.ts)
+**触发**：`envelope.errorMsg` 非空时同步发出（与 `.done` **并存**，非二选一）
+
+| 字段 | 类型 | 含义 |
 |---|---|---|
-| `viewLinkedCases.done` | 右键查看结束（无论成败） | 观测使用频次、命中率、耗时（字段 `pointCount`） |
-| `viewLinkedCases.error` | 出现 `errorMsg` | 定位失败模式（未绑定/解析失败/文件缺失/非 md 后缀） |
-| `linkerDiagnostic.done` | 命令面板诊断完成 | 观测诊断工具使用情况（字段 `pointCount`） |
-| `linkerDiagnostic.linkerError` | 诊断流程中引擎抛错 | 收集引擎侧异常 |
-| `pointCaseLinker.done` | 每次单文件匹配 | 观测匹配分档分布 |
-| `pointCaseLinker.duplicatePointId` | 输入含重复 pointId | 治理测试大纲数据质量 |
-| `pointCaseLinker.multiHitCase` | 同 case 被多个 point 命中 | 治理案例侧数据质量 |
-| `pointCaseLinker.fileError` | 批量下单文件解析失败（预留） | 定位坏文件 |
+| `errorMsg` | string | envelope 的错误原文，用于枚举失败模式（未绑定 / 非 md / 案例文件缺失 / 引擎抛错 …） |
+
+#### `linkerDiagnostic.done`（应用层 · 正常事件）
+**位置**：[linkerDiagnosticHandler.ts:593](../../src/handlers/linkerDiagnosticHandler.ts) · `handleLinkerDiagnostic` 出口
+**触发**：命令面板"关联匹配诊断"流程完整走完
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `mdFile` | string | md 文件名 |
+| `caseFile` | string | 用户选择的案例文件名 |
+| `pointCount` | string | 从 md 解析出的 point 数量 |
+| `totalRecords` | string | 案例文件总记录数 |
+| `matched` | string | 命中的记录数 |
+| `elapsedMs` | string | 端到端耗时（ms） |
+
+#### `linkerDiagnostic.linkerError`（应用层 · 错误事件）
+**位置**：[linkerDiagnosticHandler.ts:544](../../src/handlers/linkerDiagnosticHandler.ts)
+**触发**：诊断流程中 envelope 出现 `errorMsg`
+**字段**：使用 `telemetryErrProps(new Error(envelope.errorMsg))` 展开，包含 `stack` / `message` 等标准 Error 属性。
+
+#### `pointCaseLinker.done`（引擎层 · 正常事件）
+**位置**：[pointCaseLinker.ts:639](../../src/utils/pointCaseLinker.ts) · `emitTelemetry`
+**触发**：**每次** `linkPointsToCases` 匹配完成（应用层每次调用都会发一次）
+
+| 字段 | 类型 | 含义 | 备注 |
+|---|---|---|---|
+| `fileExt` | string | 案例文件扩展名 | `.yaml` / `.yml` / `.json` / `.csv` |
+| `pointCount` | string | 传入的 pointList 长度 | |
+| `totalRecords` | string | 案例文件解析后的总记录数 | |
+| `matchedRecords` | string | 至少命中一次的记录数 | |
+| `orphanRecords` | string | 完全未命中的记录数（既没 parent_id 也没 path 命中） | 关键治理指标 |
+| `type1` | string | type=1（parent_id + path 同点）命中数 | 最强匹配 |
+| `type2` | string | type=2（仅 parent_id 命中）命中数 | |
+| `type3` | string | type=3（仅 path 兜底）命中数 | **中文 CSV 场景的默认档位** |
+| `strippedParentIds` | string | 触发 `-N` 尾号剥离规则的记录数 | 用于观察 parent_id 拆分行为占比 |
+
+#### `pointCaseLinker.duplicatePointId`（引擎层 · 错误事件，条件发）
+**位置**：[pointCaseLinker.ts:651](../../src/utils/pointCaseLinker.ts)
+**触发**：`result.stats.duplicatePointIds.length > 0`
+
+| 字段 | 含义 |
+|---|---|
+| `fileExt` | 案例文件扩展名 |
+| `dupCount` | 重复 pointId 的种类数 |
+
+#### `pointCaseLinker.multiHitCase`（引擎层 · 错误事件，条件发）
+**位置**：[pointCaseLinker.ts:657](../../src/utils/pointCaseLinker.ts)
+**触发**：`result.stats.multiHitCases.length > 0`（同一 testcase_id 被多个 point 命中）
+
+| 字段 | 含义 |
+|---|---|
+| `fileExt` | 案例文件扩展名 |
+| `caseCount` | 跨点重命中的 case 数量 |
+
+#### `pointCaseLinker.fileError`（引擎层 · 错误事件，预留）
+**位置**：[pointCaseLinker.ts:394](../../src/utils/pointCaseLinker.ts) · `linkPointsToCasesBatch` 中
+**触发**：**当前 1:1 语义下不会发出**，为批量并发版本预留。放开 1:1 约束后每个坏文件产生一条。
+
+### 8.3 常用观测视角
+
+| 目标 | 观测方式 |
+|---|---|
+| **功能使用频次** | `viewLinkedCases.done` count / 用户 / 天 |
+| **失败率** | `viewLinkedCases.error` count ÷ `viewLinkedCases.done` count |
+| **失败模式分布** | `viewLinkedCases.error` 按 `errorMsg` 归类（未绑定 / 非 md / 引擎抛错 …） |
+| **匹配质量档位分布** | `pointCaseLinker.done` 按 `fileExt` 分组，看 `type1:type2:type3` 比例 |
+| **中文 CSV 用户占比** | `pointCaseLinker.done` 中 `fileExt=".csv"` 且 `type3 > 0 && type1 == 0` 的占比 |
+| **数据质量长期告警** | `pointCaseLinker.duplicatePointId` + `pointCaseLinker.multiHitCase` 的日均量 |
+| **性能观测** | `linkerDiagnostic.done` 的 `elapsedMs` 分位数（P50/P95/P99） |
+| **孤儿记录率** | `pointCaseLinker.done` 的 `orphanRecords ÷ totalRecords`，>50% 提示 md/case 大纲脱节 |
+
+### 8.4 中文 CSV 场景埋点解读
+
+由于中文 CSV 模板缺 `parent_id` 列，`pointCaseLinker.done` 会呈现固定形态，**不属于异常**：
+
+```
+fileExt = ".csv"
+type1 = "0"
+type2 = "0"
+type3 = "N"     ← 全部落到 path 兜底
+strippedParentIds = "0"
+```
+
+若观测到 CSV 用户的 `orphanRecords / totalRecords` 显著偏高，说明用户模板里连"路径"列也缺失或格式不匹配，可作为**产品侧引导补列**的信号。
 
 ---
 

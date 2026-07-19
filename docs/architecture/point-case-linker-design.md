@@ -313,6 +313,65 @@ export async function linkAndAggregateCases(
 3. **`filePath` 挂在 item 上**：让 UI 端可以追溯每条案例的来源。
 4. **异常边界收敛**：引擎抛错时以 envelope 形式返回，调用方永远不需要 try/catch。
 5. **脏数据信号透出**：把引擎的 `duplicatePointIds` / `multiHitCases` 透传到 `stats`，供上层做数据质量治理提示。
+6. **中文表头 CSV 兼容**：在调引擎前调用 `detectCsvHeaderOptions(filePath)`，把 `LinkOptions` 的字段名指向中文列，详见 §5.2.1。
+
+---
+
+### 5.2.1 中文表头 CSV 兼容 `detectCsvHeaderOptions`
+
+**位置**：[linkerDiagnosticHandler.ts](../../src/handlers/linkerDiagnosticHandler.ts)
+**定位**：轻量嗅探函数，仅在应用层生效，**零改引擎、零改 parser**。
+
+**背景**：底层引擎按英文字段名（`parent_id` / `path` / `testcase_id` / `name`）取值；如果案例文件是「中文表头 CSV」（如 `examples/case_example.csv`），首行会是 `testcase_id,名称,路径,...`，直接用英文字段取值全部为空 → **0 命中**。
+
+```ts
+/** 中文 CSV 表头到引擎字段的映射：只覆盖 linker 需要的四个字段 */
+const CN_HEADER_ALIAS = {
+    caseNameField: ['名称', '用例名称', '案例名称', '测试案例名称'],
+    pathField:     ['路径', '用例路径', '案例路径'],
+    caseIdField:   ['用例编号', '案例编号', 'testcase_id'],
+    parentIdField: ['父点编号', '所属要点', 'parent_id'],
+};
+
+function detectCsvHeaderOptions(filePath: string): Partial<LinkOptions> | undefined {
+    if (!/\.csv$/i.test(filePath)) return undefined;      // 仅处理 .csv
+    // 读首行 ≤ 8KB
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(8192);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    const firstLine = buf.slice(0, n).toString('utf-8').split(/\r?\n/)[0] || '';
+    const headers = firstLine.split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+    if (!headers.some(h => /[\u4e00-\u9fff]/.test(h))) return undefined;  // 无中文 → 短路
+
+    const out: Partial<LinkOptions> = {};
+    for (const key of Object.keys(CN_HEADER_ALIAS)) {
+        const hit = CN_HEADER_ALIAS[key].find(a => headers.includes(a));
+        if (hit) out[key] = hit;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+}
+
+// 在 linkAndAggregateCases 中的调用点：
+const csvOpts = detectCsvHeaderOptions(filePath);
+r = await linkPointsToCases(filePath, pointList, csvOpts ?? {});
+```
+
+**设计要点**：
+1. **仅在应用层生效**：引擎、parser 零侵入；yaml/json 按约定使用英文字段，路径不受影响。
+2. **只读首行**：`fs.readSync` 8KB 上限，性能开销可忽略；文件不存在或读取失败均 fallback 到默认字段名，不抛异常。
+3. **别名可扩展**：`CN_HEADER_ALIAS` 是纯常量表，需要新增团队方言时直接加词即可，无需改逻辑。
+4. **短路优化**：首行完全无中文 → 立即返回 `undefined`，保持英文 CSV 的默认行为。
+
+**能力天花板**：
+
+| 场景 | parent_id | path | 可命中类型 |
+|---|:---:|:---:|:---|
+| 中文 CSV（`examples/case_example.csv`） | ❌ 模板无此列 | ✅ 「路径」列 | 仅 `type=3`（path 兜底） |
+| 中文 CSV + 手动加 `parent_id` 列 | ✅ | ✅ | `type=1` / `type=2` / `type=3` 全档位 |
+| 英文 CSV / YAML / JSON | ✅ | ✅ | 全档位（默认行为） |
+
+> ⚠️ 中文模板里没有 `parent_id` 列，因此只能命中 `type=3`。这是**数据模型的天花板，非代码缺陷**。如需 type=1/2，请在 CSV 模板里增加一列 `parent_id`（列名可用英文或使用中文别名「父点编号」/「所属要点」，代码已自动识别）。
 
 ---
 
@@ -487,6 +546,10 @@ flowchart TD
 
 **契约要点**：任何路径下都返回同一形状的 `LinkedCasesEnvelope`；调用方永远只需要检查 `envelope.errorMsg` 与 `envelope.total`。
 
+**中文 CSV 特殊约束**：
+- 中文 CSV 命中类型受限（仅 `type=3`）不会走 errorMsg 分支，而是**成功返回**且 `stats.typeCount.type3 > 0`；
+- 若中文 CSV 完全无「路径」列 → 全部记录变孤儿，`envelope.total == 0` 且 `stats.totalOrphan == totalRecords`，UI 层可据此提示用户补 `parent_id` 或 `路径` 列。
+
 ---
 
 ## 七、性能与缓存
@@ -526,6 +589,8 @@ flowchart TD
 | **反向查询** | 引擎层已提供 `byCase`，只需增加一个 `getPointOfCase(caseId)` 便捷函数 |
 | **兜底扫描复活** | 在 `casePath == null` 分支替换为 `locateCaseDir + collectCaseFiles`，其他不变 |
 | **批量并发版本恢复** | 若未来放开 1:1 约束，可复用引擎层预留的 `linkPointsToCasesBatch` |
+| **中文表头别名扩充** | 直接在 `CN_HEADER_ALIAS` 常量表里追加词条即可；若未来需覆盖 YAML/JSON 中文键，把 `detectCsvHeaderOptions` 的扩展名判断放宽即可 |
+| **`parent_id` 中文列首类支持** | 在 CSV 模板中增加中文列（如「父点编号」），代码已自动识别，无需改动 |
 
 ---
 
@@ -539,3 +604,6 @@ flowchart TD
 | `<workspace>/.plugin/.tms/point-case-bindings.json` | 运行时存储 · md → 案例文件映射 |
 | [docs/requirements/point-case-linker-requirements.md](../requirements/point-case-linker-requirements.md) | 引擎层需求文档 |
 | `src/test/pointCaseLinker.test.ts` | 引擎层单元测试（19 项） |
+| `src/test/pointCaseLinker.integration.test.ts` | 引擎层真实样例集成验证（yaml/json/csv 三类共 1000 条） |
+| `src/test/linkerDiagnosticHandler.chineseCsv.test.ts` | 应用层中文表头 CSV 兼容验证（type=3 兜底 + 英文回归） |
+| `examples/case_example.csv` | 中文表头 CSV 示例模板 |

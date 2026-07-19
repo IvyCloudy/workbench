@@ -25,11 +25,71 @@ import {
     linkPointsToCases,
     clearLinkerCache,
     type PointItem,
+    type LinkOptions,
 } from '../utils/pointCaseLinker';
 import { getCaseOfPoint } from '../utils/pointCaseBindingStore';
 import { showToast } from '../utils/message';
 import { TelemetryService } from '../utils/telemetry';
 import { telemetryErrProps } from '../utils/extensionHelpers';
+
+// ============================================================================
+// 中文 CSV 表头兼容
+// ----------------------------------------------------------------------------
+// 现状：底层引擎按英文字段名（parent_id / path / testcase_id / name）取值；
+//       如果案例文件是「中文表头 CSV」（examples/case_example.csv 那类），
+//       首行会是 `名称,路径,前置条件,...`，直接用英文字段取值全部为空 → 0 命中。
+// 兼容策略：在调引擎前探测首行表头，命中中文关键字段时，把 LinkOptions 的
+//       字段名指向对应中文键。中文 CSV 无 parent_id 字段，因此只能命中 type=3
+//       （path 兜底），这是数据模型的天花板，非代码缺陷。
+// ============================================================================
+/** 中文 CSV 表头到引擎字段的映射：只覆盖 linker 需要的四个字段 */
+const CN_HEADER_ALIAS: Record<keyof Pick<LinkOptions, 'pathField' | 'caseNameField' | 'caseIdField' | 'parentIdField'>, string[]> = {
+    // 名称 / 用例名 / 案例名
+    caseNameField: ['名称', '用例名称', '案例名称', '测试案例名称'],
+    // 路径 / 用例路径
+    pathField: ['路径', '用例路径', '案例路径'],
+    // 用例编号 / 案例编号（testcase_id 保持英文名兼容原模板）
+    caseIdField: ['用例编号', '案例编号', 'testcase_id'],
+    // 中文模板通常无 parent_id，仅列出可能的中文别名兜底
+    parentIdField: ['父点编号', '所属要点', 'parent_id'],
+};
+
+/**
+ * 探测案例文件是否为「中文表头 CSV」，返回可注入 LinkOptions 的字段名映射。
+ * - 仅处理 .csv；yaml/json 由用户按约定使用英文字段（现状已支持）
+ * - 只读首行（<= 8KB），性能开销可忽略
+ * - 探测失败或非中文表头 → 返回 undefined，保持默认字段名
+ */
+function detectCsvHeaderOptions(filePath: string): Partial<LinkOptions> | undefined {
+    try {
+        if (!/\.csv$/i.test(filePath)) return undefined;
+        const fd = fs.openSync(filePath, 'r');
+        try {
+            const buf = Buffer.alloc(8192);
+            const n = fs.readSync(fd, buf, 0, buf.length, 0);
+            const head = buf.slice(0, n).toString('utf-8');
+            const firstLine = head.split(/\r?\n/)[0] || '';
+            if (!firstLine) return undefined;
+            // 简单按逗号切；单元格里带逗号+引号的极端情况这里不深究——不影响关键词匹配
+            const headers = firstLine.split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+            const set = new Set(headers);
+            // 若首行完全没有中文，直接短路
+            if (!headers.some(h => /[\u4e00-\u9fff]/.test(h))) return undefined;
+
+            const out: Partial<LinkOptions> = {};
+            for (const key of Object.keys(CN_HEADER_ALIAS) as (keyof typeof CN_HEADER_ALIAS)[]) {
+                const aliases = CN_HEADER_ALIAS[key];
+                const hit = aliases.find(a => set.has(a));
+                if (hit) (out as any)[key] = hit;
+            }
+            return Object.keys(out).length > 0 ? out : undefined;
+        } finally {
+            fs.closeSync(fd);
+        }
+    } catch {
+        return undefined;
+    }
+}
 
 /** 复用同一个 Output Channel，避免多次创建 */
 let outputChannel: vscode.OutputChannel | undefined;
@@ -155,10 +215,11 @@ export async function linkAndAggregateCases(
         return { total: 0, errorMsg: '未传入测试案例文件', data: {} };
     }
 
-    // ---- 单文件匹配 ----
+    // ---- 单文件匹配（针对中文表头 CSV 做字段名兼容） ----
     let r;
     try {
-        r = await linkPointsToCases(filePath, pointList);
+        const csvOpts = detectCsvHeaderOptions(filePath);
+        r = await linkPointsToCases(filePath, pointList, csvOpts ?? {});
     } catch (err: any) {
         return { total: 0, errorMsg: `匹配失败: ${err?.message || err}`, data: {} };
     }

@@ -608,6 +608,8 @@ function openColFilter(col, anchorEl) {
             else if (ev.key === 'Escape') { ev.preventDefault(); closeColFilter(); }
             ev.stopPropagation();
         });
+        // 复用公共粘贴兜底（webview 沙箱下原生 Ctrl/Cmd+V 偶发失效）
+        if (typeof attachPasteFallback === 'function') attachPasteFallback(input);
         // 阻止 mousedown 冒泡导致弹窗被全局 click 关闭逻辑误判
         input.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
     }
@@ -980,6 +982,9 @@ function openStepsSubFilter(subIdx, anchorEl) {
             else if (ev.key === 'Escape') { ev.preventDefault(); closeColFilter(); }
             ev.stopPropagation();
         });
+        // 复用公共粘贴兜底（webview 沙箱下原生 Ctrl/Cmd+V 偶发失效）
+        if (typeof attachPasteFallback === 'function') attachPasteFallback(input);
+        // 阻止 mousedown 冒泡导致弹窗被全局 click 关闭逻辑误判
         input.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
     }
     if (clear) {

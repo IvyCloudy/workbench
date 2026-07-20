@@ -24,49 +24,10 @@ function bindXsPrompt() {
     if (input) input.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter') { ev.preventDefault(); closeXsPrompt(true); }
         else if (ev.key === 'Escape') { ev.preventDefault(); closeXsPrompt(false); }
-        else if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'v' || ev.key === 'V')) {
-            // VSCode webview 沙箱下 <input> 的原生 Ctrl/Cmd+V 偶发失效，
-            // 显式调用 clipboard API 兜底，确保弹窗输入框任何时候都能粘贴文本。
-            try {
-                if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
-                    ev.preventDefault();
-                    navigator.clipboard.readText().then(function (text) {
-                        if (text == null) text = '';
-                        var el = ev.target;
-                        var start = (typeof el.selectionStart === 'number') ? el.selectionStart : el.value.length;
-                        var end = (typeof el.selectionEnd === 'number') ? el.selectionEnd : el.value.length;
-                        var before = el.value.slice(0, start);
-                        var after = el.value.slice(end);
-                        el.value = before + String(text) + after;
-                        var caret = before.length + String(text).length;
-                        try { el.setSelectionRange(caret, caret); } catch (_) {}
-                        try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
-                    }).catch(function () { /* 静默失败，回退浏览器默认（如可用） */ });
-                }
-            } catch (_) { /* ignore */ }
-        }
         ev.stopPropagation();
     });
-    if (input) input.addEventListener('paste', function (ev) {
-        // 浏览器原生 paste 事件能命中时优先使用，避免与 keydown 兜底重复粘贴
-        try {
-            var dt = ev.clipboardData || (window).clipboardData;
-            if (!dt) return;
-            var text = dt.getData('text');
-            if (text == null) return;
-            ev.preventDefault();
-            ev.stopPropagation();
-            var el = ev.target;
-            var start = (typeof el.selectionStart === 'number') ? el.selectionStart : el.value.length;
-            var end = (typeof el.selectionEnd === 'number') ? el.selectionEnd : el.value.length;
-            var before = el.value.slice(0, start);
-            var after = el.value.slice(end);
-            el.value = before + String(text) + after;
-            var caret = before.length + String(text).length;
-            try { el.setSelectionRange(caret, caret); } catch (_) {}
-            try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
-        } catch (_) { /* ignore */ }
-    });
+    // 复用公共粘贴兜底（webview 沙箱下原生 Ctrl/Cmd+V 偶发失效）
+    if (input && typeof attachPasteFallback === 'function') attachPasteFallback(input);
 }
 
 function isXsPromptOpen() {

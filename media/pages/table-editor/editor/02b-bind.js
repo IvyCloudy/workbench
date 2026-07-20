@@ -118,6 +118,8 @@ function bindToolbar() {
                 renderTable();
             }
         });
+        // 复用公共粘贴兜底（webview 沙箱下原生 Ctrl/Cmd+V 偶发失效）
+        if (typeof attachPasteFallback === 'function') attachPasteFallback(search);
     }
     var searchClear = document.getElementById('searchClear');
     if (searchClear) {

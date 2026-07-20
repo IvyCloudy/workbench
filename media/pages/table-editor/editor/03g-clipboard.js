@@ -390,3 +390,59 @@ function fillSelectedCells() {
     });
 }
 
+// ==================== 公共：粘贴兜底（webview 沙箱） ====================
+// VSCode webview 沙箱下 <input>/<textarea> 的原生 Ctrl/Cmd+V 偶发失效，
+// 这里统一兜底：
+//   1) keydown 拦截 Ctrl/Cmd+V → 用 navigator.clipboard.readText 读取并写入
+//   2) paste 事件兜底 → 浏览器原生能命中时直接用 clipboardData
+// 写入后会在光标处插入并 dispatch 'input' 事件，供搜索/过滤等实时响应。
+// 任意输入框只需调用一次 attachPasteFallback(el) 即可获得粘贴能力。
+function attachPasteFallback(input) {
+    if (!input) return;
+    // 补偿模式：优先让 paste 事件处理，keydown 仅在 paste 未发生时兜底。
+    // 原因：搜索框（普通 input）原生粘贴可用，若 keydown 也走 clipboard API 会双份；
+    //       过滤框（弹窗 input）原生粘贴失效，paste 不触发，才需 keydown 兜底。
+    var lastPasteTs = 0;
+    // paste 事件：能命中就用它，阻止浏览器默认，避免与兜底重复
+    input.addEventListener('paste', function (ev) {
+        lastPasteTs = Date.now();
+        try {
+            var dt = ev.clipboardData || (window).clipboardData;
+            if (!dt) return; // 拿不到数据则交给浏览器默认粘贴
+            var text = dt.getData('text');
+            if (text == null) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            _insertIntoInput(input, text);
+        } catch (_) {}
+    });
+    // keydown Ctrl/Cmd+V：不 preventDefault，延迟检查 paste 是否已处理，
+    // 若一段时间内没有任何 paste 事件（如弹窗沙箱），才用 clipboard API 兜底
+    input.addEventListener('keydown', function (ev) {
+        if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'v' || ev.key === 'V') && !ev.shiftKey && !ev.altKey) {
+            var beforeTs = lastPasteTs;
+            setTimeout(function () {
+                // paste 已触发（无论原生成功与否）→ 不重复插入
+                if (lastPasteTs !== beforeTs) return;
+                try {
+                    if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+                        navigator.clipboard.readText().then(function (text) {
+                            _insertIntoInput(input, text == null ? '' : text);
+                        }).catch(function () {});
+                    }
+                } catch (_) {}
+            }, 80);
+        }
+    });
+}
+
+// 在 input 光标处插入文本并触发 input 事件（内部辅助）
+function _insertIntoInput(input, text) {
+    var start = (typeof input.selectionStart === 'number') ? input.selectionStart : input.value.length;
+    var end = (typeof input.selectionEnd === 'number') ? input.selectionEnd : input.value.length;
+    input.value = input.value.slice(0, start) + String(text) + input.value.slice(end);
+    var caret = start + String(text).length;
+    try { input.setSelectionRange(caret, caret); } catch (_) {}
+    try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
+}
+

@@ -41,7 +41,9 @@ export interface CaseItem {
     /** 使用 testcase_id 作为 node_id，全局唯一 */
     testcase_id: string;
     caseName: string;
-    /** 【前置条件】... 【预期结果】... 拼接文本 */
+    /** 案例记录中的 path 字段（功能条目/测试要点路径，如 账户中心/登录模块） */
+    casePath: string;
+    /** 【前置条件】/【步骤描述】/【预期结果】拼接文本，每行用 <p></p> 包裹 */
     caseDetail: string;
     /** 匹配类型：1 parent_id+path、2 仅 parent_id、3 仅 path */
     type: 1 | 2 | 3;
@@ -182,53 +184,111 @@ export function stripSubIndex(pid: string): string {
     return pid.replace(/-\d+$/, '');
 }
 
-/** 从记录里按字段列表取第一个有值的字符串，数组会 join。 */
-function pickFirstNonEmpty(rec: any, fields: string[]): string {
-    for (const f of fields) {
-        const v = rec?.[f];
-        if (v == null) continue;
-        if (Array.isArray(v)) {
-            const joined = v
-                .map(x => (x == null ? '' : String(x).trim()))
-                .filter(Boolean)
-                .join('\n');
-            if (joined) return joined;
-        } else {
-            const s = String(v).trim();
-            if (s) return s;
-        }
+/** 把可能是数组/标量的值规整为「非空字符串数组」。 */
+function toStringArray(v: any): string[] {
+    if (v == null) return [];
+    if (Array.isArray(v)) {
+        return v.map(x => (x == null ? '' : String(x).trim())).filter(Boolean);
     }
-    return '';
+    // 字符串：按行拆分，兼容「已转换的多行文本」（如中文 CSV 的预期结果列）
+    return String(v)
+        .split(/\r?\n/)
+        .map(s => s.trim())
+        .filter(Boolean);
 }
 
-/** 组装 caseDetail：【前置条件】... 【预期结果】... */
+/** 按字段列表取「第一个有值」字段的全部值（数组形式，前置条件用）。 */
+function collectFirstNonEmptyArray(rec: any, fields: string[]): string[] {
+    for (const f of fields) {
+        const arr = toStringArray(rec?.[f]);
+        if (arr.length > 0) return arr;
+    }
+    return [];
+}
+
+/** 用 <p></p> 包裹单行文本。 */
+function wrapLine(s: string): string {
+    return `<p>${s}</p>`;
+}
+
+/**
+ * 组装 caseDetail，整体结构（每一行均用 <p></p> 包裹）：
+ *   【前置条件】
+ *   <前置内容 1> / <前置内容 2> ...
+ *   【步骤描述】
+ *   步骤1:<operation>
+ *   步骤2:<operation>
+ *   【预期结果】
+ *   步骤1:
+ *   【UI检查】
+ *   <ui_expected 1>
+ *   <ui_expected 2>
+ *   【接口调用】
+ *   <api_expected...>
+ *   【数据检查】
+ *   <db_expected...>
+ *   步骤2:
+ *   ...
+ *
+ * 退化场景：案例无 steps（如中文 CSV 模板）时，【预期结果】沿用 expFields 取值。
+ *   - 中文 CSV 的「预期结果」列已是转换好的成品文本（含【UI检查】等标签），
+ *     直接原样按行输出（每行 <p> 包裹），不再按 ui_expected/api_expected/db_expected 拆分。
+ */
 function buildCaseDetail(
     rec: any,
     preFields: string[],
     expFields: string[],
 ): string {
-    const pre = pickFirstNonEmpty(rec, preFields);
-    // expected 可能来自多个字段，此处对每个字段依次尝试并合并
-    const expParts: string[] = [];
-    for (const f of expFields) {
-        const v = rec?.[f];
-        if (v == null) continue;
-        if (Array.isArray(v)) {
-            const joined = v
-                .map(x => (x == null ? '' : String(x).trim()))
-                .filter(Boolean)
-                .join('\n');
-            if (joined) expParts.push(joined);
-        } else {
-            const s = String(v).trim();
-            if (s) expParts.push(s);
+    const lines: string[] = [];
+
+    // ---- 前置条件（始终输出标题，内容为空时补一个空行）----
+    const preArr = collectFirstNonEmptyArray(rec, preFields);
+    lines.push('【前置条件】');
+    if (preArr.length > 0) {
+        for (const p of preArr) lines.push(p);
+    } else {
+        lines.push('');
+    }
+
+    const steps = Array.isArray(rec?.steps) ? rec.steps : [];
+    if (steps.length > 0) {
+        // ---- 步骤描述 ----
+        lines.push('【步骤描述】');
+        steps.forEach((st: any, idx: number) => {
+            const no = st?.id ?? idx + 1;
+            const op = String(st?.operation ?? '').trim();
+            lines.push(`步骤${no}:${op}`);
+        });
+
+        // ---- 预期结果 ----
+        const expLines: string[] = [];
+        steps.forEach((st: any, idx: number) => {
+            const no = st?.id ?? idx + 1;
+            const ui = toStringArray(st?.ui_expected);
+            const api = toStringArray(st?.api_expected);
+            const db = toStringArray(st?.db_expected);
+            if (ui.length === 0 && api.length === 0 && db.length === 0) return;
+            expLines.push(`步骤${no}:`);
+            // 【xx检查】单独一行，检查内容另起一行
+            if (ui.length > 0) { expLines.push('【UI检查】'); expLines.push(...ui); }
+            if (api.length > 0) { expLines.push('【接口调用】'); expLines.push(...api); }
+            if (db.length > 0) { expLines.push('【数据检查】'); expLines.push(...db); }
+        });
+        if (expLines.length > 0) {
+            lines.push('【预期结果】');
+            lines.push(...expLines);
+        }
+    } else {
+        // 退化：无 steps，沿用 expFields 合并作为预期结果
+        const expParts: string[] = [];
+        for (const f of expFields) expParts.push(...toStringArray(rec?.[f]));
+        if (expParts.length > 0) {
+            lines.push('【预期结果】');
+            lines.push(...expParts);
         }
     }
-    const exp = expParts.join('\n');
-    const parts: string[] = [];
-    if (pre) parts.push(`【前置条件】${pre}`);
-    if (exp) parts.push(`【预期结果】${exp}`);
-    return parts.join(' ');
+
+    return lines.map(wrapLine).join('');
 }
 
 // ============================================================================
@@ -601,6 +661,7 @@ function matchCore(
         const caseItem: CaseItem = {
             testcase_id: testcaseId,
             caseName: String(rec[opts.caseNameField] ?? '').trim(),
+            casePath: String(rec[opts.pathField] ?? '').trim(),
             caseDetail: buildCaseDetail(rec, opts.preconditionFields, opts.expectedFields),
             type: pickedType,
         };

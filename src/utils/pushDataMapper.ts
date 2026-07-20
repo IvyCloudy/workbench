@@ -27,7 +27,7 @@
  *    description(接口) ← 每个 step 拼为 operation + <br> + data
  *                        （data 多行用 <br> 连接，data 为空时仅输出 operation）
  *                        注：operation 必填，为空将抛错由上层提示
- *    expected(接口)    ← 每个 step 拼为「【UI检查】/【接口调用 】/【数据检查】」三段
+ *    expected(接口)    ← 每个 step 拼为「【UI检查】/【接口调用】/【数据检查】」三段
  *                        任一段为空则跳过对应标题；三段都为空时输出 '' 占位
  *    description 与 expected 数组长度均等于 steps.length，按 step 顺序一一对应
  *
@@ -353,7 +353,7 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
         return dataLines.length ? `${nl2br(op)}<br>${dataLines.join('<br>')}` : nl2br(op);
     });
 
-    // expected：每个 step 拼成「【UI检查】/【接口检查】/【数据检查】」三段，空段不拼接；三段都为空时保留 '' 占位；与 steps 一一对应
+    // expected：每个 step 拼成「【UI检查】/【接口调用】/【数据检查】」三段，空段不拼接；三段都为空时保留 '' 占位；与 steps 一一对应
     const expected: string[] = steps.map((s) => {
         const segs: string[] = [];
         const ui = toLines(s && s.ui_expected).filter((l) => l.trim() !== '');

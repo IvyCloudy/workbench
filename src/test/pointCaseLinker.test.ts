@@ -341,6 +341,123 @@ describe('pointCaseLinker', () => {
         expect(caseItem.caseDetail).toContain('C');
     });
 
+    it('caseDetail：含 steps 时拼接【步骤描述】+按步骤【预期结果】，每行 <p> 包裹', async () => {
+        const fp = '/mock/detail-steps.yaml';
+        mockRecordsByPath[fp] = [
+            {
+                testcase_id: 'C-STEP',
+                parent_id: 'LGN-001',
+                path: '账户中心/登录模块',
+                name: 'x',
+                preconditions: ['环境就绪'],
+                steps: [
+                    {
+                        id: 1,
+                        operation: '执行主流程',
+                        data: ['p1'],
+                        ui_expected: ['UI成功态'],
+                        api_expected: ['接口200'],
+                        db_expected: ['状态done'],
+                    },
+                    {
+                        id: 2,
+                        operation: '验证结果',
+                        ui_expected: ['结果正确'],
+                        api_expected: [],
+                        db_expected: [],
+                    },
+                ],
+            },
+        ];
+        const { linkPointsToCases } = await importLinker();
+        const r = await linkPointsToCases(fp, POINTS);
+        const d = r.byPoint['LGN-001_账号密码登录'][0].caseDetail;
+        // 分段标题
+        expect(d).toContain('<p>【前置条件】</p>');
+        expect(d).toContain('<p>环境就绪</p>');
+        expect(d).toContain('<p>【步骤描述】</p>');
+        expect(d).toContain('<p>步骤1:执行主流程</p>');
+        expect(d).toContain('<p>步骤2:验证结果</p>');
+        expect(d).toContain('<p>【预期结果】</p>');
+        expect(d).toContain('<p>步骤1:</p>');
+        // 【xx检查】与内容分行
+        expect(d).toContain('<p>【UI检查】</p>');
+        expect(d).toContain('<p>UI成功态</p>');
+        expect(d).toContain('<p>【接口调用】</p>');
+        expect(d).toContain('<p>接口200</p>');
+        expect(d).toContain('<p>【数据检查】</p>');
+        expect(d).toContain('<p>状态done</p>');
+        expect(d).toContain('<p>步骤2:</p>');
+        expect(d).toContain('<p>【UI检查】</p>');
+        expect(d).toContain('<p>结果正确</p>');
+        // 顺序：步骤描述 在 预期结果 之前
+        expect(d.indexOf('【步骤描述】')).toBeLessThan(d.indexOf('【预期结果】'));
+    });
+
+    it('caseDetail：前置条件为空时仍输出标题并补一个空行 <p></p>', async () => {
+        const fp = '/mock/detail-empty-pre.yaml';
+        mockRecordsByPath[fp] = [
+            {
+                testcase_id: 'C-EMPTY-PRE',
+                parent_id: 'LGN-001',
+                path: '账户中心/登录模块',
+                name: 'x',
+                steps: [
+                    {
+                        id: 1,
+                        operation: '执行主流程',
+                        ui_expected: ['UI成功态'],
+                    },
+                ],
+            },
+        ];
+        const { linkPointsToCases } = await importLinker();
+        const r = await linkPointsToCases(fp, POINTS);
+        const d = r.byPoint['LGN-001_账号密码登录'][0].caseDetail;
+        // 标题存在
+        expect(d).toContain('<p>【前置条件】</p>');
+        // 标题后紧跟一个空行 <p></p>，再是【步骤描述】
+        const idxTitle = d.indexOf('<p>【前置条件】</p>');
+        const idxStep = d.indexOf('<p>【步骤描述】</p>');
+        const between = d.slice(idxTitle, idxStep);
+        expect(between).toContain('<p></p>');
+    });
+
+    it('caseDetail：中文 CSV 列名（前置条件/预期结果）正确读取，多行文本每行 <p>', async () => {
+        const fp = '/mock/cn-csv.yaml';
+        mockRecordsByPath[fp] = [
+            {
+                testcase_id: 'C-CN',
+                parent_id: 'LGN-001',
+                path: '账户中心/登录模块',
+                name: 'x',
+                前置条件: ['前置A'],
+                // 已转换的成品文本（含【UI检查】等标签），无 steps / 无 ui_expected
+                预期结果: '步骤1:\n【UI检查】\nUI检查点\n步骤3:\n【接口调用】\n接口检查点',
+            },
+        ];
+        const { linkPointsToCases } = await importLinker();
+        // 模拟 detectCsvHeaderOptions 映射后的中文字段名
+        const r = await linkPointsToCases(fp, POINTS, {
+            preconditionFields: ['前置条件'],
+            expectedFields: ['预期结果'],
+        });
+        const d = r.byPoint['LGN-001_账号密码登录'][0].caseDetail;
+        expect(d).toContain('<p>【前置条件】</p>');
+        expect(d).toContain('<p>前置A</p>');
+        expect(d).toContain('<p>【预期结果】</p>');
+        // 多行成品文本按行 <p> 包裹，不再按 ui_expected 等拆分
+        expect(d).toContain('<p>步骤1:</p>');
+        expect(d).toContain('<p>【UI检查】</p>');
+        expect(d).toContain('<p>UI检查点</p>');
+        expect(d).toContain('<p>步骤3:</p>');
+        expect(d).toContain('<p>【接口调用】</p>');
+        expect(d).toContain('<p>接口检查点</p>');
+        // 不应出现把字段名当字符遍历的脏数据
+        expect(d).not.toContain('<p>预</p>');
+        expect(d).not.toContain('<p>期</p>');
+    });
+
     // ==========================================
     // 8. 批量入口
     // ==========================================

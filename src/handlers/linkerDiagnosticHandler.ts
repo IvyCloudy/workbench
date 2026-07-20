@@ -43,7 +43,7 @@ import { telemetryErrProps } from '../utils/extensionHelpers';
 //       （path 兜底），这是数据模型的天花板，非代码缺陷。
 // ============================================================================
 /** 中文 CSV 表头到引擎字段的映射：只覆盖 linker 需要的四个字段 */
-const CN_HEADER_ALIAS: Record<keyof Pick<LinkOptions, 'pathField' | 'caseNameField' | 'caseIdField' | 'parentIdField'>, string[]> = {
+const CN_HEADER_ALIAS: Record<keyof Pick<LinkOptions, 'pathField' | 'caseNameField' | 'caseIdField' | 'parentIdField' | 'preconditionFields' | 'expectedFields'>, string[]> = {
     // 名称 / 用例名 / 案例名
     caseNameField: ['名称', '用例名称', '案例名称', '测试案例名称'],
     // 路径 / 用例路径
@@ -52,6 +52,10 @@ const CN_HEADER_ALIAS: Record<keyof Pick<LinkOptions, 'pathField' | 'caseNameFie
     caseIdField: ['用例编号', '案例编号', 'testcase_id'],
     // 中文模板通常无 parent_id，仅列出可能的中文别名兜底
     parentIdField: ['父点编号', '所属要点', 'parent_id'],
+    // 前置条件（中文 CSV 列名）
+    preconditionFields: ['前置条件', '前置', 'preconditions', 'pre_condition'],
+    // 预期结果（中文 CSV 列名，已是转换好的成品文本，含【UI检查】等标签）
+    expectedFields: ['预期结果', '预期', 'expected', 'expectedResult'],
 };
 
 /**
@@ -77,10 +81,14 @@ function detectCsvHeaderOptions(filePath: string): Partial<LinkOptions> | undefi
             if (!headers.some(h => /[\u4e00-\u9fff]/.test(h))) return undefined;
 
             const out: Partial<LinkOptions> = {};
+            // LinkOptions 中 preconditionFields / expectedFields 是 string[]，
+            // 其余（pathField 等）是 string；数组字段需包成数组返回，否则
+            // buildCaseDetail 会按字符遍历字段名而读不到值。
+            const ARRAY_KEYS = new Set<keyof typeof CN_HEADER_ALIAS>(['preconditionFields', 'expectedFields']);
             for (const key of Object.keys(CN_HEADER_ALIAS) as (keyof typeof CN_HEADER_ALIAS)[]) {
                 const aliases = CN_HEADER_ALIAS[key];
                 const hit = aliases.find(a => set.has(a));
-                if (hit) (out as any)[key] = hit;
+                if (hit) (out as any)[key] = ARRAY_KEYS.has(key) ? [hit] : hit;
             }
             return Object.keys(out).length > 0 ? out : undefined;
         } finally {
@@ -110,11 +118,13 @@ function getChannel(): vscode.OutputChannel {
  *   3. 读绑定配置 → 唯一的案例文件绝对路径（1:1）
  *   4. 校验该案例文件仍在磁盘上
  *   5. 调用引擎完成匹配
- *   6. 把「按约定格式聚合的结果」用 console.log 打到 Extension Host 的
- *      开发者控制台（VSCode 菜单：帮助 → 切换开发人员工具 → Console）
+ *   6. 把「按约定格式聚合的结果」完整写入 OutputChannel 并自动弹出
+ *      （VSCode 底部面板：「TestCase Linker 诊断」）。
  *
- * ⚠️ 全程静默：不弹 toast、不弹对话框、不弹 Output 面板。
- *    错误信息统一收敛到 envelope.errorMsg 里，仅打点 telemetry。
+ * ⚠️ 为何不用 console.log：Extension Host 开发者工具 Console 对大对象有体积
+ *    上限，会直接丢弃并打印 "Output omitted for a large object..."。关联结果
+ *    envelope 往往较大，故统一走 OutputChannel（可承载大文本）并 ch.show(true)
+ *    自动弹出；错误信息仍收敛到 envelope.errorMsg，仅打点 telemetry。
  *
  * 打印的核心对象格式（严格遵循最初约定）：
  *   {
@@ -150,28 +160,40 @@ export async function handleViewLinkedCases(uri: vscode.Uri): Promise<void> {
     const elapsed = Date.now() - t0;
 
     // ---- 结果输出 ----
+    // ⚠️ 关键修复：Extension Host 开发者工具 Console 对大对象有体积上限，
+    //    会直接丢弃并打印 "Output omitted for a large object that exceeds the limits"。
+    //    因此「完整 envelope」统一写入 OutputChannel（可承载大文本），并自动弹出，
+    //    避免 Console 截断导致「看不到数据」的假象。
+    const ch = getChannel();
+    ch.clear();
+    ch.appendLine('[TC-Linker] ===== 查看关联案例 =====');
+    ch.appendLine('[TC-Linker] 📖 测试要点：' + mdPath);
+
     if (envelope.errorMsg) {
         log('%c[TC-Linker] ⚠️  ', 'color:#f59e0b', envelope.errorMsg);
+        ch.appendLine('[TC-Linker] ⚠️ ' + envelope.errorMsg);
         TelemetryService.sendTelemetryErrorEvent('viewLinkedCases.error', { errorMsg: envelope.errorMsg });
     }
-    log('%c[TC-Linker] ===== 最终出参（约定格式） =====', 'color:#3b82f6;font-weight:bold');
-    log(envelope);                          // 折叠展开友好
-    log('[TC-Linker] JSON:', JSON.stringify(envelope, null, 2));  // 纯文本便于复制
+    ch.appendLine('[TC-Linker] ===== 最终出参（约定格式） =====');
+    // 完整 JSON 写入 OutputChannel（不会因体积被截断）
+    ch.appendLine(JSON.stringify(envelope, null, 2));
 
     // ---- 简要统计（打点/参考）----
-    log(
-        '%c[TC-Linker] ===== 统计 =====',
-        'color:#3b82f6;font-weight:bold',
-        {
-            totalMatched: envelope.total,
-            totalRecords: envelope.stats?.totalRecords,
-            typeCount: envelope.stats?.typeCount,
-            totalOrphan: envelope.stats?.totalOrphan,
-            totalStripped: envelope.stats?.totalStripped,
-            pointKeys: Object.keys(envelope.data).length,
-            elapsedMs: elapsed,
-        }
-    );
+    const stats = {
+        totalMatched: envelope.total,
+        totalRecords: envelope.stats?.totalRecords,
+        typeCount: envelope.stats?.typeCount,
+        totalOrphan: envelope.stats?.totalOrphan,
+        totalStripped: envelope.stats?.totalStripped,
+        pointKeys: Object.keys(envelope.data).length,
+        elapsedMs: elapsed,
+    };
+    ch.appendLine('[TC-Linker] ===== 统计 =====');
+    ch.appendLine(JSON.stringify(stats, null, 2));
+    log('%c[TC-Linker] ===== 统计 =====', 'color:#3b82f6;font-weight:bold', stats);
+
+    // 自动弹出 OutputChannel（保留编辑器焦点：show(true)）
+    ch.show(true);
 
     TelemetryService.sendTelemetryEvent('viewLinkedCases.done', {
         mdFile: path.basename(mdPath),
@@ -181,8 +203,6 @@ export async function handleViewLinkedCases(uri: vscode.Uri): Promise<void> {
         elapsedMs: String(elapsed),
         hasError: envelope.errorMsg ? '1' : '0',
     });
-
-    // ⚠️ 按需求已去除 toast 弹窗，结果仅通过 Extension Host 开发者工具 Console 查看
 }
 
 // ============================================================================
@@ -230,6 +250,7 @@ export async function linkAndAggregateCases(
         data[pointKey] = cases.map(c => ({
             testcase_id: c.testcase_id,
             caseName: c.caseName,
+            casePath: c.casePath,
             caseDetail: c.caseDetail,
             type: c.type,
             filePath,
@@ -334,6 +355,8 @@ export async function getLinkedCasesByMdFile(
 export interface LinkedCaseItem {
     testcase_id: string;
     caseName: string;
+    /** 案例记录中的 path 字段（功能条目/测试要点路径） */
+    casePath: string;
     caseDetail: string;
     type: 1 | 2 | 3;
     /** 该案例所在的源文件绝对路径 */

@@ -24,8 +24,10 @@ import * as fs from 'fs';
 import {
     linkPointsToCases,
     clearLinkerCache,
+    normalizePointPath,
     type PointItem,
     type LinkOptions,
+    type LinkResult,
 } from '../utils/pointCaseLinker';
 import { getCaseOfPoint } from '../utils/pointCaseBindingStore';
 import { showToast } from '../utils/message';
@@ -236,7 +238,7 @@ export async function linkAndAggregateCases(
     }
 
     // ---- 单文件匹配（针对中文表头 CSV 做字段名兼容） ----
-    let r;
+    let r!: LinkResult;
     try {
         const csvOpts = detectCsvHeaderOptions(filePath);
         r = await linkPointsToCases(filePath, pointList, csvOpts ?? {});
@@ -388,9 +390,12 @@ export interface LinkedCasesEnvelope {
  * 【公共方法】从测试要点 md 中解析出 pointList（静默：不写 Output Channel）
  *
  * 规则：
- *   1. 找到形如「功能条目：xxx / yyy」的行，作为 pointPath（会归一化空格）；
- *      若找不到，则退化为文件名（去后缀）作为 pointPath。
+ *   1. 找到形如「功能条目：xxx / yyy」的行，作为 pointPath 的「功能条目前缀」
+ *      （会归一化：\ → /、全角 ／· → /、折叠连续/首尾斜杠、去两侧空格）；
+ *      若找不到，则退化为文件名（去后缀）作为功能条目前缀。
  *   2. 找表格首行为「| 序号 | 测试点 | ... |」的表，取每行的前两列作为 pointId / pointName。
+ *   3. 每行最终的 pointPath = 功能条目前缀 用 '/' 拼接 测试点名称，
+ *      再整体归一化（兼容「功能条目尾部缺/或多/、用\」等写法，确保与案例侧 path 一致）。
  */
 export async function parseMdToPointListSilent(mdPath: string): Promise<PointItem[]> {
     let text: string;
@@ -402,16 +407,24 @@ export async function parseMdToPointListSilent(mdPath: string): Promise<PointIte
     }
     const lines = text.split(/\r?\n/);
 
-    // pointPath
-    let pointPath = '';
+    // 功能条目前缀（pointPath 的父级部分）
+    // 兼容 md 中功能条目路径的多种写法：
+    //   - 反斜杠 \（Windows 风格）       账户中心\登录模块
+    //   - 全角斜杠 ／、间隔点 ·
+    //   - 尾部缺 / 或多余 /（账户中心/登录模块 与 账户中心/登录模块/ 等价）
+    //   - 分隔符两侧多余空格
+    // 统一交给 normalizePointPath 归一化为「/ 分隔、无首尾斜杠」的标准形式，
+    // 与底层匹配引擎（buildIndex / matchCore）使用同一套规则，避免 md 侧与
+    // 案例侧出现「\ 对 /」「有无尾斜杠」的匹配不一致。
+    let funcPrefix = '';
     for (const line of lines) {
         const m = line.match(/功能条目\s*[:：]\s*(.+?)\s*$/);
         if (m) {
-            pointPath = m[1].replace(/\s*[/／]\s*/g, '/').trim();
+            funcPrefix = normalizePointPath(m[1]);
             break;
         }
     }
-    if (!pointPath) pointPath = path.basename(mdPath, path.extname(mdPath));
+    if (!funcPrefix) funcPrefix = path.basename(mdPath, path.extname(mdPath));
 
     // 表格
     const result: PointItem[] = [];
@@ -432,8 +445,18 @@ export async function parseMdToPointListSilent(mdPath: string): Promise<PointIte
         if (cells.every(c => /^:?-+:?$/.test(c.trim()))) continue;
         const pid = (cells[idIdx] || '').trim();
         const pname = (cells[nameIdx] || '').trim();
-        if (!pid || !pname) continue;
-        result.push({ pointId: pid, pointName: pname, pointPath });
+        // 仅当「测试点名称」为空才跳过；
+        // pointId（序号/编号）为空时，用测试点名称兜底，保证「未填编号的测试要点」
+        // 也能进入 pointList，并凭借 pointPath 参与 path 匹配（type=3），
+        // 从而支持「查看关联案例」。
+        if (!pname) continue;
+        const pointId = pid || pname;
+        // pointPath = 功能条目前缀 用 '/' 拼接 测试点名称，整体归一化：
+        //   - 兼容「功能条目尾部缺 /」→ 自动补 /；「尾部多 /」→ 折叠
+        //   - 兼容「功能条目用 \」→ 统一转 /
+        //   - 与案例侧 path（如 深层功能/嵌套场景/登录鉴权）保持同构，type=1 精确命中
+        const pointPath = normalizePointPath(`${funcPrefix}/${pname}`);
+        result.push({ pointId, pointName: pname, pointPath });
     }
     return result;
 }

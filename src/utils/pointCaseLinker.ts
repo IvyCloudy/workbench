@@ -661,7 +661,10 @@ function matchCore(
         const caseItem: CaseItem = {
             testcase_id: testcaseId,
             caseName: String(rec[opts.caseNameField] ?? '').trim(),
-            casePath: String(rec[opts.pathField] ?? '').trim(),
+            // casePath 落库同样走 normalizePointPath，保证与匹配（nPath）及 md 侧 pointPath
+            // 同构：案例 path 用 \、／、·、首尾/、连续// 等写法都被归一化为「/ 分隔、无首尾斜杠」，
+            // 既让 type=1/type=3 命中，也避免展示层出现「\ 对 /」的不一致。
+            casePath: nPath,
             caseDetail: buildCaseDetail(rec, opts.preconditionFields, opts.expectedFields),
             type: pickedType,
         };

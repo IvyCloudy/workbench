@@ -172,6 +172,10 @@ function normalizePath(path: string): string {
     if (!p) {
         throw new Error('路径为空或仅含空白字符');
     }
+    // 兼容 Windows 风格分隔符：反斜杠 \、全角 ／、间隔点 · 统一转为正斜杠 /，
+    // 与关联匹配侧的 normalizePointPath 保持一致的分隔符规则，避免推送出去的路径
+    // 仍以 \ 分割导致后端按 / 解析失败。
+    p = p.replace(/[\\／·]+/g, '/');
     if (p.charAt(0) === '/') p = p.slice(1);
     if (p.charAt(p.length - 1) !== '/') p = p + '/';
     if (!p || p === '/') {

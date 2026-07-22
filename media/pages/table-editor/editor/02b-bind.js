@@ -991,11 +991,12 @@ function _buildStepCombined(raws) {
         var d = step.data;
         if (Array.isArray(d)) {
             d.forEach(function (item) {
-                var s = item != null ? String(item).trim() : '';
+                // 对象元素序列化为 JSON，避免 "[object Object]"（与预期结果列处理一致）
+                var s = _stepCellItemToStr(item).trim();
                 if (s) dataItems.push(s);
             });
-        } else if (d != null && String(d).trim() !== '') {
-            String(d).split(/\r?\n/).forEach(function (l) {
+        } else if (d != null && _stepCellItemToStr(d).trim() !== '') {
+            _stepCellItemToStr(d).split(/\r?\n/).forEach(function (l) {
                 var s = l.trim();
                 if (s) dataItems.push(s);
             });
@@ -1031,12 +1032,23 @@ function _buildStepCombined(raws) {
     }).filter(function (s) { return s !== ''; }).join('\n');
 }
 
+// 将步骤单元格（data / ui_expected / api_expected / db_expected）里的单个元素转为字符串。
+// 参照后端 formatDetailCellValue / toStr 的处理：对象/数组元素序列化为 JSON，
+// 避免 YAML 中预期值为对象时被 String() 转成 "[object Object]"。
+function _stepCellItemToStr(x) {
+    if (x == null) return '';
+    if (typeof x === 'object') {
+        try { return JSON.stringify(x); } catch (_e) { return ''; }
+    }
+    return String(x);
+}
+
 function _toExpectedLines(v) {
     if (v == null) return [];
     if (Array.isArray(v)) {
-        return v.filter(function (x) { return x != null && String(x).trim() !== ''; });
+        return v.map(_stepCellItemToStr).filter(function (s) { return s.trim() !== ''; });
     }
-    var s = String(v).trim();
+    var s = _stepCellItemToStr(v).trim();
     return s ? [s] : [];
 }
 

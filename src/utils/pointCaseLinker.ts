@@ -487,7 +487,17 @@ function buildIndex(pointList: PointItem[]): PointIndex {
     const seenIds = new Set<string>();
 
     for (const p of pointList) {
-        if (!p || !p.pointId) continue;
+        if (!p) continue;
+        // 只要有合法 pointPath,就纳入 byPath 索引,支持「按路径匹配」(type=3)。
+        // 这与 pointId 是否为空无关——避免 pointId 为空字符串的要点被整体跳过,
+        // 从而无法凭 pointPath 参与路径兜底命中(type=3)。
+        const nPath = normalizePointPath(p.pointPath);
+        if (nPath) {
+            const arr2 = byPath.get(nPath);
+            if (arr2) arr2.push(p); else byPath.set(nPath, [p]);
+        }
+        // pointId 为空/空白则仅能走上面的 path 匹配,不纳入 byId(无编号无法 parent_id 匹配)
+        if (!p.pointId) continue;
         const id = String(p.pointId).trim();
         if (!id) continue;
 
@@ -496,12 +506,6 @@ function buildIndex(pointList: PointItem[]): PointIndex {
 
         const arr = byId.get(id);
         if (arr) arr.push(p); else byId.set(id, [p]);
-
-        const nPath = normalizePointPath(p.pointPath);
-        if (nPath) {
-            const arr2 = byPath.get(nPath);
-            if (arr2) arr2.push(p); else byPath.set(nPath, [p]);
-        }
     }
 
     return {

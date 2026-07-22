@@ -467,7 +467,7 @@ tbody tr.xs-tr-expanded-steps > .xs-td:not(.xs-detail-cell){white-space:normal;o
 tbody tr.xs-tr-expanded-steps > .xs-td:not(.xs-detail-cell) .xs-cell-wrap{white-space:pre-wrap;word-break:break-word;overflow:hidden;display:block}
 
 /* 容器：宽度由内部 xse-table 的 colgroup 决定（width:auto），避免被外层 td 内容盒压缩到 100% 后触发 table-layout:fixed 的等比缩放 */
-.xs-step-expanded{font-size:10px;line-height:1.5;color:#333;padding:0;width:auto;box-sizing:border-box}
+.xs-step-expanded{font-size:13px;line-height:1.6;color:#333;padding:0;width:auto;box-sizing:border-box}
 /* 内层表格：宽度由 colgroup 精确决定；不再 width:100%（否则受外层 td padding/border 影响缩放，与表头子表头条错位） */
 .xse-table{border-collapse:collapse;table-layout:fixed !important;width:auto;border:none;overflow:visible}
 /* 主表双层表头：Steps 合并列 + 子列标题（融合到同一个 th 内的两层结构）
@@ -491,7 +491,7 @@ tbody tr.xs-tr-expanded-steps > .xs-td:not(.xs-detail-cell) .xs-cell-wrap{white-
 .xs-th-inline-expand:hover{background:rgba(0,120,212,.12);color:var(--p);opacity:1}
 .xs-th-inline-expand svg{display:block;pointer-events:none}
 /* 底部子表头条：贴近主表头色（#f6f8fa 替代 #f0f4f8），字号 11px 与英文 key 一致 */
-.xs-th-sub-row{display:flex;align-items:stretch;background:#f6f8fa;border-top:1px solid #dce4ec;font-size:11px;line-height:1.4;color:#57606a}
+.xs-th-sub-row{display:flex;align-items:stretch;background:#f6f8fa;border-top:1px solid #dce4ec;font-size:12px;line-height:1.4;color:#57606a}
 .xs-th-sub{display:flex;align-items:center;font-weight:600;padding:4px 6px;border-right:1px solid #dce4ec;text-align:left;white-space:nowrap;box-sizing:border-box;flex-shrink:0;position:relative;overflow:hidden}
 .xs-th-sub:last-child{border-right:none}
 .xs-th-sub-id{width:32px;justify-content:center;text-align:center;padding:4px 2px}
@@ -629,24 +629,24 @@ tbody tr.xs-tr-push-failed .xse-table .xse-td-id .xse-idx-dot,
    .xse-td-* 只负责非宽度的样式（padding/位置等），避免与运行时的子列宽拖动数据源冲突。
    序号：小圆点风格（背景灰圆 + 白色数字），比纯数字更聚焦，且与旧宽度视觉更紧凑
    操作：40px 支持三个图标横向排列，避免竖排拥挤 */
-.xse-td-id{text-align:center;color:#666;font-weight:600;white-space:nowrap;font-size:10px;padding:5px 2px !important;vertical-align:middle}
-.xse-td-id .xse-idx-dot{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:#eef1f4;color:#57606a;font-size:10px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.xse-td-id{text-align:center;color:#666;font-weight:600;white-space:nowrap;font-size:11px;padding:5px 2px !important;vertical-align:middle}
+.xse-td-id .xse-idx-dot{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:#eef1f4;color:#57606a;font-size:11px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
 .xse-td-data{position:relative}
 .xse-td-op{position:relative;text-align:center;vertical-align:middle;padding:4px 2px !important}
 /* 检查项分组：每个检查类型为一个独立组，组间自然间距 */
 .xse-group{margin-top:6px}
 .xse-group:first-child{margin-top:0}
 /* 分组标题改成小徽章 chip：不同类别不同色（UI=蓝、接口=紫、数据=绿），视觉分层更清晰 */
-.xse-group .xse-sub{display:inline-block;font-weight:600;font-size:10px;line-height:1.2;padding:1px 7px;border-radius:8px;letter-spacing:.2px;margin-bottom:2px;background:#e7f1ff;color:#0550ae;border:1px solid #c8dcf7}
+.xse-group .xse-sub{display:inline-block;font-weight:600;font-size:11px;line-height:1.2;padding:1px 7px;border-radius:8px;letter-spacing:.2px;margin-bottom:2px;background:#e7f1ff;color:#0550ae;border:1px solid #c8dcf7}
 .xse-group .xse-sub[data-kind="api"]{background:#f2ebff;color:#5b21b6;border-color:#d8caf5}
 .xse-group .xse-sub[data-kind="data"]{background:#e6ffec;color:#1a7f37;border-color:#b4ecc4}
-.xse-group .xse-line{color:#444;padding-left:6px;white-space:pre-wrap;word-break:break-word;font-size:10px;line-height:1.5;min-height:1.5em}
+.xse-group .xse-line{color:#444;padding-left:6px;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.6;min-height:1.5em}
 .xse-group .xse-line:empty::after{content:"点击添加检查项";color:#c0c0c0;font-style:italic}
 /* 未填分组的紧凑按钮：与 chip 视觉呼应但更弱化（虚线边框 + 前缀 "+" ），
    避免撑高空行；点击后 DOM 内联替换为真实分组 chip + 可编辑空行。 */
 .xse-add-group-row{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;padding-left:0}
 .xse-add-group-row:first-child{margin-top:0}
-.xse-btn-add-group{display:inline-flex;align-items:center;font-family:inherit;font-weight:600;font-size:10px;line-height:1.2;padding:1px 7px;border-radius:8px;letter-spacing:.2px;cursor:pointer;background:#f6f8fa;color:#6a737d;border:1px dashed #d0d7de;transition:background .12s,color .12s,border-color .12s}
+.xse-btn-add-group{display:inline-flex;align-items:center;font-family:inherit;font-weight:600;font-size:11px;line-height:1.2;padding:1px 7px;border-radius:8px;letter-spacing:.2px;cursor:pointer;background:#f6f8fa;color:#6a737d;border:1px dashed #d0d7de;transition:background .12s,color .12s,border-color .12s}
 .xse-btn-add-group:hover{background:#e7f1ff;color:#0550ae;border-color:#c8dcf7;border-style:solid}
 .xse-btn-add-group[data-kind="api"]:hover{background:#f2ebff;color:#5b21b6;border-color:#d8caf5}
 .xse-btn-add-group[data-kind="data"]:hover{background:#e6ffec;color:#1a7f37;border-color:#b4ecc4}

@@ -8,6 +8,14 @@
  * ========================================================================== */
 
 // ==================== 事件绑定 ====================
+
+// 「展开步骤」按钮显隐控制：仅 YAML 文件且含 steps 字段时显示，CSV/JSON 或无 steps 列的 YAML 隐藏。
+// 供 bindToolbar 初始化与 webview 切换文件（CustomEditor 复用）、数据到达刷新时统一调用。
+function updateExpandStepsBtnVisibility() {
+    var btn = document.getElementById('expandStepsBtn');
+    if (btn) btn.style.display = (isYamlFile() && hasStepsColumn()) ? '' : 'none';
+}
+
 function bindToolbar() {
     var pushBtn = document.getElementById('pushBtn');
     if (pushBtn) pushBtn.addEventListener('click', pushChanges);
@@ -198,9 +206,13 @@ function bindToolbar() {
         });
     }
     // 展开/收起步骤按钮：切换展开模式（内联子表格编辑）与非展开模式（点击弹窗编辑）
+    // 「展开步骤」仅对 YAML 文件生效：CSV/JSON 的步骤列只是合并文本、无嵌套结构，点击无意义。
     var expandStepsBtn = document.getElementById('expandStepsBtn');
     if (expandStepsBtn) {
+        // 非 YAML 文件直接隐藏按钮（显隐由 updateExpandStepsBtnVisibility 统一控制）
+        updateExpandStepsBtnVisibility();
         expandStepsBtn.addEventListener('click', function () {
+            if (!isYamlFile() || !hasStepsColumn()) return; // 双保险：非 YAML 或无 steps 列时不展开
             var headers = (S.data && S.data.headers) || [];
             var stepsCol = headers.indexOf('steps');
             if (stepsCol < 0) {
@@ -645,6 +657,8 @@ function bindTable() {
         //    两者都触发工具栏 #expandStepsBtn 的 click，复用同一套展开/收起逻辑
         var cbtn = t.closest && (t.closest('.xs-th-group-collapse') || t.closest('.xs-th-inline-expand'));
         if (cbtn) {
+            // 「展开步骤」仅 YAML 且含 steps 列时生效：此处双保险拦截
+            if (!isYamlFile() || !hasStepsColumn()) return;
             e.stopPropagation();
             e.preventDefault();
             var toolBtn = document.getElementById('expandStepsBtn');

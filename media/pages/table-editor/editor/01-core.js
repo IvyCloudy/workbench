@@ -48,6 +48,19 @@ function dbg() {
     } catch (_) {}
 }
 
+// 判断当前打开的文件是否为 YAML。仅 YAML 文件具备嵌套 steps 结构、需要「展开步骤」功能；
+// CSV/JSON 的步骤列只是合并文本，无嵌套结构，不应展开/收起步骤。
+function isYamlFile() {
+    return (S.dataType || '') === 'yaml';
+}
+
+// 判断当前数据是否含 steps 字段（表头包含 'steps' 列）。展开步骤功能除要求 YAML 文件外，
+// 还必须满足文件本身带有 steps 字段，避免无 steps 列的 YAML 文件误显示「展开步骤」入口。
+function hasStepsColumn() {
+    var h = (S.data && S.data.headers) || [];
+    return h.indexOf('steps') >= 0;
+}
+
 var S = {
     dataType: __CFG.dataType,
     msgType: __CFG.msgType,
@@ -751,6 +764,8 @@ window.addEventListener('message', function (e) {
             S._pendingScrollTop = 0;
             // 用新 key 重新加载该文件自己的 UI 状态（首次打开则全部为空，即默认单行）
             try { loadUiState(); } catch (_) { /* ignore */ }
+            // 文件切换后刷新「展开步骤」按钮显隐（仅 YAML 显示）
+            if (typeof updateExpandStepsBtnVisibility === 'function') updateExpandStepsBtnVisibility();
         }
         // 表头中英映射：数据下发时顺带更新（需在 renderTable 之前写入 S，让骨架构造拿到最新映射）
         if (m.headerLabels && typeof m.headerLabels === 'object') {
@@ -870,6 +885,8 @@ window.addEventListener('message', function (e) {
         // 因此对 force=true 的外部变更/可见切换，统一直接覆盖前端，不再弹冲突弹窗。
         S.data = _newData;
         dbg('🎨 render rows=' + S.data.rows.length + ' force=' + !!m.force + ' reason=' + (m.reason || ''));
+        // 数据到达后按最新表头刷新「展开步骤」按钮显隐（YAML 且有 steps 列才显示）
+        if (typeof updateExpandStepsBtnVisibility === 'function') updateExpandStepsBtnVisibility();
         S.sel.clear();
         // 仅在数据真正被外部重置/重载时清空 mods；saveHighlight / pushSuccess 这种自反弹场景
         // 数据其实未变，mods 是 webview 端的权威状态（undo/redo 后由 restoreSnapshot 写入），不要被清。

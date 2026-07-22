@@ -254,7 +254,7 @@ function _getStepsTotalW() {
 function _buildSkeletonHtml() {
     var headers = (S.data && S.data.headers) || [];
     var stepsCol = headers.indexOf('steps');
-    var hasSteps = (stepsCol >= 0);
+    var hasSteps = (stepsCol >= 0) && isYamlFile();
     var expanded = !!(S._stepsExpanded && hasSteps);
     // steps 子列宽：优先用 S._stepsSubW（拖动后持久化），后退到默认。
     // 默认列宽：[序号 32, 步骤描述 132, 预期结果 128, 数据 72, 操作 40]，总和 404
@@ -415,7 +415,7 @@ function _buildArrayChipsHtml(arr) {
 function _buildRowHtml(ri, tsIdColIdx) {
     var headers = (S.data && S.data.headers) || [];
     var stepsCol = headers.indexOf('steps');
-    var hasSteps = (stepsCol >= 0);
+    var hasSteps = (stepsCol >= 0) && isYamlFile();
     var expanded = !!(S._stepsExpanded && hasSteps);
     var row = S.data.rows[ri] || [];
     var selCls = S.sel.has(ri) ? ' selected' : '';

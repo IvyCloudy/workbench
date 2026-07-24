@@ -29,6 +29,7 @@ import { showSaveResult, showPushErrorModal } from '../utils/message';
 import { TelemetryService } from '../utils/telemetry';
 import { buildErrorProps } from '../services/utils';
 import type { PushStrategy, PushContext } from '../providers/BaseEditorProvider';
+import { pushDiag, showPushDiag } from '../utils/pushDiagnostics';
 
 export interface EditorMsgCtx {
     session: EditorSession;
@@ -167,6 +168,7 @@ async function handleSave(msg: any, ctx: EditorMsgCtx): Promise<void> {
 
 async function handlePushTestCase(msg: any, ctx: EditorMsgCtx): Promise<void> {
     if (!msg?.data) return;
+    pushDiag(`[前端请求] 收到推送 | 前端下发行数=${Array.isArray(msg.data) ? msg.data.length : '非数组'} | pushIndexToRow长度=${Array.isArray(msg.pushIndexToRow) ? msg.pushIndexToRow.length : 0} | rowIndexMap键数=${msg.rowIndexMap && typeof msg.rowIndexMap === 'object' ? Object.keys(msg.rowIndexMap).length : 0} | filePath=${ctx.getFilePath()}`);
     const pushCtx: PushContext = {
         session: ctx.session,
         filePath: ctx.getFilePath(),
@@ -176,6 +178,8 @@ async function handlePushTestCase(msg: any, ctx: EditorMsgCtx): Promise<void> {
         markSelfSave: () => ctx.onSelfSave(),
     };
     await ctx.pushStrategy.push(msg.data, pushCtx, ctx.webviewPanel, ctx.extensionContext);
+    pushDiag('[前端请求] 推送流程结束');
+    showPushDiag();
 }
 
 async function handleOpenTextEditor(_msg: any, ctx: EditorMsgCtx): Promise<void> {

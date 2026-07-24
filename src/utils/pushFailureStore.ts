@@ -19,15 +19,20 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { TS_ID_COLUMN } from '../services/utils';
+import type { PushFailCategory, PushInterfaceField } from './pushFailureCategory';
 
 // ============================================
 // 类型定义
 // ============================================
 
-/** 单条失败记录：reason 为失败原因，timestamp 为失败时间戳（ms） */
+/** 单条失败记录：reason 为失败原因原文，timestamp 为失败时间戳（ms），category/field 为分类与字段维度 */
 export interface PushFailureItem {
     reason: string;
     timestamp: number;
+    /** 失败分类码（统计/埋点维度），历史数据缺失时为 undefined */
+    category?: PushFailCategory;
+    /** 命中的接口字段码（聚焦维度），历史数据缺失时为 undefined */
+    field?: PushInterfaceField;
 }
 
 export interface PushFailureEntry {
@@ -59,10 +64,12 @@ function normalizeEntry(raw: any): PushFailureEntry {
         if (v == null) continue;
         if (typeof v === 'string') {
             out[k] = { reason: v, timestamp: 0 };
-        } else if (typeof v === 'object') {
+        } else         if (typeof v === 'object') {
             const reason = (v.reason != null) ? String(v.reason) : '';
             const ts = (typeof v.timestamp === 'number' && isFinite(v.timestamp)) ? v.timestamp : 0;
-            out[k] = { reason, timestamp: ts };
+            const cat = typeof v.category === 'string' ? (v.category as PushFailCategory) : undefined;
+            const fld = typeof v.field === 'string' ? (v.field as PushInterfaceField) : undefined;
+            out[k] = { reason, timestamp: ts, category: cat, field: fld };
         }
     }
     return out;
@@ -197,7 +204,7 @@ export async function cleanupOrphanedFailures(): Promise<void> {
 export async function mergeFailures(
     filePath: string,
     batchTsIds: string[],
-    failures: { [tsId: string]: string },
+    failures: { [tsId: string]: string | { reason: string; category?: PushFailCategory; field?: PushInterfaceField } },
     successTsIds?: string[]
 ): Promise<void> {
     if (!filePath) return;
@@ -224,8 +231,12 @@ export async function mergeFailures(
     const now = Date.now();
     if (failures && typeof failures === 'object') {
         for (const k of Object.keys(failures)) {
-            if (k && failures[k] !== undefined && failures[k] !== null) {
-                entry[k] = { reason: String(failures[k] || ''), timestamp: now };
+            const raw = failures[k];
+            if (k && raw !== undefined && raw !== null) {
+                const reason = typeof raw === 'string' ? String(raw) : String(raw.reason || '');
+                const category = typeof raw === 'string' ? undefined : (raw.category as PushFailCategory | undefined);
+                const field = typeof raw === 'string' ? undefined : (raw.field as PushInterfaceField | undefined);
+                entry[k] = { reason, timestamp: now, category, field };
             }
         }
     }
@@ -254,7 +265,7 @@ export async function mergeFailures(
 export async function persistPushFailures(
     filePath: string,
     rows: any[],
-    failures: Array<{ tsId: string; reason: string }>,
+    failures: Array<{ tsId: string; reason: string; category?: PushFailCategory; field?: PushInterfaceField }>,
     successMappings: Array<{ tsId: string; testCaseNo: string }>,
 ): Promise<void> {
     const batchTsIds: string[] = [];
@@ -262,10 +273,14 @@ export async function persistPushFailures(
         const id = rec && (rec as any)[TS_ID_COLUMN] != null ? String((rec as any)[TS_ID_COLUMN]) : '';
         if (id) batchTsIds.push(id);
     }
-    const failuresMap: { [tsId: string]: string } = {};
+    const failuresMap: { [tsId: string]: { reason: string; category?: PushFailCategory; field?: PushInterfaceField } } = {};
     failures.forEach(f => {
         if (f && f.tsId !== undefined && f.tsId !== null && f.tsId !== '') {
-            failuresMap[String(f.tsId)] = String(f.reason || '');
+            failuresMap[String(f.tsId)] = {
+                reason: String(f.reason || ''),
+                category: f.category,
+                field: f.field,
+            };
         }
     });
     const successTsIds: string[] = successMappings

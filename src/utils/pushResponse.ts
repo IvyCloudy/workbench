@@ -11,6 +11,7 @@
  */
 
 import { TS_ID_COLUMN } from '../services/utils';
+import { classifyFailure, extractInterfaceField, type PushFailCategory, type PushInterfaceField } from './pushFailureCategory';
 
 // ============================================
 // 类型定义
@@ -27,6 +28,10 @@ export interface PushResponseFailure {
     tsId: string;
     reason: string;
     bodyIndex: number;
+    /** 失败分类码（后端中文文本经关键词归类，统计/埋点用稳定维度） */
+    category: PushFailCategory;
+    /** 命中的接口字段码（聚焦维度；字段类错误才有值，其余为 undefined） */
+    field?: PushInterfaceField;
 }
 
 /** parsePushResponse 返回值 */
@@ -61,8 +66,23 @@ export function parsePushResponse(
             if (fallback != null && fallback !== '') sid = String(fallback);
         }
         const dataField = item.data == null ? '' : String(item.data);
-        if (t === '1') successMappings.push({ tsId: sid, testCaseNo: dataField });
-        else if (t === '2') failures.push({ tsId: sid, reason: dataField, bodyIndex: bi });
+        // 仅 type==='1' 视为成功；其余（'2' 失败 / 未知 type / 缺失 type）一律计入失败。
+        // 关键修复：历史上"未知 type"项会被静默丢弃，既不计入成功也不计入失败，
+        // 导致 successCount + failures.length < total，部分行的接口结果凭空消失，
+        // 表现为"推送结果数据对不上 / 接口失败未合并"。现在任何非成功项都必须有归属。
+        if (t === '1') {
+            successMappings.push({ tsId: sid, testCaseNo: dataField });
+        } else {
+            const reason = dataField
+                || (t === '2' ? '推送失败' : `推送响应未返回明确结果（type=${t || '空'}）`);
+            failures.push({
+                tsId: sid,
+                reason,
+                bodyIndex: bi,
+                category: classifyFailure({ reason }),
+                field: extractInterfaceField(reason),
+            });
+        }
     });
     return { successMappings, failures };
 }

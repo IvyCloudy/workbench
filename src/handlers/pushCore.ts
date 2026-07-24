@@ -9,7 +9,8 @@
  *       全部行都命中时，跳过后端调用直接以 onComplete 汇总展示。
  *    2. 静默过滤中文样例占位行（'案例唯一标识，不可修改' / '案例唯一标识'）；
  *       全部选中行都是样例时终止并返回样例失败明细。
- *    3. 构造 taskInfo、判定 pushSource、调用后端推送接口。
+ *    3. 构造 taskInfo；按来源拆两批调用后端推送接口
+ *       （testcase_id 为 TC+uuid.hex → testAgent，其余 → testAgentMA），结果合并。
  *    4. 解析后端响应；生成失败泄露埋点数据；成功回写 testCaseNo & 快照。
  *    5. 汇总失败行号（多级降级）并将预校验失败合并进最终结果，统一由 onComplete 输出。
  *
@@ -31,9 +32,20 @@ import type * as vscode from 'vscode';
 import { pushTestCase } from '../services/http';
 import { isMapError, ROW_INDEX_META } from '../utils/pushDataMapper';
 import { parsePushResponse, PushSuccessMapping, PushResponseFailure } from '../utils/pushResponse';
+import { mapRowToCaseItem, isMapError } from '../utils/pushDataMapper';
+import {
+    classifyFailure,
+    aggregateFailures,
+    aggregateByField,
+    summarizeCategoryBreakdown,
+    summarizeFieldBreakdown,
+    failureFieldOf,
+    type PushFailCategory,
+    type PushInterfaceField,
+} from '../utils/pushFailureCategory';
+import { pushDiag, showPushDiag } from '../utils/pushDiagnostics';
 import { getCurrentTaskInfo } from '../utils/commands';
 import {
-    getPushSource,
     filterTemplateExampleRows,
     TEMPLATE_EXAMPLE_TS_ID,
     isSampleTsId,
@@ -56,6 +68,10 @@ export interface PushFailureItem {
     reason: string;
     /** 主表 1-based 行号；undefined 时前端渲染为"(无)"不可点击 */
     rowIndex?: number;
+    /** 失败分类码（统计/埋点维度；展示仍用 reason 原文） */
+    category?: PushFailCategory;
+    /** 命中的接口字段码（聚焦维度；字段类错误才有值，其余为 undefined） */
+    field?: PushInterfaceField;
 }
 
 /**
@@ -172,6 +188,33 @@ function readTsId(rec: RowLike | undefined | null): string {
     return raw == null ? '' : String(raw).trim();
 }
 
+/** 推送来源平台类型（与接口 sourcePlatform 取值对应）。 */
+type PushSource = 'testAgent' | 'testAgentMA';
+
+/** 来源判定：testcase_id 满足 TC + 32 位 uuid.hex → 'testAgent'，其余（含 MA / 标准 UUID）→ 'testAgentMA'。 */
+const TC_SOURCE_PATTERN = /^TC[0-9a-f]{32}$/i;
+
+function resolveRowSource(tsId: string): PushSource {
+    return TC_SOURCE_PATTERN.test(tsId) ? 'testAgent' : 'testAgentMA';
+}
+
+/**
+ * 按来源拆批：TC+uuid.hex 行归 testAgent，其余归 testAgentMA。
+ * 保留各自内部相对顺序，便于后续按全局行号合并结果。
+ */
+function splitRowsByPushSource(rows: RowLike[]): Array<{ source: PushSource; rows: RowLike[] }> {
+    const tc: RowLike[] = [];
+    const ma: RowLike[] = [];
+    for (const r of rows) {
+        if (resolveRowSource(readTsId(r)) === 'testAgent') tc.push(r);
+        else ma.push(r);
+    }
+    const batches: Array<{ source: PushSource; rows: RowLike[] }> = [];
+    if (tc.length > 0) batches.push({ source: 'testAgent', rows: tc });
+    if (ma.length > 0) batches.push({ source: 'testAgentMA', rows: ma });
+    return batches;
+}
+
 /** 安全调用 hook：吞掉钩子异常，避免污染主流程；仅用于"通知型"钩子。 */
 function safeInvoke<T extends (...args: any[]) => any>(fn: T | undefined, ...args: Parameters<T>): void {
     if (typeof fn !== 'function') return;
@@ -231,8 +274,25 @@ const EMPTY_VALIDATOR: RowValidator = {
     },
 };
 
+/** 案例唯一标识（testcase_id）合法格式：标准 UUID，或 TC/MA 前缀 + 32 位 uuid.hex */
+const TESTCASE_ID_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(TC|MA)[0-9a-f]{32})$/i;
+
+/** 内置校验：testcase_id 值必须符合案例唯一标识规范（UUID / TC+uuid.hex / MA+uuid.hex） */
+const FORMAT_VALIDATOR: RowValidator = {
+    kind: 'invalidFormat',
+    check(_row, tsId) {
+        if (!TESTCASE_ID_PATTERN.test(tsId)) {
+            return {
+                tsId,
+                reason: 'testcase_id的值不符合案例唯一标识规范',
+            };
+        }
+        return null;
+    },
+};
+
 /** 内置校验器序列（按需扩展；语义即"按顺序对每行跑一遍所有校验"）。 */
-const DEFAULT_VALIDATORS: RowValidator[] = [PLACEHOLDER_VALIDATOR, EMPTY_VALIDATOR];
+const DEFAULT_VALIDATORS: RowValidator[] = [PLACEHOLDER_VALIDATOR, EMPTY_VALIDATOR, FORMAT_VALIDATOR];
 
 /**
  * 通用校验驱动：按 validators 顺序对每行跑一遍，收集失败并按 kind 分桶。
@@ -250,6 +310,9 @@ function runValidators(
     for (let i = 0; i < rows.length; i++) {
         const rec = rows[i];
         const tsId = readTsId(rec);
+        // 中文样例占位行（'案例唯一标识，不可修改' / '案例唯一标识'）已由样例过滤识别，
+        // 会在 step 3 静默剔除，无需再做预校验（占位/空/格式·唯一性），避免被误判为 fieldInvalid。
+        if (isSampleTsId(tsId)) continue;
         for (const v of validators) {
             const hit = v.check(rec, tsId);
             if (hit) {
@@ -258,6 +321,8 @@ function runValidators(
                     tsId: v.kind === 'empty' ? `__EMPTY_TSID_ROW_${rowIndex}__` : hit.tsId,
                     reason: hit.reason,
                     rowIndex,
+                    category: classifyFailure({ reason: hit.reason, validatorKind: v.kind }),
+                    field: failureFieldOf({ reason: hit.reason, validatorKind: v.kind }),
                 };
                 (failuresByKind[v.kind] ||= []).push(item);
                 droppedIndex.add(i);
@@ -295,6 +360,18 @@ export function collectEmptyTestcaseIdFailures(
     resolveRowIndex: (i: number) => number,
 ): PushFailureItem[] {
     return runValidators(rows, resolveRowIndex, [EMPTY_VALIDATOR]).failuresByKind['empty'] || [];
+}
+
+/**
+ * 校验：testcase_id 值必须符合案例唯一标识规范（UUID / TC+uuid.hex / MA+uuid.hex）。
+ *
+ * 内部委托 `runValidators([FORMAT_VALIDATOR])`；对外签名保持不变。
+ */
+export function collectInvalidFormatFailures(
+    rows: RowLike[],
+    resolveRowIndex: (i: number) => number,
+): PushFailureItem[] {
+    return runValidators(rows, resolveRowIndex, [FORMAT_VALIDATOR]).failuresByKind['invalidFormat'] || [];
 }
 
 // ============================================
@@ -335,6 +412,7 @@ export function extractSampleRows(
                     tsId: TEMPLATE_EXAMPLE_TS_ID,
                     reason: '为样例数据，不允许推送。请修改"案例唯一标识，不可修改"等占位字段为真实数据后再试',
                     rowIndex,
+                    category: 'sample',
                 });
             }
         }
@@ -542,7 +620,7 @@ export function buildFailureItems(
             rowIndex = resolver({ failure, ...ctxBase });
             if (rowIndex !== undefined) break;
         }
-        return { tsId: failure.tsId, reason: failure.reason, rowIndex };
+        return { tsId: failure.tsId, reason: failure.reason, rowIndex, category: failure.category, field: failure.field };
     });
 }
 
@@ -738,7 +816,7 @@ function stepCheckMaxRows(ctx: PushContext, rowCount: number): boolean {
 
 /** step 2 结果：预校验产出。 */
 interface PreValidationResult {
-    /** 预校验失败明细（占位 + 空，占位在前） */
+    /** 预校验失败明细（占位 + 空 + 格式，按此顺序） */
     failures: PushFailureItem[];
     /** 需要从 payload 剔除的原始下标集合 */
     droppedIndex: Set<number>;
@@ -747,13 +825,14 @@ interface PreValidationResult {
 }
 
 /**
- * step 2：预校验 —— 通用 validators 驱动 + 差异化埋点 + 占位失败持久化。
+ * step 2：预校验 —— 通用 validators 驱动 + 差异化埋点 + 占位/格式失败持久化。
  */
-async function stepPreValidate(ctx: PushContext, rows: RowLike[]): Promise<PreValidationResult> {
+export async function stepPreValidate(ctx: PushContext, rows: RowLike[]): Promise<PreValidationResult> {
     const { failuresByKind, droppedIndex } = runValidators(rows, ctx.opts.resolveRowIndex);
     const placeholderFailures = failuresByKind['placeholder'] || [];
     const emptyFailures = failuresByKind['empty'] || [];
-    const failures: PushFailureItem[] = [...placeholderFailures, ...emptyFailures];
+    const formatFailures = failuresByKind['invalidFormat'] || [];
+    const failures: PushFailureItem[] = [...placeholderFailures, ...emptyFailures, ...formatFailures];
     if (failures.length === 0) {
         return { failures, droppedIndex, byKind: failuresByKind };
     }
@@ -770,18 +849,26 @@ async function stepPreValidate(ctx: PushContext, rows: RowLike[]): Promise<PreVa
             count: String(emptyFailures.length),
         });
     }
-    // 只对"占位失败"做持久化红色高亮（空 tsId 无稳定 key，跳过）
-    if (placeholderFailures.length > 0) {
+    if (formatFailures.length > 0) {
+        TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.invalidFormatSkipped`, {
+            ...baseTelemetryProps(ctx),
+            count: String(formatFailures.length),
+        });
+    }
+    // 对"占位失败"与"格式非法失败"做持久化红色高亮（二者都带稳定真实 tsId，可作 key）；
+    // 空 tsId 无稳定 key（伪 tsId 无法匹配行），跳过。
+    const highlightFailures = [...placeholderFailures, ...formatFailures];
+    if (highlightFailures.length > 0) {
         try {
-            const placeholderRows = placeholderFailures.map(f => ({ [TS_ID_COLUMN]: f.tsId } as RowLike));
+            const highlightRows = highlightFailures.map(f => ({ [TS_ID_COLUMN]: f.tsId } as RowLike));
             await persistPushFailures(
                 ctx.opts.filePath,
-                placeholderRows,
-                placeholderFailures.map(f => ({ tsId: f.tsId, reason: f.reason })),
+                highlightRows,
+                highlightFailures.map(f => ({ tsId: f.tsId, reason: f.reason, category: f.category, field: f.field })),
                 [],
             );
         } catch (err: any) {
-            console.error(`[推送][${ctx.traceId}] 持久化占位失败标记失败:`, err?.message || err);
+            console.error(`[推送][${ctx.traceId}] 持久化预校验失败标记失败:`, err?.message || err);
         }
     }
     return { failures, droppedIndex, byKind: failuresByKind };
@@ -811,44 +898,145 @@ function applyPreValidationDrops(rows: RowLike[], droppedIndex: Set<number>): { 
 function pickAllDroppedReason(byKind: Record<string, PushFailureItem[]>): string {
     const p = (byKind['placeholder'] || []).length;
     const e = (byKind['empty'] || []).length;
+    const f = (byKind['invalidFormat'] || []).length;
+    if (p > 0 && e > 0 && f > 0) return 'placeholderEmptyAndInvalidFormat';
     if (p > 0 && e > 0) return 'placeholderAndEmptyTestcaseId';
+    if (p > 0 && f > 0) return 'placeholderAndInvalidFormat';
+    if (e > 0 && f > 0) return 'emptyAndInvalidFormat';
     if (p > 0) return 'placeholderTestcaseIdOnly';
-    return 'emptyTestcaseIdOnly';
+    if (e > 0) return 'emptyTestcaseIdOnly';
+    if (f > 0) return 'invalidFormatOnly';
+    return 'unknown';
 }
 
 /**
- * step 3：调用后端 & 校验 returnCode。成功返回 body，失败返回 null（已通知 hook）。
+ * step 4：调用后端 & 校验 returnCode。
+ * 成功返回解析后的 successMappings/failures；
+ * 接口失败时也返回结构化结果（每行一条失败），不再 return null，
+ * 保证 runPush 能统一走到 onComplete 展示完整结果（含预校验失败 + 接口失败）。
  */
 async function stepInvokeBackend(
     ctx: PushContext,
     rows: RowLike[],
     taskInfo: { testTaskNo: string; subTestTaskId: string },
-    pushSource: string,
-): Promise<any | null> {
+): Promise<{ successMappings: PushSuccessMapping[]; failures: PushResponseFailure[] }> {
     console.log(`[推送][${ctx.traceId}] 文件: ${ctx.opts.filePath}, ${rows.length} 行`);
     TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.start`, {
         ...baseTelemetryProps(ctx), totalRows: String(rows.length),
     });
     emitProgress(ctx.hooks, 'start', { rows: rows.length });
     emitProgress(ctx.hooks, 'pushing', { rows: rows.length });
-    const pushResult = await pushTestCase(
-        ctx.opts.extensionContext,
-        normalizePushData(rows),
-        taskInfo,
-        ctx.baseName,
-        pushSource as any,
-    );
-    if (pushResult.returnCode !== 'SUC0000') {
-        ctx.hooks.onBackendError(pushResult.errorMsg || '推送失败');
-        TelemetryService.sendTelemetryErrorEvent(`${ctx.telemetryPrefix}.failed`, {
-            ...baseTelemetryProps(ctx),
-            returnCode: pushResult.returnCode || '',
-            totalRows: String(rows.length),
-            costMs: String(Date.now() - ctx.pushStart),
-        });
-        return null;
+
+    // 按来源分两批推送：TC+uuid.hex → testAgent；其余（MA / 标准 UUID）→ testAgentMA。
+    // 各自独立调用接口，响应结果再按「全局行下标」合并，保证最终弹窗与行号一致、按行顺序呈现。
+    const batches = splitRowsByPushSource(rows);
+    if (batches.length === 0) {
+        pushDiag(`[接口] 来源分流后无任何批次（rows=${rows.length}），跳过接口调用`);
+        return { successMappings: [], failures: [] };
     }
-    return pushResult.body;
+    pushDiag(`[接口] 分批=${batches.map((b) => `${b.source}:${b.rows.length}行`).join(', ')}`);
+
+    // 预计算每批行在全局 rows 中的下标，用于把批内 bodyIndex 重映射回全局行号。
+    const tcGlobalIdx: number[] = [];
+    const maGlobalIdx: number[] = [];
+    rows.forEach((r, gi) => {
+        if (resolveRowSource(readTsId(r)) === 'testAgent') tcGlobalIdx.push(gi);
+        else maGlobalIdx.push(gi);
+    });
+
+    const allSuccess: PushSuccessMapping[] = [];
+    const allFailures: PushResponseFailure[] = [];
+    for (const batch of batches) {
+        const gidx = batch.source === 'testAgent' ? tcGlobalIdx : maGlobalIdx;
+        pushDiag(`[接口] 开始调用批次 source=${batch.source} 行数=${batch.rows.length}`);
+
+        // 逐行预映射（dry-run）：探测 mapRowToCaseItem 会抛错的行，剔除后只推送合法行，
+        // 避免单行映射失败（如缺步骤描述）杀死整批。http.ts 内 data.map(mapRowToCaseItem)
+        // 任一行为抛错即整体失败，故在调用前先在这里逐行容错。
+        const normRows = normalizePushData(batch.rows);
+        const validRows: any[] = [];
+        const validGlobalIdx: number[] = [];
+        for (let bi = 0; bi < normRows.length; bi++) {
+            const r = normRows[bi];
+            try {
+                mapRowToCaseItem(r);   // 仅探测是否抛错，结果不收集
+                validRows.push(r);
+                validGlobalIdx.push(gidx[bi] ?? bi);
+            } catch (e: any) {
+                if (isMapError(e)) {
+                    pushDiag(`[映射] 行=${e.rowIndex ?? (gidx[bi] ?? bi)} tsId=${readTsId(r) || e.caseTag} 映射失败 reason=${e.reason} :: ${e.message}`);
+                    allFailures.push({
+                        tsId: readTsId(r) || e.caseTag || '(未知)',
+                        reason: e.message || '数据映射失败',
+                        bodyIndex: gidx[bi] ?? bi,
+                        category: classifyFailure({ reason: e.reason || 'dataMappingError' }),
+                    });
+                } else {
+                    // 非映射类异常（程序 bug），原样上抛由 runPush 顶层 catch 兜底
+                    throw e;
+                }
+            }
+        }
+        if (validRows.length === 0) {
+            pushDiag(`[接口] 批次${batch.source}全部行映射失败，跳过接口调用`);
+            continue;
+        }
+        pushDiag(`[接口] 批次${batch.source}预映射通过=${validRows.length}/${batch.rows.length} 行`);
+        // 打印本次将发送给后端的请求数据（validRows），便于排查字段/时序问题。
+        // 仅观测、不改变流程；真实请求体由 http.ts 的 pushTestCase 组装并发送。
+        pushDiag(`[接口] 批次${batch.source}请求数据(${validRows.length}行):`, validRows);
+
+        const pushResult = await pushTestCase(
+            ctx.opts.extensionContext,
+            validRows,
+            taskInfo,
+            ctx.baseName,
+            batch.source,
+        );
+        pushDiag(`[接口] 批次${batch.source}返回 | returnCode=${pushResult.returnCode || '(空)'} | errorMsg=${(pushResult.errorMsg || '').slice(0, 120)} | body长度=${Array.isArray(pushResult.body) ? pushResult.body.length : '非数组'}`);
+
+        if (pushResult.body && Array.isArray(pushResult.body)) {
+            pushDiag(`[接口] 原始body明细:`, pushResult.body.map((b: any) => ({ type: b.type ?? '(缺失)', sourceId: b.sourceId, data: String(b.data || '').slice(0, 80) })));
+        }
+        if (pushResult.returnCode !== 'SUC0000') {
+            const errorMsg = pushResult.errorMsg || '推送失败';
+            // 不再调 onBackendError / return null —— 改为将接口错误逐行拆成失败项，
+            // 由 runPush 的 step 7/8 统一合并预校验失败后在 onComplete 中一次性展示。
+            TelemetryService.sendTelemetryErrorEvent(`${ctx.telemetryPrefix}.failed`, {
+                ...baseTelemetryProps(ctx),
+                returnCode: pushResult.returnCode || '',
+                totalRows: String(validRows.length),
+                source: batch.source,
+                topFailCategory: classifyFailure({ reason: errorMsg }),
+                topFailField: failureFieldOf({ reason: errorMsg }) || '',
+                costMs: String(Date.now() - ctx.pushStart),
+            });
+            // 为该批每行都生成一条失败记录（bodyIndex 使用全局行下标）
+            for (let vi = 0; vi < validRows.length; vi++) {
+                const tsId = readTsId(validRows[vi]);
+                allFailures.push({
+                    tsId,
+                    reason: errorMsg,
+                    bodyIndex: validGlobalIdx[vi] ?? vi,
+                    category: classifyFailure({ reason: errorMsg }),
+                    field: failureFieldOf({ reason: errorMsg }),
+                });
+            }
+            continue; // 继续处理剩余批次（而非整体终止）
+        }
+        const parsed = parsePushResponse(pushResult.body, validRows);
+        pushDiag(`[解析] 批次${batch.source}解析结果 | successMappings=${parsed.successMappings.length} failures=${parsed.failures.length}`);
+        if (parsed.failures.length) pushDiag(`[解析] 失败明细:`, parsed.failures.map((f: any) => ({ tsId: f.tsId, reason: f.reason, bodyIndex: f.bodyIndex })));
+        if (parsed.successMappings.length) pushDiag(`[解析] 成功明细:`, parsed.successMappings.map((m: any) => ({ tsId: m.tsId, testCaseNo: m.testCaseNo })));
+        for (const f of parsed.failures) {
+            // 批内 bodyIndex → 全局行下标，确保与 buildTsIdToIndex(rows) / composedFilteredToOriginal 对齐
+            f.bodyIndex = validGlobalIdx[f.bodyIndex] ?? f.bodyIndex;
+        }
+        allSuccess.push(...parsed.successMappings);
+        allFailures.push(...parsed.failures);
+    }
+    pushDiag(`[接口] 全批结束 | 总success=${allSuccess.length} 总failures=${allFailures.length}`);
+    return { successMappings: allSuccess, failures: allFailures };
 }
 
 /**
@@ -905,11 +1093,15 @@ async function refreshAllFailedSnapshot(ctx: PushContext): Promise<void> {
 /**
  * 顶层未预期异常统一兜底 —— 区分 MapError（结构化）与普通 Error（纯文本）。
  * 保证前端一定能解锁 loading。
+ *
+ * @param extraFailures 异常发生前已收集的失败项（如预校验拦截），
+ *                     合并到 onComplete 中避免丢弃；异常本身的错误信息排在最后。
  */
 function handleUnexpectedError(
     ctx: PushContext,
     err: any,
     originalRowsCount: number,
+    extraFailures?: PushFailureItem[],
 ): void {
     const errorMessage = String(err?.message || err || '未知错误');
     console.error(`[推送][${ctx.traceId}] runPush 未预期异常:`, errorMessage, err);
@@ -920,6 +1112,8 @@ function handleUnexpectedError(
             tsId: err.caseTag || '',
             reason: errorMessage,
             rowIndex: err.rowIndex,
+            category: classifyFailure({ reason: errorMessage, mapErrorReason: err.reason }),
+            field: failureFieldOf({ reason: errorMessage, mapErrorReason: err.reason }),
         };
         TelemetryService.sendTelemetryErrorEvent(`${ctx.telemetryPrefix}.mapError`, {
             ...baseTelemetryProps(ctx),
@@ -928,8 +1122,10 @@ function handleUnexpectedError(
             errorMessage: errorMessage.slice(0, 500),
             costMs: String(Date.now() - ctx.pushStart),
         });
+        // 合并已有失败 + 本次异常，避免预校验等已收集的失败被吞掉
+        const merged = [...(extraFailures || []), mapFailure];
         try {
-            ctx.hooks.onComplete({ successCount: 0, failures: [mapFailure], total: 1 });
+            ctx.hooks.onComplete({ successCount: 0, failures: merged, total: originalRowsCount });
         } catch (hookErr: any) {
             console.error(`[推送][${ctx.traceId}] onComplete 钩子抛错:`, hookErr?.message || hookErr);
         }
@@ -978,6 +1174,9 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         hooks: opts.hooks,
     };
     const originalRowsCount = Array.isArray(opts.rows) ? opts.rows.length : 0;
+    pushDiag(`[入口] runPush 开始 | 原始行数=${originalRowsCount} | frontPushIndexToRow长度=${opts.frontPushIndexToRow?.length ?? 0} | frontRowIndexMap键数=${opts.frontRowIndexMap ? Object.keys(opts.frontRowIndexMap).length : 0} | maxRows=${ctx.maxRows} | filePath=${opts.filePath}`);
+    // 提升到 try 外层，使 catch 兜底能访问——避免异常路径丢弃已收集的预校验失败
+    let preValidationFailures: PushFailureItem[] = [];
 
     try {
         // ---- 0. 任务绑定校验 ----
@@ -997,30 +1196,43 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         // ---- 1.a 贴 __rowIndex（早于任何过滤，行号永远跟着行走） ----
         rows = stampRowIndex(rows, opts.resolveRowIndex);
 
-        const pushSource = getPushSource(opts.filePath, rows);
-
         // ---- 1.b 行数上限保护 ----
         if (stepCheckMaxRows(ctx, rows.length)) return;
 
-        // ---- 2. 预校验（占位 + 空 tsId） ----
+        // ---- 2. 预校验（占位 + 空 tsId + 格式） ----
         const pre = await stepPreValidate(ctx, rows);
-        const preValidationFailures = pre.failures;
+        preValidationFailures = pre.failures;
 
         const applied = applyPreValidationDrops(rows, pre.droppedIndex);
         rows = applied.rows;
         const preFilterToOriginal = applied.preFilterToOriginal;
+        {
+            const byCat: Record<string, number> = {};
+            pre.failures.forEach((f: any) => { const c = f?.category || '未知'; byCat[c] = (byCat[c] || 0) + 1; });
+            pushDiag(`[预校验] 预校验失败=${pre.failures.length} 类别分布=${JSON.stringify(byCat)} | 剔除后剩余可推送行=${rows.length} | 是否短路=${rows.length === 0 ? '是（不调接口）' : '否'}`);
+            if (pre.failures.length) pushDiag('[预校验] 失败明细:', pre.failures.map((f: any) => ({ row: f.rowIndex, tsId: f.tsId, cat: f.category, reason: f.reason })));
+        }
 
         // 预校验剔除后已无可推送行 —— 直接短路
         if (rows.length === 0) {
+            const abortStats = aggregateFailures(preValidationFailures, 1);
+            const abortFieldStats = aggregateByField(preValidationFailures, 1);
             TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
                 ...baseTelemetryProps(ctx),
                 reason: pickAllDroppedReason(pre.byKind),
                 count: String(preValidationFailures.length),
+                failCategoryBreakdown: summarizeCategoryBreakdown(abortStats),
+                topFailCategory: abortStats.length ? abortStats[0].category : '',
+                failFieldBreakdown: summarizeFieldBreakdown(abortFieldStats),
+                topFailField: abortFieldStats.length ? abortFieldStats[0].field : '',
             });
+            pushDiag(`[短路-全部预校验失败] 总数=${originalRowsCount} 失败=${preValidationFailures.length} | 不调用接口`);
+            pushDiag('[短路] 失败明细:', preValidationFailures.map((f: any) => ({ row: f.rowIndex, tsId: f.tsId, cat: f.category, reason: f.reason })));
+            showPushDiag();
             ctx.hooks.onComplete({
                 successCount: 0,
                 failures: preValidationFailures,
-                total: preValidationFailures.length,
+                total: originalRowsCount,
             });
             emitProgress(ctx.hooks, 'done', { rows: 0 });
             return;
@@ -1033,24 +1245,38 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         if (filtered.length === 0) {
             // 混合场景：样例 + 预校验失败 → 一起在 onComplete 展示
             if (preValidationFailures.length > 0) {
+                const abortStats = aggregateFailures([...preValidationFailures, ...sampleFailures], 1);
+                const abortFieldStats = aggregateByField([...preValidationFailures, ...sampleFailures], 1);
                 TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
                     ...baseTelemetryProps(ctx),
                     reason: 'onlyTemplateExampleAndPreValidationFailed',
                     sampleCount: String(sampleFailures.length),
                     preValidationCount: String(preValidationFailures.length),
+                    failCategoryBreakdown: summarizeCategoryBreakdown(abortStats),
+                    topFailCategory: abortStats.length ? abortStats[0].category : '',
+                    failFieldBreakdown: summarizeFieldBreakdown(abortFieldStats),
+                    topFailField: abortFieldStats.length ? abortFieldStats[0].field : '',
                 });
+                pushDiag(`[短路-仅样例+预校验失败] 总数=${originalRowsCount} 预校验失败=${preValidationFailures.length} 样例失败=${sampleFailures.length} | 不调用接口`);
+                showPushDiag();
                 ctx.hooks.onComplete({
                     successCount: 0,
                     failures: [...preValidationFailures, ...sampleFailures],
-                    total: preValidationFailures.length + sampleFailures.length,
+                    total: originalRowsCount,
                 });
                 emitProgress(ctx.hooks, 'done', { rows: 0 });
                 return;
             }
+            const sampleStats = aggregateFailures(sampleFailures, 1);
+            const sampleFieldStats = aggregateByField(sampleFailures, 1);
             TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
                 ...baseTelemetryProps(ctx),
                 reason: 'onlyTemplateExample',
                 count: String(sampleFailures.length),
+                failCategoryBreakdown: summarizeCategoryBreakdown(sampleStats),
+                topFailCategory: sampleStats.length ? sampleStats[0].category : '',
+                failFieldBreakdown: summarizeFieldBreakdown(sampleFieldStats),
+                topFailField: sampleFieldStats.length ? sampleFieldStats[0].field : '',
             });
             ctx.hooks.onOnlySampleRows(sampleFailures);
             return;
@@ -1062,16 +1288,18 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
             });
         }
         rows = filtered;
+        pushDiag(`[样例过滤] 过滤后剩余=${rows.length} 行 | 跳过样例=${skipped} | 样例失败=${sampleFailures.length} | filteredToOriginal映射长度=${filteredToOriginal.length}`);
 
-        // ---- 4. 后端推送 ----
-        const body = await stepInvokeBackend(ctx, rows, taskInfo, pushSource);
-        if (body === null) return;
+        // ---- 4. 后端推送（按来源拆两批：TC+uuid.hex → testAgent；其余 → testAgentMA）----
+        pushDiag(`[接口] 即将调用后端推送 | 实际推送行数=${rows.length} ${rows.length === 0 ? '⚠️ 无合法行，将不调用接口' : ''}`);
+        const invoked = await stepInvokeBackend(ctx, rows, taskInfo);
 
-        // ---- 5. 解析响应 & 泄露清洗 ----
-        const parsed = parsePushResponse(body, rows);
-        const cleaned = sanitizeSampleLeaks(ctx, parsed.successMappings, parsed.failures);
+        // ---- 5. 泄露清洗（响应已在 stepInvokeBackend 内按批解析并合并）----
+        pushDiag('[step5] sanitizeSampleLeaks 开始');
+        const cleaned = sanitizeSampleLeaks(ctx, invoked.successMappings, invoked.failures);
         const successMappings = cleaned.successMappings;
         const failures = cleaned.failures;
+        pushDiag(`[step5] 清洗后 success=${successMappings.length} failures=${failures.length}`);
 
         // ---- 6. 成功回写 / 全部失败快照兜底 ----
         if (successMappings.length > 0) {
@@ -1092,6 +1320,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         } else if (failures.length > 0) {
             await refreshAllFailedSnapshot(ctx);
         }
+        pushDiag('[step6] 回写/快照完成');
 
         // ---- 7. 汇总失败行号（三级降级）----
         const tsIdToIndex = buildTsIdToIndex(rows);
@@ -1102,16 +1331,36 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         const failureItems = buildFailureItems(
             failures, tsIdToIndex, opts.frontRowIndexMap, opts.frontPushIndexToRow, composedFilteredToOriginal,
         );
-        const mergedFailures: PushFailureItem[] = [...preValidationFailures, ...failureItems];
-        const total = preValidationFailures.length + rows.length;
+        // 两批推送的失败已合并，按主表行号升序排列，保证弹窗按行顺序呈现（无行号的排最后）
+        const mergedFailures: PushFailureItem[] = [...preValidationFailures, ...failureItems].sort(
+            (a, b) => (a.rowIndex ?? Number.MAX_SAFE_INTEGER) - (b.rowIndex ?? Number.MAX_SAFE_INTEGER),
+        );
+        // total 使用原始总行数（含预校验拦截/样例过滤/接口推送全部行），而非过滤后的 rows.length
+        const total = originalRowsCount;
+        pushDiag(`[step7] 合并后 total=${total} success=${successMappings.length} failures=${mergedFailures.length}（预校验=${preValidationFailures.length} 接口=${failureItems.length}）`);
 
         // ---- 8. 输出结果 & 持久化 ----
+        pushDiag(`[汇总] 总数=${total} 成功=${successMappings.length} 失败=${mergedFailures.length}（其中预校验=${preValidationFailures.length} / 接口=${mergedFailures.length - preValidationFailures.length}）`);
+        pushDiag('[汇总] 失败明细(按行号):', mergedFailures.map((f: any) => ({ row: f.rowIndex, tsId: f.tsId, cat: f.category, field: f.field, reason: f.reason })));
+        showPushDiag();
         ctx.hooks.onComplete({ successCount: successMappings.length, failures: mergedFailures, total });
         try {
             await persistPushFailures(opts.filePath, rows, failures, successMappings);
         } catch (err: any) {
             console.error(`[推送][${ctx.traceId}] 持久化失败标记失败:`, err?.message || err);
         }
+
+        // 失败分类聚合（并入本次推送结果埋点，不单独发事件，避免重复计数）：
+        //   - 用户仍看到完整中文原文 reason；
+        //   - category 为稳定短码，供后台按错误类型聚合统计。
+        const failStats = aggregateFailures(mergedFailures, 1);
+        const failCategoryBreakdown = summarizeCategoryBreakdown(failStats);
+        const topFailCategory = failStats.length ? failStats[0].category : '';
+
+        // 字段聚焦维度（仅字段类错误计入）：failFieldBreakdown 'sourceId:3,testCaseName:1' + topFailField
+        const failFieldStats = aggregateByField(mergedFailures, 1);
+        const failFieldBreakdown = summarizeFieldBreakdown(failFieldStats);
+        const topFailField = failFieldStats.length ? failFieldStats[0].field : '';
 
         TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.complete`, {
             ...baseTelemetryProps(ctx),
@@ -1122,11 +1371,18 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
             successRows: String(successMappings.length),
             failedRows: String(mergedFailures.length),
             preValidationFailedRows: String(preValidationFailures.length),
+            failCategoryBreakdown,
+            topFailCategory,
+            failFieldBreakdown,
+            topFailField,
             costMs: String(Date.now() - ctx.pushStart),
         });
         emitProgress(ctx.hooks, 'done', { rows: total });
     } catch (err: any) {
         // 顶层未预期异常兜底：MapError / 普通 Error
-        handleUnexpectedError(ctx, err, originalRowsCount);
+        // 携带 preValidationFailures 避免异常路径丢弃已收集的预校验失败（如占位/格式非法）
+        pushDiag(`[异常] runPush catch | err=${err?.message || err} | stack=${(err?.stack || '').slice(0, 300)}`);
+        showPushDiag();
+        handleUnexpectedError(ctx, err, originalRowsCount, preValidationFailures);
     }
 }

@@ -519,6 +519,35 @@ function isFrozenCol(ci) {
     return headers[ci] === 'testcase_id';
 }
 
+// ==================== 行冻结（样例数据行）====================
+// 样例数据行：testcase_id 为占位值「案例唯一标识，不可修改 / 案例唯一标识」时，
+// 整行视为模板示例数据，完全只读——禁止进入编辑、粘贴、清空、批量填充、查找替换等
+// 任意内容写入。判定规则（仅中文样例占位）与后端 src/utils/fileIdentifier.ts 的
+// isSampleTsId 保持一致，避免前后端判定不一致。
+// 注意：英文占位 'TESTCASE_ID' 仅用于后端推送阻断弹窗，**不**纳入前端编辑冻结判定
+//       ——样例数据行的 testcase_id 实际并不存在 'TESTCASE_ID' 字面量。
+var SAMPLE_TS_ID_VALUES = ['案例唯一标识，不可修改', '案例唯一标识'];
+function isSampleTsIdValue(v) {
+    if (v == null) return false;
+    var s = String(v).trim();
+    if (!s) return false;
+    return s === SAMPLE_TS_ID_VALUES[0] || s === SAMPLE_TS_ID_VALUES[1];
+}
+function isFrozenRow(ri) {
+    if (typeof ri !== 'number' || ri < 0) return false;
+    var rows = (S.data && S.data.rows) || [];
+    var row = rows[ri];
+    if (!row || !Array.isArray(row)) return false;
+    var headers = (S.data && S.data.headers) || [];
+    var tsIdx = headers.indexOf('testcase_id');
+    if (tsIdx < 0) return false;
+    return isSampleTsIdValue(row[tsIdx]);
+}
+// 单元格级冻结：列冻结（testcase_id）或 行冻结（样例数据行）任一命中即只读
+function isFrozenCell(ri, ci) {
+    return isFrozenCol(ci) || isFrozenRow(ri);
+}
+
 // 受保护列：禁止结构性变更（删除列 / 重命名列），但不限制编辑、粘贴、批量等
 // 与 isFrozenCol 语义不同：isFrozenCol 是"完全只读"，isProtectedCol 仅锁列名/列存在性
 // 命中后右键菜单中的 "删除该列" / "重命名列" 直接不渲染（不显示）
@@ -684,6 +713,8 @@ function applyColumnsBulk(fillVal) {
     }
     rows.forEach(function (row, ri) {
         if (_viewSetCols && !_viewSetCols.has(ri)) return;
+        // 样例数据行冻结：批量列操作跳过该行，避免改写模板示例数据
+        if (isFrozenRow(ri)) return;
         targets.forEach(function (ci) {
             // 标量数组列的填充：清空→[]；填充为 x → 以 '; ' 拆分成数组。
             var isArrTarget = typeof isArrayCol === 'function' && isArrayCol(ci);

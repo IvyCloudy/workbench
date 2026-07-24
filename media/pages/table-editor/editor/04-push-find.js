@@ -378,6 +378,11 @@ function replaceCurrent() {
     var rep = document.getElementById('replaceInput');
     var newVal = rep ? rep.value : '';
     var m = S._matches[S._matchIdx];
+    if (isFrozenRow(m.r)) {
+        showToast('样例数据行已冻结，跳过替换', 'error');
+        stepFind(1);
+        return;
+    }
     if (isFrozenCol(m.c)) {
         showToast('testcase_id 列为系统列，跳过替换', 'error');
         stepFind(1);
@@ -440,6 +445,8 @@ function replaceAll() {
     }
     (S.data.rows || []).forEach(function (row, ri) {
         if (visibleRows && !visibleRows.has(ri)) return;
+        // 样例数据行冻结：全量替换跳过该行
+        if (isFrozenRow(ri)) return;
         (S.data.headers || []).forEach(function (_, ci) {
             if (isFrozenCol(ci)) return; // tsId 列跳过
             // 标量数组列跳过全量替换，避免语义窜乱

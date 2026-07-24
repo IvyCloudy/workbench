@@ -418,6 +418,8 @@ function _alignStepsExpansion() {
             for (var ri = 0; ri < rows.length; ri++) {
                 var raws = dt.rawRowGroups[ri];
                 if (!Array.isArray(raws) || raws.length === 0) continue;
+                // 样例数据行冻结：跳过步骤列展示同步写入
+                if (isFrozenRow(ri)) continue;
                 var combined = _buildStepCombined(raws);
                 if (combined) rows[ri][stepsCol] = combined;
             }
@@ -426,6 +428,8 @@ function _alignStepsExpansion() {
             for (var ri2 = 0; ri2 < rows.length; ri2++) {
                 var raws2 = dt.rawRowGroups[ri2];
                 if (!Array.isArray(raws2) || raws2.length === 0) continue;
+                // 样例数据行冻结：跳过步骤列展示同步写入
+                if (isFrozenRow(ri2)) continue;
                 rows[ri2][stepsCol] = '[' + raws2.length + ' 项]';
             }
         }
@@ -1151,6 +1155,7 @@ window.addEventListener('message', function (e) {
             try { renderTable(); } catch (_) {}
         }
     } else if (m.type === 'pushResult') {
+        console.log('[推送诊断][webview] 收到 pushResult | successCount=' + (m.successCount || 0) + ' total=' + (m.total != null ? m.total : '?') + ' failures.length=' + (m.failures ? m.failures.length : 0) + ' failures.tsIds=' + (m.failures ? m.failures.map(function (f) { return f.tsId; }).join(',') : ''));
         S._pushing = false;
         if (typeof updatePushBtn === 'function') updatePushBtn();
         // 保险：若 _lastPushBatchRowIndices 意外丢失，用 _lastPushBatchTsIds 反推，确保 showPushResultModal 能正确清理

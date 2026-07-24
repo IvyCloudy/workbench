@@ -471,6 +471,8 @@ function _buildRowHtml(ri, tsIdColIdx) {
     // 先遍历一次构造所有单元格 inner HTML，检测是否含真实换行符 \n
     var cells = [];
     var hasBr = false;
+    // 样例数据行冻结：整行只读（testcase_id 命中占位值），用于渲染冻结视觉 + 后续编辑拦截
+    var rowFrozen = isFrozenRow(ri);
     for (var ci = 0; ci < headers.length; ci++) {
         var v = row[ci];
         var _modKey = ri + ',' + ci;
@@ -555,7 +557,7 @@ function _buildRowHtml(ri, tsIdColIdx) {
             if (st) mkStyle = ' style="' + st + '"';
         }
         var colSelCls2 = S.colSel.has(ci) ? ' xs-col-selected' : '';
-        var frozenCls2 = (String(headers[ci]) === 'testcase_id') ? ' xs-td-frozen' : '';
+        var frozenCls2 = (String(headers[ci]) === 'testcase_id' || rowFrozen) ? ' xs-td-frozen' : '';
         // 单元格内部 HTML 与相关 cls/title 由 _buildCellInner 统一产出，与 patchCell 复用。
         var _ci = _buildCellInner(ri, ci, v);
         var inner = _ci.inner;
@@ -578,7 +580,7 @@ function _buildRowHtml(ri, tsIdColIdx) {
             break;
         }
     }
-    var html = '<tr data-row="' + ri + '" class="' + (selCls + resizedCls + failCls + expandedStepsCls).trim() + '"' + rowStyle + '>'
+    var html = '<tr data-row="' + ri + '" class="' + (selCls + resizedCls + failCls + expandedStepsCls + (rowFrozen ? ' xs-tr-frozen' : '')).trim() + '"' + rowStyle + '>'
         + '<td class="xs-td xs-td-cb xs-td-rownum" data-row="' + ri + '" title="' + escapeHtml(rowNumTitle) + '">'
         +   '<span class="xs-rownum">' + (ri + 1) + '</span>'
         +   '<div class="xs-row-resizer" data-row="' + ri + '" title="拖动调整行高；双击自适应内容"></div>'

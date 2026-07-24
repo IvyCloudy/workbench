@@ -12,6 +12,7 @@
 // payload: { fileName, successCount, failures:[{rowIndex, tsId, reason}], total }
 var __PR_MAX_INLINE = 200; // 列表最多渲染条数，超出折叠
 function showPushResultModal(payload) {
+    console.log('[推送诊断][webview] showPushResultModal 渲染 | failures.length=' + (payload && payload.failures ? payload.failures.length : 0) + ' successCount=' + (payload ? payload.successCount || 0 : 0) + ' total=' + (payload && payload.total != null ? payload.total : '?'));
     var modal = document.getElementById('pushResultModal');
     if (!modal) return;
     var p = payload || {};

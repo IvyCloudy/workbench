@@ -231,6 +231,8 @@ function bindToolbar() {
                 for (var ri2 = 0; ri2 < rows.length; ri2++) {
                     var raws2 = dt.rawRowGroups[ri2];
                     if (!Array.isArray(raws2) || raws2.length === 0) continue;
+                    // 样例数据行冻结：跳过步骤列收起写入
+                    if (isFrozenRow(ri2)) continue;
                     var count = raws2.length;
                     var collapsed = count > 0 ? '[' + count + ' 项]' : '[]';
                     if (S.data.rows[ri2][stepsCol] !== collapsed) {
@@ -253,6 +255,8 @@ function bindToolbar() {
                 for (var ri = 0; ri < rows.length; ri++) {
                     var raws = dt.rawRowGroups[ri];
                     if (!Array.isArray(raws) || raws.length === 0) continue;
+                    // 样例数据行冻结：跳过步骤列展开写入
+                    if (isFrozenRow(ri)) continue;
                     var combined = _buildStepCombined(raws);
                     if (combined) {
                         S.data.rows[ri][stepsCol] = combined;
@@ -431,6 +435,8 @@ function bindDocument() {
                     for (var _vi2 = 0; _vi2 < _rowListV.length; _vi2++) {
                         var rr = _rowListV[_vi2];
                         var rowR = rows[rr]; if (!rowR) continue;
+                        // 样例数据行冻结：粘贴跳过该行
+                        if (isFrozenRow(rr)) continue;
                         for (var cc = _rcPaste.c1; cc <= _rcPaste.c2; cc++) {
                             if (isFrozenCol(cc)) { skippedTsId = true; continue; }
                             var isArrT = typeof isArrayCol === 'function' && isArrayCol(cc);
@@ -506,6 +512,8 @@ function bindDocument() {
                         var rIdx = _targetRows[i];
                         var rowi = rows[rIdx];
                         if (!rowi) continue;
+                        // 样例数据行冻结：粘贴跳过该行
+                        if (isFrozenRow(rIdx)) continue;
                         for (var j = 0; j < grid[i].length; j++) {
                             var cIdx = startC + j;
                             if (cIdx >= headers.length) break;

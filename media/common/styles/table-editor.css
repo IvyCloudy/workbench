@@ -365,6 +365,16 @@ tbody tr.selected td.xs-td-frozen{background:#dde7f3}
 tbody tr.xs-tr-push-failed td.xs-td.xs-td-frozen{background:#fde8e8}
 tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-frozen{background:#fbd9d9}
 
+/* 行冻结：样例数据行（testcase_id 为占位值「案例唯一标识，不可修改」等）整行只读。
+   视觉与冻结列保持一致（浅灰底 + 灰字 + 禁止编辑光标），并在行号格加锁标记色提示。 */
+tbody tr.xs-tr-frozen td.xs-td{cursor:not-allowed;color:#6e7781}
+tbody tr.xs-tr-frozen td.xs-td .xs-cell-wrap{user-select:none}
+tbody tr.xs-tr-frozen td.xs-td-cb{background:#eef0f2;box-shadow:inset 3px 0 0 #b6bdc6}
+tbody tr.xs-tr-frozen:hover td.xs-td{background:#f2f3f5}
+/* 冻结行内的冻结列（tsId）保持冻结灰调，避免被整行规则覆盖 */
+tbody tr.xs-tr-frozen td.xs-td.xs-td-frozen{background:#f7f8fa;color:#6e7781}
+tbody tr.xs-tr-frozen.selected td.xs-td{background:#dde7f3}
+
 /* 上下文菜单 */
 .xs-cm{display:none;position:fixed;background:#fff;border:1px solid var(--bd);border-radius:4px;box-shadow:var(--sh);z-index:1000;min-width:160px;padding:4px 0}
 .xs-mi{padding:6px 12px;cursor:pointer;font-size:12px}

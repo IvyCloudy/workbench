@@ -25,6 +25,12 @@ function onCellDblClick(e) {
     var td = e.currentTarget;
     var ri = parseInt(td.getAttribute('data-row'), 10);
     var ci = parseInt(td.getAttribute('data-col'), 10);
+    // 样例数据行冻结：整行只读，禁止双击进入任何编辑（含明细弹窗 / 数组编辑器）
+    if (isFrozenRow(ri)) {
+        e.preventDefault();
+        showToast('样例数据行已冻结，不可编辑（testcase_id 为占位值）', 'error');
+        return;
+    }
     // testcase_id 列冻结：不允许双击进入编辑
     if (isFrozenCol(ci)) {
         e.preventDefault();
@@ -109,6 +115,11 @@ function startEdit(e) {
     var td = e.currentTarget;
     var ri = parseInt(td.getAttribute('data-row'), 10);
     var ci = parseInt(td.getAttribute('data-col'), 10);
+    // 样例数据行冻结：整行只读，禁止进入编辑
+    if (isFrozenRow(ri)) {
+        showToast('样例数据行已冻结，不可编辑（testcase_id 为占位值）', 'error');
+        return;
+    }
     // testcase_id 列冻结：不允许进入编辑
     if (isFrozenCol(ci)) {
         showToast('testcase_id 列为系统列，不允许编辑', 'error');
@@ -265,6 +276,8 @@ function startEdit(e) {
                     for (var _bi = 0; _bi < bulkRows.length; _bi++) {
                         var rr = bulkRows[_bi];
                         var rowR = rows[rr]; if (!rowR) continue;
+                        // 样例数据行冻结：批量填充跳过该行
+                        if (isFrozenRow(rr)) continue;
                         for (var cc = bulkRect.c1; cc <= bulkRect.c2; cc++) {
                             if (isFrozenCol(cc)) { skippedTsId = true; continue; }
                             var isArrTarget = typeof isArrayCol === 'function' && isArrayCol(cc);

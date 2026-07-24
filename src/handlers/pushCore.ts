@@ -30,9 +30,8 @@
 import * as path from 'path';
 import type * as vscode from 'vscode';
 import { pushTestCase } from '../services/http';
-import { isMapError, ROW_INDEX_META } from '../utils/pushDataMapper';
+import { isMapError, ROW_INDEX_META, mapRowToCaseItem } from '../utils/pushDataMapper';
 import { parsePushResponse, PushSuccessMapping, PushResponseFailure } from '../utils/pushResponse';
-import { mapRowToCaseItem, isMapError } from '../utils/pushDataMapper';
 import {
     classifyFailure,
     aggregateFailures,

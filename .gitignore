@@ -33,3 +33,9 @@ Thumbs.db
 /telemetry-server/metabase/data/
 /test.json
 /测试案例/
+
+# Python 编译产物
+__pycache__/
+
+# 本地临时测试（_tmp_ 前缀，不入库）
+_tmp_*.test.ts

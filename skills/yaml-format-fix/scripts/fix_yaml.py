@@ -463,6 +463,40 @@ def rule_reserved_char(line: str, line_num: int, ctx: LineCtx) -> Optional[Issue
     )
 
 
+def is_quoted_block_scalar_line(line: str) -> bool:
+    """判断整行是否为「引号包裹的块标量头」（如 `key: "|"`）。供 parser 兜底层做级联抑制。"""
+    idx = line.find(":")
+    if idx <= 0:
+        return False
+    value_text = line[idx + 1:]
+    trimmed = value_text.strip()
+    if not trimmed:
+        return False
+    return bool(re.match(r"^(['\"])([|>][+-]?\d*[+-]?)\1(\s*(?:#.*)?)?$", trimmed))
+
+
+def rule_quoted_block_scalar(line: str, line_num: int, ctx: LineCtx) -> Optional[Issue]:
+    """R9: 块标量头被引号包裹（如 `key: "|"` / `key: ">"`）。去引号使其生效，避免后续多行被误注释。"""
+    if ctx.colon_idx <= 0 or ctx.value_text is None:
+        return None
+    value_text = ctx.value_text
+    trimmed = value_text.strip()
+    if not trimmed:
+        return None
+    m = re.match(r"^(['\"])([|>][+-]?\d*[+-]?)\1(\s*(?:#.*)?)?$", trimmed)
+    if not m:
+        return None
+    head = m.group(2)
+    tail = m.group(3) or ""
+    fixed = line[: ctx.colon_idx + 1] + value_text.replace(trimmed, head + tail)
+    return Issue(
+        id="R9", line=line_num, column=ctx.colon_idx + 2, length=len(trimmed),
+        title="块标量头被引号包裹",
+        message=f'第 {line_num} 行：块标量指示符 "{head}" 被引号包裹，YAML 不会将其识别为多行文本，后续缩进行会被误注释。已去掉引号使其生效',
+        severity="warning", fix=fixed,
+    )
+
+
 def rule_dash_space(line: str, line_num: int, ctx: LineCtx) -> Optional[Issue]:
     m = _DASH_SPACE_RE.match(line)
     if not m:
@@ -487,6 +521,7 @@ RULES: List[Tuple[RuleFn, bool]] = [
     (rule_ambiguous_value, False),
     (rule_hash_in_value, False),
     (rule_reserved_char, False),
+    (rule_quoted_block_scalar, False),
 ]
 
 
@@ -756,6 +791,12 @@ def validate(content: str, logger: Logger) -> List[Issue]:
             fix = generate_fix_for_parse_error(line_text, err_col, str(err))
             if fix is not None and fix == line_text:
                 fix = None
+            # 级联抑制：报错行上一行是「引号包裹块标量头」时，根因在上一行（R9 去引号），
+            # 不注释当前行，避免后续多行内容被误注释丢失。
+            if fix is not None and fix.lstrip().startswith("#") and err_line > 1:
+                _prev = lines[err_line - 2] if err_line - 2 < len(lines) else ""
+                if is_quoted_block_scalar_line(_prev):
+                    fix = None
             if not already:
                 logger.rule("P*", err_line, line_text, f"parse error (iter {_iter + 1}): {err}")
                 logger.rule_after("P*", err_line, fix)
@@ -764,6 +805,11 @@ def validate(content: str, logger: Logger) -> List[Issue]:
                 orig_fix = generate_fix_for_parse_error(orig_line_text, err_col, str(err))
                 if orig_fix is not None and orig_fix == orig_line_text:
                     orig_fix = None
+                # 同上：级联抑制（基于原始行，保证 issues 中的 fix 与迭代内一致）
+                if orig_fix is not None and orig_fix.lstrip().startswith("#") and err_line > 1:
+                    _prev = lines[err_line - 2] if err_line - 2 < len(lines) else ""
+                    if is_quoted_block_scalar_line(_prev):
+                        orig_fix = None
                 issues.append(Issue(
                     id="P*", line=err_line, column=err_col, length=1,
                     title="YAML 解析错误",

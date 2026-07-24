@@ -371,6 +371,41 @@ function ruleReservedChar(line, lineNum, ctx) {
     };
 }
 
+/**
+ * R9: 块标量头被引号包裹（如 `key: "|"` / `key: ">"` / `key: "|-"`）。
+ *   Yaml 中 `|`/`>` 是块标量（多行文本）指示符；一旦被引号包裹，它就退化成普通字符串，
+ *   其后更深缩进的续行会被解析器当作非法映射项，进而被 parser 兜底注释化，造成数据丢失。
+ *   修复：去掉引号，使块标量头生效，续行恢复为合法的多行内容。
+ */
+function ruleQuotedBlockScalar(line, lineNum, ctx) {
+    if (ctx.colonIdx <= 0 || !ctx.valueText) return null;
+    const valueText = ctx.valueText;
+    const trimmed = valueText.trim();
+    if (trimmed.length === 0) return null;
+    const m = trimmed.match(/^(['"])([|>][+-]?\d*[+-]?)\1(\s*(?:#.*)?)?$/);
+    if (!m) return null;
+    const head = m[2];
+    const tail = m[3] || '';
+    const fixed = line.substring(0, ctx.colonIdx + 1) + valueText.replace(trimmed, head + tail);
+    return {
+        id: 'R9', line: lineNum, column: ctx.colonIdx + 2, length: trimmed.length,
+        title: '块标量头被引号包裹',
+        message: `第 ${lineNum} 行：块标量指示符 "${head}" 被引号包裹，YAML 不会将其识别为多行文本，后续缩进行会被误注释。已去掉引号使其生效`,
+        severity: 'warning',
+        fix: fixed,
+    };
+}
+
+/** 判断整行是否为"引号包裹的块标量头"（如 `key: "|"`）。供 parser 兜底层做级联抑制。 */
+function isQuotedBlockScalarLine(line) {
+    const idx = line.indexOf(':');
+    if (idx <= 0) return false;
+    const valueText = line.substring(idx + 1);
+    const trimmed = valueText.trim();
+    if (trimmed.length === 0) return false;
+    return /^(['"])([|>][+-]?\d*[+-]?)\1(\s*(?:#.*)?)?$/.test(trimmed);
+}
+
 function ruleDashSpace(line, lineNum) {
     const m = line.match(/^(\s*)-([^\s-])/);
     if (!m) return null;
@@ -393,6 +428,7 @@ const RULES = [
     { rule: ruleAmbiguousValue },
     { rule: ruleHashInValue },
     { rule: ruleReservedChar },
+    { rule: ruleQuotedBlockScalar },
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -597,6 +633,11 @@ function validate(content, logger) {
                     const lineText = (errLine > 0 && errLine <= lines.length) ? lines[errLine - 1] : '';
                     let fix = generateFixForParseError(lineText, errCol, err.message);
                     if (fix !== undefined && fix === lineText) fix = undefined;
+                    // 级联抑制：报错行上一行是「引号包裹块标量头」时，根因在上一行（R9 去引号），
+                    // 不注释当前行，避免后续多行内容被误注释丢失。
+                    if (fix !== undefined && /^\s*#/.test(fix) && errLine > 1 && isQuotedBlockScalarLine(lines[errLine - 2] || '')) {
+                        fix = undefined;
+                    }
                     logger.rule('P*', errLine, lineText, `parse error: ${err.message}`);
                     logger.ruleAfter('P*', errLine, fix);
                     issues.push({
@@ -627,6 +668,11 @@ function validate(content, logger) {
                     const lineText = (errLine > 0 && errLine <= lines.length) ? lines[errLine - 1] : '';
                     let fix = generateFixForParseError(lineText, errCol, parseErr.message);
                     if (fix !== undefined && fix === lineText) fix = undefined;
+                    // 级联抑制：报错行上一行是「引号包裹块标量头」时，根因在上一行（R9 去引号），
+                    // 不注释当前行，避免后续多行内容被误注释丢失。
+                    if (fix !== undefined && /^\s*#/.test(fix) && errLine > 1 && isQuotedBlockScalarLine(lines[errLine - 2] || '')) {
+                        fix = undefined;
+                    }
                     logger.rule('P*', errLine, lineText, `parse-fallback error: ${parseErr.message}`);
                     logger.ruleAfter('P*', errLine, fix);
                     issues.push({

@@ -26,6 +26,7 @@ import {
     buildLineCtx,
     generateFixForParseError,
     truncateYamlMessage,
+    isQuotedBlockScalarLine,
 } from './yamlRules';
 
 // 类型再导出，保持外部导入路径兼容
@@ -215,7 +216,10 @@ export function validateYamlContent(content: string): YamlIssue[] {
                     const hasSafeFixSameLine = issues.some(
                         (iss) => iss.line === errLine && iss.fix !== undefined && !isDestructiveFix(iss.fix),
                     );
-                    if (hasSafeFixSameLine) fix = undefined;
+                    // 级联抑制：报错行的上一行是「引号包裹块标量头」（R9 会去引号修复），
+                    // 则根因在上一行，不应注释化当前行，避免后续多行内容被误注释丢失。
+                    const prevIsQuotedBlockScalar = errLine > 1 && isQuotedBlockScalarLine(lines[errLine - 2] ?? '');
+                    if (hasSafeFixSameLine || prevIsQuotedBlockScalar) fix = undefined;
                 }
                 issues.push({
                     line: errLine, column: errCol, length: 1,
@@ -259,7 +263,10 @@ export function validateYamlContent(content: string): YamlIssue[] {
                     const hasSafeFixSameLine = issues.some(
                         (iss) => iss.line === errLine && iss.fix !== undefined && !isDestructiveFix(iss.fix),
                     );
-                    if (hasSafeFixSameLine) fix = undefined;
+                    // 级联抑制：报错行的上一行是「引号包裹块标量头」（R9 会去引号修复），
+                    // 则根因在上一行，不应注释化当前行，避免后续多行内容被误注释丢失。
+                    const prevIsQuotedBlockScalar = errLine > 1 && isQuotedBlockScalarLine(lines[errLine - 2] ?? '');
+                    if (hasSafeFixSameLine || prevIsQuotedBlockScalar) fix = undefined;
                 }
                 issues.push({
                     line: errLine, column: errCol, length: 1,

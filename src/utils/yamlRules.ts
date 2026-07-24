@@ -439,6 +439,50 @@ const reservedCharRule: YamlRule = (line, lineNum, ctx) => {
     };
 };
 
+/**
+ * R9: 块标量头被引号包裹（如 `key: "|"` / `key: ">"` / `key: "|-"`）。
+ *
+ * 背景：YAML 中 `|` / `>` 是块标量（多行文本）指示符；一旦被引号包裹，
+ * 它就退化成普通字符串 `"|"`。此时其后更深缩进的续行（多行描述）不再被视为块标量内容，
+ * 而被解析器当作非法映射项（"All mapping items must start at the same column" /
+ * "Implicit keys need to be on a single line"），最终被 parser 兜底注释化
+ * （`# [indent mismatch] ...`），造成多行内容整段丢失。
+ *
+ * 修复：去掉引号，使块标量头生效，续行恢复为合法的多行内容（数据不再被注释）。
+ *   · `description: "|"`        → `description: |`
+ *   · `desc: ">"   # 折叠`       → `desc: >   # 折叠`
+ * 仅当"整值脱引号后恰好是块标量头"才命中，普通含 `|`/`>` 的字符串（如 `"a|b"`）不受影响。
+ */
+const quotedBlockScalarRule: YamlRule = (line, lineNum, ctx) => {
+    if (ctx.colonIdx <= 0 || !ctx.valueText) return null;
+    const valueText = ctx.valueText; // 冒号后全文（含前导空格）
+    const trimmed = valueText.trim();
+    if (trimmed.length === 0) return null;
+    // 必须整体被成对引号包裹，且脱引号后是纯块标量头（可带尾注释）
+    const m = trimmed.match(/^(['"])([|>][+-]?\d*[+-]?)\1(\s*(?:#.*)?)?$/);
+    if (!m) return null;
+    const head = m[2];
+    const tail = m[3] || '';
+    const fixed = line.substring(0, ctx.colonIdx + 1) + valueText.replace(trimmed, head + tail);
+    return {
+        line: lineNum, column: ctx.colonIdx + 2, length: trimmed.length,
+        title: '块标量头被引号包裹',
+        message: `第 ${lineNum} 行：块标量指示符 "${head}" 被引号包裹，YAML 不会将其识别为多行文本，后续缩进行会被误注释。已去掉引号使其生效`,
+        severity: 'warning',
+        fix: fixed,
+    };
+};
+
+/** 判断整行是否为"引号包裹的块标量头"（如 `key: "|"`）。供 parser 兜底层做级联抑制。 */
+export function isQuotedBlockScalarLine(line: string): boolean {
+    const colonIdx = line.indexOf(':');
+    if (colonIdx <= 0) return false;
+    const valueText = line.substring(colonIdx + 1);
+    const trimmed = valueText.trim();
+    if (trimmed.length === 0) return false;
+    return /^(['"])([|>][+-]?\d*[+-]?)\1(\s*(?:#.*)?)?$/.test(trimmed);
+}
+
 /** R8: 序列项 `-` 后缺少空格（如 `-value` 或 `-{}`；行首才作 sequence 语义） */
 const dashSpaceRule: YamlRule = (line, lineNum) => {
     // 匹配：任意缩进 + '-' + 非空白非破折号字符
@@ -479,6 +523,7 @@ export const YAML_RULES: YamlRuleEntry[] = [
     { rule: ambiguousValueRule },
     { rule: hashInValueRule },
     { rule: reservedCharRule },
+    { rule: quotedBlockScalarRule },
 ];
 
 // ============================================

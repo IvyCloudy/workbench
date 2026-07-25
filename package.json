@@ -383,6 +383,11 @@
           "type": "boolean",
           "default": false,
           "description": "开启后会在开发者控制台打印测试要点⇄测试案例绑定弹窗的详细日志。日常使用建议保持关闭。"
+        },
+        "testcaseViewer.debug.push": {
+          "type": "boolean",
+          "default": false,
+          "description": "开启后会在开发者控制台和「TestCase 推送诊断」输出面板打印推送链路各阶段（分批、映射、请求、响应解析、失败分类、汇总等）的详细诊断日志。仅在排查推送问题时开启，日常使用建议保持关闭。"
         }
       }
     }

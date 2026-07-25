@@ -437,8 +437,14 @@ function copySelectedRows() {
     var tcCol0 = headers0.indexOf('testCaseNo');
     var dts = getDetailTables();
     selRows.forEach(function (rowIdx) {
+        // 每个选中行的下方各插入一份副本；selRows 已按降序遍历，
+        // 从后往前插入不会影响前面尚未处理的 rowIdx。
+        var at = rowIdx + 1;
         var src = S.data.rows[rowIdx] || [];
         var newRow = src.map(function (v) { return Array.isArray(v) ? v.slice() : v; });
+        // 复制行需要重新生成 testcase_id（避免与源行同 id），并清空已回写的 testCaseNo
+        if (tsCol0 >= 0) newRow[tsCol0] = genUuidV4();
+        if (tcCol0 >= 0) newRow[tcCol0] = '';
         S.data.rows.splice(at, 0, newRow);
         // 同步转移高亮/修改集合（逐行累加，与 insertRow 一致）
         _shiftRowIdxHighlights('insert', at);

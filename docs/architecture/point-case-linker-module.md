@@ -14,13 +14,14 @@
 ```mermaid
 flowchart TB
     subgraph L0["UI 层 · package.json"]
-        C1["testcaseViewer.viewLinkedCases<br/>（右键，已隐藏菜单项）"]
         C2["testcaseViewer.diagnosticLinker<br/>（命令面板入口）"]
     end
 
-    subgraph L1["应用层 · linkerDiagnosticHandler.ts"]
-        H1["handleViewLinkedCases(uri)<br/>接右键 URI"]
-        H2["handleLinkerDiagnostic()<br/>接命令面板"]
+    subgraph L1a["应用层 · 命令层 linkerDiagnosticCommand.ts"]
+        H2["handleLinkerDiagnostic()<br/>命令面板入口"]
+    end
+
+    subgraph L1["应用层 · 公共 API linkerDiagnosticHandler.ts"]
         G["getLinkedCasesByMdFile(mdPath)<br/>业务级一站入口"]
         LA["linkAndAggregateCases(pointList, casePath)<br/>纯函数聚合"]
         PM["parseMdToPointListSilent(mdPath)<br/>md 静默解析"]
@@ -50,7 +51,6 @@ flowchart TB
         CF[("测试案例 yaml/json/csv")]
     end
 
-    C1 --> H1 --> G
     C2 --> H2 --> G
     G --> PM
     G --> B1
@@ -158,37 +158,33 @@ sequenceDiagram
 
 ### 3.1 UI 层：命令与菜单
 
-**位置**：[package.json](../../package.json) 的 `contributes.commands` 和 `contributes.menus`；[src/extension.ts](../../src/extension.ts) 的 `registerCommand`。
+**位置**：[package.json](../../package.json) 的 `contributes.commands`；[src/extension.ts](../../src/extension.ts) 的 `registerCommand`。
 
-- `testcaseViewer.viewLinkedCases`：接受一个 `vscode.Uri`，通常由资源管理器右键触发。**目前右键菜单项已从 `menus.explorer/context` 中移除**（命令与 handler 保留，供 API 化调用与未来复活）。
-- `testcaseViewer.diagnosticLinker`：无参，从命令面板触发，改造后**不再弹文件选择框**，直接读取当前激活编辑器里的 `.md`（必须位于 `测试任务/<任务名>/测试大纲/` 下）+ 绑定关系。
+- `testcaseViewer.diagnosticLinker`：无参，从命令面板触发，直接读取当前激活编辑器里的 `.md` / `.xmind`（必须位于 `测试任务/<任务名>/测试大纲/` 下）+ 绑定关系。
 
-两个命令在 [extension.ts](../../src/extension.ts) 中的注册都会先发一条 `command.executed` 埋点，再调 handler。
+命令在 [extension.ts](../../src/extension.ts) 中的注册会先发一条 `command.executed` 埋点，再调 handler。
+
+> 历史上曾存在 `testcaseViewer.viewLinkedCases`（右键入口），已于 2026-07-25 合并到 `diagnosticLinker`，命令/handler/埋点均已下线。
 
 ---
 
 ### 3.2 应用层：编排 + 聚合
 
-应用层由**两个入口 handler**、**三个可复用公共方法**和**一个嗅探函数**组成，全部集中在 [src/handlers/linkerDiagnosticHandler.ts](../../src/handlers/linkerDiagnosticHandler.ts)。
+应用层拆分为两个文件（2026-07-25 重构）：
+- **命令入口**：[src/handlers/linkerDiagnosticCommand.ts](../../src/handlers/linkerDiagnosticCommand.ts)（仅 `handleLinkerDiagnostic` + Output Channel 相关辅助）
+- **公共 API**：[src/handlers/linkerDiagnosticHandler.ts](../../src/handlers/linkerDiagnosticHandler.ts)（三个可复用公共方法 + 一个嗅探函数 + 类型定义）
 
-#### 3.2.1 `handleViewLinkedCases(uri)` — 右键入口
-- 直接读 `uri.fsPath` 作 mdPath
-- 调 `getLinkedCasesByMdFile(mdPath)` → envelope
-- 完整 envelope 写 **Output Channel**（`ch.show(true)` 自动弹出），因 Extension Host Console 对大对象有体积上限，Output Channel 才能承载完整 JSON
-- 发埋点 `viewLinkedCases.done`；若 `envelope.errorMsg` 非空另发 `viewLinkedCases.error`
-
-#### 3.2.2 `handleLinkerDiagnostic()` — 命令面板入口
-- 取 `vscode.window.activeTextEditor.document.uri.fsPath` 作 mdPath
-- 三重校验：非空、`.md` 后缀、命中正则 `测试任务/<任务名>/测试大纲/xxx.md`
-- 单独调 `parseMdToPointListSilent(mdPath)` 拿 pointList，用于**诊断视角逐行展开**（`getLinkedCasesByMdFile` 内部也会解析一次，这里的重复解析纯 fs.readFile + 正则，成本可忽略）
-- 调 `getLinkedCasesByMdFile(mdPath)` → envelope，**与右键入口 `handleViewLinkedCases` 完全同源**：绑定读取、案例文件存在性校验、匹配聚合都在公共方法内一次完成
+#### 3.2.1 `handleLinkerDiagnostic()` — 命令面板入口
+- 从 `vscode.window.activeTextEditor.document.uri.fsPath` 取 mdPath，不命中时从 `tabGroups.activeTab.input.uri` 兜底（兼容 xmind 自定义编辑器场景）
+- 三重校验：非空、`.md` / `.xmind` 后缀、命中正则 `测试任务/<任务名>/测试大纲/xxx.(md|xmind)`
+- 调 `getLinkedCasesByMdFile(mdPath)` → envelope：绑定读取、案例文件存在性校验、匹配聚合都在公共方法内一次完成
 - 从 envelope 首个 item 的 `filePath` 回溯 casePath 用于日志展示（1:1 语义下所有 item 的 filePath 相同）
-- **诊断视角**输出：pointList 逐行展开 + 每 point 命中详情（type badge + 100 条上限保护）+ 总览统计 + 脏数据信号（`duplicatePointIds` / `multiHitCases`）
+- **输出规格**：TC-Linker 前缀 + JSON 分块（envelope 完整 JSON + stats 完整 JSON），无人类可读摘要杂音
 - Output Channel 自动弹出（`ch.show(true)`），面板名为 `TestCase Linker 诊断`
 - 发埋点 `linkerDiagnostic.done` / `linkerDiagnostic.linkerError`
 - **无**「是否清缓存」QuickPick、**无**完成后 toast（如需观察真实解析耗时，请保存 md/case 触发 mtime 变化让 `fileCache` 自然失效）
 
-#### 3.2.3 `getLinkedCasesByMdFile(mdPath)` — 业务级一站入口
+#### 3.2.2 `getLinkedCasesByMdFile(mdPath)` — 业务级一站入口
 公共方法之首，**"一个 md 进 → envelope 出"**。层层短路，任何错误路径都返回同形状 envelope（`{ total: 0, errorMsg, data: {} }`），调用方永远只需检查 `errorMsg` 与 `total`。
 
 流程五步：
@@ -360,6 +356,7 @@ async function loadRecords(filePath, enableCache) {
 
 #### 3.4.4 埋点 `emitTelemetry`
 - 正常事件：`pointCaseLinker.done`（每次匹配都发，含 fileExt / pointCount / totalRecords / matchedRecords / orphanRecords / type1-3 / strippedParentIds）
+- 应用层事件：`linkerDiagnostic.done` / `linkerDiagnostic.linkerError`
 - 告警事件：`pointCaseLinker.duplicatePointId`、`pointCaseLinker.multiHitCase`（脏数据信号，条件发出）
 
 #### 3.4.5 批量入口 `linkPointsToCasesBatch`
@@ -530,10 +527,10 @@ sequenceDiagram
 
 | 定位 | 文件 | 关键符号 |
 |---|---|---|
-| 命令注册 | [src/extension.ts](../../src/extension.ts) | `testcaseViewer.viewLinkedCases` / `testcaseViewer.diagnosticLinker` |
-| 应用层入口 | [src/handlers/linkerDiagnosticHandler.ts](../../src/handlers/linkerDiagnosticHandler.ts) | `handleViewLinkedCases` / `handleLinkerDiagnostic` |
-| 应用层公共方法 | 同上 | `getLinkedCasesByMdFile` / `linkAndAggregateCases` / `parseMdToPointListSilent` |
-| 中文 CSV 嗅探 | 同上 | `detectCsvHeaderOptions` / `CN_HEADER_ALIAS` |
+| 命令注册 | [src/extension.ts](../../src/extension.ts) | `testcaseViewer.diagnosticLinker` |
+| 应用层 · 命令入口 | [src/handlers/linkerDiagnosticCommand.ts](../../src/handlers/linkerDiagnosticCommand.ts) | `handleLinkerDiagnostic` |
+| 应用层 · 公共 API | [src/handlers/linkerDiagnosticHandler.ts](../../src/handlers/linkerDiagnosticHandler.ts) | `getLinkedCasesByMdFile` / `linkAndAggregateCases` / `parseMdToPointListSilent` |
+| 中文 CSV 嗅探 | 上文公共 API 文件 | `detectCsvHeaderOptions` / `CN_HEADER_ALIAS` |
 | 引擎层单文件 | [src/utils/pointCaseLinker.ts](../../src/utils/pointCaseLinker.ts) | `linkPointsToCases` |
 | 引擎层批量 | 同上 | `linkPointsToCasesBatch` |
 | 引擎层缓存 | 同上 | `fileCache` / `cacheGet` / `cachePut` / `clearLinkerCache` |

@@ -29,13 +29,14 @@
 ```mermaid
 flowchart TB
     subgraph UI层
-        A1[右键菜单<br/>testcaseViewer.viewLinkedCases]
         A2[命令面板<br/>testcaseViewer.diagnosticLinker]
     end
 
-    subgraph 应用层[应用层 · linkerDiagnosticHandler.ts]
-        H1[handleViewLinkedCases<br/>接右键uri]
+    subgraph 命令层[命令层 · linkerDiagnosticCommand.ts]
         H2[handleLinkerDiagnostic<br/>接命令面板]
+    end
+
+    subgraph 应用层[应用层 · linkerDiagnosticHandler.ts]
         G[getLinkedCasesByMdFile<br/>业务级一站入口]
         M[parseMdToPointListSilent<br/>md→pointList 静默解析]
         L[linkAndAggregateCases<br/>匹配聚合·纯函数]
@@ -78,7 +79,7 @@ flowchart TB
 
 ### 2.2 关键关系说明
 
-- **两个 UI 入口共用一份匹配逻辑**：`handleViewLinkedCases` 与 `handleLinkerDiagnostic` 都经由 `linkAndAggregateCases` 完成核心匹配聚合，避免逻辑漂移。
+- **UI 入口已收敛为命令面板单入口**（2026-07-25）：`handleLinkerDiagnostic` 经 `linkAndAggregateCases` 完成匹配聚合；历史右键入口 `handleViewLinkedCases` 已下线合并。
 - **`getLinkedCasesByMdFile` 是业务级"总闸"**：一个 md 路径进 → 约定 envelope 出，任何上层（Tree View、Webview、其他 handler）都可以直接调用。
 - **绑定层与引擎层完全解耦**：引擎层不关心"这些案例文件是怎么来的"，绑定层不关心"匹配算法如何做"。
 - **全链路 1:1 语义**：一个测试要点 md **最多**绑定一个测试案例文件，反之亦然。因此：
@@ -96,19 +97,20 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     participant U as 用户
-    participant VS as VSCode 菜单
-    participant H as handleViewLinkedCases
+    participant VS as VSCode 命令面板
+    participant H as handleLinkerDiagnostic
     participant G as getLinkedCasesByMdFile
     participant PM as parseMdToPointListSilent
     participant BS as pointCaseBindingStore
     participant L as linkAndAggregateCases
     participant EN as pointCaseLinker (引擎)
-    participant DC as 开发者Console
+    participant CH as Output Channel
 
-    U->>VS: 右键 .md 文件
-    VS->>H: uri
+    U->>VS: 执行“关联匹配诊断”命令
+    VS->>H: 无参
+    H->>H: 从 activeTextEditor/tabGroups 取 mdPath
     H->>G: mdPath
-    G->>G: 校验扩展名 (.md)
+    G->>G: 校验扩展名 (.md / .xmind)
     G->>PM: 读 md 抽 pointList
     PM-->>G: PointItem[]
     G->>BS: getCaseOfPoint(mdPath)
@@ -121,15 +123,15 @@ sequenceDiagram
     L->>L: 直接而況到 envelope (无需去重)
     L-->>G: LinkedCasesEnvelope
     G-->>H: envelope
-    H->>DC: console.log 结构化 + JSON字符串
-    H->>H: telemetry: viewLinkedCases.done
+    H->>CH: TC-Linker 前缀 + envelope/stats JSON 分块
+    H->>H: telemetry: linkerDiagnostic.done
 ```
 
 ### 3.2 失败短路时序（未绑定示例）
 
 ```mermaid
 sequenceDiagram
-    participant H as handleViewLinkedCases
+    participant H as handleLinkerDiagnostic
     participant G as getLinkedCasesByMdFile
     participant BS as pointCaseBindingStore
 
@@ -137,7 +139,7 @@ sequenceDiagram
     G->>BS: getCaseOfPoint
     BS-->>G: null
     G-->>H: {total:0, errorMsg:"当前测试要点尚未绑定测试案例...", data:{}}
-    Note over H: 不弹 toast<br/>直接 console.log 出参
+    Note over H: 弹 toast(warning) + 将 errorMsg + envelope JSON 写 Output Channel
 ```
 
 ---
@@ -572,12 +574,10 @@ flowchart TD
 按发出方分为三层，各事件间通过 `mdFile` / `caseFile` / `fileExt` 关联串起完整链路：
 
 ```
-┌───────────── 应用层（linkerDiagnosticHandler.ts） ─────────────┐
-│  viewLinkedCases.done            右键"查看关联案例"结束（成功/失败均发） │
-│  viewLinkedCases.error           右键路径出现 errorMsg（Error 事件）  │
+┌───────────── 应用层（linkerDiagnosticCommand.ts） ─────────────┐
 │  linkerDiagnostic.done           命令面板诊断完成                     │
 │  linkerDiagnostic.linkerError    命令面板诊断遇到 errorMsg（Error）   │
-└────────────────────────────────────────────────────────────────┘
+└───────────────────────────────────────────────────────────────┘
                      │ 每次 linkPointsToCases 调用都会级联下面 1~3 个事件
                      ▼
 ┌───────────── 引擎层（pointCaseLinker.ts） ─────────────────────┐
@@ -592,42 +592,29 @@ flowchart TD
 
 ### 8.2 事件字段详表
 
-#### `viewLinkedCases.done`（应用层 · 正常事件）
-**位置**：[linkerDiagnosticHandler.ts:176](../../src/handlers/linkerDiagnosticHandler.ts) · `handleViewLinkedCases` 出口
-**触发**：右键"查看关联案例"命令**每次**结束（含 `errorMsg` 的失败路径）
-
-| 字段 | 类型 | 含义 | 备注 |
-|---|---|---|---|
-| `mdFile` | string | 测试要点 md 的**文件名**（不含目录） | `path.basename(mdPath)`，避免全路径泄露 |
-| `totalRecords` | string | 案例文件解析出的总记录数 | 来自 `envelope.stats.totalRecords`，未匹配路径为 `"0"` |
-| `matched` | string | 命中的记录数 | = `envelope.total` |
-| `pointCount` | string | 输出 `data` 里的 point 键数 | 反映"实际有命中案例的要点数" |
-
-#### `viewLinkedCases.error`（应用层 · 错误事件）
-**位置**：[linkerDiagnosticHandler.ts:155](../../src/handlers/linkerDiagnosticHandler.ts)
-**触发**：`envelope.errorMsg` 非空时同步发出（与 `.done` **并存**，非二选一）
-
-| 字段 | 类型 | 含义 |
-|---|---|---|
-| `errorMsg` | string | envelope 的错误原文，用于枚举失败模式（未绑定 / 非 md / 案例文件缺失 / 引擎抛错 …） |
-
 #### `linkerDiagnostic.done`（应用层 · 正常事件）
-**位置**：[linkerDiagnosticHandler.ts:593](../../src/handlers/linkerDiagnosticHandler.ts) · `handleLinkerDiagnostic` 出口
+**位置**：[linkerDiagnosticCommand.ts](../../src/handlers/linkerDiagnosticCommand.ts) · `handleLinkerDiagnostic` 出口
 **触发**：命令面板"关联匹配诊断"流程完整走完
 
 | 字段 | 类型 | 含义 |
 |---|---|---|
 | `mdFile` | string | md 文件名 |
 | `caseFile` | string | 用户选择的案例文件名 |
-| `pointCount` | string | 从 md 解析出的 point 数量 |
+| `matchedPointKeys` | string | envelope.data 里的 point 键数（“有命中的要点数”、≤ pointList 总数）|
 | `totalRecords` | string | 案例文件总记录数 |
 | `matched` | string | 命中的记录数 |
-| `elapsedMs` | string | 端到端耗时（ms） |
+| `elapsedMs` | string | 端到端耗时（ms）|
 
 #### `linkerDiagnostic.linkerError`（应用层 · 错误事件）
-**位置**：[linkerDiagnosticHandler.ts:544](../../src/handlers/linkerDiagnosticHandler.ts)
+**位置**：[linkerDiagnosticCommand.ts](../../src/handlers/linkerDiagnosticCommand.ts)
 **触发**：诊断流程中 envelope 出现 `errorMsg`
-**字段**：使用 `telemetryErrProps(new Error(envelope.errorMsg))` 展开，包含 `stack` / `message` 等标准 Error 属性。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `errorMessage` | string | 来自 `telemetryErrProps(new Error(envelope.errorMsg))` 展开的 Error.message |
+| `stackHead` | string | Error 栈顶部行，用于定位抛点 |
+| `mdFile` | string | md 文件名（`path.basename(mdPath)`），用于统计“哪些要点文件更易触发错误” |
+| `elapsedMs` | string | 端到端耗时（ms），用于区分“快速短路错误”与“匹配中途抛错” |
 
 #### `pointCaseLinker.done`（引擎层 · 正常事件）
 **位置**：[pointCaseLinker.ts:639](../../src/utils/pointCaseLinker.ts) · `emitTelemetry`
@@ -671,9 +658,9 @@ flowchart TD
 
 | 目标 | 观测方式 |
 |---|---|
-| **功能使用频次** | `viewLinkedCases.done` count / 用户 / 天 |
-| **失败率** | `viewLinkedCases.error` count ÷ `viewLinkedCases.done` count |
-| **失败模式分布** | `viewLinkedCases.error` 按 `errorMsg` 归类（未绑定 / 非 md / 引擎抛错 …） |
+| **功能使用频次** | `linkerDiagnostic.done` count / 用户 / 天 |
+| **失败率** | `linkerDiagnostic.linkerError` count ÷ `linkerDiagnostic.done` count |
+| **失败模式分布** | `linkerDiagnostic.linkerError` 按 `errorMessage` 归类（未绑定 / 非 md / 引擎抛错 …）|
 | **匹配质量档位分布** | `pointCaseLinker.done` 按 `fileExt` 分组，看 `type1:type2:type3` 比例 |
 | **中文 CSV 用户占比** | `pointCaseLinker.done` 中 `fileExt=".csv"` 且 `type3 > 0 && type1 == 0` 的占比 |
 | **数据质量长期告警** | `pointCaseLinker.duplicatePointId` + `pointCaseLinker.multiHitCase` 的日均量 |

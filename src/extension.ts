@@ -43,7 +43,7 @@ import { openOrCreateHeaderLabelsSettings } from './utils/headerLabels';
 import { initYamlDiagnostics } from './utils/yamlValidator';
 import { registerYamlValidation, disposeYamlValidation } from './handlers/yamlValidationHandler';
 import { registerYamlPreOpenInterceptor } from './handlers/yamlPreOpenInterceptor';
-import { handleLinkerDiagnostic, handleViewLinkedCases } from './handlers/linkerDiagnosticHandler';
+import { handleLinkerDiagnostic } from './handlers/linkerDiagnosticCommand';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
@@ -75,7 +75,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // 注册核心功能
     const bindTaskDisposables = registerBindTaskFeatures(context);
     const bindStatusBarDisposables = registerBindStatusBar();
-    const bindDialogProvider = new BindDialogProvider(context.extensionUri, context, () => { refreshBindDecorations(); refreshBindStatusBar(); });
+    const bindDialogProvider = new BindDialogProvider(context.extensionUri, context, (uris?: vscode.Uri[]) => { refreshBindDecorations(uris); refreshBindStatusBar(); });
     const tableBrowserProvider = new TableBrowserProvider(context.extensionUri, context);
     const testCaseProvider = new TestCaseProvider(context.extensionUri, context);
     const unifiedEditorProvider = new UnifiedEditorProvider(context.extensionUri, context);
@@ -371,20 +371,6 @@ export async function activate(context: vscode.ExtensionContext) {
                 } catch (err: any) {
                     TelemetryService.sendTelemetryErrorEvent('diagnosticLinker.commandError', telemetryErrProps(err));
                     showToast(undefined, 'error', `诊断失败: ${err.message || err}`);
-                }
-            }
-        ),
-
-        // ---- 查看关联案例（右键测试要点 .md 一键触发，Output 打印） ----
-        vscode.commands.registerCommand(
-            'testcaseViewer.viewLinkedCases',
-            async (uri: vscode.Uri) => {
-                TelemetryService.sendTelemetryEvent('command.executed', { command: 'testcaseViewer.viewLinkedCases' });
-                try {
-                    await handleViewLinkedCases(uri);
-                } catch (err: any) {
-                    TelemetryService.sendTelemetryErrorEvent('viewLinkedCases.commandError', telemetryErrProps(err));
-                    showToast(undefined, 'error', `查看关联案例失败: ${err.message || err}`);
                 }
             }
         ),

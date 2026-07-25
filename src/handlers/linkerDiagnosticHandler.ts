@@ -1,24 +1,23 @@
 /**
  * ============================================================================
  *  linkerDiagnosticHandler.ts
- *  测试要点 ⇄ 测试案例 关联匹配 · 应用层入口
+ *  测试要点 ⇄ 测试案例 关联匹配 · 公共 API 集合
  * ----------------------------------------------------------------------------
- *  职责（严格 1:1 语义：一个测试要点 md 最多绑定一个测试案例文件）：
- *    ① 右键入口 handleViewLinkedCases：
- *       md → 读绑定 → 匹配 → 按约定 envelope 打印到开发者 Console
- *    ② 命令面板入口 handleLinkerDiagnostic：
- *       基于「当前激活编辑器的 .md」+「该 md 已绑定的案例文件」→ 匹配
- *       → 详情打印到 Output Channel（若无激活 md 或未绑定，会提示并退出）
- *    ③ 三个公共方法：
- *       - getLinkedCasesByMdFile   业务级一站入口（1 md 进 → envelope 出）
- *       - linkAndAggregateCases    匹配聚合纯函数（1 md + 1 case → envelope）
- *       - parseMdToPointListSilent md 静默解析
+ *  定位：业务级公共方法汇（严格 1:1 语义：一个测试要点文件最多绑定一个测试案例文件）：
+ *    ☆ getLinkedCasesByMdFile      业务级一站入口（1 要点文件进 → envelope 出）
+ *    ☆ linkAndAggregateCases       匹配聚合纯函数（1 pointList + 1 case → envelope）
+ *    ☆ parseMdToPointListSilent    md 静默解析
+ *    ☆ parseXmindToPointListSilent xmind 静默解析（引自 utils/parseXmindToPointList）
+ *    ☆ LinkedCasesEnvelope / LinkedCaseItem 类型定义
+ *
+ *  命令面板入口 handleLinkerDiagnostic 已于 2026-07-25 拆到 [linkerDiagnosticCommand.ts]；
+ *  历史右键入口 handleViewLinkedCases（testcaseViewer.viewLinkedCases）已于
+ *  同日合并到 diagnosticLinker，命令/埋点均已下线。
  *
  *  ⚠️ 缓存策略：底层引擎 LRU 用 filePath + mtimeMs + size 作为 key，
- *     文件保存后立即失效；如需查看编辑器内未保存的改动，请先保存 md/case。
+ *     文件保存后立即失效；如需查看编辑器内未保存的改动，请先保存要点/案例文件。
  * ============================================================================
  */
-import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import {
@@ -29,9 +28,11 @@ import {
     type LinkResult,
 } from '../utils/pointCaseLinker';
 import { getCaseOfPoint } from '../utils/pointCaseBindingStore';
-import { showToast } from '../utils/message';
-import { TelemetryService } from '../utils/telemetry';
-import { telemetryErrProps } from '../utils/extensionHelpers';
+import {
+    parseXmindToPointListSilent,
+    type XmindInvalidNode,
+    type XmindWarning,
+} from '../utils/parseXmindToPointList';
 
 // ============================================================================
 // 中文 CSV 表头兼容
@@ -59,11 +60,10 @@ const CN_HEADER_ALIAS: Record<keyof Pick<LinkOptions, 'pathField' | 'caseNameFie
     expectedFields: ['预期结果', '预期', 'expected', 'expectedResult'],
 };
 
-/**
- * 探测案例文件是否为「中文表头 CSV」，返回可注入 LinkOptions 的字段名映射。
- * - 仅处理 .csv；yaml/json 由用户按约定使用英文字段（现状已支持）
- * - 只读首行（<= 8KB），性能开销可忽略
- * - 探测失败或非中文表头 → 返回 undefined，保持默认字段名
+/** 探测案例文件是否为「中文表头 CSV」，返回可注入 LinkOptions 的字段名映射。
+ *  - 仅处理 .csv；yaml/json 由用户按约定使用英文字段（现状已支持）
+ *  - 只读首行（<= 8KB），性能开销可忽略
+ *  - 探测失败或非中文表头 → 返回 undefined，保持默认字段名
  */
 function detectCsvHeaderOptions(filePath: string): Partial<LinkOptions> | undefined {
     try {
@@ -100,111 +100,12 @@ function detectCsvHeaderOptions(filePath: string): Partial<LinkOptions> | undefi
     }
 }
 
-/** 复用同一个 Output Channel，避免多次创建 */
-let outputChannel: vscode.OutputChannel | undefined;
-function getChannel(): vscode.OutputChannel {
-    if (!outputChannel) {
-        outputChannel = vscode.window.createOutputChannel('TestCase Linker 诊断');
-    }
-    return outputChannel;
-}
-
-// ============================================================================
-// 【推荐入口】右键 md 一键查看关联案例（1:1 语义）
-// ============================================================================
-/**
- * 从测试要点 .md 右键触发：
- *   1. 校验路径合法（必须是 .md）
- *   2. 解析当前 md → pointList（静默）
- *   3. 读绑定配置 → 唯一的案例文件绝对路径（1:1）
- *   4. 校验该案例文件仍在磁盘上
- *   5. 调用引擎完成匹配
- *   6. 把「按约定格式聚合的结果」完整写入 OutputChannel 并自动弹出
- *      （VSCode 底部面板：「TestCase Linker 诊断」）。
- *
- * ⚠️ 为何不用 console.log：Extension Host 开发者工具 Console 对大对象有体积
- *    上限，会直接丢弃并打印 "Output omitted for a large object..."。关联结果
- *    envelope 往往较大，故统一走 OutputChannel（可承载大文本）并 ch.show(true)
- *    自动弹出；错误信息仍收敛到 envelope.errorMsg，仅打点 telemetry。
- *
- * 打印的核心对象格式（严格遵循最初约定）：
- *   {
- *     "${pointId}_${pointName}": [
- *       {
- *         "testcase_id": "作为 node_id",
- *         "caseName": "xxx",
- *         "caseDetail": "【前置条件】...【预期结果】...",
- *         "type": 1
- *       }
- *     ]
- *   }
- */
-export async function handleViewLinkedCases(uri: vscode.Uri): Promise<void> {
-    // eslint-disable-next-line no-console
-    const log = console.log.bind(console);
-    log('%c[TC-Linker] ===== 查看关联案例 =====', 'color:#22c55e;font-weight:bold');
-
-    const mdPath = uri?.fsPath;
-    if (!mdPath) {
-        const envelope: LinkedCasesEnvelope = { total: 0, errorMsg: '未拿到测试要点文件路径', data: {} };
-        log('%c[TC-Linker] ❌ 未拿到 md 文件路径', 'color:#ef4444');
-        log('%c[TC-Linker] ===== 最终出参 =====', 'color:#3b82f6;font-weight:bold');
-        log(envelope);
-        log('[TC-Linker] JSON:', JSON.stringify(envelope, null, 2));
-        return;
-    }
-    log('[TC-Linker] 📖 测试要点：', mdPath);
-
-    // ==== 调用高层公共方法：一个 md 进 → 约定 envelope 出 ====
-    const t0 = Date.now();
-    const envelope = await getLinkedCasesByMdFile(mdPath);
-    const elapsed = Date.now() - t0;
-
-    // ---- 结果输出 ----
-    // ⚠️ 关键修复：Extension Host 开发者工具 Console 对大对象有体积上限，
-    //    会直接丢弃并打印 "Output omitted for a large object that exceeds the limits"。
-    //    因此「完整 envelope」统一写入 OutputChannel（可承载大文本），并自动弹出，
-    //    避免 Console 截断导致「看不到数据」的假象。
-    const ch = getChannel();
-    ch.clear();
-    ch.appendLine('[TC-Linker] ===== 查看关联案例 =====');
-    ch.appendLine('[TC-Linker] 📖 测试要点：' + mdPath);
-
-    if (envelope.errorMsg) {
-        log('%c[TC-Linker] ⚠️  ', 'color:#f59e0b', envelope.errorMsg);
-        ch.appendLine('[TC-Linker] ⚠️ ' + envelope.errorMsg);
-        TelemetryService.sendTelemetryErrorEvent('viewLinkedCases.error', { errorMsg: envelope.errorMsg });
-    }
-    ch.appendLine('[TC-Linker] ===== 最终出参（约定格式） =====');
-    // 完整 JSON 写入 OutputChannel（不会因体积被截断）
-    ch.appendLine(JSON.stringify(envelope, null, 2));
-
-    // ---- 简要统计（打点/参考）----
-    const stats = {
-        totalMatched: envelope.total,
-        totalRecords: envelope.stats?.totalRecords,
-        typeCount: envelope.stats?.typeCount,
-        totalOrphan: envelope.stats?.totalOrphan,
-        totalStripped: envelope.stats?.totalStripped,
-        pointKeys: Object.keys(envelope.data).length,
-        elapsedMs: elapsed,
-    };
-    ch.appendLine('[TC-Linker] ===== 统计 =====');
-    ch.appendLine(JSON.stringify(stats, null, 2));
-    log('%c[TC-Linker] ===== 统计 =====', 'color:#3b82f6;font-weight:bold', stats);
-
-    // 自动弹出 OutputChannel（保留编辑器焦点：show(true)）
-    ch.show(true);
-
-    TelemetryService.sendTelemetryEvent('viewLinkedCases.done', {
-        mdFile: path.basename(mdPath),
-        totalRecords: String(envelope.stats?.totalRecords ?? 0),
-        matched: String(envelope.total),
-        pointCount: String(Object.keys(envelope.data).length),
-        elapsedMs: String(elapsed),
-        hasError: envelope.errorMsg ? '1' : '0',
-    });
-}
+// ----------------------------------------------------------------------------
+// 【墓碑】handleViewLinkedCases / testcaseViewer.viewLinkedCases（2026-07-25 已下线）
+//   已合并至 handleLinkerDiagnostic（拆分后位于 linkerDiagnosticCommand.ts）；
+//   如需业务级复用，请调用 getLinkedCasesByMdFile。
+//   埋点 viewLinkedCases.done / viewLinkedCases.error 已停发。
+// ----------------------------------------------------------------------------
 
 // ============================================================================
 // ★★★ 公共方法：查看关联案例（可被任意上层调用方复用） ★★★
@@ -306,22 +207,48 @@ export async function getLinkedCasesByMdFile(
     if (!mdPath || typeof mdPath !== 'string') {
         return { total: 0, errorMsg: '未拿到测试要点文件路径', data: {} };
     }
-    // 1.1) 扩展名分派（当前仅支持 .md；预留 .xmind 等未来扩展）
+    // 1.1) 扩展名分派：目前支持 .md 与 .xmind
+    //      不同扩展名走不同 parser，出参统一收敛到 PointItem[] + 可选的结构诊断信息
     const ext = path.extname(mdPath).toLowerCase();
-    if (ext !== '.md') {
+    let pointList: PointItem[];
+    let xmindInvalidNodes: XmindInvalidNode[] | undefined;
+    let xmindWarnings: XmindWarning[] | undefined;
+    if (ext === '.md') {
+        pointList = await parseMdToPointListSilent(mdPath);
+        if (pointList.length === 0) {
+            return {
+                total: 0,
+                errorMsg: '未从 md 解析出测试点，请检查表头格式（需为 `| 序号 | 测试点 | ... |`）',
+                data: {},
+            };
+        }
+    } else if (ext === '.xmind') {
+        const xr = await parseXmindToPointListSilent(mdPath);
+        pointList = xr.pointList;
+        xmindInvalidNodes = xr.invalidNodes.length > 0 ? xr.invalidNodes : undefined;
+        xmindWarnings = xr.warnings.length > 0 ? xr.warnings : undefined;
+        if (xr.errorMsg) {
+            // 结构错误 / 读取错误 → 直接短路返回，携带清单供上层写 Output Channel
+            return {
+                total: 0,
+                errorMsg: xr.errorMsg,
+                data: {},
+                xmindInvalidNodes,
+                xmindWarnings,
+            };
+        }
+        if (pointList.length === 0) {
+            return {
+                total: 0,
+                errorMsg: '未从 xmind 解析出测试点，请确认存在带「五角星」图标的节点',
+                data: {},
+                xmindWarnings,
+            };
+        }
+    } else {
         return {
             total: 0,
-            errorMsg: `暂不支持的测试要点文件类型：${ext || '(无后缀)'}，当前仅支持 .md`,
-            data: {},
-        };
-    }
-
-    // 2) 解析 md → pointList
-    const pointList = await parseMdToPointListSilent(mdPath);
-    if (pointList.length === 0) {
-        return {
-            total: 0,
-            errorMsg: '未从 md 解析出测试点，请检查表头格式（需为 `| 序号 | 测试点 | ... |`）',
+            errorMsg: `暂不支持的测试要点文件类型：${ext || '(无后缀)'}，当前支持 .md / .xmind`,
             data: {},
         };
     }
@@ -345,8 +272,11 @@ export async function getLinkedCasesByMdFile(
         return { total: 0, errorMsg: '绑定的测试案例文件已缺失', data: {} };
     }
 
-    // 5) 调用底层单文件匹配 + 聚合
-    return linkAndAggregateCases(pointList, casePath);
+    // 5) 调用底层单文件匹配 + 聚合；xmind 侧的结构诊断信息随 envelope 一并回传
+    const envelope = await linkAndAggregateCases(pointList, casePath);
+    if (xmindInvalidNodes) envelope.xmindInvalidNodes = xmindInvalidNodes;
+    if (xmindWarnings) envelope.xmindWarnings = xmindWarnings;
+    return envelope;
 }
 
 // ============================================================================
@@ -383,6 +313,10 @@ export interface LinkedCasesEnvelope {
         /** 同一 case 被多个 point 命中的 testcase_id（脏数据信号） */
         multiHitCases?: string[];
     };
+    /** xmind 解析结构错误清单（仅 xmind 源、且中间存在无图标节点时非空） */
+    xmindInvalidNodes?: XmindInvalidNode[];
+    /** xmind 解析脏数据告警（如多 label 等，不阻断解析） */
+    xmindWarnings?: XmindWarning[];
 }
 
 /**
@@ -461,15 +395,15 @@ export async function parseMdToPointListSilent(mdPath: string): Promise<PointIte
 }
 
 // ============================================================================
-// ★★★ 保留：未绑定场景兜底扫描（当前未启用，后续如需恢复扫描模式可复用） ★★★
+// 【抽屉】未绑定场景兜底扫描（当前未启用）
 // ----------------------------------------------------------------------------
-// 当前策略：md 未绑定测试案例时直接短路提示用户去做绑定；
-// 兜底扫描作为「按目录约定自动发现案例文件」的能力保留在此，随时可以启用。
-// 启用方式：在 getLinkedCasesByMdFile 里 boundAbsList.length === 0 分支中，
-// 用 locateCaseDir + collectCaseFiles 代替直接返回错误 envelope 即可。
+// ✅ 意图：当 md 未绑定测试案例时，能自动以目录约定发现案例文件，避免硬报错。
+// 🔒 当前策略：md 未绑定测试案例时直接短路提示用户去做绑定（业务团队认为显式绑定更可控）。
+// 🎛️ 启用方式：在 getLinkedCasesByMdFile 里「未拿到绑定」分支中，用 locateCaseDir + collectCaseFiles
+//    置换直接返回错误 envelope 即可。下方两个函数已设计成纯函数，无副作用、无需预初始化，
+//    兜底时不会与主链路衍生意外副作用。
+// ⚠️ 若不再需要兜底能力，可安全删除以下两个函数；删除前请确认无调用方。
 // ============================================================================
-
-/** 从 md 所在路径向上找到「测试案例」目录 */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function locateCaseDir(mdPath: string): string | null {
     // 优先规则：如果 md 所在目录名叫「测试大纲」，则同级找「测试案例」
@@ -514,122 +448,6 @@ async function collectCaseFiles(dir: string, out: string[]): Promise<void> {
 }
 
 // ============================================================================
-// 命令入口
-// ============================================================================
-export async function handleLinkerDiagnostic(): Promise<void> {
-    const ch = getChannel();
-    ch.clear();
-    ch.show(true);
-    ch.appendLine(`[${nowIso()}] === 关联匹配诊断开始 ===`);
-
-    // 1) 取当前激活编辑器里的 .md（必须位于「测试任务/<任务名>/测试大纲/」下）
-    const activeEditor = vscode.window.activeTextEditor;
-    if (!activeEditor) {
-        const msg = '请先在编辑器中打开一个测试要点 .md 文件后再执行本命令。';
-        ch.appendLine(`❌ ${msg}`);
-        showToast(undefined, 'warn', msg);
-        return;
-    }
-    const mdPath = activeEditor.document.uri.fsPath;
-    if (path.extname(mdPath).toLowerCase() !== '.md') {
-        const msg = `当前激活文件不是 .md：${short(mdPath)}`;
-        ch.appendLine(`❌ ${msg}`);
-        showToast(undefined, 'warn', msg);
-        return;
-    }
-    // 路径必须命中「测试任务/<任务名>/测试大纲/」（与右键菜单入口保持一致）
-    const OUTLINE_RE = /测试任务[\\/][^\\/]+[\\/]测试大纲[\\/].+\.md$/i;
-    if (!OUTLINE_RE.test(mdPath)) {
-        const msg = `当前激活的 .md 不在「测试任务/<任务名>/测试大纲/」下：${short(mdPath)}`;
-        ch.appendLine(`❌ ${msg}`);
-        showToast(undefined, 'warn', msg);
-        return;
-    }
-    ch.appendLine(`📖 测试要点（来自当前编辑器）：${short(mdPath)}`);
-
-    // 2) 单独解析 pointList 用于诊断视角展开（getLinkedCasesByMdFile 内部也会解析，
-    //    这里再解析一次的成本可忽略：纯 fs.readFile + 正则，无 IO 缓存也无副作用）
-    const pointList = await parseMdToPointListSilent(mdPath);
-    ch.appendLine('');
-    ch.appendLine(`📋 pointList 共 ${pointList.length} 个点：`);
-    for (const p of pointList) {
-        ch.appendLine(`   · ${p.pointId} | ${p.pointName} | ${p.pointPath}`);
-    }
-    ch.appendLine('');
-
-    // 3) 复用【右键入口同源公共方法】完成"读绑定 + 校验 case 存在 + 匹配 + 聚合"，
-    //    保证诊断结果与右键"查看关联案例"完全一致。
-    const t0 = Date.now();
-    const envelope = await getLinkedCasesByMdFile(mdPath);
-    const elapsed = Date.now() - t0;
-
-    if (envelope.errorMsg) {
-        ch.appendLine(`❌ ${envelope.errorMsg}`);
-        TelemetryService.sendTelemetryErrorEvent('linkerDiagnostic.linkerError', telemetryErrProps(new Error(envelope.errorMsg)));
-        showToast(undefined, 'warn', envelope.errorMsg);
-        return;
-    }
-
-    // 4) 从 envelope 中回捞 casePath 用于日志展示（1:1 语义下所有 item 的 filePath 相同）
-    const firstItem = Object.values(envelope.data)[0]?.[0];
-    const casePath = firstItem?.filePath ?? '(未知)';
-    ch.appendLine(`📎 绑定的测试案例：${short(casePath)}`);
-    ch.appendLine(`⏱  linker 完成：耗时 ${elapsed}ms。`);
-    ch.appendLine('');
-
-    // 6) 打印每个 point 的详情（诊断视角，超大结果做行数保护避免 Output 面板卡顿）
-    const keys = Object.keys(envelope.data).sort();
-    if (keys.length === 0) {
-        ch.appendLine('   （无任何 point 命中案例）');
-    }
-    const MAX_CASES_PER_POINT = 100;
-    for (const key of keys) {
-        const cases = envelope.data[key];
-        ch.appendLine(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-        ch.appendLine(`🔗 ${key}  → ${cases.length} 条`);
-        const shown = cases.slice(0, MAX_CASES_PER_POINT);
-        for (const c of shown) {
-            const badge = typeBadge(c.type);
-            const detail = c.caseDetail ? ` ｜ ${trunc(c.caseDetail, 60)}` : '';
-            ch.appendLine(`   ${badge} ${c.testcase_id} · ${c.caseName}${detail}`);
-        }
-        if (cases.length > MAX_CASES_PER_POINT) {
-            ch.appendLine(`   … 还有 ${cases.length - MAX_CASES_PER_POINT} 条（已折叠，完整结果见 telemetry / 复用公共方法）`);
-        }
-    }
-    ch.appendLine('');
-
-    // 7) 总览
-    const st = envelope.stats;
-    ch.appendLine(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    ch.appendLine(`📊 总览`);
-    ch.appendLine(`   案例文件: ${short(casePath)}`);
-    ch.appendLine(`   总记录: ${st?.totalRecords ?? 0}`);
-    ch.appendLine(`   命中: ${envelope.total}  (type1=${st?.typeCount.type1 ?? 0}, type2=${st?.typeCount.type2 ?? 0}, type3=${st?.typeCount.type3 ?? 0})`);
-    ch.appendLine(`   孤儿: ${st?.totalOrphan ?? 0}`);
-    ch.appendLine(`   剥离子序号次数: ${st?.totalStripped ?? 0}`);
-    // 脏数据信号（仅在有值时输出，避免噪声）
-    if (st?.duplicatePointIds && st.duplicatePointIds.length > 0) {
-        ch.appendLine(`   ⚠️  重复 pointId (${st.duplicatePointIds.length}): ${st.duplicatePointIds.slice(0, 20).join(', ')}${st.duplicatePointIds.length > 20 ? ' …' : ''}`);
-    }
-    if (st?.multiHitCases && st.multiHitCases.length > 0) {
-        ch.appendLine(`   ⚠️  跨点多命中 case (${st.multiHitCases.length}): ${st.multiHitCases.slice(0, 20).join(', ')}${st.multiHitCases.length > 20 ? ' …' : ''}`);
-    }
-    ch.appendLine(`   总耗时: ${elapsed}ms`);
-    ch.appendLine('');
-    ch.appendLine(`[${nowIso()}] === 关联匹配诊断结束 ===`);
-
-    TelemetryService.sendTelemetryEvent('linkerDiagnostic.done', {
-        mdFile: path.basename(mdPath),
-        caseFile: path.basename(casePath),
-        pointCount: String(pointList.length),
-        totalRecords: String(st?.totalRecords ?? 0),
-        matched: String(envelope.total),
-        elapsedMs: String(elapsed),
-    });
-}
-
-// ============================================================================
 // 辅助
 // ============================================================================
 /**
@@ -643,26 +461,4 @@ function splitMdRow(line: string): string[] {
     const PLACEHOLDER = '\u0000';
     const escaped = trimmed.replace(/\\\|/g, PLACEHOLDER);
     return escaped.split('|').map(c => c.replace(new RegExp(PLACEHOLDER, 'g'), '|'));
-}
-
-function typeBadge(t: 1 | 2 | 3): string {
-    if (t === 1) return '🟢[type=1 精确]';
-    if (t === 2) return '🟡[type=2 仅ID]';
-    return '🔵[type=3 仅path]';
-}
-
-function trunc(s: string, n: number): string {
-    if (!s) return '';
-    const one = s.replace(/\s+/g, ' ').trim();
-    return one.length > n ? one.slice(0, n) + '…' : one;
-}
-
-function short(fp: string): string {
-    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (ws && fp.startsWith(ws)) return '.' + fp.slice(ws.length);
-    return fp;
-}
-
-function nowIso(): string {
-    return new Date().toISOString().replace('T', ' ').slice(0, 19);
 }

@@ -7,8 +7,8 @@
  *    ① 右键入口 handleViewLinkedCases：
  *       md → 读绑定 → 匹配 → 按约定 envelope 打印到开发者 Console
  *    ② 命令面板入口 handleLinkerDiagnostic：
- *       手动选 1 个 md + 1 个 case 文件 → 匹配 → 详情打印到 Output Channel
- *       （面向开发/联调场景，绕过绑定配置做算法验证）
+ *       基于「当前激活编辑器的 .md」+「该 md 已绑定的案例文件」→ 匹配
+ *       → 详情打印到 Output Channel（若无激活 md 或未绑定，会提示并退出）
  *    ③ 三个公共方法：
  *       - getLinkedCasesByMdFile   业务级一站入口（1 md 进 → envelope 出）
  *       - linkAndAggregateCases    匹配聚合纯函数（1 md + 1 case → envelope）
@@ -23,7 +23,6 @@ import * as path from 'path';
 import * as fs from 'fs';
 import {
     linkPointsToCases,
-    clearLinkerCache,
     normalizePointPath,
     type PointItem,
     type LinkOptions,
@@ -523,50 +522,34 @@ export async function handleLinkerDiagnostic(): Promise<void> {
     ch.show(true);
     ch.appendLine(`[${nowIso()}] === 关联匹配诊断开始 ===`);
 
-    // 1) 选 md 文件（1:1 语义：仅单选）
-    const mdPicks = await vscode.window.showOpenDialog({
-        canSelectFiles: true,
-        canSelectFolders: false,
-        canSelectMany: false,
-        openLabel: '选择测试要点 .md',
-        filters: { Markdown: ['md'] },
-    });
-    if (!mdPicks || mdPicks.length === 0) {
-        ch.appendLine('用户取消：未选择测试要点文件。');
+    // 1) 取当前激活编辑器里的 .md（必须位于「测试任务/<任务名>/测试大纲/」下）
+    const activeEditor = vscode.window.activeTextEditor;
+    if (!activeEditor) {
+        const msg = '请先在编辑器中打开一个测试要点 .md 文件后再执行本命令。';
+        ch.appendLine(`❌ ${msg}`);
+        showToast(undefined, 'warn', msg);
         return;
     }
-
-    // 2) 选 case 文件（1:1 语义：仅单选）
-    const casePicks = await vscode.window.showOpenDialog({
-        canSelectFiles: true,
-        canSelectFolders: false,
-        canSelectMany: false,
-        openLabel: '选择测试案例（yaml/json/csv）',
-        filters: { '测试案例': ['yaml', 'yml', 'json', 'csv'] },
-    });
-    if (!casePicks || casePicks.length === 0) {
-        ch.appendLine('用户取消：未选择测试案例文件。');
+    const mdPath = activeEditor.document.uri.fsPath;
+    if (path.extname(mdPath).toLowerCase() !== '.md') {
+        const msg = `当前激活文件不是 .md：${short(mdPath)}`;
+        ch.appendLine(`❌ ${msg}`);
+        showToast(undefined, 'warn', msg);
         return;
     }
-
-    // 3) 是否清缓存（诊断场景默认清一次，观察真实解析耗时）
-    const clearCacheChoice = await vscode.window.showQuickPick(
-        [
-            { label: '是（推荐，观察真实解析）', value: true },
-            { label: '否（复用缓存）', value: false },
-        ],
-        { placeHolder: '是否清空 linker 缓存后再匹配？' }
-    );
-    const shouldClear = clearCacheChoice?.value ?? true;
-    if (shouldClear) {
-        clearLinkerCache();
-        ch.appendLine('已清空 linker 缓存。');
+    // 路径必须命中「测试任务/<任务名>/测试大纲/」（与右键菜单入口保持一致）
+    const OUTLINE_RE = /测试任务[\\/][^\\/]+[\\/]测试大纲[\\/].+\.md$/i;
+    if (!OUTLINE_RE.test(mdPath)) {
+        const msg = `当前激活的 .md 不在「测试任务/<任务名>/测试大纲/」下：${short(mdPath)}`;
+        ch.appendLine(`❌ ${msg}`);
+        showToast(undefined, 'warn', msg);
+        return;
     }
+    ch.appendLine(`📖 测试要点（来自当前编辑器）：${short(mdPath)}`);
 
-    // 4) 解析 md → pointList
-    const mdPath = mdPicks[0].fsPath;
+    // 2) 单独解析 pointList 用于诊断视角展开（getLinkedCasesByMdFile 内部也会解析，
+    //    这里再解析一次的成本可忽略：纯 fs.readFile + 正则，无 IO 缓存也无副作用）
     const pointList = await parseMdToPointListSilent(mdPath);
-    ch.appendLine(`解析 md：${short(mdPath)} → ${pointList.length} 个点`);
     ch.appendLine('');
     ch.appendLine(`📋 pointList 共 ${pointList.length} 个点：`);
     for (const p of pointList) {
@@ -574,24 +557,24 @@ export async function handleLinkerDiagnostic(): Promise<void> {
     }
     ch.appendLine('');
 
-    if (pointList.length === 0) {
-        ch.appendLine('⚠️  未从 md 中解析出任何测试点，终止匹配。');
-        return;
-    }
-
-    // 5) 调用【公共方法】完成匹配 + 聚合（与右键入口共用同一份逻辑）
-    const casePath = casePicks[0].fsPath;
+    // 3) 复用【右键入口同源公共方法】完成"读绑定 + 校验 case 存在 + 匹配 + 聚合"，
+    //    保证诊断结果与右键"查看关联案例"完全一致。
     const t0 = Date.now();
-    const envelope = await linkAndAggregateCases(pointList, casePath);
+    const envelope = await getLinkedCasesByMdFile(mdPath);
     const elapsed = Date.now() - t0;
 
     if (envelope.errorMsg) {
-        ch.appendLine(`❌ 匹配失败：${envelope.errorMsg}`);
+        ch.appendLine(`❌ ${envelope.errorMsg}`);
         TelemetryService.sendTelemetryErrorEvent('linkerDiagnostic.linkerError', telemetryErrProps(new Error(envelope.errorMsg)));
-        showToast(undefined, 'error', `linker 执行失败: ${envelope.errorMsg}`);
+        showToast(undefined, 'warn', envelope.errorMsg);
         return;
     }
-    ch.appendLine(`⏱  linker 完成：耗时 ${elapsed}ms（案例文件：${short(casePath)}）。`);
+
+    // 4) 从 envelope 中回捞 casePath 用于日志展示（1:1 语义下所有 item 的 filePath 相同）
+    const firstItem = Object.values(envelope.data)[0]?.[0];
+    const casePath = firstItem?.filePath ?? '(未知)';
+    ch.appendLine(`📎 绑定的测试案例：${short(casePath)}`);
+    ch.appendLine(`⏱  linker 完成：耗时 ${elapsed}ms。`);
     ch.appendLine('');
 
     // 6) 打印每个 point 的详情（诊断视角，超大结果做行数保护避免 Output 面板卡顿）
@@ -644,12 +627,6 @@ export async function handleLinkerDiagnostic(): Promise<void> {
         matched: String(envelope.total),
         elapsedMs: String(elapsed),
     });
-
-    showToast(
-        undefined,
-        'info',
-        `关联匹配完成：${envelope.total}/${st?.totalRecords ?? 0} 记录命中，耗时 ${elapsed}ms（详见 Output）`
-    );
 }
 
 // ============================================================================

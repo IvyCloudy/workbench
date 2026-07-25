@@ -64,7 +64,7 @@ function normalizeEntry(raw: any): PushFailureEntry {
         if (v == null) continue;
         if (typeof v === 'string') {
             out[k] = { reason: v, timestamp: 0 };
-        } else         if (typeof v === 'object') {
+        } else if (typeof v === 'object') {
             const reason = (v.reason != null) ? String(v.reason) : '';
             const ts = (typeof v.timestamp === 'number' && isFinite(v.timestamp)) ? v.timestamp : 0;
             const cat = typeof v.category === 'string' ? (v.category as PushFailCategory) : undefined;

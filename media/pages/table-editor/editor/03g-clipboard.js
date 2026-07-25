@@ -359,7 +359,7 @@ function fillSelectedCells() {
         pushHistory();
         for (var i = 0; i < rowList.length; i++) {
             var r = rowList[i];
-            // 样例数据行冻结：批量清空跳过该行
+            // 样例数据行冻结：批量填充跳过该行
             if (isFrozenRow(r)) continue;
             for (var c = rc.c1; c <= rc.c2; c++) {
                 if (isFrozenCol(c)) { skippedTsId = true; continue; }

@@ -118,8 +118,19 @@ function showContextMenu(e) {
         if (_selRows.length > 1) {
             items.push({ label: '复制选中行 (' + _selRows.length + ')', action: copySelectedRows });
         }
-        items.push({ label: '在上方插入行', action: function () { insertRow(S._ctxRow); }, disabled: S._ctxRow < 0 });
-        items.push({ label: '在下方插入行', action: function () { insertRow(S._ctxRow + 1); }, disabled: S._ctxRow < 0 });
+        // 插入 N 行：菜单项内嵌数字输入框，默认 1
+        items.push({
+            insertNRows: 'above',
+            label: '在上方插入',
+            action: function (n) { insertRow(S._ctxRow, n); },
+            disabled: S._ctxRow < 0
+        });
+        items.push({
+            insertNRows: 'below',
+            label: '在下方插入',
+            action: function (n) { insertRow(S._ctxRow + 1, n); },
+            disabled: S._ctxRow < 0
+        });
         // 标记 / 取消标记
         var _markRects = collectMarkRects();
         if (_markRects.length > 0) {
@@ -162,8 +173,17 @@ function showContextMenu(e) {
     if (!menu) return;
     var html = '';
     items.forEach(function (it) {
-        if (it.divider) html += '<div class="xs-div"></div>';
-        else html += '<div class="xs-mi' + (it.disabled ? ' disabled' : '') + '" data-key="' + escapeHtml(it.label) + '">' + escapeHtml(it.label) + '</div>';
+        if (it.divider) { html += '<div class="xs-div"></div>'; return; }
+        if (it.insertNRows) {
+            // 带内嵌数字输入框的菜单项：label + input + "行"
+            html += '<div class="xs-mi xs-mi-with-input' + (it.disabled ? ' disabled' : '') + '" data-key="' + escapeHtml(it.label) + '">' +
+                '<span class="xs-mi-lbl">' + escapeHtml(it.label) + '</span>' +
+                '<input class="xs-mi-num" type="number" min="1" max="999" value="1" />' +
+                '<span class="xs-mi-suffix">行</span>' +
+                '</div>';
+            return;
+        }
+        html += '<div class="xs-mi' + (it.disabled ? ' disabled' : '') + '" data-key="' + escapeHtml(it.label) + '">' + escapeHtml(it.label) + '</div>';
     });
     menu.innerHTML = html;
     menu.style.display = 'block';
@@ -184,10 +204,42 @@ function showContextMenu(e) {
             if (walker === idx) { realIdx = i; break; }
             walker++;
         }
+        var item = items[realIdx];
+        // 带 input 的菜单项：阻断 input 的点击 / 鼠标事件冒泡，避免触发菜单关闭；
+        // 支持回车触发；点击行其余区域按当前输入值执行。
+        if (item && item.insertNRows) {
+            var input = mi.querySelector('.xs-mi-num');
+            if (input) {
+                ['mousedown', 'click', 'dblclick', 'contextmenu'].forEach(function (ev) {
+                    input.addEventListener(ev, function (e2) { e2.stopPropagation(); });
+                });
+                input.addEventListener('keydown', function (e2) {
+                    e2.stopPropagation();
+                    if (e2.key === 'Enter') {
+                        if (item.disabled) return;
+                        var n = parseInt(input.value, 10);
+                        if (!isFinite(n) || n < 1) n = 1;
+                        hideContextMenu();
+                        try { item.action(n); } catch (err) { console.error(err); }
+                    } else if (e2.key === 'Escape') {
+                        hideContextMenu();
+                    }
+                });
+                // 打开菜单时选中输入框内容，方便直接输入替换
+                input.addEventListener('focus', function () { try { input.select(); } catch (_) {} });
+            }
+        }
         mi.addEventListener('click', function (ev) {
             ev.stopPropagation();
-            var item = items[realIdx];
             if (!item || item.disabled) return;
+            if (item.insertNRows) {
+                var inp = mi.querySelector('.xs-mi-num');
+                var n = inp ? parseInt(inp.value, 10) : 1;
+                if (!isFinite(n) || n < 1) n = 1;
+                hideContextMenu();
+                try { item.action(n); } catch (err) { console.error(err); }
+                return;
+            }
             hideContextMenu();
             try { item.action(); } catch (err) { console.error(err); }
         });

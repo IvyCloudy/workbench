@@ -104,7 +104,26 @@ function _shiftRowIdxHighlights(op, at) {
     }
 }
 
-function insertRow(at) {
+function insertRow(at, count) {
+    // 批量插入：count 次连续在 at 位置插入（每次插入后新插入行都在 at，后续插入会把它们往下推）
+    // 通过一次 pushHistory 支持整体撤销，避免用户按 N 次 Undo
+    var n = parseInt(count, 10);
+    if (!isFinite(n) || n < 1) n = 1;
+    if (n > 1) {
+        pushHistory();
+        // 递归调用时 count 传 1，但为避免每次都 pushHistory，改为内联循环调用一个不带历史/保存的核心
+        // 简化做法：直接循环调用 insertRow(at, 1)，其内部各自 pushHistory 会造成撤销栈膨胀（N 次撤销才能全撤）。
+        // 折中：使用一个模块级标记跳过内部 pushHistory / saveFile / renderTable，最后统一执行。
+        S._insertRowSkipSideEffects = true;
+        try {
+            for (var _k = 0; _k < n; _k++) insertRow(at, 1);
+        } finally {
+            S._insertRowSkipSideEffects = false;
+        }
+        saveFile();
+        renderTable();
+        return;
+    }
     var headers = S.data.headers || [];
     var width = headers.length;
     var newRow = new Array(width).fill('');
@@ -129,7 +148,7 @@ function insertRow(at) {
     if (tsCol >= 0) newRow[tsCol] = genUuidV4();
     if (at < 0) at = 0;
     if (at > S.data.rows.length) at = S.data.rows.length;
-    pushHistory();
+    if (!S._insertRowSkipSideEffects) pushHistory();
     S.data.rows.splice(at, 0, newRow);
     // 同步所有明细表：在插入位置插入空条目，确保 rowGroups/rawRowGroups/rawRowTypes
     // 与主表 rows 长度一致，避免后续 buildRowDetailSignature 按行索引误读其他行的明细数据
@@ -187,6 +206,7 @@ function insertRow(at) {
     }
     // 行结构变化 → 清除单元格矩形选区，避免索引错位
     S.cellSel = null;
+    if (S._insertRowSkipSideEffects) return;
     saveFile();
     renderTable();
 }

@@ -382,6 +382,13 @@ tbody tr.xs-tr-frozen.selected td.xs-td{background:#dde7f3}
 .xs-mi.disabled{opacity:.4;cursor:not-allowed}
 .xs-mi.disabled:hover{background:transparent}
 .xs-div{height:1px;background:var(--bd);margin:4px 0}
+/* 带内嵌数字输入框的菜单项（在上方/下方插入 N 行） */
+.xs-mi-with-input{display:flex;align-items:center;gap:6px}
+.xs-mi-with-input .xs-mi-lbl{flex:1}
+.xs-mi-with-input .xs-mi-num{width:44px;height:20px;padding:0 4px;border:1px solid var(--bd);border-radius:3px;font-size:12px;text-align:center;background:#fff;color:inherit;box-sizing:border-box}
+.xs-mi-with-input .xs-mi-num:focus{outline:none;border-color:#409eff;box-shadow:0 0 0 2px rgba(64,158,255,.15)}
+.xs-mi-with-input .xs-mi-suffix{color:#606266;font-size:12px}
+.xs-mi-with-input.disabled .xs-mi-num{cursor:not-allowed;background:#f5f5f5}
 .lb{float:right;color:var(--tl);font-size:11px}
 
 /* 列筛选弹窗（Excel 风格） */

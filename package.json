@@ -181,12 +181,6 @@
         "title": "诊断：测试要点 ⇄ 案例 关联匹配",
         "icon": "$(debug-console)",
         "category": "测试案例"
-      },
-      {
-        "command": "testcaseViewer.viewLinkedCases",
-        "title": "查看关联案例",
-        "icon": "$(list-tree)",
-        "category": "测试案例"
       }
     ],
     "menus": {
@@ -271,10 +265,6 @@
         },
         {
           "command": "testcaseViewer.bindTestPoints",
-          "when": "false"
-        },
-        {
-          "command": "testcaseViewer.viewLinkedCases",
           "when": "false"
         }
       ],
@@ -396,6 +386,7 @@
   },
   "dependencies": {
     "iconv-lite": "^0.7.2",
+    "jszip": "^3.10.1",
     "sm-crypto": "^0.3.7",
     "udsv": "^0.7.3",
     "xlsx": "^0.18.5",

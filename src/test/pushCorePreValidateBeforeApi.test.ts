@@ -54,10 +54,17 @@ const baseHooks = () => ({
 
 const run = (rows: Array<Record<string, string>>) => {
     const hooks = baseHooks();
+    // 给每行注入 mapper 必填字段（description + steps），确保合法行能通过预校验到达接口；
+    // 本文件关注"非法格式拦截"，不关注字段内容，故用最小合法字段集。
+    const enriched = rows.map((r) => ({
+        description: '推送测试',
+        steps: [{ operation: '执行', ui_expected: ['ok'] }],
+        ...r,
+    }));
     return runPush({
         extensionContext: {} as any,
         filePath: '/tmp/tt/push.yaml',
-        rows: rows as any,
+        rows: enriched as any,
         resolveRowIndex: (i: number) => i + 1,
         hooks: hooks as any,
         telemetryPrefix: 'push',

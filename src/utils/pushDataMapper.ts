@@ -42,7 +42,10 @@
  *    priority          ← 优先级
  *    preCondition      ← 前置条件
  *    description(接口) ← 步骤描述（解析「步骤x[:：]\n内容」结构，按步骤号提取）
+ *                        若文本不含「步骤N:」但非空，整段作为步骤1
  *    expected(接口)    ← 预期结果（同上解析，按 description 步骤号对齐，缺步骤填 ''）
+ *                        若文本不含「步骤N:」但含【UI检查】/【接口调用】/【数据检查】
+ *                        且非空，则整段视为步骤1的预期
  *    description 与 expected 数组长度始终相等，按步骤号一一对应
  *
  *  ── 通用规则 ─────────────────────────────────────────
@@ -75,7 +78,7 @@
 // ============================================================================
 export interface MapErrorFields {
     caseTag: string;
-    reason: 'missingTestcaseId' | 'missingOperation' | 'missingStepDesc' | 'invalidPath';
+    reason: 'missingTestcaseId' | 'missingOperation' | 'missingStepDesc' | 'missingTestCaseDes' | 'missingExpected' | 'invalidPath';
     stepIdx?: number;
     rowIndex?: number;
 }
@@ -280,9 +283,23 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
         );
     }
 
+    // 案例描述（testCaseDes）必填：空/仅空白 → 抛错
+    const testCaseDesRaw = unescapeCsvCell(row['案例描述']);
+    if (testCaseDesRaw.trim() === '') {
+        throw makeMapError(
+            `案例 [${caseTag}] 缺少「案例描述」，请补全后再推送。`,
+            { caseTag, reason: 'missingTestCaseDes', rowIndex }
+        );
+    }
+
     // description：解析「步骤x[:：]\n内容」格式，按步骤号排序
+    // 兼容：若文本中不含「步骤N:」结构但整段非空，则整段视为「步骤1」的内容
+    //       （适配用户只写单步骤时直接写正文，不加"步骤1:"前缀的常见习惯）
     const stepsText = unescapeCsvCell(row['步骤描述']);
-    const descBlocks = parseStepBlocks(stepsText);
+    let descBlocks = parseStepBlocks(stepsText);
+    if (descBlocks.length === 0 && stepsText.trim() !== '') {
+        descBlocks = [{ num: 1, content: stepsText.trim() }];
+    }
     const description: string[] = descBlocks.map(b => nl2br(b.content));
     if (description.length === 0) {
         throw makeMapError(
@@ -293,10 +310,24 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
 
     // expected：解析同格式文本，按 description 的步骤号顺序对齐，
     //           缺失的步骤填充空字符串，确保 expected 长度始终等于 description
+    // 兼容：若文本中不含「步骤N:」结构但含【UI检查】/【接口调用】/【数据检查】标签
+    //       且整段非空，则整段视为「步骤1」的预期结果（与步骤描述回退规则对称）
     const expectedText = unescapeCsvCell(row['预期结果']);
-    const expBlocks = parseStepBlocks(expectedText);
+    let expBlocks = parseStepBlocks(expectedText);
+    if (expBlocks.length === 0
+        && /【\s*(UI检查|接口调用|数据检查)\s*】/.test(expectedText)
+        && expectedText.trim() !== '') {
+        expBlocks = [{ num: 1, content: expectedText.trim() }];
+    }
     const expMap = new Map(expBlocks.map(b => [b.num, b.content]));
     const expected: string[] = descBlocks.map(b => expMap.get(b.num) ?? '');
+    // 预期结果必填：至少要有一步存在非空预期，否则视为整体缺失预期
+    if (expected.every(e => toStr(e).trim() === '')) {
+        throw makeMapError(
+            `案例 [${caseTag}] 缺少「预期结果」，请补全后再推送。`,
+            { caseTag, reason: 'missingExpected', rowIndex }
+        );
+    }
 
     // testType：执行方式 → 空或'手工' → '手工'；其他 → '自动化'
     const execMethod = toStr(row['执行方式']).trim();
@@ -344,6 +375,24 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
         );
     }
 
+    // 案例描述（testCaseDes）必填：空/仅空白 → 抛错
+    const testCaseDesRaw = toStr(row['description']);
+    if (testCaseDesRaw.trim() === '') {
+        throw makeMapError(
+            `案例 [${caseTag}] 缺少「案例描述」（description），请补全后再推送。`,
+            { caseTag, reason: 'missingTestCaseDes', rowIndex }
+        );
+    }
+
+    // steps 必填：steps 缺失或为空数组时，description / expected 都会是 []，
+    // 后端不接受空列表，前置拦截并给出更明确的报错定位。
+    if (steps.length === 0) {
+        throw makeMapError(
+            `案例 [${caseTag}] 缺少「步骤」（steps），请补全后再推送。`,
+            { caseTag, reason: 'missingStepDesc', rowIndex }
+        );
+    }
+
     // description：每个 step 拼为 operation + <br> + data；operation 必填，为空抛错；与 steps 一一对应
     const description: string[] = steps.map((s, idx) => {
         const op = toStr(s && s.operation).trim();
@@ -368,6 +417,13 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
         if (db.length) segs.push('【数据检查】\n' + db.join('\n'));
         return segs.join('\n');
     });
+    // 预期结果必填：至少要有一步存在非空预期（ui/api/db 任一段填了即可），否则视为整体缺失预期
+    if (expected.length === 0 || expected.every(e => toStr(e).trim() === '')) {
+        throw makeMapError(
+            `案例 [${caseTag}] 缺少「预期结果」（每个步骤的 ui_expected / api_expected / db_expected 至少填其一），请补全后再推送。`,
+            { caseTag, reason: 'missingExpected', rowIndex }
+        );
+    }
 
     // testType：执行方式 → 空或'手工' → '手工'；其他 → '自动化'
     const testTypeRaw = row['test_type'] != null && String(row['test_type']).trim() !== ''

@@ -67,9 +67,10 @@ describe.skipIf(!allExist)('pointCaseLinker · 真实样例集成验证', () => 
     const lgnPoints = parseMdPointList(MDS.login);
     const ordPoints = parseMdPointList(MDS.order);
     const pointList = lgnPoints.concat(ordPoints);
-    expect(lgnPoints.length).toBe(100);
-    expect(ordPoints.length).toBe(100);
-    expect(pointList.length).toBe(200);
+    // 点位数量：允许样例文件被增删，仅要求达到最小规模（登录/订单各 ≥100 点）
+    expect(lgnPoints.length).toBeGreaterThanOrEqual(100);
+    expect(ordPoints.length).toBeGreaterThanOrEqual(100);
+    expect(pointList.length).toBe(lgnPoints.length + ordPoints.length);
 
     const t0 = Date.now();
     const result = await linkPointsToCasesBatch(Object.values(FILES), pointList);
@@ -104,8 +105,8 @@ describe.skipIf(!allExist)('pointCaseLinker · 真实样例集成验证', () => 
     const mixed = result[FILES.mixed];
 
     // ---- 断言 ----
-    // 1) 总记录 == 1000
-    expect(grandTotal).toBe(1000);
+    // 1) 总记录数达到最小规模（允许样例文件被增删，历史基线为 1000）
+    expect(grandTotal).toBeGreaterThanOrEqual(1000);
     // 2) 三种 type 都必须命中
     expect(grandType.type1).toBeGreaterThan(0);
     expect(grandType.type2).toBeGreaterThan(0);

@@ -77,6 +77,8 @@ describe('编辑器全链路：行号映射 / 接口成功计入', () => {
 
     it('无样例行：8 预校验失败(行号正确) + 3 成功', async () => {
         // 前端选中 11 行（全局行号 1..11），pushIndexToRow = [1..11]
+        // 合法行需补齐 mapper 必填字段（description + steps.operation + ui_expected）
+        const legal = { description: '推送测试', steps: [{ operation: '执行', ui_expected: ['ok'] }] };
         const rows = [
             { [TS_ID_COLUMN]: 'TESTCASE_ID' },       // 1 占位
             { [TS_ID_COLUMN]: '' },                   // 2 空
@@ -86,9 +88,9 @@ describe('编辑器全链路：行号映射 / 接口成功计入', () => {
             { [TS_ID_COLUMN]: '12345678-1234-1234-1234' }, // 6 格式
             { [TS_ID_COLUMN]: 'TC-abc-def' },         // 7 格式
             { [TS_ID_COLUMN]: 'test_case_x' },        // 8 格式
-            { [TS_ID_COLUMN]: TC_ID },                // 9 合法
-            { [TS_ID_COLUMN]: MA_ID },                // 10 合法
-            { [TS_ID_COLUMN]: UUID_ID },              // 11 合法
+            { [TS_ID_COLUMN]: TC_ID, ...legal },      // 9 合法
+            { [TS_ID_COLUMN]: MA_ID, ...legal },      // 10 合法
+            { [TS_ID_COLUMN]: UUID_ID, ...legal },    // 11 合法
         ];
         const pushIndexToRow = rows.map((_, i) => i + 1);
         const hooks = baseHooks();
@@ -116,6 +118,8 @@ describe('编辑器全链路：行号映射 / 接口成功计入', () => {
     it('含样例行：过滤后接口成功行行号仍正确映射到全局行', async () => {
         // 全局行 1=样例, 2..9=预校验失败, 10..12=合法(被选中)
         const sampleRow = { [TS_ID_COLUMN]: '案例唯一标识，不可修改' };
+        // 合法行需补齐 mapper 必填字段（description + steps.operation + ui_expected）
+        const legal = { description: '推送测试', steps: [{ operation: '执行', ui_expected: ['ok'] }] };
         const rows = [
             sampleRow,                               // 1 样例(应被过滤)
             { [TS_ID_COLUMN]: 'TESTCASE_ID' },       // 2 占位
@@ -126,9 +130,9 @@ describe('编辑器全链路：行号映射 / 接口成功计入', () => {
             { [TS_ID_COLUMN]: '12345678-1234-1234-1234' }, // 7 格式
             { [TS_ID_COLUMN]: 'TC-abc-def' },         // 8 格式
             { [TS_ID_COLUMN]: 'test_case_x' },        // 9 格式
-            { [TS_ID_COLUMN]: TC_ID },                // 10 合法
-            { [TS_ID_COLUMN]: MA_ID },                // 11 合法
-            { [TS_ID_COLUMN]: UUID_ID },              // 12 合法
+            { [TS_ID_COLUMN]: TC_ID, ...legal },      // 10 合法
+            { [TS_ID_COLUMN]: MA_ID, ...legal },      // 11 合法
+            { [TS_ID_COLUMN]: UUID_ID, ...legal },    // 12 合法
         ];
         // 前端只选中了 8/9/10/11/12 这几行参与推送（样例+部分失败+合法）
         // 模拟：选中全局行 [1,2,3,10,11,12] -> payload 顺序

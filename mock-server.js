@@ -242,9 +242,12 @@ var server = http.createServer(function (req, res) {
                     if (rec.sourceId != null && String(rec.sourceId) !== '') tsId = String(rec.sourceId);
                     else if (rec.testcase_id != null) tsId = String(rec.testcase_id);
                 }
-                var shouldFail = (data.length === 1)
-                    ? (FAIL_RATIO > 0)               // 单条时：按 FAIL_RATIO 决定
-                    : (i % Math.round(1 / FAIL_RATIO || 1) !== 0); // 多条时：按比例失败
+                // FAIL_RATIO<=0 时短路，保证 0 比例即全部成功；避免 1/0=Infinity 导致的除零陷阱
+                var shouldFail = FAIL_RATIO > 0 && (
+                    data.length === 1
+                        ? true                                         // 单条时：FAIL_RATIO>0 即失败
+                        : (i % Math.round(1 / FAIL_RATIO) !== 0)       // 多条时：按比例失败
+                );
                 if (!shouldFail) {
                     return {
                         data: 'TT' + Date.now() + (1000 + i),

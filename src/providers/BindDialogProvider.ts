@@ -156,7 +156,7 @@ export class BindDialogProvider {
     constructor(
         private readonly extensionUri: vscode.Uri,
         private readonly context: vscode.ExtensionContext,
-        private readonly refreshDecorations: () => void,
+        private readonly refreshDecorations: (uris?: vscode.Uri[]) => void,
     ) {}
 
     /**
@@ -322,6 +322,12 @@ export class BindDialogProvider {
                         return;
                     }
                     try {
+                        // 保存前先快照一份"老对端"，保存后回调时一并传给装饰器，
+                        // 以便旧对端的图标也能精确刷新（从"已绑"变"未绑"）。
+                        const oldBoundAbsPaths: string[] = direction === 'point-to-cases'
+                            ? getBoundCasesOfPoint(sourceAbsPath)
+                            : getBoundPointsOfCase(sourceAbsPath);
+
                         if (direction === 'point-to-cases') {
                             await setPointCases(sourceAbsPath, selectedAbsPaths);
                         } else {
@@ -332,7 +338,13 @@ export class BindDialogProvider {
                             count: String(selectedAbsPaths.length),
                             action: selectedAbsPaths.length === 0 ? 'unbind' : 'bind',
                         });
-                        this.refreshDecorations();
+                        // 受影响 URI = 源文件 ∪ 新对端 ∪ 旧对端，去重后传给装饰器精确刷新
+                        const affectedPaths = new Set<string>();
+                        affectedPaths.add(sourceAbsPath);
+                        for (const p of selectedAbsPaths) affectedPaths.add(p);
+                        for (const p of oldBoundAbsPaths) affectedPaths.add(p);
+                        const affectedUris = Array.from(affectedPaths).map(p => vscode.Uri.file(p));
+                        this.refreshDecorations(affectedUris);
                         const tip = selectedAbsPaths.length === 0
                             ? '已解除绑定'
                             : `已绑定 1 个${targetLabel}`;
@@ -340,6 +352,8 @@ export class BindDialogProvider {
                         panel.webview.postMessage({ command: 'saved' });
                         setTimeout(() => panel.dispose(), 300);
                     } catch (err: any) {
+                        // 保存失败可能已部分写盘，兜底触发一次全量刷新以避免 UI/存储失同步
+                        try { this.refreshDecorations(); } catch { /* ignore */ }
                         TelemetryService.sendTelemetryErrorEvent('bindDialog.save.error', {
                             errorMessage: String(err?.message || err).slice(0, 500),
                             direction,

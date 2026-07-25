@@ -74,14 +74,25 @@ function filterBoundItemsByWorkspace(items: CurrentTask[]): CurrentTask[] {
 // ============================================
 
 class TaskFolderDecorationProvider implements vscode.FileDecorationProvider {
-    private _onDidChange = new vscode.EventEmitter<vscode.Uri | vscode.Uri[]>();
+    // 允许 undefined 触发全量刷新；VSCode 约定：
+    //   fire(undefined) → 重新调用所有可见文件的 provideFileDecoration
+    //   fire(uri | uri[]) → 仅刷新给定 URI
+    //   fire([]) 空数组会被视作"无变更" → 不触发刷新（历史 Bug）
+    private _onDidChange = new vscode.EventEmitter<vscode.Uri | vscode.Uri[] | undefined>();
     readonly onDidChangeFileDecorations = this._onDidChange.event;
 
-    /** 通知装饰器刷新（绑定文件变更时调用） */
-    refresh() {
+    /**
+     * 通知装饰器刷新（绑定文件变更时调用）
+     * @param uris 若提供且非空 → 只精确刷新这些 URI；否则触发全量刷新
+     */
+    refresh(uris?: vscode.Uri[]) {
         // 变更时强制失效 O(1) 缓存，让下次 provideFileDecoration 拿到最新
         invalidateGlobalBoundFileMap();
-        this._onDidChange.fire([]);
+        if (uris && uris.length > 0) {
+            this._onDidChange.fire(uris);
+        } else {
+            this._onDidChange.fire(undefined);
+        }
     }
 
     provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
@@ -279,6 +290,7 @@ export function registerBindTaskFeatures(context: vscode.ExtensionContext): vsco
                 TelemetryService.sendTelemetryEvent('pointCaseBindings.fileChanged', {});
                 clearPointCaseBindingCache();
                 taskFolderDecorationProvider.refresh();
+                bindTasksTreeProvider.refresh();
             }
         })
     );
@@ -289,6 +301,7 @@ export function registerBindTaskFeatures(context: vscode.ExtensionContext): vsco
         const onChange = () => {
             clearPointCaseBindingCache();
             taskFolderDecorationProvider.refresh();
+            bindTasksTreeProvider.refresh();
         };
         pcbWatcher.onDidChange(onChange);
         pcbWatcher.onDidCreate(onChange);
@@ -306,10 +319,17 @@ export function registerBindTaskFeatures(context: vscode.ExtensionContext): vsco
 // 对外：供 BindDialogProvider 在保存后触发装饰器与 TreeView 刷新
 // ============================================
 
-export function refreshBindDecorations(): void {
+/**
+ * 供 BindDialogProvider 在绑定/解绑保存后触发装饰器与 TreeView 刷新。
+ *
+ * @param uris 可选。若提供了受影响的文件 URI 列表（例如：
+ *             源文件 + 新对端 + 旧对端），则装饰器只精确刷新这些 URI；
+ *             未传或为空数组时退化为全量刷新（保持向后兼容）。
+ */
+export function refreshBindDecorations(uris?: vscode.Uri[]): void {
     try {
         clearPointCaseBindingCache();
-        taskFolderDecorationProvider.refresh();
+        taskFolderDecorationProvider.refresh(uris);
         bindTasksTreeProvider.refresh();
     } catch (_) { /* ignore */ }
 }

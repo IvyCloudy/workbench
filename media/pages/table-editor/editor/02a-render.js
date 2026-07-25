@@ -630,7 +630,10 @@ function _buildCellInner(ri, ci, v) {
     if (isDetail) {
         // 展开模式且内容为 steps 合并文本 → 四列内联子表格；否则显示为链接
         if (S._stepsExpanded && rawText && (rawText.indexOf('【步骤描述】') === 0 || rawText.indexOf('【预期结果】') >= 0)) {
-            inner = '<div class="xs-step-expanded" data-detail-row="' + ri + '" data-detail-col="' + ci + '">' + _buildStepExpandedHtml(rawText) + '</div>';
+            // 样例数据行：展开态下 steps 子表也应只读（与 isFrozenRow/isFrozenCell 保护一致）
+            var _rowFrozenForExpand = (typeof isFrozenRow === 'function') && isFrozenRow(ri);
+            var _frozenCls = _rowFrozenForExpand ? ' xs-step-expanded-frozen' : '';
+            inner = '<div class="xs-step-expanded' + _frozenCls + '" data-detail-row="' + ri + '" data-detail-col="' + ci + '"' + (_rowFrozenForExpand ? ' data-xse-frozen="1"' : '') + '>' + _buildStepExpandedHtml(rawText, _rowFrozenForExpand) + '</div>';
         } else {
             var detailLinkCls = isEmptyDetail ? 'xs-detail-link xs-detail-empty' : 'xs-detail-link';
             var detailDisplay = isEmptyDetail ? '[空]' : rawText;
@@ -652,8 +655,10 @@ function _buildCellInner(ri, ci, v) {
 }
 
 // 将已展开的步骤合并文本解析为四列表格：序号 | 步骤描述 | 数据 | 预期结果
-function _buildStepExpandedHtml(text) {
+// frozen=true 时（样例数据行）：只读呈现 —— 三个 contenteditable 列改为 false，隐藏操作按钮与“添加分组”按钮
+function _buildStepExpandedHtml(text, frozen) {
     if (!text) return '';
+    var _editable = frozen ? 'false' : 'true';
     var lines = text.replace(/\\n/g, '\n').split(/\r?\n/);
     var steps = [];
     var cur = null;
@@ -763,7 +768,8 @@ function _buildStepExpandedHtml(text) {
         // 序号（不可编辑）：小圆点风格，与列头序号位置一致
         html += '<td class="xse-td-id"><span class="xse-idx-dot">' + escapeHtml(step.id || '-') + '</span></td>';
         // 步骤描述（可编辑）：data-xse-step 使用原始索引，保证编辑映射到源文本正确位置
-        html += '<td class="xse-td-desc" contenteditable="true" data-xse-step="' + _origIdx + '" data-xse-section="desc">' + escapeHtml(step.desc || '') + '</td>';
+        // frozen 行（样例）：contenteditable="false"，只读展示
+        html += '<td class="xse-td-desc" contenteditable="' + _editable + '" data-xse-step="' + _origIdx + '" data-xse-section="desc">' + escapeHtml(step.desc || '') + '</td>';
         // 预期结果（可编辑）
         // 交互优化（方案 A + 分组标题优化）：
         //   1) 全空 → 仅显示一行"+ 添加分组"按钮组（UI/接口/数据），占 1 行而非原来的 6 行
@@ -771,7 +777,7 @@ function _buildStepExpandedHtml(text) {
         //   3) 全填 → 保持三个 chip + 内容行原有布局
         // 数据层无破坏：_handleSubTableCellEdit 依据 DOM 中存在的 .xse-group + .xse-sub 识别分组，
         // 未渲染的分组会自然回写为空数组（并被清理为 delete step.xxx_expected），符合"未填"语义。
-        html += '<td class="xse-td-expected" contenteditable="true" data-xse-step="' + _origIdx + '" data-xse-section="expected">';
+        html += '<td class="xse-td-expected" contenteditable="' + _editable + '" data-xse-step="' + _origIdx + '" data-xse-section="expected">';
         // 解析 step.expected 到三个具名分组
         var _groupMap = { 'ui': null, 'api': null, 'data': null };
         var _titleMap = { 'ui': '【UI检查】', 'api': '【接口调用】', 'data': '【数据检查】' };
@@ -826,8 +832,8 @@ function _buildStepExpandedHtml(text) {
             }
             html += '</div>';
         }
-        // 渲染未填分组：合并到一行"+ 分组名"按钮
-        if (_missingKinds.length > 0) {
+        // 渲染未填分组：合并到一行"+ 分组名"按钮（frozen 行不展示，避免误导与误操作）
+        if (_missingKinds.length > 0 && !frozen) {
             html += '<div class="xse-add-group-row" contenteditable="false">';
             for (var _mi = 0; _mi < _missingKinds.length; _mi++) {
                 var _mk = _missingKinds[_mi];
@@ -841,7 +847,7 @@ function _buildStepExpandedHtml(text) {
         }
         html += '</td>';
         // 数据（可编辑）
-        html += '<td class="xse-td-data" contenteditable="true" data-xse-step="' + _origIdx + '" data-xse-section="data">';
+        html += '<td class="xse-td-data" contenteditable="' + _editable + '" data-xse-step="' + _origIdx + '" data-xse-section="data">';
         if (step.data.length) {
             for (var di = 0; di < step.data.length; di++) {
                 html += '<div class="xse-line">' + escapeHtml(step.data[di]) + '</div>';
@@ -850,8 +856,9 @@ function _buildStepExpandedHtml(text) {
             html += '<div class="xse-line"></div>';
         }
         html += '</td>';
-        // 操作（复制 / 向下插入 / 删除步骤）
+        // 操作（复制 / 向下插入 / 删除步骤）：frozen 行不提供，保持 5 列结构但空内容
         html += '<td class="xse-td-op">';
+        if (frozen) { html += '</td></tr>'; continue; }
         html += '<div class="xse-row-actions">';
         html += '<button class="xse-btn-copy" data-xse-copy="' + _origIdx + '" contenteditable="false" title="复制">' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>';
@@ -1067,7 +1074,10 @@ function patchCell(ri, ci) {
     td.innerHTML = '<div class="xs-cell-wrap"' + clampVar2 + '>' + inner + '</div>';
     // class 同步：懒补修改时间戳，用于下面的失败-修改时间竞争
     var _mKey2 = ri + ',' + ci;
-    var _hasMod2 = S.mods.has(_mKey2);
+    // 与 _buildRowHtml 保持一致：detail 修改（展开态子表编辑、明细弹窗编辑等）
+    // 也应视为该单元格已被修改，避免 saved 后 S.mods 被 clear、但 _detailModCellKeys 保留时，
+    // patchCell 判定 _hasMod2=false → 失败红底完全胜出 → 用户看不到 modified 黄底叠加。
+    var _hasMod2 = S.mods.has(_mKey2) || (S._detailModCellKeys && S._detailModCellKeys.has(_mKey2));
     if (_hasMod2 && S._modsTime && S._modsTime[_mKey2] == null) {
         S._modsTime[_mKey2] = Date.now();
     }
@@ -1156,6 +1166,7 @@ function patchCell(ri, ci) {
     td.classList.remove('xs-td-push-updated', 'xs-td-push-updated-row', 'xs-td-push-added', 'xs-td-user-marked', 'xs-td-push-failed', 'xs-td-overrides-fail');
     if (_bestClass) td.classList.add(_bestClass);
     if (_failOverridden) td.classList.add('xs-td-overrides-fail');
+    // 【诊断日志·失败行不变黄】只在失败行触发时输出，便于对齐子表落盘日志
     // 应用标记颜色（仅当标记是最新操作时）
     if (_bestMkInfo) {
         if (_bestMkInfo.bgColor) td.style.setProperty('background', _bestMkInfo.bgColor, 'important');

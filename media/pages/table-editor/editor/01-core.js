@@ -418,8 +418,8 @@ function _alignStepsExpansion() {
             for (var ri = 0; ri < rows.length; ri++) {
                 var raws = dt.rawRowGroups[ri];
                 if (!Array.isArray(raws) || raws.length === 0) continue;
-                // 样例数据行冻结：跳过步骤列展示同步写入
-                if (isFrozenRow(ri)) continue;
+                // 样例数据行：允许跟随整表展开态同步 steps 列展示（仅 UI 呈现，
+                // 手动编辑仍受 isFrozenCell 冻结保护，不视为用户编辑）
                 var combined = _buildStepCombined(raws);
                 if (combined) rows[ri][stepsCol] = combined;
             }
@@ -428,8 +428,7 @@ function _alignStepsExpansion() {
             for (var ri2 = 0; ri2 < rows.length; ri2++) {
                 var raws2 = dt.rawRowGroups[ri2];
                 if (!Array.isArray(raws2) || raws2.length === 0) continue;
-                // 样例数据行冻结：跳过步骤列展示同步写入
-                if (isFrozenRow(ri2)) continue;
+                // 样例数据行：允许跟随整表折叠态同步 steps 列展示
                 rows[ri2][stepsCol] = '[' + raws2.length + ' 项]';
             }
         }
@@ -817,7 +816,34 @@ window.addEventListener('message', function (e) {
                     S._highlightedTime = 0;
                     // highlightedCells=null 表示后端 diff 无变化（数据已回到快照基线），
                     // 同步清除 detailModCellKeys 避免单元格黄色背景残留
-                    if (S._detailModCellKeys && S._detailModCellKeys.size > 0) S._detailModCellKeys.clear();
+                    // 【失败行例外】保留失败行的 detail keys：失败行数据快照未推成功，
+                    // 后端 diff 认为"无变化"是相对最新落盘值的比较，但视觉上用户"改过又还没推"，
+                    // 需要保留黄底叠加。这里按 testcase_id 排除失败行的所有 detail 修改标记。
+                    if (S._detailModCellKeys && S._detailModCellKeys.size > 0) {
+                        var _failedTsIds = S._pushFailedTsIds;
+                        if (_failedTsIds && _failedTsIds.size > 0) {
+                            var _tsColIdx = (S.data && S.data.headers) ? S.data.headers.indexOf('testcase_id') : -1;
+                            if (_tsColIdx >= 0 && S.data && Array.isArray(S.data.rows)) {
+                                var _toKeep = [];
+                                S._detailModCellKeys.forEach(function (k) {
+                                    var _p = String(k).split(',');
+                                    var _ri = parseInt(_p[0], 10);
+                                    if (!isNaN(_ri) && S.data.rows[_ri]) {
+                                        var _tid = S.data.rows[_ri][_tsColIdx];
+                                        if (_tid !== undefined && _tid !== null && _tid !== '' && _failedTsIds.has(String(_tid))) {
+                                            _toKeep.push(k);
+                                        }
+                                    }
+                                });
+                                S._detailModCellKeys.clear();
+                                for (var _kk = 0; _kk < _toKeep.length; _kk++) S._detailModCellKeys.add(_toKeep[_kk]);
+                            } else {
+                                S._detailModCellKeys.clear();
+                            }
+                        } else {
+                            S._detailModCellKeys.clear();
+                        }
+                    }
                 }
             }
             // 合并后端下发的新增行信息：先清空再重建，确保 _addedRowSet 与扩展端 diff 结果完全一致，
@@ -892,9 +918,17 @@ window.addEventListener('message', function (e) {
         // 数据到达后按最新表头刷新「展开步骤」按钮显隐（YAML 且有 steps 列才显示）
         if (typeof updateExpandStepsBtnVisibility === 'function') updateExpandStepsBtnVisibility();
         S.sel.clear();
-        // 仅在数据真正被外部重置/重载时清空 mods；saveHighlight / pushSuccess 这种自反弹场景
-        // 数据其实未变，mods 是 webview 端的权威状态（undo/redo 后由 restoreSnapshot 写入），不要被清。
-        var _selfReboundReasons = (m.reason === 'saveHighlight' || m.reason === 'pushSuccess');
+        // 仅在数据真正被外部重置/重载时清空 mods；saveHighlight / pushSuccess / reload
+        // 这类"自反弹或用户主动 refresh"场景数据其实未变（已落盘），mods 是 webview 端的权威
+        // 状态（undo/redo 后由 restoreSnapshot 写入），不要被清。
+        //
+        // 【为什么 reload 也要保留 mods】：
+        //   用户点击"重置筛选并获取最新数据"按钮 → 扩展端 reload from webview → 磁盘数据已
+        //   包含用户最近的编辑（saveFile 已完成），此时清空 S.mods / _detailModCellKeys /
+        //   _modsTime 会导致失败行的"改单元格黄 / 整行橙"高亮完全丢失（时间戳竞争链路
+        //   见 02a-render.js _buildRowHtml），视觉上退化为纯失败红底。
+        //   语义上：reload 只重置筛选/重新加载数据，不代表放弃本地未推送修改标记。
+        var _selfReboundReasons = (m.reason === 'saveHighlight' || m.reason === 'pushSuccess' || m.reason === 'reload');
         // clearAllMods：由后端在"整文件一次性提交"（如资源管理器右键推送）时显式声明，
         // 强制清空全量本地修改状态（S.mods / _detailModCellKeys / _history / _future / _addedRowSet /
         // _lastPushBatch），从源头解决 pushSuccess 帧默认"选择性保留 mods"策略与
@@ -946,7 +980,7 @@ window.addEventListener('message', function (e) {
                     rowSet: new Set(m.highlightedCells.rowIndices),
                     cells: null
                 };
-                // cells 为 [rowIdx, colIdx][] 扁平数组，用于精确逐格高亮
+                // cells 为 [rowIdx, colIdx][] 扈平数组，用于精确逐格高亮
                 if (m.highlightedCells.cells && Array.isArray(m.highlightedCells.cells)) {
                     hl.cells = new Set();
                     for (var ci_hl = 0; ci_hl < m.highlightedCells.cells.length; ci_hl++) {
@@ -1070,9 +1104,17 @@ window.addEventListener('message', function (e) {
         dbg('📨 recv saved curRows=' + ((S.data && S.data.rows && S.data.rows.length) || 0)
             + ' mods=' + (S.mods ? S.mods.size : 0)
             + ' history=' + (S._history ? S._history.length : 0));
+        // 【诊断日志·失败行不变黄】saved 到达瞬间快照
         showToast('保存成功', 'success');
-        S.mods.clear();
-        if (S._detailModCellKeys && S._detailModCellKeys.size > 0) S._detailModCellKeys.clear();
+        // 【修复：折叠态/主表编辑后黄底消失】（方案 A：S.mods 与 _detailModCellKeys 对齐语义）
+        //   旧实现在此处 S.mods.clear()，导致：
+        //     - 折叠态修改主表单元格 → S.mods.add → saveFile → patchCell 显现黄底
+        //     - saved 到达 → S.mods.clear → renderTable → _hasMod=false → 黄底消失
+        //   _detailModCellKeys 已证明「保留到推送成功」是正确语义（详见 149 行注释）。
+        //   折叠态和展开态编辑本质是同一种「未推送修改」，应有一致视觉反馈。
+        //   现在保留 S.mods，让「改动已产生但尚未再次推送」的黄底一直显示，
+        //   直到用户再次推送成功后由 05a-push-result.js 按 tsId 精确清理（第 51/253 行）。
+        //   undo/redo 有独立快照恢复机制，不受影响。
         renderTable();
     } else if (m.type === 'saveError') {
         dbg('📨 recv saveError: ' + (m.message || ''));

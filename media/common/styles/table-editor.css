@@ -322,6 +322,16 @@ tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-overrides-fail.xs-td-push-add
 tbody tr.xs-tr-push-failed td.xs-td.xs-td-overrides-fail.modified{background:#fffbe6 !important;box-shadow:inset 3px 0 0 #fbc02d !important}
 tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-overrides-fail.modified{background:#fff59d !important;box-shadow:inset 3px 0 0 #fbc02d !important}
 tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-overrides-fail.modified{background:#fff9c4 !important;box-shadow:inset 3px 0 0 #fbc02d,inset -2px 0 0 var(--p) !important}
+/* 展开态兜底：xs-detail-cell（步骤列展开为内嵌子表 .xse-table）失败行修改时，
+   强制主 td 显示黄底金条；子表 td 由 617-660 透传规则透明化，从而透出主 td 黄底。
+   使用更高特异性 + !important 稳压任何默认色 / 斑马纹 / hover / focus。 */
+tbody tr.xs-tr-push-failed td.xs-td.xs-detail-cell.xs-td-overrides-fail.modified,
+tbody tr.xs-tr-push-failed:hover td.xs-td.xs-detail-cell.xs-td-overrides-fail.modified,
+tbody tr.xs-tr-push-failed.selected td.xs-td.xs-detail-cell.xs-td-overrides-fail.modified{
+    background:#fffbe6 !important;
+    background-color:#fffbe6 !important;
+    box-shadow:inset 3px 0 0 #fbc02d !important;
+}
 
 /* 列选中（Excel 风格）：表头加深、单元格浅蓝；不覆盖行选中（同时存在时使用渐变叠加色） */
 .xs-th.xs-col-selected{background:#cfe4f8 !important;box-shadow:inset 0 3px 0 var(--p)}
@@ -612,7 +622,46 @@ tbody tr.xs-tr-push-failed .xse-table tbody td[contenteditable="true"]:focus-wit
 .xs-col-selected .xse-table tbody tr:nth-child(even):hover td,
 .xs-col-selected .xse-table tbody td[contenteditable="true"]:hover,
 .xs-col-selected .xse-table tbody td[contenteditable="true"]:focus,
-.xs-col-selected .xse-table tbody td[contenteditable="true"]:focus-within{background:transparent !important;background-color:transparent !important;color:inherit}
+.xs-col-selected .xse-table tbody td[contenteditable="true"]:focus-within,
+/* 修改高亮（含 detail 修改叠加失败红底后的 modified）：让子表透明，透过外层 td 的黄底显示 */
+.xs-td.modified .xse-table tbody td,
+.xs-td.modified .xse-table tbody tr:nth-child(even) td,
+.xs-td.modified .xse-table tbody tr:hover td,
+.xs-td.modified .xse-table tbody tr:nth-child(even):hover td,
+.xs-td.modified .xse-table tbody td[contenteditable="true"]:hover,
+.xs-td.modified .xse-table tbody td[contenteditable="true"]:focus,
+.xs-td.modified .xse-table tbody td[contenteditable="true"]:focus-within,
+/* xs-td-overrides-fail：失败行内被其他高亮覆盖时，让子表也跟随透明 */
+.xs-td.xs-td-overrides-fail .xse-table tbody td,
+.xs-td.xs-td-overrides-fail .xse-table tbody tr:nth-child(even) td,
+.xs-td.xs-td-overrides-fail .xse-table tbody tr:hover td,
+.xs-td.xs-td-overrides-fail .xse-table tbody tr:nth-child(even):hover td,
+.xs-td.xs-td-overrides-fail .xse-table tbody td[contenteditable="true"]:hover,
+.xs-td.xs-td-overrides-fail .xse-table tbody td[contenteditable="true"]:focus,
+.xs-td.xs-td-overrides-fail .xse-table tbody td[contenteditable="true"]:focus-within{background:transparent !important;background-color:transparent !important;color:inherit}
+
+/* ============================================================================
+ * 强化兜底：失败行 + 修改叠加场景（tr.xs-tr-push-failed + xs-td.modified.xs-td-overrides-fail）
+ * ----------------------------------------------------------------------------
+ * 目的：无论内嵌子表的 tr:nth-child / :hover / :focus / [contenteditable="true"]:focus
+ *       等状态如何组合，都强制把 .xse-table td 背景清零，让外层 xs-td 的黄底
+ *       #fffbe6 / #fff59d / #fff9c4 稳定透出。
+ * 特异性：(0,4,3+)（含 :focus / :hover 伪类时），配合 !important 稳压所有子表默认规则。
+ * ============================================================================ */
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody td,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody tr td,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody tr:nth-child(even) td,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody tr:hover td,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody tr:nth-child(even):hover td,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody td[contenteditable="true"],
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody td[contenteditable="true"]:hover,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody td[contenteditable="true"]:focus,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody td[contenteditable="true"]:focus-within{
+    background:transparent !important;
+    background-color:transparent !important;
+    box-shadow:none !important;
+    color:inherit
+}
 
 /* -- 2) 子表内的文字元素继承外层颜色（chip 背景保留分类标识，仅字色跟随）-- */
 tbody tr.xs-tr-push-failed .xse-table .xse-line,

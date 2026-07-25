@@ -231,8 +231,8 @@ function bindToolbar() {
                 for (var ri2 = 0; ri2 < rows.length; ri2++) {
                     var raws2 = dt.rawRowGroups[ri2];
                     if (!Array.isArray(raws2) || raws2.length === 0) continue;
-                    // 样例数据行冻结：跳过步骤列收起写入
-                    if (isFrozenRow(ri2)) continue;
+                    // 样例数据行：允许跟随「展开/收起步骤」按钮同步切换 steps 列展示态
+                    // （手动编辑仍受 isFrozenCell 冻结，此处仅为整表 UI 切换，不视为编辑）
                     var count = raws2.length;
                     var collapsed = count > 0 ? '[' + count + ' 项]' : '[]';
                     if (S.data.rows[ri2][stepsCol] !== collapsed) {
@@ -255,8 +255,8 @@ function bindToolbar() {
                 for (var ri = 0; ri < rows.length; ri++) {
                     var raws = dt.rawRowGroups[ri];
                     if (!Array.isArray(raws) || raws.length === 0) continue;
-                    // 样例数据行冻结：跳过步骤列展开写入
-                    if (isFrozenRow(ri)) continue;
+                    // 样例数据行：允许跟随「展开/收起步骤」按钮同步切换 steps 列展示态
+                    // （手动编辑仍受 isFrozenCell 冻结，此处仅为整表 UI 切换，不视为编辑）
                     var combined = _buildStepCombined(raws);
                     if (combined) {
                         S.data.rows[ri][stepsCol] = combined;
@@ -632,6 +632,25 @@ function bindDocument() {
             }
         }
     });
+    // 子表格编辑（方案 A · "未修改不保存"）：focusin 时给聚焦 td 打一次初值快照，
+    //   focusout 时 _handleSubTableCellEdit 首行会用 innerText 与快照对比，相等即 return。
+    //   —— 修复"点进步骤描述单元格什么都没改、鼠标离开却触发 saveFile+标黄"的问题。
+    //   数据面差异根因：
+    //     * td 里显示的是主表拼接文本反解析出的 step.desc（渲染时会剥离"步骤N "前缀、trim 等）
+    //     * 旧逻辑用 dt.rawRowGroups[ri][stepIdx].operation（原始 YAML 字段）做 oldOp
+    //     二者天生不在同一数据面，即使用户未编辑也常常 !==，导致误判 changed=true。
+    //   本方案直接以"用户点进去时看到的 innerText"作为基准，最符合"未修改"的直觉语义。
+    document.addEventListener('focusin', function (e) {
+        var td = e.target;
+        if (!td || !td.closest || !td.closest('.xse-table')) return;
+        if (td.getAttribute('contenteditable') !== 'true') return;
+        // 只对我们关心的三种子表 td 做快照，避免污染其他 contenteditable 场景
+        var section = td.getAttribute('data-xse-section');
+        if (section !== 'desc' && section !== 'data' && section !== 'expected') return;
+        // innerText 原样存储（不 trim、不 normalize），focusout 时用完全相同的读法比对
+        try { td.__xseInitial = (td.innerText != null ? td.innerText : ''); }
+        catch (_e) { td.__xseInitial = null; }
+    });
     // 子表格编辑：focusout 捕获子表格单元格编辑完成（blur 不冒泡，用 focusout 代替）
     document.addEventListener('focusout', function (e) {
         var td = e.target;
@@ -708,6 +727,11 @@ function bindTable() {
             if (xseContainer && !isNaN(copyStep)) {
                 var dri0 = parseInt(xseContainer.getAttribute('data-detail-row'), 10);
                 var dci0 = parseInt(xseContainer.getAttribute('data-detail-col'), 10);
+                // 样例数据行冻结：禁止展开态下按钮操作
+                if (typeof isFrozenRow === 'function' && isFrozenRow(dri0)) {
+                    if (typeof showToast === 'function') showToast('样例数据行已冻结，不可操作', 'error');
+                    return;
+                }
                 _copySubStep(dri0, dci0, copyStep);
             }
             return;
@@ -721,6 +745,11 @@ function bindTable() {
             if (xseContainer && !isNaN(delStep)) {
                 var dri2 = parseInt(xseContainer.getAttribute('data-detail-row'), 10);
                 var dci2 = parseInt(xseContainer.getAttribute('data-detail-col'), 10);
+                // 样例数据行冻结：禁止删除步骤
+                if (typeof isFrozenRow === 'function' && isFrozenRow(dri2)) {
+                    if (typeof showToast === 'function') showToast('样例数据行已冻结，不可操作', 'error');
+                    return;
+                }
                 _delSubStep(dri2, dci2, delStep);
             }
             return;
@@ -734,6 +763,11 @@ function bindTable() {
             if (xseContainer2 && !isNaN(addStep)) {
                 var dri3 = parseInt(xseContainer2.getAttribute('data-detail-row'), 10);
                 var dci3 = parseInt(xseContainer2.getAttribute('data-detail-col'), 10);
+                // 样例数据行冻结：禁止插入步骤
+                if (typeof isFrozenRow === 'function' && isFrozenRow(dri3)) {
+                    if (typeof showToast === 'function') showToast('样例数据行已冻结，不可操作', 'error');
+                    return;
+                }
                 _addSubStep(dri3, dci3, addStep);
             }
             return;
@@ -748,6 +782,15 @@ function bindTable() {
         if (xseBtnAddGroup) {
             e.stopPropagation();
             e.preventDefault();
+            // 样例数据行冻结：禁止添加分组（双保险，正常情况下视图层已不渲染此按钮）
+            var _agContainer = xseBtnAddGroup.closest('.xs-step-expanded');
+            if (_agContainer) {
+                var _agRi = parseInt(_agContainer.getAttribute('data-detail-row'), 10);
+                if (!isNaN(_agRi) && typeof isFrozenRow === 'function' && isFrozenRow(_agRi)) {
+                    if (typeof showToast === 'function') showToast('样例数据行已冻结，不可操作', 'error');
+                    return;
+                }
+            }
             var _kind = xseBtnAddGroup.getAttribute('data-xse-add-group-kind');
             var _titleByKind = { 'ui': '【UI检查】', 'api': '【接口调用】', 'data': '【数据检查】' };
             var _title = _titleByKind[_kind];
@@ -1126,6 +1169,29 @@ function _handleSubTableCellEdit(td) {
     var ri = parseInt(container.getAttribute('data-detail-row'), 10);
     var ci = parseInt(container.getAttribute('data-detail-col'), 10);
     if (isNaN(ri) || isNaN(ci)) return;
+    // 样例数据行冻结：展开态下 steps 子表也只读，防止任何仅依赖回写的编辑轨道
+    if (typeof isFrozenRow === 'function' && isFrozenRow(ri)) {
+        if (typeof showToast === 'function') showToast('样例数据行已冻结，不可编辑（testcase_id 为占位值）', 'error');
+        // 冻结路径同样清理快照，避免下次聚焦其他 td 时误用残留值
+        try { if (td.__xseInitial != null) delete td.__xseInitial; } catch (_e) { td.__xseInitial = null; }
+        return;
+    }
+
+    // 【方案 A · 未修改短路】焦点仅停留、未做任何编辑时直接放行，
+    //   不写 rawRowGroups、不 pushHistory、不 saveFile、不 patchCell → 从根源杜绝
+    //   "点一下步骤描述单元格 → 未修改也标黄并触发保存" 的问题。
+    //   基准值 __xseInitial 由 focusin 时以完全相同的读法（td.innerText 原样）打点，
+    //   这里也用同样读法比对，保证同一数据面。
+    try {
+        if (td.__xseInitial != null) {
+            var _cur = (td.innerText != null ? td.innerText : '');
+            if (_cur === td.__xseInitial) {
+                // 命中：清理快照后退出
+                delete td.__xseInitial;
+                return;
+            }
+        }
+    } catch (_e) { /* 兜底：任何异常都退化到原有 changed 判定链路 */ }
 
     var stepIdx = parseInt(td.getAttribute('data-xse-step'), 10);
     var section = td.getAttribute('data-xse-section');
@@ -1242,7 +1308,14 @@ function _handleSubTableCellEdit(td) {
                   JSON.stringify(step.api_expected || []) !== JSON.stringify(oldApi) ||
                   JSON.stringify(step.db_expected || []) !== JSON.stringify(oldDb);
     }
-    if (!changed) return;
+    if (!changed) {
+        // 未变更：清理快照，与短路分支保持一致
+        try { if (td.__xseInitial != null) delete td.__xseInitial; } catch (_e) { td.__xseInitial = null; }
+        return;
+    }
+
+    // 走到真正落盘：清理快照，避免下一次聚焦沿用旧值
+    try { if (td.__xseInitial != null) delete td.__xseInitial; } catch (_e) { td.__xseInitial = null; }
 
     // 重建合并文本并同步主表数据
     var combined = _buildStepCombined(dt.rawRowGroups[ri]);
@@ -1250,5 +1323,20 @@ function _handleSubTableCellEdit(td) {
     if (!S.data.rows[ri]) return;
     S.data.rows[ri][ci] = combined;
     if (S.mods) S.mods.add(ri + ',' + ci);
+    // 子表格深层修改同时标记为 detail cell 修改（与 03h-detail-helpers/05d-detail-write 一致），
+    // 让"仅看修改行"及 detail 相关判定链路都能命中该单元格。
+    if (S._detailModCellKeys) S._detailModCellKeys.add(ri + ',' + ci);
+    // 【关键修复：失败行修改后单元格不变黄】
+    //   _modsTime 由 renderTable/patchCell 「懒补」（== null 时才补 Date.now()）而非「主动更新」。
+    //   若该单元格在本次推送失败之前已有旧时间戳 T_old（< rowFailTime），懒补会跳过、
+    //   保留旧值 → 渲染时 _modTime <= rowFailTime → 失败红底完全胜出 → td.classList.remove('modified')。
+    //   这里在真正落盘处主动写入最新时间戳（覆盖旧值），确保：
+    //     _modTime = Date.now() > rowFailTime → _failOverridden = true → 保留 modCls
+    //     → CSS: tr.xs-tr-push-failed td.xs-td-overrides-fail.modified 命中 → 黄底叠加于失败红底
+    if (!S._modsTime) S._modsTime = {};
+    S._modsTime[ri + ',' + ci] = Date.now();
     if (typeof saveFile === 'function') saveFile();
+    // 立即 patchCell 让 modified 视觉反馈在 'saved' 回程前就渲染出来。
+    // patchCell 读取上面刚更新的 _modsTime → 走失败竞争 _failOverridden 分支 → 保留 modified 类。
+    if (typeof patchCell === 'function') patchCell(ri, ci);
 }

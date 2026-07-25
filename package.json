@@ -219,11 +219,6 @@
           "group": "2_workspace@4"
         },
         {
-          "command": "testcaseViewer.viewLinkedCases",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试大纲[\\\\/].+\\.md$/i",
-          "group": "2_workspace@4c"
-        },
-        {
           "command": "testcaseViewer.bindTestPoints",
           "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i",
           "group": "2_workspace@5"

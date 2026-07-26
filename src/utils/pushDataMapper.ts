@@ -78,7 +78,7 @@
 // ============================================================================
 export interface MapErrorFields {
     caseTag: string;
-    reason: 'missingTestcaseId' | 'missingOperation' | 'missingStepDesc' | 'missingTestCaseDes' | 'missingExpected' | 'invalidPath';
+    reason: 'missingTestcaseId' | 'missingOperation' | 'missingStepDesc' | 'missingExpected' | 'invalidPath';
     stepIdx?: number;
     rowIndex?: number;
 }
@@ -283,14 +283,7 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
         );
     }
 
-    // 案例描述（testCaseDes）必填：空/仅空白 → 抛错
-    const testCaseDesRaw = unescapeCsvCell(row['案例描述']);
-    if (testCaseDesRaw.trim() === '') {
-        throw makeMapError(
-            `案例 [${caseTag}] 缺少「案例描述」，请补全后再推送。`,
-            { caseTag, reason: 'missingTestCaseDes', rowIndex }
-        );
-    }
+    // 案例描述（testCaseDes）允许为空：不做前置校验，交由后端处理
 
     // description：解析「步骤x[:：]\n内容」格式，按步骤号排序
     // 兼容：若文本中不含「步骤N:」结构但整段非空，则整段视为「步骤1」的内容
@@ -375,14 +368,7 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
         );
     }
 
-    // 案例描述（testCaseDes）必填：空/仅空白 → 抛错
-    const testCaseDesRaw = toStr(row['description']);
-    if (testCaseDesRaw.trim() === '') {
-        throw makeMapError(
-            `案例 [${caseTag}] 缺少「案例描述」（description），请补全后再推送。`,
-            { caseTag, reason: 'missingTestCaseDes', rowIndex }
-        );
-    }
+    // 案例描述（testCaseDes / description）允许为空：不做前置校验，交由后端处理
 
     // steps 必填：steps 缺失或为空数组时，description / expected 都会是 []，
     // 后端不接受空列表，前置拦截并给出更明确的报错定位。

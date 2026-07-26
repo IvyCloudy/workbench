@@ -18,6 +18,8 @@
 import { setHighlight, clearHighlight } from '../utils/highlightStore';
 import { diffPushSnapshot, type DeletedRowInfo, type AddedRowInfo } from '../utils/pushSnapshotStore';
 import { markDeletedRows } from '../utils/deletedRowsStore';
+import { getFailures } from '../utils/pushFailureStore';
+import { TS_ID_COLUMN } from './utils';
 import type { FileParser, FileType } from '../parsers';
 
 // ============================================
@@ -109,8 +111,61 @@ export async function applyDiffHighlight(
     const diffResult = diffPushSnapshot(filePath, tableData);
     if (!diffResult) return null;
 
-    const { changed: changedRows, deletedInfos, addedInfos } = diffResult;
+    const { changed: changedRowsRaw, deletedInfos, addedInfos: addedInfosRaw } = diffResult;
     const prefix = options.logPrefix ? options.logPrefix + ' ' : '';
+
+    // ============================================================
+    // 【关键过滤】剔除"推送失败"的行 —— 2026-07-26 修复
+    // ------------------------------------------------------------
+    // 背景：applyDiffHighlight 原本无脑把 diff 出的所有 changedRows / addedInfos
+    //   都写进 session.highlightedCells（推送后更新态 = 金黄色）。
+    //   但推送失败的行文件里数据尚未回写 testCaseNo，与快照必然存在差异，
+    //   于是它们也被误算成"需要黄底"。
+    //
+    // 表现：推送失败 → 弹窗关闭 → reload 触发本函数再次运行 →
+    //   highlightedCells 里含失败行 → 前端 resolveHighlight 分支 1 打
+    //   xs-td-push-updated 且 highlightedTime > rowFailTime → 分支 4 命中
+    //   failOverridden → CSS 兜底为淡黄底 "#fffbe6"，覆盖失败淡红底。
+    //   用户直观感受是"失败行显示成修改高亮"。
+    //
+    // 修复：读取 push-failures.json，把命中失败 tsId 的行从 changedRows /
+    //   addedInfos 中剔除，这样 highlightedCells 只承载"真正成功推送后又被改动"
+    //   的行，失败行独立走 _pushFailedTsIds 的红底路径。
+    // ============================================================
+    const failuresMap = getFailures(filePath);
+    const failedTsIds = new Set<string>(Object.keys(failuresMap || {}));
+    const headers: string[] = (tableData && tableData.headers) || [];
+    const rows: any[][] = (tableData && tableData.rows) || [];
+    const tsIdCol = headers.indexOf(TS_ID_COLUMN);
+
+    let excludedChanged = 0;
+    let excludedAdded = 0;
+    const changedRows = (failedTsIds.size === 0 || tsIdCol < 0)
+        ? changedRowsRaw
+        : changedRowsRaw.filter(d => {
+            const row = rows[d.rowIndex];
+            // .trim() 防御：极端情况下文件里 tsId 单元格可能夹带前后空白，
+            // 而 pushFailureStore 存的是清洗后的值；不 trim 会导致 has() 永远不命中，
+            // 失败行被误判为"更新态"而覆盖成淡黄底 —— 这正是本函数要修的 bug 场景。
+            const tsId = Array.isArray(row) && tsIdCol < row.length ? String(row[tsIdCol] || '').trim() : '';
+            const excluded = tsId !== '' && failedTsIds.has(tsId);
+            if (excluded) excludedChanged++;
+            return !excluded;
+        });
+    const addedInfos = failedTsIds.size === 0
+        ? addedInfosRaw
+        : addedInfosRaw.filter(a => {
+            const aTsId = a.tsId ? String(a.tsId).trim() : '';
+            const excluded = aTsId !== '' && failedTsIds.has(aTsId);
+            if (excluded) excludedAdded++;
+            return !excluded;
+        });
+    if (excludedChanged > 0 || excludedAdded > 0) {
+        log(`🚫 ${prefix}剔除推送失败行不参与更新态高亮：`
+            + `changedRows -${excludedChanged}, addedInfos -${excludedAdded}, `
+            + `失败 tsId 数=${failedTsIds.size}`);
+    }
+
     // 新增行也纳入黄色单元格高亮，与"修改行"保持一致的心智模型：
     // "任何相对最新推送快照的差异 = 黄色高亮"，避免出现「新增行编辑不显示黄」的割裂感。
     const addedFlatCells = expandAddedRowsToCells(addedInfos, tableData);

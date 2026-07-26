@@ -130,11 +130,20 @@ export interface PushCoreHooks {
      * 未实现即可（无副作用）。
      */
     onProgress?: (stage: 'start' | 'pushing' | 'writingBack' | 'done', payload?: { rows?: number }) => void;
-    /** 推送完成（成功/部分成功/全部失败）—— 弹窗展示结果 */
+    /**
+     * 推送完成（成功/部分成功/全部失败）—— 弹窗展示结果
+     *
+     * skipped：本次推送中被识别为"样例/模板占位"而主动过滤的行数（不参与后端接口调用）。
+     *   - total = successCount + failures.length + skipped
+     *   - 弹窗层需要显式展示 skipped，避免出现"总计 13 / 成功 12 / 失败 0"这种
+     *     视觉上对不齐的场景（真实差额就是 skipped）。
+     *   - 未过滤到样例时为 0；调用方按需读取，缺省视作 0。
+     */
     onComplete: (payload: {
         successCount: number;
         failures: PushFailureItem[];
         total: number;
+        skipped?: number;
     }) => void;
     /**
      * 成功回写 testCaseNo 前后的钩子。用于编辑器场景标记 self-save 时间戳
@@ -998,7 +1007,31 @@ async function stepInvokeBackend(
             pushDiag(`[接口] 原始body明细:`, pushResult.body.map((b: any) => ({ type: b.type ?? '(缺失)', sourceId: b.sourceId, data: String(b.data || '').slice(0, 80) })));
         }
         if (pushResult.returnCode !== 'SUC0000') {
-            const errorMsg = pushResult.errorMsg || '推送失败';
+            // 兜底文案增强：当后端未返回 errorMsg 时，把 returnCode / body 形态一并写入 reason，
+            // 便于用户在失败明细弹窗直接看到"后端返回码=空 / body=非数组({})"这类可诊断信息，
+            // 而非零信息量的"推送失败"四个字。历史问题：本地/预发环境接口未实现或走网关兜底时
+            // 会返回 HTTP 200 + 空对象 {}，前端只能兜底"推送失败"，用户与开发都无从下手。
+            let errorMsg = pushResult.errorMsg;
+            if (!errorMsg) {
+                const rcText = pushResult.returnCode ? String(pushResult.returnCode) : '空';
+                // 兜底序列化：JSON.stringify 遇循环引用会抛 "Converting circular structure to JSON"，
+                // 若不 catch 会把本来的"接口失败"升级为"扩展端崩溃"。这里失败即降级到 String(...)。
+                let bodyText: string;
+                if (Array.isArray(pushResult.body)) {
+                    bodyText = `数组(len=${pushResult.body.length})`;
+                } else if (pushResult.body && typeof pushResult.body === 'object') {
+                    let jsonSnippet: string;
+                    try {
+                        jsonSnippet = JSON.stringify(pushResult.body).slice(0, 60);
+                    } catch {
+                        jsonSnippet = String(pushResult.body).slice(0, 60);
+                    }
+                    bodyText = `非数组(${jsonSnippet})`;
+                } else {
+                    bodyText = `非数组(${String(pushResult.body)})`;
+                }
+                errorMsg = `推送失败（后端返回码=${rcText}，body=${bodyText}，无错误详情，请联系后端排查）`;
+            }
             // 不再调 onBackendError / return null —— 改为将接口错误逐行拆成失败项，
             // 由 runPush 的 step 7/8 统一合并预校验失败后在 onComplete 中一次性展示。
             TelemetryService.sendTelemetryErrorEvent(`${ctx.telemetryPrefix}.failed`, {
@@ -1232,6 +1265,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
                 successCount: 0,
                 failures: preValidationFailures,
                 total: originalRowsCount,
+                skipped: 0, // 本分支在样例过滤前提前 return，尚未产生 skipped
             });
             emitProgress(ctx.hooks, 'done', { rows: 0 });
             return;
@@ -1262,6 +1296,9 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
                     successCount: 0,
                     failures: [...preValidationFailures, ...sampleFailures],
                     total: originalRowsCount,
+                    // 说明：这里的 sampleFailures 是"样例行已被作为失败展示"的路径（onlySample 混合场景），
+                    // 不再重复计入 skipped，避免同一行被同时计入 failures + skipped
+                    skipped: 0,
                 });
                 emitProgress(ctx.hooks, 'done', { rows: 0 });
                 return;
@@ -1342,7 +1379,8 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         pushDiag(`[汇总] 总数=${total} 成功=${successMappings.length} 失败=${mergedFailures.length}（其中预校验=${preValidationFailures.length} / 接口=${mergedFailures.length - preValidationFailures.length}）`);
         pushDiag('[汇总] 失败明细(按行号):', mergedFailures.map((f: any) => ({ row: f.rowIndex, tsId: f.tsId, cat: f.category, field: f.field, reason: f.reason })));
         showPushDiag();
-        ctx.hooks.onComplete({ successCount: successMappings.length, failures: mergedFailures, total });
+        // skipped：真正被静默跳过（不算失败）的样例行数，与 successCount / failures 并列的第 4 维度
+        ctx.hooks.onComplete({ successCount: successMappings.length, failures: mergedFailures, total, skipped });
         try {
             await persistPushFailures(opts.filePath, rows, failures, successMappings);
         } catch (err: any) {

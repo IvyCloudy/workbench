@@ -9,10 +9,12 @@
 
 // ==================== 推送结果弹窗 ====================
 // 展示推送结果（成功 / 部分成功 / 全部失败）
-// payload: { fileName, successCount, failures:[{rowIndex, tsId, reason}], total }
+// payload: { fileName, successCount, failures:[{rowIndex, tsId, reason}], total, skipped }
+//   skipped：本次推送内"样例/模板占位行"被静默过滤的行数，不计入 success/fail。
+//   仅 skipped > 0 时弹窗会额外展示"跳过 N"与"其中 N 行样例数据已跳过"文案，避免总计/成功/失败三数字相加不等于总计的视觉失调。
 var __PR_MAX_INLINE = 200; // 列表最多渲染条数，超出折叠
 function showPushResultModal(payload) {
-    console.log('[推送诊断][webview] showPushResultModal 渲染 | failures.length=' + (payload && payload.failures ? payload.failures.length : 0) + ' successCount=' + (payload ? payload.successCount || 0 : 0) + ' total=' + (payload && payload.total != null ? payload.total : '?'));
+    console.log('[推送诊断][webview] showPushResultModal 渲染 | failures.length=' + (payload && payload.failures ? payload.failures.length : 0) + ' successCount=' + (payload ? payload.successCount || 0 : 0) + ' total=' + (payload && payload.total != null ? payload.total : '?') + ' skipped=' + (payload && payload.skipped != null ? payload.skipped : 0));
     var modal = document.getElementById('pushResultModal');
     if (!modal) return;
     var p = payload || {};
@@ -20,7 +22,8 @@ function showPushResultModal(payload) {
     var errorMsg = p.error || '';   // 纯错误消息（前置校验失败等场景，无 failures）
     var successCount = p.successCount || 0;
     var failures = Array.isArray(p.failures) ? p.failures : [];
-    var total = (p.total != null) ? p.total : (successCount + failures.length);
+    var skipped = (p.skipped != null && p.skipped > 0) ? Number(p.skipped) : 0;
+    var total = (p.total != null) ? p.total : (successCount + failures.length + skipped);
 
     var header = document.getElementById('pushResultHeader');
     var iconEl = document.getElementById('pushResultIcon');
@@ -40,28 +43,11 @@ function showPushResultModal(payload) {
         if (hintEl) hintEl.textContent = '';
         if (copyBtn) copyBtn.style.display = 'none';
         // 前置校验失败也属于"推送完成"，清理本批修改高亮避免残留
-        if (S._lastPushBatchRowIndices && S._lastPushBatchRowIndices.length > 0) {
-            var errModsToDelete = [];
-            S.mods.forEach(function (key) {
-                var commaIdx = key.indexOf(',');
-                if (commaIdx > -1 && S._lastPushBatchRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
-                    errModsToDelete.push(key);
-                }
-            });
-            errModsToDelete.forEach(function (k) { S.mods.delete(k); });
-            if (S._detailModCellKeys && S._detailModCellKeys.size > 0) {
-                var errDetailToDelete = [];
-                S._detailModCellKeys.forEach(function (key) {
-                    var commaIdx = key.indexOf(',');
-                    if (commaIdx > -1 && S._lastPushBatchRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
-                        errDetailToDelete.push(key);
-                    }
-                });
-                errDetailToDelete.forEach(function (k) { S._detailModCellKeys.delete(k); });
-            }
-            S._lastPushBatchRowIndices = null;
-        }
-        S._lastPushBatchTsIds = null;
+        HighlightModel.clearByPushBatch(S, {
+            rowIndices: (S._lastPushBatchRowIndices && S._lastPushBatchRowIndices.length > 0)
+                ? S._lastPushBatchRowIndices.slice()
+                : null,
+        });
         try { renderTable(); } catch (_) {}
         bindPushResultModal();
         modal.classList.add('show');
@@ -80,18 +66,30 @@ function showPushResultModal(payload) {
         titleEl.textContent = titleText + (fileName ? ('：' + fileName) : '');
     }
 
-    // 概要：成功 / 失败 / 总计
+    // 概要：总计 / 成功 / 失败 / 跳过（skipped>0 时才显示）
     if (summaryEl) {
-        summaryEl.innerHTML =
+        var summaryHtml =
             '<span class="xs-pr-summary-item">总计 <span class="xs-pr-num">' + total + '</span></span>' +
             '<span class="xs-pr-summary-item">成功 <span class="xs-pr-num is-success">' + successCount + '</span></span>' +
             '<span class="xs-pr-summary-item">失败 <span class="xs-pr-num is-failed">' + failures.length + '</span></span>';
+        if (skipped > 0) {
+            // 静默跳过的样例行不算失败也不算成功，作为第 4 个维度展示；
+            // 重要：避免以前"总计 13 / 成功 12 / 失败 0"与底部"全部 13 条推送成功"矛盾的就是它。
+            summaryHtml += '<span class="xs-pr-summary-item">跳过 <span class="xs-pr-num">' + skipped + '</span></span>';
+        }
+        summaryEl.innerHTML = summaryHtml;
     }
 
     // 失败明细列表
     if (listEl) {
         if (failures.length === 0) {
-            listEl.innerHTML = '<div class="xs-pr-empty">全部 ' + total + ' 条推送成功 🎉</div>';
+            // 纯成功（可能伴随 skipped）—— 文案要照应 skipped，否则多出的行数会让用户困惑。
+            var succCount = successCount;
+            var successText = '全部 ' + succCount + ' 条推送成功 🎉';
+            if (skipped > 0) {
+                successText += '（已跳过 ' + skipped + ' 行样例数据）';
+            }
+            listEl.innerHTML = '<div class="xs-pr-empty">' + successText + '</div>';
         } else {
             var renderCount = Math.min(failures.length, __PR_MAX_INLINE);
             var html = '';
@@ -170,6 +168,12 @@ function showPushResultModal(payload) {
 
     // 写入/更新本次失败 tsId 与原因，并打上当前时间戳供后续渲染按时间优先级比较
     var _failNow = Date.now();
+    // 快照旧的 _pushFailedTime，便于诊断"时间戳被重刷"（双发 bug 现象）
+    var _oldFailTimeSnap = null;
+    if (S._pushFailedTime && S._pushFailedTime.size > 0) {
+        _oldFailTimeSnap = [];
+        S._pushFailedTime.forEach(function (v, k) { _oldFailTimeSnap.push(k + '=' + v); });
+    }
     failures.forEach(function (f) {
         if (f && f.tsId !== undefined && f.tsId !== null && f.tsId !== '') {
             var key = String(f.tsId);
@@ -179,6 +183,12 @@ function showPushResultModal(payload) {
             if (S._pushFailedTime) S._pushFailedTime.set(key, _failNow);
         }
     });
+    // 诊断日志：若同一 tsId 出现在旧快照且时间戳被更新，说明存在重刷（配合 01-core.js 双发检测）
+    if (_oldFailTimeSnap && _oldFailTimeSnap.length > 0) {
+        console.log('[推送诊断][webview] pushResult 合并 | _failNow=' + _failNow
+            + ' | 旧 _pushFailedTime=[' + _oldFailTimeSnap.join(', ') + ']'
+            + ' | 本次写入 tsIds=' + Array.from(nowFailedSet).join(','));
+    }
 
     if (typeof dbg === 'function') {
         dbg('📨 pushResult merge: batch=' + (batchSet ? batchSet.size : 'null')
@@ -188,11 +198,9 @@ function showPushResultModal(payload) {
             + ' failedOnly=' + !!S._failedOnly);
     }
 
-    // 一次推送结果消费完毕，清空本批缓存
-    S._lastPushBatchTsIds = null;
-
     // 清除本批推送行的 S.mods 修改高亮（推送完成 = 修改已提交）
     // 失败行由 S._pushFailedTsIds 提供红色高亮，不再需要黄色 modified 标记
+    // 05a 自身负责"从哪几个渠道兜底反查行号"，门面只接收最终 rowIndices
     // 兜底 1：_lastPushBatchRowIndices（pushChanges / pushFromContextMenu 缓存）
     var pushRowIndices = S._lastPushBatchRowIndices;
     // 兜底 2：若行索引缺失，从 _lastPushBatchTsIds 反推
@@ -242,61 +250,28 @@ function showPushResultModal(payload) {
             }
         }
     }
-    if (pushRowIndices && pushRowIndices.length > 0) {
-        var modsToDelete = [];
-        S.mods.forEach(function (key) {
-            var commaIdx = key.indexOf(',');
-            if (commaIdx > -1 && pushRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
-                modsToDelete.push(key);
-            }
-        });
-        modsToDelete.forEach(function (k) { S.mods.delete(k); });
-        // 同步清除 _detailModCellKeys 中对应批次行的条目，否则明细弹窗修改的高亮仍会残留
-        if (S._detailModCellKeys && S._detailModCellKeys.size > 0) {
-            var detailToDelete = [];
-            S._detailModCellKeys.forEach(function (key) {
-                var commaIdx = key.indexOf(',');
-                if (commaIdx > -1 && pushRowIndices.indexOf(parseInt(key.substring(0, commaIdx), 10)) !== -1) {
-                    detailToDelete.push(key);
-                }
-            });
-            detailToDelete.forEach(function (k) { S._detailModCellKeys.delete(k); });
-        }
-        // 清除已推送行的新增高亮（推送成功后不再是"新增行"）
-        if (S._addedRowSet && S._addedRowSet.size > 0) {
-            pushRowIndices.forEach(function (ri) { S._addedRowSet.delete(ri); });
-        }
-        S._lastPushBatchRowIndices = null;
-    }
+    // 交由门面统一收敛清理动作：S.mods / _detailModCellKeys / _addedRowSet /
+    // _lastPushBatchRowIndices / _lastPushBatchTsIds（一次推送结果消费完毕）
+    console.log('[推送诊断][webview] clearByPushBatch 生效 | rowIndices=' + (pushRowIndices && pushRowIndices.length > 0 ? '[' + pushRowIndices.join(',') + ']' : '(空)')
+        + ' | mods(before)=' + ((S.mods && S.mods.size) || 0));
+    HighlightModel.clearByPushBatch(S, {
+        rowIndices: (pushRowIndices && pushRowIndices.length > 0) ? pushRowIndices : null,
+    });
+    console.log('[推送诊断][webview] clearByPushBatch 完成 | mods(after)=' + ((S.mods && S.mods.size) || 0)
+        + ' | _lastPushBatchTsIds(after)=' + (S._lastPushBatchTsIds ? Array.from(S._lastPushBatchTsIds).join(',') : '(null)')
+        + ' | _lastPushBatchRowIndices(after)=' + (S._lastPushBatchRowIndices ? '[' + S._lastPushBatchRowIndices.join(',') + ']' : '(null)'));
 
     // 推送后回写的 testCaseNo 单元格高亮信息（同时清除旧高亮，确保弹窗显示最新结果）
-    if (p.highlightedCells && p.highlightedCells.colIdx != null && Array.isArray(p.highlightedCells.rowIndices)) {
-        var hl = {
-            colIdx: p.highlightedCells.colIdx,
-            rowSet: new Set(p.highlightedCells.rowIndices)
-        };
-        // ⚠ 格式契约：扩展端 payload.cells 是 Array<[row, col]>；
-        //   而消费方（02a-render.js / _getModifiedRowSet）统一读的是 "row:col" 字符串。
-        //   这里必须序列化为字符串，否则 Set.has('row:col') 永远为 false，
-        //   导致修改行高亮/仅看修改行按钮统计失效（历史 bug）。
-        if (p.highlightedCells.cells && Array.isArray(p.highlightedCells.cells)) {
-            hl.cells = new Set();
-            for (var _hci = 0; _hci < p.highlightedCells.cells.length; _hci++) {
-                var _hc = p.highlightedCells.cells[_hci];
-                if (Array.isArray(_hc) && _hc.length >= 2) {
-                    hl.cells.add(_hc[0] + ':' + _hc[1]);
-                }
-            }
-        }
-        S._highlightedCells = hl;
-        // ⚠ 必须同步刷新 _highlightedTime，否则后续 render 时新推送的高亮会被历史修改时间
-        //   (_modsTime > _highlightedTime) 判为“陈旧的推送”→ 放弃 pushUpdCls，
+    // 说明：p.highlightedCells 未传时保留已有高亮；传空/无效时按 null 清除。
+    var _hlC = HighlightUtil.parseHighlightedCells(p.highlightedCells);
+    if (_hlC) {
+        // ⚠ setHighlightedCells 内部会同步刷新 _highlightedTime，否则后续 render 时新推送的高亮会被历史修改时间
+        //   (_modsTime > _highlightedTime) 判为"陈旧的推送"→ 放弃 pushUpdCls，
         //   导致「推送成功后重新推送成功」的黄底不显示（对偶于「推送成功后修改」的 modified 显示逻辑）
-        S._highlightedTime = Date.now();
+        HighlightModel.setHighlightedCells(S, _hlC);
     } else if ('highlightedCells' in p) {
         // 扩展端明确传了空的 highlightedCells，表示无高亮
-        S._highlightedCells = null;
-        S._highlightedTime = 0;
+        HighlightModel.setHighlightedCells(S, null);
     }
 
     try { renderTable(); } catch (_) { /* ignore */ }

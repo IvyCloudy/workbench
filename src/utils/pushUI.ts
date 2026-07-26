@@ -24,6 +24,8 @@ export interface PushFileResult {
     total: number;
     failures: PushFailure[];
     error?: string;
+    /** 本次推送被识别为样例/模板占位而静默跳过的行数（不计入 success/fail），弹窗汇总用 */
+    skipped?: number;
 }
 
 /** 进度项状态 */

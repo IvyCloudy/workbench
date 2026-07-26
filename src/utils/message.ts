@@ -226,10 +226,13 @@ export function showPushErrorModal(
 /**
  * 推送结果弹窗（成功 / 部分成功 / 全部失败）。
  *
- * @param error  推送流程级错误（如 YAML 语法错误、文件不在合规目录等），
- *               前端 showPushResultModal 会以红色错误分支渲染，不会误判为"成功"。
+ * @param error   推送流程级错误（如 YAML 语法错误、文件不在合规目录等），
+ *                前端 showPushResultModal 会以红色错误分支渲染，不会误判为"成功"。
+ * @param skipped 本次被识别为样例/模板占位而静默跳过的行数（不计入 successCount/failures）。
+ *                默认 0；仅当 > 0 时前端弹窗会显示"跳过 N"这一维度以及"其中 N 行样例数据已跳过"提示。
+ *                有它才能解释"total 13 = success 12 + fail 0 + skipped 1"这种视觉对不上的情形。
  *
- * - panel 可用 → postMessage({ type:'pushResult', fileName, successCount, failures, total, error })
+ * - panel 可用 → postMessage({ type:'pushResult', fileName, successCount, failures, total, skipped, error })
  * - panel 不可用 → 独立 webview 模态框展示结果摘要
  */
 export function showPushResult(
@@ -239,9 +242,10 @@ export function showPushResult(
     failures: PushFailure[],
     total: number,
     error?: string,
+    skipped: number = 0,
 ): void {
     if (panel) {
-        panel.webview.postMessage({ type: 'pushResult', fileName, successCount, failures, total, error });
+        panel.webview.postMessage({ type: 'pushResult', fileName, successCount, failures, total, skipped, error });
     } else {
         // 独立模态框：如果有 error（流程级错误），直接展示错误，不走 successCount/failures 逻辑
         if (error) {
@@ -250,17 +254,18 @@ export function showPushResult(
             return;
         }
         const failCount = failures.length;
+        const skipHint = skipped > 0 ? `（其中 ${skipped} 行样例数据已跳过）` : '';
         if (failCount === 0 && successCount === 0) {
             showModal('default', 'warning', '推送结果', `推送未产生结果：${fileName}\n请检查文件后重试。`);
         } else if (failCount === 0) {
-            showModal('default', 'success', '推送结果', `推送成功：${fileName}\n共 ${successCount} 条全部成功。`);
+            showModal('default', 'success', '推送结果', `推送成功：${fileName}\n共 ${successCount} 条全部成功${skipHint}。`);
         } else if (successCount === 0) {
             showModal('default', 'error', '推送结果',
-                `推送失败：${fileName}\n共 ${failCount} 条全部失败。\n\n` +
+                `推送失败：${fileName}\n共 ${failCount} 条全部失败${skipHint}。\n\n` +
                 failures.map(f => `• ${f.tsId}: ${f.reason}`).join('\n'));
         } else {
             showModal('default', 'warning', '推送结果',
-                `推送部分成功：${fileName}\n成功 ${successCount} / 失败 ${failCount} / 共 ${total} 条。\n\n` +
+                `推送部分成功：${fileName}\n成功 ${successCount} / 失败 ${failCount} / 共 ${total} 条${skipHint}。\n\n` +
                 `失败明细：\n` + failures.map(f => `• ${f.tsId}: ${f.reason}`).join('\n'));
         }
     }

@@ -153,7 +153,7 @@ async function pushSingleFile(
     const { rowIndexMap, pushIndexToRow } = buildRowIndexMappings(rows);
 
     // 收集结果
-    let finalResult: { successCount: number; failures: PushFailureItem[]; total: number } | null = null;
+    let finalResult: { successCount: number; failures: PushFailureItem[]; total: number; skipped?: number } | null = null;
     let pushError: string | null = null;
     let resolved = false;
 
@@ -168,8 +168,10 @@ async function pushSingleFile(
             telemetryPrefix: 'explorerPush',
             hooks: {
                 markSelfSave: () => BaseEditorProvider.markPanelSelfSave(filePath),
-                afterWriteBack: async ({ hasFailure }) => { /* 批量推送不做单文件刷新 */ },
-                onAllFailedSnapshot: async () => { /* 批量推送不做单文件刷新 */ },
+                // 批量推送不在此处逐文件刷新 webview（避免循环期间多次全量渲染抖动），
+                // 由 handleFilePush 在批次结束后统一遍历 results 对"已打开的面板"调用 postExplorerPushRefresh。
+                afterWriteBack: async ({ hasFailure }) => { /* 批量推送不做单文件刷新，见 handleFilePush 批次末尾 */ },
+                onAllFailedSnapshot: async () => { /* 批量推送不做单文件刷新，见 handleFilePush 批次末尾 */ },
                 onUnbound: () => { pushError = '未绑定任务'; resolved = true; },
                 onNoData: () => { pushError = '文件无数据'; resolved = true; },
                 onPlaceholderTestcaseId: (_f) => { /* 已废弃：runPush 不再调用此钩子，失败信息统一在 onComplete 中输出 */ },
@@ -220,6 +222,7 @@ async function pushSingleFile(
         failCount: result.failures.length,
         total: result.total,
         failures: result.failures,
+        skipped: result.skipped ?? 0,
     };
 }
 
@@ -394,8 +397,8 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
                     showModal(panel, 'warning', '案例编号回写失败',
                         `${baseName}\n\n后端推送已成功，但案例编号未能写回本地文件。请稍后手动刷新或重新打开文件。\n\n错误信息：${errorMsg}`);
                 },
-                onComplete: ({ successCount, failures, total }) => {
-                    showPushResult(panel, baseName, successCount, failures, total);
+                onComplete: ({ successCount, failures, total, skipped }) => {
+                    showPushResult(panel, baseName, successCount, failures, total, undefined, skipped ?? 0);
                     if (!panel) {
                         TelemetryService.sendTelemetryEvent('explorerPush.noPanelFallback', {
                             succ: String(successCount),
@@ -493,6 +496,34 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         });
     }
 
+    // ─── 批次结束后统一刷新已打开的 webview 面板 ────────────────────────────
+    // 说明：pushSingleFile 内部的 afterWriteBack / onAllFailedSnapshot 为空，
+    //      避免在循环中每文件都触发 webview 全量刷新造成性能抖动。
+    //      这里在批次结束后集中处理，仅对"当前已打开"的面板执行一次刷新，
+    //      使前端 mods / _addedRowSet / _highlightedCells / _pushFailedTsIds
+    //      与磁盘/持久化状态对齐（符合《高亮逻辑说明.md》9 类高亮规则）。
+    //      未打开的文件无需刷新——其失败态由 pushFailureStore.json 持久化，
+    //      用户点总结页打开时经由 init 流程自动恢复。
+    let refreshedPanelCount = 0;
+    for (const result of results) {
+        try {
+            if (!BaseEditorProvider.getPanel(result.filePath)) {
+                continue; // 面板未打开，跳过
+            }
+            const hasFailure = !!result.error || result.failCount > 0;
+            await BaseEditorProvider.postExplorerPushRefresh(result.filePath, hasFailure);
+            refreshedPanelCount++;
+        } catch (err: any) {
+            console.warn('[推送] 批次结束刷新面板失败:', result.filePath, err?.message || err);
+        }
+    }
+    if (refreshedPanelCount > 0) {
+        TelemetryService.sendTelemetryEvent('explorerPush.batch.postRefresh', {
+            refreshed: String(refreshedPanelCount),
+            total: String(results.length),
+        });
+    }
+
     // 推送完成自动切换到总结视图（同一面板，带可点击文件名）
     await progressPanel.done(results, async (result) => {
         const uri = vscode.Uri.file(result.filePath);
@@ -506,9 +537,9 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         // 等待 webview 前端消息监听器就绪（waitReady 仅保证扩展端就绪）
         await new Promise(resolve => setTimeout(resolve, 400));
         if (result.error) {
-            showPushResult(panel, result.fileName, 0, [], result.total, result.error);
+            showPushResult(panel, result.fileName, 0, [], result.total, result.error, result.skipped ?? 0);
         } else {
-            showPushResult(panel, result.fileName, result.successCount, result.failures, result.total);
+            showPushResult(panel, result.fileName, result.successCount, result.failures, result.total, undefined, result.skipped ?? 0);
         }
     });
 

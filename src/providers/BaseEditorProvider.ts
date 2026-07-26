@@ -228,19 +228,24 @@ export class PushViaHttpClient implements PushStrategy {
                 await clearHighlight(ctx.filePath);
                 ctx.session.cachedTableData = null;
             },
-            onComplete: ({ successCount, failures, total }) => {
+            onComplete: ({ successCount, failures, total, skipped }) => {
                 // 编辑器内推送：直接复用前端 webview 弹窗（同一个 panel 内嵌）
-                showPushResult(webviewPanel, baseName, successCount, failures, total);
+                //
+                // ⚠ 历史 bug（2026-07-26 修复）：
+                //   此处曾在 showPushResult / showPushDone 之外再次 postMessage
+                //   type:'pushResult' 与 type:'pushDone'，导致前端收到 2 次相同消息：
+                //     · 前端 05a 会消费两遍 pushResult，第一次消费清空 _lastPushBatchTsIds
+                //       后，第二次因 batch 缺失只 add 不 diff，还会用 Date.now() 重刷
+                //       _pushFailedTime 的时间戳，与其它高亮时间戳产生竞争 → 部分失败行
+                //       呈"整行黄底 + 只有 tsId 列红底"的错乱视觉。
+                //     · 也会额外触发一次 clearByPushBatch → renderTable() 抖动。
+                //   showPushResult / showPushDone 内部已经各自发送一次消息，此处不再重复。
+                // 诊断日志：failedTsIds 只取前 20 个，避免批量失败时打出超长行影响 console 可读性
+                const _failedTsIdsPreview = failures.slice(0, 20).map(f => f.tsId || '(空)').join(',')
+                    + (failures.length > 20 ? `,...(+${failures.length - 20})` : '');
+                console.log(`[推送诊断][ext] onComplete 只发一次 pushResult | successCount=${successCount} failures=${failures.length} total=${total} skipped=${skipped ?? 0} failedTsIds=${_failedTsIdsPreview}`);
+                showPushResult(webviewPanel, baseName, successCount, failures, total, undefined, skipped ?? 0);
                 showPushDone(webviewPanel);
-                webviewPanel.webview.postMessage({
-                    type: 'pushResult',
-                    fileName: baseName,
-                    successCount,
-                    failures,
-                    total,
-                });
-                // 通知前端推送流程已完成（用于隐藏 loading 之类的状态）
-                webviewPanel.webview.postMessage({ type: 'pushDone' });
             },
         };
     }
@@ -667,9 +672,10 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         //   05d-detail-write    —— 明细弹窗（v2）写操作（增删 step / 字段写入 / 保存）
         //   05e-array-editor    —— 数组列编辑器，并在末尾调用 init()
         const editorScriptFiles = [
-            'editor/01-core.js',
-            'editor/02a-render.js',
-            'editor/02b-bind.js',
+                'editor/00-highlight-util.js',
+                'editor/01-core.js',
+                'editor/02a-render.js',
+                'editor/02b-bind.js',
             'editor/02c-row-cell-sel.js',
             'editor/02d-sel-utils.js',
             'editor/03a-cell-edit.js',

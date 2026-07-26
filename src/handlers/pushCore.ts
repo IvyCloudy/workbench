@@ -38,6 +38,8 @@ import {
     aggregateByField,
     summarizeCategoryBreakdown,
     summarizeFieldBreakdown,
+    splitFieldStatsByLevel,
+    topFieldOfLevel,
     failureFieldOf,
     type PushFailCategory,
     type PushInterfaceField,
@@ -1249,14 +1251,21 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         if (rows.length === 0) {
             const abortStats = aggregateFailures(preValidationFailures, 1);
             const abortFieldStats = aggregateByField(preValidationFailures, 1);
+            const abortFieldSplit = splitFieldStatsByLevel(abortFieldStats);
             TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
                 ...baseTelemetryProps(ctx),
                 reason: pickAllDroppedReason(pre.byKind),
                 count: String(preValidationFailures.length),
                 failCategoryBreakdown: summarizeCategoryBreakdown(abortStats),
                 topFailCategory: abortStats.length ? abortStats[0].category : '',
+                // 兼容维度（全字段合并）：保留 failFieldBreakdown / topFailField 以避免旧看板断列
                 failFieldBreakdown: summarizeFieldBreakdown(abortFieldStats),
                 topFailField: abortFieldStats.length ? abortFieldStats[0].field : '',
+                // 分层维度（接口级 / 行级）：便于区分"整批失败"与"部分行字段错"
+                interfaceFailBreakdown: summarizeFieldBreakdown(abortFieldStats, 'interface'),
+                topInterfaceFailField: topFieldOfLevel(abortFieldStats, 'interface')?.field || '',
+                caseFailBreakdown: summarizeFieldBreakdown(abortFieldStats, 'case'),
+                topCaseFailField: topFieldOfLevel(abortFieldStats, 'case')?.field || '',
             });
             pushDiag(`[短路-全部预校验失败] 总数=${originalRowsCount} 失败=${preValidationFailures.length} | 不调用接口`);
             pushDiag('[短路] 失败明细:', preValidationFailures.map((f: any) => ({ row: f.rowIndex, tsId: f.tsId, cat: f.category, reason: f.reason })));
@@ -1287,8 +1296,14 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
                     preValidationCount: String(preValidationFailures.length),
                     failCategoryBreakdown: summarizeCategoryBreakdown(abortStats),
                     topFailCategory: abortStats.length ? abortStats[0].category : '',
+                    // 兼容维度（全字段合并）
                     failFieldBreakdown: summarizeFieldBreakdown(abortFieldStats),
                     topFailField: abortFieldStats.length ? abortFieldStats[0].field : '',
+                    // 分层维度
+                    interfaceFailBreakdown: summarizeFieldBreakdown(abortFieldStats, 'interface'),
+                    topInterfaceFailField: topFieldOfLevel(abortFieldStats, 'interface')?.field || '',
+                    caseFailBreakdown: summarizeFieldBreakdown(abortFieldStats, 'case'),
+                    topCaseFailField: topFieldOfLevel(abortFieldStats, 'case')?.field || '',
                 });
                 pushDiag(`[短路-仅样例+预校验失败] 总数=${originalRowsCount} 预校验失败=${preValidationFailures.length} 样例失败=${sampleFailures.length} | 不调用接口`);
                 showPushDiag();
@@ -1311,8 +1326,14 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
                 count: String(sampleFailures.length),
                 failCategoryBreakdown: summarizeCategoryBreakdown(sampleStats),
                 topFailCategory: sampleStats.length ? sampleStats[0].category : '',
+                // 兼容维度（全字段合并）
                 failFieldBreakdown: summarizeFieldBreakdown(sampleFieldStats),
                 topFailField: sampleFieldStats.length ? sampleFieldStats[0].field : '',
+                // 分层维度
+                interfaceFailBreakdown: summarizeFieldBreakdown(sampleFieldStats, 'interface'),
+                topInterfaceFailField: topFieldOfLevel(sampleFieldStats, 'interface')?.field || '',
+                caseFailBreakdown: summarizeFieldBreakdown(sampleFieldStats, 'case'),
+                topCaseFailField: topFieldOfLevel(sampleFieldStats, 'case')?.field || '',
             });
             ctx.hooks.onOnlySampleRows(sampleFailures);
             return;
@@ -1394,10 +1415,17 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         const failCategoryBreakdown = summarizeCategoryBreakdown(failStats);
         const topFailCategory = failStats.length ? failStats[0].category : '';
 
-        // 字段聚焦维度（仅字段类错误计入）：failFieldBreakdown 'sourceId:3,testCaseName:1' + topFailField
+        // 字段聚焦维度（仅字段类错误计入）：
+        //   - failFieldBreakdown / topFailField：兼容维度（全字段合并），保留原有大盘看板
+        //   - interface* / case*：分层维度，区分接口级公共参数错（一次错=整批失败）与
+        //     行级 caseList 字段错，避免接口级错误在 count 维度淹没行级字段真实分布。
         const failFieldStats = aggregateByField(mergedFailures, 1);
         const failFieldBreakdown = summarizeFieldBreakdown(failFieldStats);
         const topFailField = failFieldStats.length ? failFieldStats[0].field : '';
+        const interfaceFailBreakdown = summarizeFieldBreakdown(failFieldStats, 'interface');
+        const topInterfaceFailField = topFieldOfLevel(failFieldStats, 'interface')?.field || '';
+        const caseFailBreakdown = summarizeFieldBreakdown(failFieldStats, 'case');
+        const topCaseFailField = topFieldOfLevel(failFieldStats, 'case')?.field || '';
 
         TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.complete`, {
             ...baseTelemetryProps(ctx),
@@ -1412,6 +1440,10 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
             topFailCategory,
             failFieldBreakdown,
             topFailField,
+            interfaceFailBreakdown,
+            topInterfaceFailField,
+            caseFailBreakdown,
+            topCaseFailField,
             costMs: String(Date.now() - ctx.pushStart),
         });
         emitProgress(ctx.hooks, 'done', { rows: total });

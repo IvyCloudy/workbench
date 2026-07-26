@@ -256,6 +256,7 @@ export async function pushTestCase(
     const body = {
         testTaskNo: taskInfo.testTaskNo,
         subTestTaskId: taskInfo.subTestTaskId,
+        designer: "",
         artifactId,
         sourcePlatform,
         caseList

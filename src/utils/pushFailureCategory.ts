@@ -71,8 +71,14 @@ const BACKEND_CATEGORY_RULES: Array<{ category: PushFailCategory; patterns: RegE
     { category: 'network',      patterns: /超时|timeout|网络|连接失败|ECONN|connect|socket/i },
     { category: 'auth',         patterns: /鉴权|权限|未登录|token|无权限|登录|认证|unauthorized|forbidden|401|403/i },
     { category: 'duplicate',    patterns: /已存在|重复|duplicate|already|冲突|conflict/i },
-    { category: 'fieldInvalid', patterns: /格式|不合法|非法|必填|长度|字段|参数|param|invalid|格式错误|为空|不能为空|缺失|缺少|未填写/i },
-    { category: 'notFound',     patterns: /不存在|未找到|查无|未绑定|not\s*found|404/i },
+    // bizReject 需早于 fieldInvalid："当前不支持案例来源" 应归为业务拒绝，而不是字段错误
+    { category: 'bizReject',    patterns: /不支持|不允许|拒绝/i },
+    // notFound 需早于 fieldInvalid："任务下未匹配到有效测试要点"、"案例路径错误未匹配到有效测试要点"
+    // 里含"未匹配"，若先命中 fieldInvalid（"未"→"未填写"其实不含，但"路径"会走 field 抽取）会误分类
+    { category: 'notFound',     patterns: /不存在|未找到|查无|未绑定|未匹配|not\s*found|404/i },
+    // fieldInvalid：新增"不一致"（步骤描述与预期结果数量不一致）、"检查点"（案例检查点数为0）、
+    // "无效"（数据中包含无效的案例来源/案例类型/案例优先级/案例默认执行方式）
+    { category: 'fieldInvalid', patterns: /格式|不合法|非法|无效|必填|长度|字段|参数|param|invalid|格式错误|为空|不能为空|缺失|缺少|未填写|不一致|检查点/i },
     { category: 'serverError',  patterns: /服务[器端]?|5\d\d|系统异常|内部错误|5xx|server\s*error/i },
 ];
 
@@ -119,8 +125,25 @@ export function classifyFailure(input: {
 // 与 category 正交：category 表示"错误大类"，field 表示"命中的接口字段"。
 // 该维度用于埋点 failFieldBreakdown + 前端"按字段引导纠错"。
 
-/** 接口 caseList 字段码（聚焦维度，覆盖推送接口主要入参字段） */
+/** 接口字段码（聚焦维度，覆盖推送接口主要入参字段）。
+ *
+ *  两层级别（由 FIELD_LEVEL 区分）：
+ *   - interface：接口级公共参数（请求体顶层 / header），一次错 = 整批失败
+ *     testTaskNo / subTestTaskId / artifactId / sourcePlatform / designer
+ *   - case：caseList[] 行级字段，每行独立
+ *     sourceId / testCasePath / testCaseName / ... / testType
+ *
+ *  区分两层的目的：避免接口级一次错误在 count 维度淹没行级字段真实分布
+ *  （例：designer 无权限会导致 100 行全部失败，如果不分层，会远比 description:42 看起来严重）。
+ */
 export type PushInterfaceField =
+    // ── 接口级公共参数（level=interface）──
+    | 'testTaskNo'      // 测试任务编号（请求体顶层，必填）
+    | 'subTestTaskId'   // 子任务Id（请求体顶层，必填）
+    | 'artifactId'      // 产出物Id（请求体顶层，必填，<=500）
+    | 'sourcePlatform'  // 案例来源平台（请求体顶层，TMS/RFWeb/CMBT_APP 等，必填）
+    | 'designer'        // 设计人（header X-User-Id/X-User-Name 携带，<=200，必填）
+    // ── caseList[] 行级字段（level=case）──
     | 'sourceId'        // 案例唯一标识 / testcase_id（必填）
     | 'testCasePath'    // 案例路径 / path（必填）
     | 'testCaseName'    // 案例名称 / name（必填）
@@ -130,23 +153,81 @@ export type PushInterfaceField =
     | 'priority'        // 优先级
     | 'type'            // 案例类型
     | 'preCondition'    // 前置条件
+    | 'keyFlag'         // 关键案例（是/否，必填）
+    | 'projectDes'      // 项目说明
+    | 'planExecNum'     // 计划执行次数
     | 'testType';       // 执行方式
+
+/** 字段级别：interface=接口级公共参数（一次错=整批失败）；case=caseList 行级字段 */
+export type PushFieldLevel = 'interface' | 'case';
+
+/** 字段→级别映射表。与 PushInterfaceField 一一对应（TS 会强制盖全）。 */
+const FIELD_LEVEL: Record<PushInterfaceField, PushFieldLevel> = {
+    // interface
+    testTaskNo: 'interface',
+    subTestTaskId: 'interface',
+    artifactId: 'interface',
+    sourcePlatform: 'interface',
+    designer: 'interface',
+    // case
+    sourceId: 'case',
+    testCasePath: 'case',
+    testCaseName: 'case',
+    testCaseDes: 'case',
+    description: 'case',
+    expected: 'case',
+    priority: 'case',
+    type: 'case',
+    preCondition: 'case',
+    keyFlag: 'case',
+    projectDes: 'case',
+    planExecNum: 'case',
+    testType: 'case',
+};
+
+/** 查字段级别（迭代完 FIELD_LEVEL 后外部调用入口） */
+export function fieldLevelOf(field: PushInterfaceField): PushFieldLevel {
+    return FIELD_LEVEL[field];
+}
 
 /**
  * 接口字段 → 别名（中英文，后端报错可能用任一种）。
  * 顺序即优先级：把含 "案例" 前缀、更具体的短语排在前面，避免被通用别名抢先。
  */
 const INTERFACE_FIELD_ALIASES: Array<{ field: PushInterfaceField; aliases: RegExp }> = [
-    { field: 'sourceId',     aliases: /sourceId|testcase_id|testCaseId|案例唯一标识|案例标识|案例\s*id|案例ID/ },
-    { field: 'testCasePath', aliases: /testCasePath|案例路径|案例\s*path|路径/ },
-    { field: 'testCaseName', aliases: /testCaseName|案例名称|案例\s*name|名称/ },
-    { field: 'testCaseDes',  aliases: /testCaseDes|案例描述/ },
-    { field: 'description',  aliases: /description|步骤描述|步骤/ },
-    { field: 'expected',     aliases: /expected|预期结果|预期/ },
-    { field: 'priority',     aliases: /priority|优先级/ },
-    { field: 'type',         aliases: /\btype\b|案例类型/ },
-    { field: 'preCondition', aliases: /preCondition|前置条件/ },
-    { field: 'testType',     aliases: /testType|执行方式/ },
+    // ──── 接口级公共参数（优先匹配，避免被 "名称/路径" 等行级别名抢先） ────
+    // testTaskNo：后端错误 "测试任务编号...不能为空/未匹配到有效阶段信息"
+    { field: 'testTaskNo',     aliases: /testTaskNo|test_task_no|测试任务编号|任务编号/ },
+    // subTestTaskId：后端错误 "子任务Id...不能为空"
+    { field: 'subTestTaskId',  aliases: /subTestTaskId|sub_test_task_id|subTaskId|子任务\s*[Ii][dD]|子任务/ },
+    // artifactId：后端错误 "产出物Id不能为空/长度不能超过500个字符"
+    { field: 'artifactId',     aliases: /artifactId|artifact_id|产出物\s*[Ii][dD]|产出物/ },
+    // designer：后端错误 "设计人不能为空/长度不能超过200个字符/设计人无权限"
+    { field: 'designer',       aliases: /designer|设计人/ },
+
+    // ──── caseList[] 行级字段 ────
+    // sourceId 补 "案例来源Id"：后端错误 "案例来源Id不能为空/长度不能超过36个字符" 均指向该字段
+    // 需排在 sourcePlatform 之前："案例来源Id" 应优先归到 sourceId，避免被 sourcePlatform 的"案例来源"抢先命中
+    { field: 'sourceId',       aliases: /sourceId|testcase_id|testCaseId|案例来源\s*[Ii][dD]|案例唯一标识|案例标识|案例\s*id|案例ID/ },
+    // sourcePlatform 案例来源平台：后端错误 "无效的案例来源(TMS/...)/当前不支持案例来源(...)" 均指向该字段
+    { field: 'sourcePlatform', aliases: /sourcePlatform|source_platform|案例来源平台|案例来源(?![\s]*[Ii][dD])|来源平台/ },
+    { field: 'testCasePath',   aliases: /testCasePath|案例路径|案例\s*path|路径/ },
+    { field: 'testCaseName',   aliases: /testCaseName|案例名称|案例\s*name|名称/ },
+    { field: 'testCaseDes',    aliases: /testCaseDes|案例描述/ },
+    { field: 'description',    aliases: /description|步骤描述|步骤/ },
+    // expected 补 "检查点"："案例检查点数为0请查看预期结果检查分类" 归到预期结果字段
+    { field: 'expected',       aliases: /expected|预期结果|预期|检查点/ },
+    { field: 'priority',       aliases: /priority|优先级/ },
+    { field: 'type',           aliases: /\btype\b|案例类型/ },
+    { field: 'preCondition',   aliases: /preCondition|前置条件/ },
+    // 关键案例：接口字段名为 keyFlag，后端报错可能回“关键案例不能为空/格式不正确”
+    { field: 'keyFlag',        aliases: /keyFlag|key_flag|关键案例/ },
+    // 项目说明（projectDes）：caseList 实际字段，预留字段维度堆积
+    { field: 'projectDes',     aliases: /projectDes|project_des|项目说明/ },
+    // 计划执行次数（planExecNum）：caseList 实际字段，预留字段维度堆积
+    { field: 'planExecNum',    aliases: /planExecNum|plan_exec_num|计划执行次数/ },
+    // testType 补 "默认执行方式"：错误原文 "无效的案例默认执行方式"
+    { field: 'testType',       aliases: /testType|默认执行方式|执行方式/ },
 ];
 
 /** MapError.reason → 接口字段（客户端字段映射错误已知具体字段） */
@@ -157,8 +238,10 @@ const MAP_ERROR_REASON_TO_FIELD: Record<string, PushInterfaceField> = {
     invalidPath: 'testCasePath',
 };
 
-/** 字段相关 category（仅这些大类才有意义去聚焦到具体字段） */
-const FIELD_RELATED_CATEGORIES: PushFailCategory[] = ['fieldInvalid', 'mapError', 'placeholder', 'emptyTestcaseId'];
+/** 字段相关 category（仅这些大类才有意义去聚焦到具体字段）
+ *  包含 duplicate："sourceId 已存在/案例已存在" 也可能带具体字段（如 sourceId），
+ *  应允许抽取，避免字段维度丢失重复类错误。 */
+const FIELD_RELATED_CATEGORIES: PushFailCategory[] = ['fieldInvalid', 'mapError', 'placeholder', 'emptyTestcaseId', 'duplicate'];
 
 /**
  * 从自由文本抽取接口字段码（仅基于 reason 关键词）。命中返回字段码；否则 undefined。
@@ -200,9 +283,10 @@ export function failureFieldOf(input: {
     return undefined;
 }
 
-/** 单条失败的字段统计（含原文样本，供 UI / 埋点） */
+/** 单条失败的字段统计（含原文样本，供 UI / 埋点）。level 区分接口级/行级，便于分层展示。 */
 export interface FailureFieldStat {
     field: PushInterfaceField;
+    level: PushFieldLevel;
     count: number;
     samples: string[];
 }
@@ -211,6 +295,7 @@ export interface FailureFieldStat {
  * 按接口字段聚合（聚焦维度）。非字段类错误（field 为 undefined）不计入。
  * - 优先用 item.field；缺失时用 failureFieldOf 兜底（兼容历史/未贯通数据）；
  * - 同字段合并 count，保留最多 maxSamples 条不重复 reason 样本；
+ * - 自动写入 level（接口级/行级），方便下游分层展示；
  * - 返回按 count 降序。
  */
 export function aggregateByField(
@@ -225,7 +310,7 @@ export function aggregateByField(
         if (!field) continue;
         let stat = buckets.get(field);
         if (!stat) {
-            stat = { field, count: 0, samples: [] };
+            stat = { field, level: FIELD_LEVEL[field], count: 0, samples: [] };
             buckets.set(field, stat);
         }
         stat.count++;
@@ -236,9 +321,32 @@ export function aggregateByField(
     return Array.from(buckets.values()).sort((a, b) => b.count - a.count);
 }
 
-/** 把字段聚合压成埋点友好紧凑串（field:count 逗号分隔），空聚合返回 '' */
-export function summarizeFieldBreakdown(stats: FailureFieldStat[]): string {
+/**
+ * 按字段级别（interface / case）拆分聚合结果，便于 UI 分两个 section 展示。
+ * 两个子集内部保持原有 count 降序。
+ */
+export function splitFieldStatsByLevel(stats: FailureFieldStat[]): { interfaceStats: FailureFieldStat[]; caseStats: FailureFieldStat[] } {
+    const interfaceStats: FailureFieldStat[] = [];
+    const caseStats: FailureFieldStat[] = [];
+    for (const s of stats || []) {
+        (s.level === 'interface' ? interfaceStats : caseStats).push(s);
+    }
+    return { interfaceStats, caseStats };
+}
+
+/** 求某一层级中 count 最高的字段（用于埋点 topInterfaceFailField / topCaseFailField） */
+export function topFieldOfLevel(stats: FailureFieldStat[], level: PushFieldLevel): FailureFieldStat | undefined {
+    return (stats || []).find(s => s.level === level);
+}
+
+/**
+ *  把字段聚合压成埋点友好紧凑串（field:count 逗号分隔），空聚合返回 ''。
+ *  可选 level 参数：仅输出指定级别的字段（interface/case），便于埋点拆分为
+ *  interfaceFieldBreakdown / caseFieldBreakdown 两个独立维度。不传时同归一串（兼容旧埋点）。
+ */
+export function summarizeFieldBreakdown(stats: FailureFieldStat[], level?: PushFieldLevel): string {
     return (stats || [])
+        .filter(s => !level || s.level === level)
         .map(s => `${s.field}:${s.count}`)
         .join(',');
 }

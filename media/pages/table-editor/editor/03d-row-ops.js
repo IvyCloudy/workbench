@@ -15,93 +15,18 @@
 // ==================== 行操作 ====================
 
 /**
- * 统一处理"行索引依赖的高亮集合"随行操作的移位。
+ * 行索引偏移的统一入口：委托到 00-highlight-util.js 的 HighlightModel.shiftRowIndex。
+ * 保留本地包装函数是为了让 03d 内部调用点保持简洁（不必每处都写 HighlightModel.xxx(S, ...)）。
+ *
  * @param {'insert'|'delete'|'deleteBatch'} op
  * @param {number|number[]} at insert: 插入位置; delete: 被删行; deleteBatch: 降序数组
  *
- * 涉及集合（key 中含行索引）：
- *   - S.mods           (Set, key='row,col')
- *   - S._modsTime      (Object, key='row,col')
- *   - S._detailModCellKeys (Set, key='row,col')
- *   - S._highlightedCells.cells   (Set, key='row:col')
- *   - S._highlightedCells.rowSet  (Set, key=row)
- *
- * 注：_addedRowSet / rowHeights / _rowExpanded / S.sel 由各调用方就地处理（历史逻辑内联，不动）。
+ * 覆盖集合详见 HighlightModel.shiftRowIndex 注释；本次 P5 已把原本散落在
+ * insertRow/deleteRow/deleteSelectedRows/copyRowInline/copySelectedRows 的
+ * _addedRowSet 手写偏移合并进 shiftRowIndex，此处不再重复。
  */
 function _shiftRowIdxHighlights(op, at) {
-    function _shiftKey(key, sep, shiftFn) {
-        var p = key.indexOf(sep);
-        if (p < 0) return null;
-        var r = parseInt(key.substring(0, p), 10);
-        if (isNaN(r)) return null;
-        var nr = shiftFn(r);
-        if (nr < 0) return null; // -1 表示丢弃（被删行本身）
-        return nr + sep + key.substring(p + 1);
-    }
-    function _reshapeSet(setRef, sep, shiftFn) {
-        if (!setRef || !setRef.size) return;
-        var next = new Set();
-        setRef.forEach(function (k) {
-            var nk = _shiftKey(k, sep, shiftFn);
-            if (nk !== null) next.add(nk);
-        });
-        setRef.clear();
-        next.forEach(function (k) { setRef.add(k); });
-    }
-    function _reshapeObj(objRef, sep, shiftFn) {
-        if (!objRef) return;
-        var keys = Object.keys(objRef);
-        if (!keys.length) return;
-        var next = {};
-        keys.forEach(function (k) {
-            var nk = _shiftKey(k, sep, shiftFn);
-            if (nk !== null) next[nk] = objRef[k];
-        });
-        // 原地清空后回填，避免调用方持有旧引用失效
-        keys.forEach(function (k) { delete objRef[k]; });
-        Object.keys(next).forEach(function (k) { objRef[k] = next[k]; });
-    }
-    function _reshapeRowSet(setRef, shiftFn) {
-        if (!setRef || !setRef.size) return;
-        var next = new Set();
-        setRef.forEach(function (r) {
-            var nr = shiftFn(r);
-            if (nr >= 0) next.add(nr);
-        });
-        setRef.clear();
-        next.forEach(function (r) { setRef.add(r); });
-    }
-
-    var shiftFn;
-    if (op === 'insert') {
-        var atI = at;
-        shiftFn = function (r) { return r >= atI ? r + 1 : r; };
-    } else if (op === 'delete') {
-        var atD = at;
-        shiftFn = function (r) { if (r === atD) return -1; return r > atD ? r - 1 : r; };
-    } else if (op === 'deleteBatch') {
-        // at 为降序数组（例如 [5,3,1]）
-        var sortedDesc = at;
-        var sortedAsc = sortedDesc.slice().sort(function (a, b) { return a - b; });
-        shiftFn = function (r) {
-            if (sortedAsc.indexOf(r) >= 0) return -1;
-            var s = 0;
-            for (var i = 0; i < sortedAsc.length; i++) { if (sortedAsc[i] < r) s++; }
-            return r - s;
-        };
-    } else {
-        return;
-    }
-
-    // key='row,col' 的集合
-    _reshapeSet(S.mods, ',', shiftFn);
-    _reshapeSet(S._detailModCellKeys, ',', shiftFn);
-    _reshapeObj(S._modsTime, ',', shiftFn);
-    // _highlightedCells 若不存在则直接跳过
-    if (S._highlightedCells) {
-        _reshapeSet(S._highlightedCells.cells, ':', shiftFn);
-        _reshapeRowSet(S._highlightedCells.rowSet, shiftFn);
-    }
+    HighlightModel.shiftRowIndex(S, op, at);
 }
 
 function insertRow(at, count) {
@@ -169,13 +94,8 @@ function insertRow(at, count) {
         }
     });
     if (!S._addedRowSet) S._addedRowSet = new Set();
-    // 插入位置之后已有的新增行索引整体+1
-    if (S._addedRowSet.size > 0) {
-        var toShift = [];
-        S._addedRowSet.forEach(function (ri) { if (ri >= at) toShift.push(ri); });
-        toShift.forEach(function (ri) { S._addedRowSet.delete(ri); S._addedRowSet.add(ri + 1); });
-    }
-    // 同步转移高亮集合（S.mods / _modsTime / _detailModCellKeys / _highlightedCells.cells / _highlightedCells.rowSet）
+    // 同步转移高亮集合（S.mods / _modsTime / _detailModCellKeys / _highlightedCells.cells / _highlightedCells.rowSet / _addedRowSet）
+    // 说明：_addedRowSet 后移已合并到 HighlightModel.shiftRowIndex，无需再单独处理
     _shiftRowIdxHighlights('insert', at);
     // 仅当文件已被推送过时才标绿（与关闭重开后扩展端 diff 行为一致）：
     // 未推送的文件没有快照基线，重开后所有行都会被视为初始数据 → 不应有“新增”概念。
@@ -243,14 +163,8 @@ function deleteRow(ri) {
         if (dt.rawRowGroups) dt.rawRowGroups.splice(ri, 1);
         if (dt.rawRowTypes) dt.rawRowTypes.splice(ri, 1);
     });
-    // 同步新增行集合：被删行移除，后续行 -1
-    if (S._addedRowSet && S._addedRowSet.size > 0) {
-        S._addedRowSet.delete(ri);
-        var toShiftBack = [];
-        S._addedRowSet.forEach(function (i) { if (i > ri) toShiftBack.push(i); });
-        toShiftBack.forEach(function (i) { S._addedRowSet.delete(i); S._addedRowSet.add(i - 1); });
-    }
-    // 同步转移高亮集合（S.mods / _modsTime / _detailModCellKeys / _highlightedCells.cells / _highlightedCells.rowSet）
+    // 同步转移高亮集合（S.mods / _modsTime / _detailModCellKeys / _highlightedCells.cells / _highlightedCells.rowSet / _addedRowSet）
+    // 说明：_addedRowSet 的"移除被删行 + 后续行 -1"已合并到 HighlightModel.shiftRowIndex，无需再单独处理
     _shiftRowIdxHighlights('delete', ri);
     var ns = new Set();
     S.sel.forEach(function (i) { if (i !== ri) ns.add(i > ri ? i - 1 : i); });
@@ -317,18 +231,8 @@ function deleteSelectedRows() {
             if (dt.rawRowTypes) dt.rawRowTypes.splice(i, 1);
         });
     });
-    // 同步新增行集合：被删行移除，后续行按删除数量整体左移
-    if (S._addedRowSet && S._addedRowSet.size > 0) {
-        var newAdded = new Set();
-        S._addedRowSet.forEach(function (ri) {
-            if (sorted.indexOf(ri) >= 0) return; // 被删行，移除
-            var shift = 0;
-            for (var si = 0; si < sorted.length; si++) { if (sorted[si] < ri) shift++; }
-            newAdded.add(ri - shift);
-        });
-        S._addedRowSet = newAdded;
-    }
-    // 同步转移高亮集合（S.mods / _modsTime / _detailModCellKeys / _highlightedCells.cells / _highlightedCells.rowSet）
+    // 同步转移高亮集合（S.mods / _modsTime / _detailModCellKeys / _highlightedCells.cells / _highlightedCells.rowSet / _addedRowSet）
+    // 说明：_addedRowSet 的批量删除+左移已合并到 HighlightModel.shiftRowIndex，无需再单独处理
     _shiftRowIdxHighlights('deleteBatch', sorted);
     // 同步行高索引：依次处理所有被删行（已按降序，逐个 -1 调整后续索引）
     if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
@@ -371,15 +275,9 @@ function copyRowInline() {
     var tsCol0 = headers0.indexOf('testcase_id');
     var tcCol0 = headers0.indexOf('testCaseNo');
     S.data.rows.splice(at, 0, newRow);
-    // 同步转移高亮/修改集合（与 insertRow 一致）
+    // 同步转移高亮/修改集合（与 insertRow 一致，_addedRowSet 已合并到 shiftRowIndex 内）
     _shiftRowIdxHighlights('insert', at);
-    // 同步新增行集合：插入位置后方的新增行索引+1
-    if (S._addedRowSet && S._addedRowSet.size > 0) {
-        var toShiftCI = [];
-        S._addedRowSet.forEach(function (rr) { if (rr >= at) toShiftCI.push(rr); });
-        toShiftCI.forEach(function (rr) { S._addedRowSet.delete(rr); S._addedRowSet.add(rr + 1); });
-    }
-    // 复制行也属于“新增行”（與 insertRow 同步待推送语义）
+    // 复制行也属于"新增行"（與 insertRow 同步待推送语义）
     if (typeof _filePushedBefore === 'function' && _filePushedBefore()) {
         if (!S._addedRowSet) S._addedRowSet = new Set();
         S._addedRowSet.add(at);
@@ -446,14 +344,8 @@ function copySelectedRows() {
         if (tsCol0 >= 0) newRow[tsCol0] = genUuidV4();
         if (tcCol0 >= 0) newRow[tcCol0] = '';
         S.data.rows.splice(at, 0, newRow);
-        // 同步转移高亮/修改集合（逐行累加，与 insertRow 一致）
+        // 同步转移高亮/修改集合（逐行累加，与 insertRow 一致，_addedRowSet 已合并到 shiftRowIndex 内）
         _shiftRowIdxHighlights('insert', at);
-        // 同步 _addedRowSet：插入位置后方的新增行索引+1，自身可选入集
-        if (S._addedRowSet && S._addedRowSet.size > 0) {
-            var toShiftCS = [];
-            S._addedRowSet.forEach(function (rr) { if (rr >= at) toShiftCS.push(rr); });
-            toShiftCS.forEach(function (rr) { S._addedRowSet.delete(rr); S._addedRowSet.add(rr + 1); });
-        }
         if (typeof _filePushedBefore === 'function' && _filePushedBefore()) {
             if (!S._addedRowSet) S._addedRowSet = new Set();
             S._addedRowSet.add(at);

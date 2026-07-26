@@ -77,8 +77,7 @@ function _shiftColIdxHighlights(op, at) {
             var nc = shiftFn(S._highlightedCells.colIdx);
             if (nc < 0) {
                 // 高亮列被删除，整个 highlightedCells 语义失效
-                S._highlightedCells = null;
-                S._highlightedTime = 0;
+                HighlightModel.setHighlightedCells(S, null);
             } else {
                 S._highlightedCells.colIdx = nc;
             }

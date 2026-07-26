@@ -9,11 +9,12 @@
 
 // ==================== 事件绑定 ====================
 
-// 「展开步骤」按钮显隐控制：仅 YAML 文件且含 steps 字段时显示，CSV/JSON 或无 steps 列的 YAML 隐藏。
+// 「展开步骤」按钮显隐控制：仅结构化文件（YAML/JSON）且含 steps 字段时显示；
+// CSV 或无 steps 列的文件隐藏。
 // 供 bindToolbar 初始化与 webview 切换文件（CustomEditor 复用）、数据到达刷新时统一调用。
 function updateExpandStepsBtnVisibility() {
     var btn = document.getElementById('expandStepsBtn');
-    if (btn) btn.style.display = (isYamlFile() && hasStepsColumn()) ? '' : 'none';
+    if (btn) btn.style.display = (supportsStepsExpansion() && hasStepsColumn()) ? '' : 'none';
 }
 
 function bindToolbar() {
@@ -161,11 +162,17 @@ function bindToolbar() {
             // _deletedInfos 由后端 diff 重新下发，此处不提前清空以免渲染闪烁
             // 关闭可能打开的列筛选弹窗（若存在该函数）
             try { if (typeof closeColFilter === 'function') closeColFilter(); } catch (e) {}
-            // 清掉 mods（高亮）与撤销栈：刷新后磁盘 = 内存，旧撤销点不再有意义；
-            // 同时避免随后扩展端 force 推送被前端 hasUserChanges 兜底拦截。
-            if (S.mods && S.mods.size > 0) S.mods.clear();
-            if (S._detailModCellKeys && S._detailModCellKeys.size > 0) S._detailModCellKeys.clear();
-            if (typeof clearHistory === 'function') clearHistory();
+            // 【reload 场景下的状态重置策略】沉淀在 HighlightModel.resetForReload
+            // 里作为唯一真源（含"为什么保留 mods / 只清 history"的完整背景与决策）。
+            // 若未来再有新按钮触发 reload，请复用此 API，不要在这里内联清字段。
+            if (window.HighlightModel && typeof HighlightModel.resetForReload === 'function') {
+                HighlightModel.resetForReload(S, {
+                    clearHistory: (typeof clearHistory === 'function') ? clearHistory : null
+                });
+            } else if (typeof clearHistory === 'function') {
+                // 兜底：HighlightModel 未加载时退化为仅清撤销栈
+                clearHistory();
+            }
             renderTable();
             // 提示进行中：成功覆盖会在收到磁盘最新数据后再次提示
             if (typeof showToast === 'function') showToast('正在获取最新数据…', 'info');
@@ -206,13 +213,13 @@ function bindToolbar() {
         });
     }
     // 展开/收起步骤按钮：切换展开模式（内联子表格编辑）与非展开模式（点击弹窗编辑）
-    // 「展开步骤」仅对 YAML 文件生效：CSV/JSON 的步骤列只是合并文本、无嵌套结构，点击无意义。
+    // 「展开步骤」仅对结构化文件（YAML/JSON）生效：CSV 的步骤列只是合并文本、无嵌套结构，点击无意义。
     var expandStepsBtn = document.getElementById('expandStepsBtn');
     if (expandStepsBtn) {
-        // 非 YAML 文件直接隐藏按钮（显隐由 updateExpandStepsBtnVisibility 统一控制）
+        // 非结构化文件直接隐藏按钮（显隐由 updateExpandStepsBtnVisibility 统一控制）
         updateExpandStepsBtnVisibility();
         expandStepsBtn.addEventListener('click', function () {
-            if (!isYamlFile() || !hasStepsColumn()) return; // 双保险：非 YAML 或无 steps 列时不展开
+            if (!supportsStepsExpansion() || !hasStepsColumn()) return; // 双保险：不支持类型或无 steps 列时不展开
             var headers = (S.data && S.data.headers) || [];
             var stepsCol = headers.indexOf('steps');
             if (stepsCol < 0) {
@@ -682,10 +689,11 @@ function bindTable() {
         //    - .xs-th-group-collapse: 展开态下的收起按钮（顶部条右上角）
         //    - .xs-th-inline-expand:  未展开态下的展开按钮（xs-th-inner 内 flex 项）
         //    两者都触发工具栏 #expandStepsBtn 的 click，复用同一套展开/收起逻辑
+        //    （门面：supportsStepsExpansion / hasStepsColumn）
         var cbtn = t.closest && (t.closest('.xs-th-group-collapse') || t.closest('.xs-th-inline-expand'));
         if (cbtn) {
-            // 「展开步骤」仅 YAML 且含 steps 列时生效：此处双保险拦截
-            if (!isYamlFile() || !hasStepsColumn()) return;
+            // 「展开步骤」仅结构化文件（YAML/JSON）且含 steps 列时生效：此处双保险拦截
+            if (!supportsStepsExpansion() || !hasStepsColumn()) return;
             e.stopPropagation();
             e.preventDefault();
             var toolBtn = document.getElementById('expandStepsBtn');

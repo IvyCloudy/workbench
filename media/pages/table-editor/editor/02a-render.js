@@ -254,7 +254,7 @@ function _getStepsTotalW() {
 function _buildSkeletonHtml() {
     var headers = (S.data && S.data.headers) || [];
     var stepsCol = headers.indexOf('steps');
-    var hasSteps = (stepsCol >= 0) && isYamlFile();
+    var hasSteps = (stepsCol >= 0) && supportsStepsExpansion();
     var expanded = !!(S._stepsExpanded && hasSteps);
     // steps 子列宽：优先用 S._stepsSubW（拖动后持久化），后退到默认。
     // 默认列宽：[序号 32, 步骤描述 132, 预期结果 128, 数据 72, 操作 40]，总和 404
@@ -415,7 +415,7 @@ function _buildArrayChipsHtml(arr) {
 function _buildRowHtml(ri, tsIdColIdx) {
     var headers = (S.data && S.data.headers) || [];
     var stepsCol = headers.indexOf('steps');
-    var hasSteps = (stepsCol >= 0) && isYamlFile();
+    var hasSteps = (stepsCol >= 0) && supportsStepsExpansion();
     var expanded = !!(S._stepsExpanded && hasSteps);
     var row = S.data.rows[ri] || [];
     var selCls = S.sel.has(ri) ? ' selected' : '';
@@ -483,69 +483,22 @@ function _buildRowHtml(ri, tsIdColIdx) {
         }
         var modCls = _hasMod ? ' modified' : '';
         var _modTime = _hasMod ? ((S._modsTime && S._modsTime[_modKey]) || 0) : 0;
-        // 按时间顺序选择高亮：最新操作的类型优先显示
-        // bestTime 和 bestClass/bestStyle 记录当前生效的高亮
-        var bestTime = 0;
-        var bestClass = '';
-        var bestInlineStyle = '';
-        var bestMkInfo = null; // {bgColor, fontColor}
-
-        // 1) 推送变更高亮（行级橙 + 单元格级黄）：作为一组同时间戳的整体参与竞争
-        //    同一次推送内，单元格级（黄）优先于行级（橙），保留"内层套外层"语义
-        //    但若该 cell 的修改时间晚于推送时间（推送后又改了），则放弃 pushUpdCls，
-        //    让 modified 黄底独立显示，直观提示"改动已产生但尚未再次推送"
-        var pushUpdCls = '';
-        if (S._highlightedCells) {
-            if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
-                pushUpdCls = ' xs-td-push-updated'; // 单元格级：黄色
-            } else if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)
-                && (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci)) {
-                pushUpdCls = ' xs-td-push-updated-row'; // 行级：橙色
-            }
-        }
-        if (pushUpdCls) {
-            var t = S._highlightedTime || 0;
-            // 修改时间胜出：跳过 pushUpdCls，保留 modCls 独立生效
-            if (_modTime > t) {
-                pushUpdCls = '';
-            } else if (t >= bestTime) {
-                bestTime = t; bestClass = pushUpdCls; bestMkInfo = null;
-            }
-        }
-        // 2) 新增行高亮
-        if (S._addedRowSet && S._addedRowSet.has(ri)) {
-            var t = S._addedRowTime || 0;
-            if (t >= bestTime) { bestTime = t; bestClass = ' xs-td-push-added'; modCls = ''; bestMkInfo = null; }
-        }
-        // 3) 用户手动标记高亮
-        if (typeof isUserMarked === 'function') {
-            var mkInfo = isUserMarked(ri, ci);
-            if (mkInfo) {
-                var t = mkInfo.timestamp || 0;
-                if (t >= bestTime) { bestTime = t; bestClass = ' xs-td-user-marked'; bestMkInfo = mkInfo; modCls = (bestClass === ' xs-td-push-added') ? '' : modCls; }
-            }
-        }
-        // 5) 推送失败高亮：作为单元格级"红底"候选项参与时间竞争
-        //    - 若失败时间 >= 其他高亮时间：失败色覆盖（清除 user-marked 内联色，加 xs-td-push-failed）
-        //    - 否则：标记为 xs-td-overrides-fail，让 CSS 保留原高亮色（避免被 tr.xs-tr-push-failed 红底吞掉）
-        //    - 若修改时间晚于失败时间，保留 modCls 并追加 xs-td-overrides-fail，让 CSS 释放 modified 黄底
-        var failOverridden = false;
-        if (rowFailTime > 0) {
-            if (rowFailTime >= bestTime) {
-                // 失败胜出临时斠标：但若本 cell 的 mod 时间更晚（失败后又改了），则保留 modified 叠加
-                if (_modTime > rowFailTime) {
-                    // 保留 modCls 不变，仅把失败当作“被覆盖”标记
-                    failOverridden = true;
-                } else {
-                    bestTime = rowFailTime;
-                    bestClass = ' xs-td-push-failed';
-                    bestMkInfo = null;          // 清除可能已挂上的用户标记色，让失败红底完全生效
-                    modCls = '';
-                }
-            } else {
-                failOverridden = true;       // 其他高亮时间更新 → 让其覆盖失败色
-            }
-        }
+        // 时间戳竞争决策：统一入口，见 00-highlight-util.js / docs/specs/高亮逻辑说明.md 第 2 节。
+        // 输出的 bestClass 不带前导空格，本处拼接时补上；modCls 交给下方 clearModified 决定是否置空。
+        var _res = HighlightUtil.resolveHighlight({
+            ri: ri, ci: ci,
+            modTime: _modTime,
+            highlightedCells: S._highlightedCells,
+            highlightedTime: S._highlightedTime,
+            addedRowSet: S._addedRowSet,
+            addedRowTime: S._addedRowTime,
+            userMarkInfo: (typeof isUserMarked === 'function') ? isUserMarked(ri, ci) : null,
+            rowFailTime: rowFailTime,
+        });
+        var bestClass = _res.bestClass ? (' ' + _res.bestClass) : '';
+        var bestMkInfo = _res.bestMkInfo;
+        var failOverridden = _res.failOverridden;
+        if (_res.clearModified) modCls = '';
 
         var hiliCls = bestClass + (failOverridden ? ' xs-td-overrides-fail' : '');
         var mkStyle = '';
@@ -585,6 +538,33 @@ function _buildRowHtml(ri, tsIdColIdx) {
         +   '<span class="xs-rownum">' + (ri + 1) + '</span>'
         +   '<div class="xs-row-resizer" data-row="' + ri + '" title="拖动调整行高；双击自适应内容"></div>'
         + '</td>';
+    // 【诊断·失败行黄底追查】仅当 tsId 命中失败集合时输出，避免刷屏。
+    // 打印 tr 的 failCls、每个 cell 的 modCls / hiliCls，以及关键源字段快照：
+    //   S.mods.size / S._modsTime keys / rowFailTime，用来判断
+    //   "modified 类的来源是 S.mods 还是 CSS 兜底 / patchCell 后加"。
+    if (failCls) {
+        var _diagCells = cells.map(function (c, idx) {
+            return idx + ':{mod=' + (c.modCls ? 'Y' : '_') + ' hili=' + (c.hiliCls || '_').trim() + '}';
+        }).join(' ');
+        var _modKeysForRow = [];
+        var _modTimeKeysForRow = [];
+        try {
+            S.mods.forEach(function (k) { if (k.indexOf(ri + ',') === 0) _modKeysForRow.push(k); });
+            if (S._modsTime) {
+                for (var _mtk in S._modsTime) {
+                    if (Object.prototype.hasOwnProperty.call(S._modsTime, _mtk) && _mtk.indexOf(ri + ',') === 0) {
+                        _modTimeKeysForRow.push(_mtk + '=' + S._modsTime[_mtk]);
+                    }
+                }
+            }
+        } catch (_e) { /* ignore */ }
+        console.log('[渲染诊断][失败行] ri=' + ri
+            + ' | tsId=' + (row[tsIdColIdx] || '(空)')
+            + ' | failCls="' + failCls.trim() + '" rowFailTime=' + rowFailTime
+            + ' | S.mods 本行 keys=[' + _modKeysForRow.join(',') + ']'
+            + ' | S._modsTime 本行 keys=[' + _modTimeKeysForRow.join(',') + ']'
+            + ' | cells: ' + _diagCells);
+    }
     for (var ci2 = 0; ci2 < cells.length; ci2++) {
         var c = cells[ci2];
         var wrapStyleAttr = multilineClamp ? ' style="' + multilineClamp + '"' : '';
@@ -1087,49 +1067,7 @@ function patchCell(ri, ci) {
     if (isArrCol) td.classList.add('xs-arr-cell'); else td.classList.remove('xs-arr-cell');
     var frozen = (String(headers[ci]) === 'testcase_id');
     if (frozen) td.classList.add('xs-td-frozen'); else td.classList.remove('xs-td-frozen');
-    // 按时间顺序选择高亮：最新操作的类型优先显示（与 _buildRowHtml 一致）
-    var _bestTime = 0;
-    var _bestClass = '';
-    var _bestMkInfo = null;
-
-    // 1) 推送变更高亮（行级橙 + 单元格级黄）：作为一组同时间戳的整体参与竞争
-    //    同一次推送内，单元格级（黄）优先于行级（橙）
-    var _pushUpdCls = '';
-    if (S._highlightedCells) {
-        if (S._highlightedCells.cells && S._highlightedCells.cells.has(ri + ':' + ci)) {
-            _pushUpdCls = 'xs-td-push-updated';
-        } else if (S._highlightedCells.rowSet && S._highlightedCells.rowSet.has(ri)
-            && (S._highlightedCells.colIdx === -1 || S._highlightedCells.colIdx === ci)) {
-            _pushUpdCls = 'xs-td-push-updated-row';
-        }
-    }
-    if (_pushUpdCls) {
-        var _t1 = S._highlightedTime || 0;
-        // 修改时间胜出：跳过 pushUpdCls，保留 modified 独立生效
-        if (_modTime2 > _t1) {
-            _pushUpdCls = '';
-        } else if (_t1 >= _bestTime) {
-            _bestTime = _t1; _bestClass = _pushUpdCls; _bestMkInfo = null;
-        }
-    }
-    // 2) 新增行高亮
-    if (S._addedRowSet && S._addedRowSet.has(ri)) {
-        var _t3 = S._addedRowTime || 0;
-        if (_t3 >= _bestTime) {
-            _bestTime = _t3;
-            _bestClass = 'xs-td-push-added';
-            _bestMkInfo = null;
-            // 新增行胜出时与 _buildRowHtml 对齐：清除 modified 类（避免绿底上叠加黄底）
-            td.classList.remove('modified');
-        }
-    }
-    // 3) 用户手动标记高亮
-    var _mkInfo = (typeof isUserMarked === 'function') ? isUserMarked(ri, ci) : null;
-    if (_mkInfo) {
-        var _t4 = _mkInfo.timestamp || 0;
-        if (_t4 >= _bestTime) { _bestTime = _t4; _bestClass = 'xs-td-user-marked'; _bestMkInfo = _mkInfo; }
-    }
-    // 5) 推送失败高亮（行级失败时间）：作为另一候选项参与时间竞争
+    // 5) 推送失败行级失败时间（先算好交给统一决策器）
     var _rowFailTime = 0;
     if (S._pushFailedTsIds && S._pushFailedTsIds.size > 0) {
         var _tsIdColIdx2 = (S.data && S.data.headers) ? S.data.headers.indexOf('testcase_id') : -1;
@@ -1145,22 +1083,21 @@ function patchCell(ri, ci) {
             }
         }
     }
-    var _failOverridden = false;
-    if (_rowFailTime > 0) {
-        if (_rowFailTime >= _bestTime) {
-            // 失败胜出临界：但若本 cell 的 mod 时间更晚（失败后又改了），则保留 modified 叠加
-            if (_modTime2 > _rowFailTime) {
-                _failOverridden = true;      // 保留 modified 类，让 CSS 应用叠加色
-            } else {
-                _bestTime = _rowFailTime;
-                _bestClass = 'xs-td-push-failed';
-                _bestMkInfo = null;
-                td.classList.remove('modified');  // 失败完全胜出时清 modified
-            }
-        } else {
-            _failOverridden = true;
-        }
-    }
+    // 时间戳竞争决策：统一入口，见 00-highlight-util.js / docs/specs/高亮逻辑说明.md 第 2 节
+    var _res2 = HighlightUtil.resolveHighlight({
+        ri: ri, ci: ci,
+        modTime: _modTime2,
+        highlightedCells: S._highlightedCells,
+        highlightedTime: S._highlightedTime,
+        addedRowSet: S._addedRowSet,
+        addedRowTime: S._addedRowTime,
+        userMarkInfo: (typeof isUserMarked === 'function') ? isUserMarked(ri, ci) : null,
+        rowFailTime: _rowFailTime,
+    });
+    var _bestClass = _res2.bestClass;
+    var _bestMkInfo = _res2.bestMkInfo;
+    var _failOverridden = _res2.failOverridden;
+    if (_res2.clearModified) td.classList.remove('modified');
 
     // 清除所有高亮 class
     td.classList.remove('xs-td-push-updated', 'xs-td-push-updated-row', 'xs-td-push-added', 'xs-td-user-marked', 'xs-td-push-failed', 'xs-td-overrides-fail');

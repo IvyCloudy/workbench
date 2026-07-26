@@ -48,14 +48,24 @@ function dbg() {
     } catch (_) {}
 }
 
-// 判断当前打开的文件是否为 YAML。仅 YAML 文件具备嵌套 steps 结构、需要「展开步骤」功能；
-// CSV/JSON 的步骤列只是合并文本，无嵌套结构，不应展开/收起步骤。
+// 判断当前打开的文件是否为 YAML。保留供 YAML 专属能力使用（如 YAML 校验、格式化等）。
+// 注意：展开步骤功能不应再依赖此函数 —— 请改用 supportsStepsExpansion()，因为
+// JSON 文件同样具备嵌套 steps 结构（json-parser 与 yaml-parser 输出的 rawRowGroups 完全等价）。
 function isYamlFile() {
     return (S.dataType || '') === 'yaml';
 }
 
-// 判断当前数据是否含 steps 字段（表头包含 'steps' 列）。展开步骤功能除要求 YAML 文件外，
-// 还必须满足文件本身带有 steps 字段，避免无 steps 列的 YAML 文件误显示「展开步骤」入口。
+// 判断当前文件类型是否"支持步骤展开"。凡是被解析器构造成 detailTable + rawRowGroups
+// 嵌套结构的类型都支持（当前为 yaml / json）；纯扁平文本（如 csv）不支持。
+// 该门面是「展开步骤」相关 gating 的唯一决策入口，未来若新增支持类型只需在此扩展一处。
+function supportsStepsExpansion() {
+    var t = S.dataType || '';
+    return t === 'yaml' || t === 'json';
+}
+
+// 判断当前数据是否含 steps 字段（表头包含 'steps' 列）。展开步骤功能除要求
+// 结构化文件类型（yaml/json）外，还必须满足文件本身带有 steps 字段，
+// 避免无 steps 列的文件误显示「展开步骤」入口。
 function hasStepsColumn() {
     var h = (S.data && S.data.headers) || [];
     return h.indexOf('steps') >= 0;
@@ -323,18 +333,14 @@ function _cloneDetailTables(dts) {
 }
 
 // 浅克隆推送失败映射：tsIds Set + reasons Map + time Map
-// 三者一起入快照，确保撤销/重做严格还原，而不是粗暴清空。
-function _clonePushFailures() {
-    return {
-        ids: S._pushFailedTsIds ? Array.from(S._pushFailedTsIds) : [],
-        reasons: S._pushFailedReasons ? Array.from(S._pushFailedReasons) : [],   // [[k,v],...]
-        time: S._pushFailedTime ? Array.from(S._pushFailedTime) : []             // [[k,ts],...]
-    };
-}
+// 【P7】实现下沉到 HighlightModel.snapshotForUndo，本处保留仅是历史注释锚点，
+// 若需扩展快照采集，直接改门面即可，避免多处内联复制导致格式契约漂移。
 
 function snapshot() {
     try {
         var d = S.data || {};
+        // 高亮相关字段统一交给门面采集（P7 抽取自 snapshot() 内联逻辑）
+        var _hlSnap = HighlightModel.snapshotForUndo(S);
         var snap = {
             headers: Array.isArray(d.headers) ? d.headers.slice() : [],
             rows: _cloneRows(d.rows),
@@ -345,9 +351,9 @@ function snapshot() {
             highlightedTime: S._highlightedTime || 0,
             addedRowTime: S._addedRowTime || 0,
             // 用户标记（rects）也参与撤销栈，保证标记/取消标记后 Ctrl+Z 可还原
-            userMarks: _cloneMarkRects((S._userMarks && S._userMarks.rects) || []),
+            userMarks: _hlSnap.userMarks,
             // 推送失败标记入快照，避免 undo/redo 误清「与本次操作无关」的失败状态
-            pushFailures: _clonePushFailures()
+            pushFailures: _hlSnap.pushFailures
         };
         // 兼容字段：columnTypes 等若存在则一并保留（浅引用够用，前端不修改）
         if (d.columnTypes) snap.columnTypes = d.columnTypes;
@@ -360,21 +366,9 @@ function snapshot() {
     }
 }
 
-// 浅克隆标记 rects 数组：rects 元素只含基本字段，单层拷贝即可。
-function _cloneMarkRects(rects) {
-    if (!Array.isArray(rects)) return [];
-    var out = new Array(rects.length);
-    for (var i = 0; i < rects.length; i++) {
-        var r = rects[i] || {};
-        out[i] = {
-            r1: r.r1, c1: r.c1, r2: r.r2, c2: r.c2,
-            bgColor: r.bgColor || null,
-            fontColor: r.fontColor || null,
-            timestamp: (r.timestamp != null) ? r.timestamp : 0
-        };
-    }
-    return out;
-}
+// 浅克隆标记 rects 数组：P7 起实现下沉到 HighlightModel（snapshotForUndo /
+// restoreFromSnapshot 内部使用），字段兜底（bgColor/fontColor→null，timestamp→0）
+// 与旧版严格等价。
 
 // ---- restoreSnapshot 内部辅助：拆分以降低单个函数复杂度 ----
 
@@ -445,21 +439,12 @@ function _restoreClearSel() {
     S._rowSelAnchor = -1;
 }
 
-// 还原推送失败标记（精确还原，不再粗暴清空）
+// 还原推送失败标记 —— P7 起主体逻辑由 HighlightModel.restoreFromSnapshot 承担；
+// 本函数保留是为了：1) 保持撤销栈调用点的语义顺序稳定；2) 处理仅本模块关心的
+// 副作用（_deletedInfos 复位），这类跨模块副作用不应污染高亮门面。
 function _restorePushFailures(snap) {
-    var pf = snap.pushFailures;
-    if (pf && (pf.ids || pf.reasons || pf.time)) {
-        S._pushFailedTsIds = new Set(pf.ids || []);
-        S._pushFailedReasons = new Map(pf.reasons || []);
-        S._pushFailedTime = new Map(pf.time || []);
-    } else {
-        // 旧快照不含 pushFailures：保持「全清空」的旧行为，避免索引错位污染
-        S._pushFailedTsIds = new Set();
-        S._pushFailedReasons = new Map();
-        S._pushFailedTime = new Map();
-    }
-    if (S._failedOnly && (!S._pushFailedTsIds || S._pushFailedTsIds.size === 0)) S._failedOnly = false;
-    if (S._modifiedOnly) S._modifiedOnly = false;
+    HighlightModel.restoreFromSnapshot(S, snap);
+    // 副作用：删除幽灵行数据独立于高亮体系，本处一并清空避免旧索引残留
     S._deletedInfos = [];
 }
 
@@ -471,14 +456,15 @@ function _restoreAddedAndTimes(snap) {
 }
 
 // 还原用户标记 rects，并通知扩展端持久化
+// P7：rects 恢复主体已在 _restorePushFailures 中随 restoreFromSnapshot 一并完成，
+// 本函数只保留 01-core 决策的两个副作用：
+//   1) 「标记保护期」1500ms，拒绝扩展端 save/pushSuccess 帧的旧值覆盖
+//   2) postMessage('setMarkRects', ...) 通知扩展端持久化到 markStore.json
 function _restoreUserMarks(snap) {
-    var _restoredMarks = Array.isArray(snap.userMarks) ? _cloneMarkRects(snap.userMarks) : [];
-    S._userMarks.rects = _restoredMarks;
-    S._userMarks.cellMap = null;
-    S._userMarks.rowMap = null;
-    S._userMarks.rowSet = null;
-    S._userMarks.cellTime = null;
-    S._userMarks.rowTime = null;
+    // 拿到当前已被 restoreFromSnapshot 恢复的 rects 快照（源已在 S._userMarks.rects）
+    var _restoredMarks = (S._userMarks && Array.isArray(S._userMarks.rects))
+        ? S._userMarks.rects
+        : [];
     // «标记保护期»：1500ms内拒绝扩展端«与本地不一致»的 userMarks 覆盖（主要防«save 并发读到旧值»）
     S._markGuardUntil = Date.now() + 1500;
     dbg('🔒 markGuard armed for 1500ms, restored rects=' + _restoredMarks.length);
@@ -796,24 +782,9 @@ window.addEventListener('message', function (e) {
             dbg('⏭ skip repush (user changes)');
             // saveHighlight 等 reason 带高亮信息时，仍更新 highlightedCells / addedInfos 避免丢失
             if ('highlightedCells' in m) {
-                if (m.highlightedCells && m.highlightedCells.colIdx != null && Array.isArray(m.highlightedCells.rowIndices)) {
-                    var hl = {
-                        colIdx: m.highlightedCells.colIdx,
-                        rowSet: new Set(m.highlightedCells.rowIndices),
-                        cells: null
-                    };
-                    if (m.highlightedCells.cells && Array.isArray(m.highlightedCells.cells)) {
-                        hl.cells = new Set();
-                        for (var ci_hl2 = 0; ci_hl2 < m.highlightedCells.cells.length; ci_hl2++) {
-                            var c2 = m.highlightedCells.cells[ci_hl2];
-                            hl.cells.add(c2[0] + ':' + c2[1]);
-                        }
-                    }
-                    S._highlightedCells = hl;
-                    S._highlightedTime = Date.now();
-                } else {
-                    S._highlightedCells = null;
-                    S._highlightedTime = 0;
+                var _hlA = HighlightUtil.parseHighlightedCells(m.highlightedCells);
+                HighlightModel.setHighlightedCells(S, _hlA);
+                if (!_hlA) {
                     // highlightedCells=null 表示后端 diff 无变化（数据已回到快照基线），
                     // 同步清除 detailModCellKeys 避免单元格黄色背景残留
                     // 【失败行例外】保留失败行的 detail keys：失败行数据快照未推成功，
@@ -849,20 +820,20 @@ window.addEventListener('message', function (e) {
             // 合并后端下发的新增行信息：先清空再重建，确保 _addedRowSet 与扩展端 diff 结果完全一致，
             // 避免旧索引残留导致非新增行被误标绿（undo / 行列增删后索引错位场景）。
             if ('addedInfos' in m) {
-                if (!S._addedRowSet) S._addedRowSet = new Set();
-                S._addedRowSet.clear();
-                S._addedRowTime = Date.now();
+                var _rowIdxList = [];
                 if (m.addedInfos && Array.isArray(m.addedInfos) && m.addedInfos.length > 0) {
                     S._addedInfos = m.addedInfos;
                     for (var _ai = 0; _ai < m.addedInfos.length; _ai++) {
-                        S._addedRowSet.add(m.addedInfos[_ai].rowIndex);
+                        _rowIdxList.push(m.addedInfos[_ai].rowIndex);
                     }
                 } else {
                     S._addedInfos = [];
                 }
+                // 统一走门面：clear + rebuild + 时间戳，避免多个字段漏更新
+                HighlightModel.setAddedRows(S, _rowIdxList);
                 // 没有新增行数据时自动关闭"仅看新增行"筛选
-                if (S._addedRowSet.size === 0) {
-                    if (S._addedOnly) S._addedOnly = false;
+                if ((!S._addedRowSet || S._addedRowSet.size === 0) && S._addedOnly) {
+                    S._addedOnly = false;
                 }
             }
             // 同步后端下发的已删除行信息（skip-data 路径之前遗漏了 deletedInfos，导致
@@ -884,17 +855,8 @@ window.addEventListener('message', function (e) {
             var _inGuard0 = (S._markGuardUntil && Date.now() < S._markGuardUntil);
             var _skipReason0 = (m.reason === 'saveHighlight' || m.reason === 'pushSuccess');
             if ('userMarks' in m && !_skipReason0 && !_inGuard0) {
-                var um2 = m.userMarks;
-                if (um2 && Array.isArray(um2)) {
-                    S._userMarks.rects = um2;
-                } else {
-                    S._userMarks.rects = [];
-                }
-                S._userMarks.cellMap = null;
-                S._userMarks.rowMap = null;
-                S._userMarks.rowSet = null;
-                S._userMarks.cellTime = null;
-                S._userMarks.rowTime = null;
+                // P7：rects 替换与缓存失效收敛到 HighlightModel.applyUserMarksPayload
+                HighlightModel.applyUserMarksPayload(S, m.userMarks);
             } else if ('userMarks' in m && (_skipReason0 || _inGuard0)) {
                 dbg('⏭ skip userMarks override (skip-data) reason=' + (m.reason || '') + ' inGuard=' + !!_inGuard0 + ' incoming=' + ((m.userMarks && m.userMarks.length) || 0) + ' local=' + ((S._userMarks && S._userMarks.rects && S._userMarks.rects.length) || 0));
             }
@@ -934,14 +896,8 @@ window.addEventListener('message', function (e) {
         // _lastPushBatch），从源头解决 pushSuccess 帧默认"选择性保留 mods"策略与
         // "整文件推送"语义之间的冲突，无需再靠外部 clearMods 消息夹住中间帧兜底。
         if (m.clearAllMods === true) {
-            if (S.mods && S.mods.size > 0) S.mods.clear();
-            if (S._detailModCellKeys && S._detailModCellKeys.size > 0) S._detailModCellKeys.clear();
-            if (Array.isArray(S._history)) S._history.length = 0;
-            if (Array.isArray(S._future)) S._future.length = 0;
-            if (S._lastPushBatchTsIds instanceof Set) S._lastPushBatchTsIds.clear();
-            S._lastPushBatchRowIndices = null;
-            if (S._addedRowSet && S._addedRowSet.size > 0) S._addedRowSet.clear();
-            S._addedInfos = [];
+            // 「整文件推送」强清策略：详见 HighlightModel.resetForFullPush 说明
+            HighlightModel.resetForFullPush(S);
         } else if (!_selfReboundReasons) {
             S.mods.clear();
             S._detailModCellKeys.clear();
@@ -962,71 +918,21 @@ window.addEventListener('message', function (e) {
             // 子列筛选与主表列筛选正交，列结构变化不影响子列 idx（永远是 1/2/3），故不清空
             // 若希望列结构变化时也重置子列筛选，取消下一行注释即可
             // S._stepsSubFilters = {};
-            S._pushFailedTsIds = new Set();
-            S._pushFailedReasons = new Map();
-            S._pushFailedTime = new Map();
-            S._lastPushBatchTsIds = new Set();
-            S._failedOnly = false;
-            S._modifiedOnly = false;
-            S._highlightedCells = null;
-            S._highlightedTime = 0;
+            // 「列结构变化」重置策略：详见 HighlightModel.resetOnColumnChange 说明
+            HighlightModel.resetOnColumnChange(S);
         }
         // 高亮信息更新（必须在 _lastHeadSig 检查之后，避免首次 init 被列变化分支覆盖）
         // 仅在字段存在时更新：visible/reload 等不带 highlightedCells 时保留已有高亮
         if ('highlightedCells' in m) {
-            if (m.highlightedCells && m.highlightedCells.colIdx != null && Array.isArray(m.highlightedCells.rowIndices)) {
-                var hl = {
-                    colIdx: m.highlightedCells.colIdx,
-                    rowSet: new Set(m.highlightedCells.rowIndices),
-                    cells: null
-                };
-                // cells 为 [rowIdx, colIdx][] 扈平数组，用于精确逐格高亮
-                if (m.highlightedCells.cells && Array.isArray(m.highlightedCells.cells)) {
-                    hl.cells = new Set();
-                    for (var ci_hl = 0; ci_hl < m.highlightedCells.cells.length; ci_hl++) {
-                        var c = m.highlightedCells.cells[ci_hl];
-                        hl.cells.add(c[0] + ':' + c[1]);
-                    }
-                }
-                S._highlightedCells = hl;
-                S._highlightedTime = Date.now();
-            } else {
-                S._highlightedCells = null;
-                S._highlightedTime = 0;
-            }
+            var _hlB = HighlightUtil.parseHighlightedCells(m.highlightedCells);
+            HighlightModel.setHighlightedCells(S, _hlB);
         }
         // 推送失败标记：从扩展端持久化文件（push-failures.json）下发，按 testcase_id 关联。
         // 字段存在则覆盖恢复整套失败映射；不存在则保留前端现有内存集合。
         // 新版 entry value 为 { reason, timestamp }；旧版可能为字符串 reason，做兼容。
+        // P7：格式兼容 + 三件套重建收敛到 HighlightModel.applyPushFailuresPayload
         if ('pushFailures' in m) {
-            if (m.pushFailures && typeof m.pushFailures === 'object') {
-                var pf = m.pushFailures;
-                S._pushFailedTsIds = new Set();
-                S._pushFailedReasons = new Map();
-                if (!S._pushFailedTime) S._pushFailedTime = new Map();
-                else S._pushFailedTime.clear();
-                for (var _pfk in pf) {
-                    if (!Object.prototype.hasOwnProperty.call(pf, _pfk)) continue;
-                    var _kStr = String(_pfk);
-                    if (!_kStr) continue;
-                    S._pushFailedTsIds.add(_kStr);
-                    var _pv = pf[_pfk];
-                    if (_pv && typeof _pv === 'object') {
-                        if (_pv.reason) S._pushFailedReasons.set(_kStr, String(_pv.reason));
-                        var _pts = (typeof _pv.timestamp === 'number' && isFinite(_pv.timestamp)) ? _pv.timestamp : 0;
-                        S._pushFailedTime.set(_kStr, _pts);
-                    } else if (typeof _pv === 'string') {
-                        // 兼容旧格式：纯字符串 reason，timestamp 视为 0
-                        if (_pv) S._pushFailedReasons.set(_kStr, String(_pv));
-                        S._pushFailedTime.set(_kStr, 0);
-                    }
-                }
-            } else {
-                S._pushFailedTsIds = new Set();
-                S._pushFailedReasons = new Map();
-                if (S._pushFailedTime) S._pushFailedTime.clear(); else S._pushFailedTime = new Map();
-                if (S._failedOnly) S._failedOnly = false;
-            }
+            HighlightModel.applyPushFailuresPayload(S, m.pushFailures);
         }
         // 删除行信息（快照中有但当前数据中已不存在的行）
         if ('deletedInfos' in m) {
@@ -1061,17 +967,8 @@ window.addEventListener('message', function (e) {
         var _inGuard1 = (S._markGuardUntil && Date.now() < S._markGuardUntil);
         var _skipReason1 = (m.reason === 'saveHighlight' || m.reason === 'pushSuccess');
         if ('userMarks' in m && !_skipReason1 && !_inGuard1) {
-            var um = m.userMarks;
-            if (um && Array.isArray(um)) {
-                S._userMarks.rects = um;
-            } else {
-                S._userMarks.rects = [];
-            }
-            S._userMarks.cellMap = null;
-            S._userMarks.rowMap = null;
-            S._userMarks.rowSet = null;
-            S._userMarks.cellTime = null;
-            S._userMarks.rowTime = null;
+            // P7：rects 替换与缓存失效收敛到 HighlightModel.applyUserMarksPayload
+            HighlightModel.applyUserMarksPayload(S, m.userMarks);
         } else if ('userMarks' in m && (_skipReason1 || _inGuard1)) {
             dbg('⏭ skip userMarks override (full-data) reason=' + (m.reason || '') + ' inGuard=' + !!_inGuard1 + ' incoming=' + ((m.userMarks && m.userMarks.length) || 0) + ' local=' + ((S._userMarks && S._userMarks.rects && S._userMarks.rects.length) || 0));
         }
@@ -1138,17 +1035,8 @@ window.addEventListener('message', function (e) {
             try { renderTable(); } catch (_) { /* ignore */ }
             return;
         }
-        var um = m.userMarks;
-        if (um && Array.isArray(um)) {
-            S._userMarks.rects = um;
-        } else {
-            S._userMarks.rects = [];
-        }
-        S._userMarks.cellMap = null;
-        S._userMarks.rowMap = null;
-        S._userMarks.rowSet = null;
-        S._userMarks.cellTime = null;
-        S._userMarks.rowTime = null;
+        // P7：rects 替换与缓存失效收敛到 HighlightModel.applyUserMarksPayload
+        HighlightModel.applyUserMarksPayload(S, m.userMarks);
         dbg('🖍 userMarksUpdated applied len=' + _incomingLen + ' inGuard=' + !!_inGuard2);
         try { renderTable(); } catch (_) { /* ignore */ }
     } else if (m.type === 'pushDone') {
@@ -1197,7 +1085,24 @@ window.addEventListener('message', function (e) {
             try { renderTable(); } catch (_) {}
         }
     } else if (m.type === 'pushResult') {
+        // === 双发检测（2026-07-26 加固） ===
+        // 后端 onComplete 曾同时 showPushResult + 裸 postMessage 发过两次同源 pushResult，
+        // 导致 05a 消费两遍：第二次因 _lastPushBatchTsIds 已被首次消费清空，会用当前时间戳
+        // 重刷 _pushFailedTime → 与 modified/added 高亮时间戳竞争 → 视觉错乱。
+        // 此处在 500ms 内若重复收到 pushResult，则打警告到 console 便于排查（不阻断流程）。
+        var _prNow = Date.now();
+        if (S._lastPushResultRecvAt && (_prNow - S._lastPushResultRecvAt) < 500) {
+            console.warn('[推送诊断][webview] ⚠ 500ms 内重复收到 pushResult！间隔=' + (_prNow - S._lastPushResultRecvAt) + 'ms'
+                + ' | 上次 failures=' + (S._lastPushResultFailuresCnt || 0)
+                + ' | 本次 failures=' + (m.failures ? m.failures.length : 0)
+                + ' → 疑似扩展端仍在双发，请核查 BaseEditorProvider.onComplete 与 pushHandler。');
+        }
+        S._lastPushResultRecvAt = _prNow;
+        S._lastPushResultFailuresCnt = (m.failures ? m.failures.length : 0);
         console.log('[推送诊断][webview] 收到 pushResult | successCount=' + (m.successCount || 0) + ' total=' + (m.total != null ? m.total : '?') + ' failures.length=' + (m.failures ? m.failures.length : 0) + ' failures.tsIds=' + (m.failures ? m.failures.map(function (f) { return f.tsId; }).join(',') : ''));
+        console.log('[推送诊断][webview] pushResult 前置状态 | _lastPushBatchTsIds=' + (S._lastPushBatchTsIds ? Array.from(S._lastPushBatchTsIds).join(',') : '(null)')
+            + ' | _lastPushBatchRowIndices=' + (S._lastPushBatchRowIndices ? '[' + S._lastPushBatchRowIndices.join(',') + ']' : '(null)')
+            + ' | _pushFailedTsIds(before)=' + (S._pushFailedTsIds ? Array.from(S._pushFailedTsIds).join(',') : '(空)'));
         S._pushing = false;
         if (typeof updatePushBtn === 'function') updatePushBtn();
         // 保险：若 _lastPushBatchRowIndices 意外丢失，用 _lastPushBatchTsIds 反推，确保 showPushResultModal 能正确清理
@@ -1265,29 +1170,12 @@ window.addEventListener('message', function (e) {
     } else if (m.type === 'showModal') {
         showXsInfoModal(m.modalType || 'info', m.title || '', m.message || '');
     } else if (m.type === 'clearAllHighlights') {
-        // 清除所有高亮状态：编辑变更高亮、推送失败标记、新增行标记、删除行信息、用户标记
-        S._highlightedCells = null;
-        S._highlightedTime = 0;
-        S._pushFailedTsIds = new Set();
-        S._pushFailedReasons = new Map();
-        S._pushFailedTime = new Map();
-        // 与 _lastPushBatchTsIds 成对清空：避免 pushDone/pushResult/pushError 兜底
-        // 逻辑读到过期的批次行号，误清与本次无关的 mods/detailMods/addedRowSet。
-        S._lastPushBatchTsIds = new Set();
-        S._lastPushBatchRowIndices = null;
-        S._addedRowSet = new Set();
-        S._addedInfos = [];
-        S._deletedInfos = [];
-        S._userMarks.rects = [];
-        S._userMarks.cellMap = null;
-        S._userMarks.rowMap = null;
-        S._userMarks.rowSet = null;
-        S._userMarks.cellTime = null;
-        S._userMarks.rowTime = null;
-        if (S._detailModCellKeys) S._detailModCellKeys.clear();
+        // 「clearAllHighlights 消息」全清策略：详见 HighlightModel.resetAllHighlights 说明
+        HighlightModel.resetAllHighlights(S);
         // 高亮源全清后，与之绑定的过滤开关也需要复位，否则页面变空但按钮仍激活，
         // 用户看不到任何行且无提示。与 _restorePushFailures / addedInfos / deletedInfos
-        // 分支「数据没了就关 toggle」保持一致的语义。
+        // 分支「数据没了就关 toggle」保持一致的语义。UI toggle 属于视图状态，
+        // 不并入 HighlightModel。
         if (S._failedOnly) S._failedOnly = false;
         if (S._modifiedOnly) S._modifiedOnly = false;
         if (S._addedOnly) S._addedOnly = false;

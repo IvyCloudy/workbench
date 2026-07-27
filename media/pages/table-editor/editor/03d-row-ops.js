@@ -274,6 +274,8 @@ function copyRowInline() {
     var headers0 = S.data.headers || [];
     var tsCol0 = headers0.indexOf('testcase_id');
     var tcCol0 = headers0.indexOf('testCaseNo');
+    if (tsCol0 >= 0) newRow[tsCol0] = genUuidV4();
+    if (tcCol0 >= 0) newRow[tcCol0] = '';
     S.data.rows.splice(at, 0, newRow);
     // 同步转移高亮/修改集合（与 insertRow 一致，_addedRowSet 已合并到 shiftRowIndex 内）
     _shiftRowIdxHighlights('insert', at);

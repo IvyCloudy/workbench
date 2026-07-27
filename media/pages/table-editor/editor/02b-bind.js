@@ -422,7 +422,9 @@ function bindDocument() {
                     // 去掉末尾多余的空行（很多剪贴板会带一个尾随换行）
                     var raw = text.replace(/\r\n?/g, '\n');
                     if (raw.length > 0 && raw.charAt(raw.length - 1) === '\n') raw = raw.slice(0, -1);
-                    grid = raw.split('\n').map(function (line) { return line.split('\t'); });
+                    // 使用支持引号转义的解析器：单元格内换行/制表符被双引号包裹后
+                    // 视为字段内容，不会误判为行/列分隔符（避免含换行单元格被拆成多行）
+                    grid = (typeof _parseTsv === 'function') ? _parseTsv(raw, '\t') : raw.split('\n').map(function (line) { return line.split('\t'); });
                 }
                 if (!grid.length) return;
                 // 单格内容 + 多格选区 → 把这 1 格填充到整个选区（Excel 行为）

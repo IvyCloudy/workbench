@@ -24,9 +24,57 @@ function _cellValueToTsv(v) {
         return (typeof formatCellValue === 'function') ? formatCellValue(v) : v.join('; ');
     }
     if (typeof v === 'object') {
-        try { return JSON.stringify(v); } catch (_e) { return ''; }
+        // 美化输出（带换行与缩进），避免把对象/对象数组压成一行，
+        // 复制步骤描述等内容时保留可读的多行结构
+        try { return JSON.stringify(v, null, 2); } catch (_e) { return ''; }
     }
     return String(v);
+}
+
+// ==================== 剪贴板辅助：单元格值 → 带转义的 TSV 字段 ====================
+// 仅当字段含 "、\t、\n、\r 时才用双引号包裹，内部 " 转义为 ""。
+// 这样单元格内的换行/制表符在 TSV 中被当作“字段内容”而非“行/列分隔符”，
+// 解决 Ctrl+C 含换行单元格 → Ctrl+V 被误拆成多行 的问题。
+function _quoteTsvField(s) {
+    s = (s == null) ? '' : String(s);
+    if (s.indexOf('"') >= 0 || s.indexOf('\t') >= 0 || s.indexOf('\n') >= 0 || s.indexOf('\r') >= 0) {
+        return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+}
+
+// 支持引号转义的 TSV/CSV 解析器：引号内 \n / \t / " 均视为字段内容。
+// 无引号字段行为与简单 split('\t')/split('\n') 一致，兼容从 Excel 复制的纯 TSV。
+function _parseTsv(text, colDelim) {
+    if (colDelim === undefined) colDelim = '\t';
+    var rows = [];
+    var row = [];
+    var field = '';
+    var inQuotes = false;
+    var i, n = text.length;
+    for (i = 0; i < n; i++) {
+        var ch = text.charAt(i);
+        if (inQuotes) {
+            if (ch === '"') {
+                if (i + 1 < n && text.charAt(i + 1) === '"') { field += '"'; i++; }
+                else { inQuotes = false; }
+            } else {
+                field += ch;
+            }
+        } else {
+            if (ch === '"') {
+                inQuotes = true;
+            } else if (ch === '\n') {
+                row.push(field); rows.push(row); row = []; field = '';
+            } else if (ch === colDelim) {
+                row.push(field); field = '';
+            } else {
+                field += ch;
+            }
+        }
+    }
+    row.push(field); rows.push(row);
+    return rows;
 }
 
 function _writeSystemClipboard(tsv, successMsg, failMsg) {
@@ -83,8 +131,9 @@ function copyCell() {
                 // 对象/对象数组需要深拷贝，避免后续粘贴/编辑共享引用污染源数据
                 var _copied = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(v) : (Array.isArray(v) ? v.slice() : v);
                 line.push(_copied);
-                // TSV：单元格内 \t / \r / \n 替换为空格，避免列错位
-                _tsvLine.push(_cellValueToTsv(v).replace(/\t/g, ' ').replace(/\r?\n/g, ' '));
+                // TSV：单元格值用引号转义（含 \t / \n / " 时包裹），使单元格内换行
+                // 在 Ctrl+V 解析时被视为字段内容而非行分隔符，避免换行丢失/错位
+                _tsvLine.push(_quoteTsvField(_cellValueToTsv(v)));
             }
             grid.push(line);
             _lines.push(_tsvLine.join('\t'));
@@ -108,7 +157,9 @@ function copyCell() {
     // 单元格深拷贝（含对象 / 对象数组），避免后续粘贴或编辑导致引用共享污染源数据
     S.clip = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(v0) : (Array.isArray(v0) ? v0.slice() : v0);
     // 同步写入系统剪贴板（单格值），使 Ctrl+V 也可用；toast 由 _writeSystemClipboard 统一触发
-    var _tsvSingle = _cellValueToTsv(v0).replace(/\t/g, ' ').replace(/\r?\n/g, ' ');
+    // 单格复制保留内部换行，并用双引号转义包裹，使 Ctrl+V 解析时不会把单元格内换行
+    // 误判为行分隔符（步骤描述等多行内容才能完整保留）
+    var _tsvSingle = _quoteTsvField(_cellValueToTsv(v0));
     _writeSystemClipboard(_tsvSingle, '已复制');
 }
 

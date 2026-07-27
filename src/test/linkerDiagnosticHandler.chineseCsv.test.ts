@@ -3,7 +3,7 @@
  * ----------------------------------------------------------------------------
  * 场景：examples/case_example.csv 那类中文表头 CSV
  *   首行示例：testcase_id,名称,路径,案例描述,执行方式,案例类型,优先级,前置条件,步骤描述,预期结果
- * 期望：linkAndAggregateCases 能通过「路径 → path」映射兜底命中 type=3。
+ * 期望：linkAndAggregateCases 能通过「路径 → path」映射兜底命中 type=2。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs';
@@ -22,7 +22,7 @@ const pointList: PointItem[] = [
     { pointId: 'LGN-002', pointName: '密码错误', pointPath: POINT_PATH },
 ];
 
-// 中文表头 CSV：两条数据，路径与 pointList 一致 → 期望 type=3 命中
+// 中文表头 CSV：两条数据，路径与 pointList 一致 → 期望 type=2 命中
 const csvContent = [
     'testcase_id,名称,路径,案例描述,执行方式,案例类型,优先级,前置条件,步骤描述,预期结果',
     'TC001,登录成功,登录模块/账号密码登录,验证正常登录,手工,功能点类,高,已注册,步骤1: 输入账号,登录成功',
@@ -42,16 +42,16 @@ describe('linkerDiagnosticHandler · 中文表头 CSV 兼容', () => {
         } catch { /* ignore */ }
     });
 
-    it('中文表头 CSV：应通过路径兜底匹配（type=3），data 非空', async () => {
+    it('中文表头 CSV：应通过路径兜底匹配（type=2），data 非空', async () => {
         const envelope = await linkAndAggregateCases(pointList, CSV_FILE);
 
         expect(envelope.errorMsg).toBe('');
         expect(envelope.total).toBe(2);
         expect(envelope.stats?.totalRecords).toBe(2);
-        // 中文 CSV 无 parent_id → 只能命中 type=3
-        expect(envelope.stats?.typeCount.type3).toBe(2);
+        // 中文 CSV 无 parent_id → 只能命中 type=2
+        expect(envelope.stats?.typeCount.type2).toBe(2);
         expect(envelope.stats?.typeCount.type1).toBe(0);
-        expect(envelope.stats?.typeCount.type2).toBe(0);
+        expect(envelope.stats?.typeCount.type3).toBe(0);
 
         // 数据结构：pointKey → 案例数组，caseName 取「名称」列
         const keys = Object.keys(envelope.data);

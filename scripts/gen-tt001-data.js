@@ -169,7 +169,7 @@ console.log(`✅ 已生成 md：登录模块=${lgnPoints.length}点，订单模�
  * @param opts
  *   domain       'login' | 'order'
  *   points       该 domain 的 pointList
- *   otherPath    与目标 path 不同的路径（造 type=2）
+ *   otherPath    与目标 path 不同的路径（造 type=3：仅 parent_id 命中）
  *   counts       { type1, type2, type3, orphan }
  *   idStart      testcase_id 起始序号
  *   stripCount   带尾号剥离的 case 条数（-1/-2/-3）
@@ -197,17 +197,17 @@ function buildCases(opts) {
         results.push(makeCase(domain, uuidBase, idSeq++, parentId, targetPath, p.pointName, 'type1'));
     }
 
-    // -------- type=2：parent_id ✅ + path ❌ --------
-    for (let i = 0; i < counts.type2; i++) {
+    // -------- type=3：parent_id ✅ + path ❌（仅 parent_id 命中） --------
+    for (let i = 0; i < counts.type3gen ?? counts.type2; i++) {
         const p = shuffledPoints[i % shuffledPoints.length];
-        results.push(makeCase(domain, uuidBase, idSeq++, p.pointId, otherPath, p.pointName, 'type2'));
+        results.push(makeCase(domain, uuidBase, idSeq++, p.pointId, otherPath, p.pointName, 'type3'));
     }
 
-    // -------- type=3：parent_id ❌ + path ✅ --------
-    for (let i = 0; i < counts.type3; i++) {
+    // -------- type=2：parent_id ❌ + path ✅（仅 path 兜底命中） --------
+    for (let i = 0; i < counts.type2gen ?? counts.type3; i++) {
         // 用 md 里不存在的 pointId：NOPOINT-XXX
         const fakeId = `NOPOINT-${String(idSeq).padStart(4, '0')}`;
-        results.push(makeCase(domain, uuidBase, idSeq++, fakeId, targetPath, `疑似 ${domain} 场景 ${i + 1}`, 'type3'));
+        results.push(makeCase(domain, uuidBase, idSeq++, fakeId, targetPath, `疑似 ${domain} 场景 ${i + 1}`, 'type2'));
     }
 
     // -------- 孤儿：parent_id ❌ + path ❌ --------
@@ -267,7 +267,9 @@ function makeCase(domain, uuidBase, seq, parentId, casePath, pointName, tag) {
 // ============================================================================
 // 【5】三个案例文件的分布
 // ============================================================================
-// 登录 500：350×type1 + 100×type2 + 40×type3 + 10 孤儿
+// 登录 500：350×type1 + 100×type3(仅parent_id) + 40×type2(仅path) + 10 孤儿
+// 说明：blocks 里 type2 计数组实际用于生成「仅 parent_id 命中(type3)」记录、
+//       type3 计数组用于生成「仅 path 命中(type2)」记录（type 对调后保持一致）
 const loginBuild = buildCases({
     domain: 'login',
     points: lgnPoints,
@@ -277,7 +279,7 @@ const loginBuild = buildCases({
     stripCount: 18,
 });
 
-// 订单 400：280×type1 + 80×type2 + 30×type3 + 10 孤儿
+// 订单 400：280×type1 + 80×type3(仅parent_id) + 30×type2(仅path) + 10 孤儿
 const orderBuild = buildCases({
     domain: 'order',
     points: ordPoints,
@@ -287,7 +289,7 @@ const orderBuild = buildCases({
     stripCount: 10,
 });
 
-// mixed 100：60×type1 + 20×type2 + 15×type3 + 5 孤儿
+// mixed 100：60×type1 + 20×type3(仅parent_id) + 15×type2(仅path) + 5 孤儿
 // mixed 里两个域各取一半，简单起见让 mixed 全部用登录域点做匹配（path=登录）
 const mixedBuildA = buildCases({
     domain: 'mixed',

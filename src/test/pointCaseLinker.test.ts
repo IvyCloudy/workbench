@@ -100,7 +100,7 @@ describe('pointCaseLinker', () => {
         expect(r.stats.orphanRecords).toBe(0);
     });
 
-    it('基本匹配：type=2（仅 parent_id 命中，path 不等）', async () => {
+    it('基本匹配：type=3（仅 parent_id 命中，path 不等）', async () => {
         const fp = '/mock/case2.yaml';
         mockRecordsByPath[fp] = [
             {
@@ -112,21 +112,21 @@ describe('pointCaseLinker', () => {
         ];
         const { linkPointsToCases } = await importLinker();
         const r = await linkPointsToCases(fp, POINTS);
-        expect(r.byPoint['LGN-001_账号密码登录'][0].type).toBe(2);
-        expect(r.stats.matchedByType.type2).toBe(1);
+        expect(r.byPoint['LGN-001_账号密码登录'][0].type).toBe(3);
+        expect(r.stats.matchedByType.type3).toBe(1);
     });
 
-    it('基本匹配：type=2（仅 parent_id 命中，path 缺失）', async () => {
+    it('基本匹配：type=3（仅 parent_id 命中，path 缺失）', async () => {
         const fp = '/mock/case2b.yaml';
         mockRecordsByPath[fp] = [
             { testcase_id: 'C-102', parent_id: 'LGN-001', name: 'x' },
         ];
         const { linkPointsToCases } = await importLinker();
         const r = await linkPointsToCases(fp, POINTS);
-        expect(r.byPoint['LGN-001_账号密码登录'][0].type).toBe(2);
+        expect(r.byPoint['LGN-001_账号密码登录'][0].type).toBe(3);
     });
 
-    it('基本匹配：type=3（仅 path 命中）', async () => {
+    it('基本匹配：type=2（仅 path 命中）', async () => {
         const fp = '/mock/case3.yaml';
         mockRecordsByPath[fp] = [
             {
@@ -140,10 +140,10 @@ describe('pointCaseLinker', () => {
         const r = await linkPointsToCases(fp, POINTS);
         // path 命中 → 有两个 point 都在该 path 下（LGN-001 / LGN-002）
         // 取第一个（Map 迭代顺序即插入顺序）
-        const totalType3 = r.stats.matchedByType.type3;
-        expect(totalType3).toBe(1);
+        const totalType2 = r.stats.matchedByType.type2;
+        expect(totalType2).toBe(1);
         expect(r.stats.matchedByType.type1).toBe(0);
-        expect(r.stats.matchedByType.type2).toBe(0);
+        expect(r.stats.matchedByType.type3).toBe(0);
     });
 
     it('孤儿记录：parent_id 和 path 都匹配不上', async () => {
@@ -172,13 +172,13 @@ describe('pointCaseLinker', () => {
             {
                 testcase_id: 'C-A1',
                 parent_id: ['LGN-001', 'ORD-001'],  // 命中不同 point → Q14 保留最强 type 的第一个
-                path: '账户中心/登录模块',   // LGN-001 是 type=1，ORD-001 是 type=2
+                path: '账户中心/登录模块',   // LGN-001 是 type=1，ORD-001 是 type=3（path 不匹配）
                 name: 'multi',
             },
         ];
         const { linkPointsToCases } = await importLinker();
         const r = await linkPointsToCases(fp, POINTS);
-        // 只归到 LGN-001（type=1 > type=2）
+        // 只归到 LGN-001（type=1 > type=3）
         expect(r.byPoint['LGN-001_账号密码登录']).toHaveLength(1);
         expect(r.byPoint['LGN-001_账号密码登录'][0].type).toBe(1);
         expect(r.byPoint['ORD-001_创建订单']).toBeUndefined();
@@ -230,8 +230,8 @@ describe('pointCaseLinker', () => {
         ];
         const { linkPointsToCases } = await importLinker();
         const r = await linkPointsToCases(fp, POINTS, { stripParentIdTailIndex: false });
-        // parent_id 无命中 → path 命中 → type=3
-        expect(r.stats.matchedByType.type3).toBe(1);
+        // parent_id 无命中 → path 命中 → type=2
+        expect(r.stats.matchedByType.type2).toBe(1);
         expect(r.stats.strippedParentIds).toBe(0);
     });
 
@@ -285,17 +285,17 @@ describe('pointCaseLinker', () => {
         mockRecordsByPath[fp] = [
             {
                 testcase_id: 'C-MULTI',
-                parent_id: ['ORD-001'],   // ORD-001 是 type=2（因 path 不匹配 交易中心/订单模块）
-                path: '账户中心/登录模块',  // path 命中 LGN-001/LGN-002 → type=3
+                parent_id: ['ORD-001'],   // ORD-001 是 type=3（因 path 不匹配 交易中心/订单模块）
+                path: '账户中心/登录模块',  // path 命中 LGN-001/LGN-002 → type=2
                 name: 'multi-hit',
             },
         ];
         const { linkPointsToCases } = await importLinker();
         const r = await linkPointsToCases(fp, POINTS);
-        // ORD-001 因 path 不同 → 是 type=2；path 命中 LGN-001/LGN-002 → type=3
-        // Q14 取最强 type=2 → 只归到 ORD-001
-        expect(r.byPoint['ORD-001_创建订单']).toHaveLength(1);
-        expect(r.byPoint['ORD-001_创建订单'][0].type).toBe(2);
+        // ORD-001 因 path 不同 → 是 type=3；path 命中 LGN-001/LGN-002 → type=2
+        // Q14 取最强 type=2（path 命中）→ 只归到 LGN-001
+        expect(r.byPoint['LGN-001_账号密码登录']).toHaveLength(1);
+        expect(r.byPoint['LGN-001_账号密码登录'][0].type).toBe(2);
         expect(r.stats.multiHitCases).toContain('C-MULTI');
     });
 

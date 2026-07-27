@@ -2,7 +2,7 @@
  * pointCaseLinker · 路径比对时尾部斜杠兼容
  * ----------------------------------------------------------------------------
  * 验证：比对两侧（md 侧 pointPath vs 案例侧 path）任意一方带尾部斜杠、另一方不带，
- *   归一化后都应视为同一路径，兼容命中（type=1 / type=3）。
+ *   归一化后都应视为同一路径，兼容命中（type=1 / type=2）。
  *   依据：normalizePointPath 的 .replace(/^\/|\/$/g, '') 去除首尾斜杠。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -82,7 +82,7 @@ describe('pointCaseLinker · 路径尾部斜杠比对兼容', () => {
         expect(item.casePath).toBe(EXPECT_PATH);
     });
 
-    it('type=3：parent_id 缺失，仅靠 path 兜底，尾 / 有无兼容', async () => {
+    it('type=2：parent_id 缺失，仅靠 path 兜底，尾 / 有无兼容', async () => {
         const mdPath = path.join(TMP_DIR, 'p3.md');
         const yamlPath = path.join(TMP_DIR, 'c3.yaml');
         fs.writeFileSync(mdPath, mdContent('功能条目：账户中心/登录模块'), 'utf-8');
@@ -94,7 +94,7 @@ describe('pointCaseLinker · 路径尾部斜杠比对兼容', () => {
 
         const item = result.byPoint['LGN-001_账号登录']?.[0];
         expect(item).toBeDefined();
-        expect(item.type).toBe(3);
+        expect(item.type).toBe(2);
         expect(item.casePath).toBe(EXPECT_PATH);
     });
 

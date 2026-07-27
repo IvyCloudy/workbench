@@ -213,7 +213,7 @@ sequenceDiagram
 **关键容错**：
 - 转义竖线 `\|` 用占位符保护，避免被误拆列
 - 表头分隔行 `| --- |` 自动跳过
-- pointId 为空可用 pointName 兜底（保证仅有名称的要点也能通过 path 匹配 type=3）
+- pointId 为空可用 pointName 兜底（保证仅有名称的要点也能通过 path 匹配 type=2）
 
 #### 3.2.6 `detectCsvHeaderOptions(csv)` — 中文表头嗅探
 底层引擎默认按英文字段名（`parent_id / path / testcase_id / name`）取值。当案例文件是"中文表头 CSV"（如 `名称,路径,前置条件,...`），引擎会全部取空 → 0 命中。
@@ -229,7 +229,7 @@ sequenceDiagram
 | `preconditionFields` | 前置条件 / 前置 / preconditions / pre_condition（数组） |
 | `expectedFields` | 预期结果 / 预期 / expected / expectedResult（数组） |
 
-**能力天花板**：中文 CSV 模板无 `parent_id` 列 → 仅能命中 `type=3`（path 兜底）。这是**数据模型的天花板，非代码缺陷**。
+**能力天花板**：中文 CSV 模板无 `parent_id` 列 → 仅能命中 `type=2`（path 兜底）。这是**数据模型的天花板，非代码缺陷**。
 
 ---
 
@@ -312,7 +312,7 @@ buildIndex → loadRecords → matchCore → emitTelemetry
 }
 ```
 
-**要点**：pointId 为空的点仍会进入 `byPath`（保证无编号的要点也能通过 path 匹配 type=3）。
+**要点**：pointId 为空的点仍会进入 `byPath`（保证无编号的要点也能通过 path 匹配 type=2）。
 
 #### 3.4.2 案例文件解析 + LRU 缓存 `loadRecords`
 ```ts
@@ -546,14 +546,14 @@ sequenceDiagram
 |---|---|
 | [src/test/pointCaseLinker.test.ts](../../src/test/pointCaseLinker.test.ts) | 引擎层 19 项：基础三档匹配、parent_id 数组/字符串/尾号剥离、path 归一化、重复 pointId、multiHit、缓存命中 |
 | [src/test/pointCaseLinker.integration.test.ts](../../src/test/pointCaseLinker.integration.test.ts) | 引擎层真实样例集成验证：yaml/json/csv 三类共 1000 条案例 + 200 个点，验证缓存命中 |
-| [src/test/linkerDiagnosticHandler.chineseCsv.test.ts](../../src/test/linkerDiagnosticHandler.chineseCsv.test.ts) | 应用层：中文表头 CSV → type=3 兜底命中 + 英文表头回归 |
+| [src/test/linkerDiagnosticHandler.chineseCsv.test.ts](../../src/test/linkerDiagnosticHandler.chineseCsv.test.ts) | 应用层：中文表头 CSV → type=2 兜底命中 + 英文表头回归 |
 
 ## 附录 C：常见问题排查
 
 | 现象 | 可能原因 | 排查步骤 |
 |---|---|---|
 | envelope.total = 0 且 errorMsg 空 | 全部记录变孤儿 | 看 `stats.totalOrphan` 是否等于 `totalRecords`；进一步看 md 的 pointPath 与 case 的 path 是否同构 |
-| CSV 命中全为 type=3 | 中文表头 CSV 无 parent_id 列 | 属于**数据模型天花板**，非缺陷；如需 type=1/2 请在 CSV 加 `parent_id` 或"父点编号"列 |
+| CSV 命中全为 type=2 | 中文表头 CSV 无 parent_id 列 | 属于**数据模型天花板**，非缺陷；如需 type=1/3 请在 CSV 加 `parent_id` 或"父点编号"列 |
 | 编辑后查看仍是旧内容 | fileCache 用 mtime，未保存不失效 | **保存 md / case 后再查看**（诊断命令已不再提供"清缓存"选项） |
 | 绑定文件被外部改动没生效 | cacheByRoot 用 mtime，被外部改会自动失效 | 若立即需要生效，可 `Reload Window` 或调 `clearCache()` |
 | 装饰器徽标延迟 | globalBoundFileMap 有 5s TTL | 属于设计，写入侧已 `invalidate`；正常场景延迟 <1 秒 |

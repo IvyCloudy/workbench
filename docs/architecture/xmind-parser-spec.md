@@ -60,7 +60,7 @@ interface PointItem {
 ### 3.2 字段抽取
 
 - `pointName` = 五角星节点的 `title`
-- `pointId` = 五角星节点的**首个 label**；无 label → 空字符串（后续走 pointPath 匹配 type=3）
+- `pointId` = 五角星节点的**首个 label**；无 label → 空字符串（后续走 pointPath 匹配 type=2）
 - 多 label 时取首个，并追加一条 `warnings`
 
 ### 3.3 pointPath 组装（P1 语义）

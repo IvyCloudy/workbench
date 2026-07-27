@@ -2,7 +2,7 @@
  * linkerDiagnosticHandler · pointId 为空的测试要点也支持查看关联案例
  * ----------------------------------------------------------------------------
  * 验证：md 表格中「序号/编号」列为空时，测试要点不再被丢弃，而是以测试点名称兜底
- *   进入 pointList，并凭借 pointPath 参与 path 匹配（type=3），从而可查看关联案例。
+ *   进入 pointList，并凭借 pointPath 参与 path 匹配（type=2），从而可查看关联案例。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs';
@@ -50,7 +50,7 @@ describe('linkerDiagnosticHandler · pointId 为空的测试要点也支持查�
         expect(emptyOne.pointPath).toBe('账户中心/登录模块/账号登录');
     });
 
-    it('pointId 为空也能通过 path 匹配案例（type=3）查看关联案例', async () => {
+    it('pointId 为空也能通过 path 匹配案例（type=2）查看关联案例', async () => {
         const mdPath = path.join(TMP_DIR, 'emptyPid2.md');
         const yamlPath = path.join(TMP_DIR, 'case.yaml');
         fs.writeFileSync(mdPath, mdContent('功能条目：账户中心/登录模块', ['|  | 账号登录 |']), 'utf-8');
@@ -66,7 +66,7 @@ describe('linkerDiagnosticHandler · pointId 为空的测试要点也支持查�
         const result = await linkPointsToCases(yamlPath, list, { enableCache: false });
         const key = '账号登录_账号登录';
         expect(result.byPoint[key]).toBeDefined();
-        expect(result.byPoint[key][0].type).toBe(3);   // 仅靠 path 兜底命中
+        expect(result.byPoint[key][0].type).toBe(2);   // 仅靠 path 兜底命中
     });
 
     it('混合：部分有编号、部分无编号，全部进入 pointList', async () => {

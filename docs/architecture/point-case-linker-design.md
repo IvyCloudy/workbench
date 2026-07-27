@@ -369,11 +369,11 @@ r = await linkPointsToCases(filePath, pointList, csvOpts ?? {});
 
 | 场景 | parent_id | path | 可命中类型 |
 |---|:---:|:---:|:---|
-| 中文 CSV（`examples/case_example.csv`） | ❌ 模板无此列 | ✅ 「路径」列 | 仅 `type=3`（path 兜底） |
+| 中文 CSV（`examples/case_example.csv`） | ❌ 模板无此列 | ✅ 「路径」列 | 仅 `type=2`（path 兜底） |
 | 中文 CSV + 手动加 `parent_id` 列 | ✅ | ✅ | `type=1` / `type=2` / `type=3` 全档位 |
 | 英文 CSV / YAML / JSON | ✅ | ✅ | 全档位（默认行为） |
 
-> ⚠️ 中文模板里没有 `parent_id` 列，因此只能命中 `type=3`。这是**数据模型的天花板，非代码缺陷**。如需 type=1/2，请在 CSV 模板里增加一列 `parent_id`（列名可用英文或使用中文别名「父点编号」/「所属要点」，代码已自动识别）。
+> ⚠️ 中文模板里没有 `parent_id` 列，因此只能命中 `type=2`。这是**数据模型的天花板，非代码缺陷**。如需 type=1/3，请在 CSV 模板里增加一列 `parent_id`（列名可用英文或使用中文别名「父点编号」/「所属要点」，代码已自动识别）。
 
 ---
 
@@ -438,7 +438,7 @@ export async function parseMdToPointListSilent(mdPath: string): Promise<PointIte
 // 2. 案例文件解析走 LRU 缓存（key = filePath + mtimeMs + size）
 // 3. 单文件解析失败：抛出异常由上层聚合层转成 envelope.errorMsg
 // 4. 每个案例记录只做一遍匹配：先原值 parent_id 查、命中失败再剥离尾号 -N 查
-//    parent_id 完全失败才落到 path 兜底 (→ type=3)
+//    parent_id 完全失败才落到 path 兜底 (→ type=2)
 export async function linkPointsToCases(
     filePath: string,
     pointList: PointItem[],
@@ -549,7 +549,7 @@ flowchart TD
 **契约要点**：任何路径下都返回同一形状的 `LinkedCasesEnvelope`；调用方永远只需要检查 `envelope.errorMsg` 与 `envelope.total`。
 
 **中文 CSV 特殊约束**：
-- 中文 CSV 命中类型受限（仅 `type=3`）不会走 errorMsg 分支，而是**成功返回**且 `stats.typeCount.type3 > 0`；
+- 中文 CSV 命中类型受限（仅 `type=2`）不会走 errorMsg 分支，而是**成功返回**且 `stats.typeCount.type2 > 0`；
 - 若中文 CSV 完全无「路径」列 → 全部记录变孤儿，`envelope.total == 0` 且 `stats.totalOrphan == totalRecords`，UI 层可据此提示用户补 `parent_id` 或 `路径` 列。
 
 ---
@@ -628,8 +628,8 @@ flowchart TD
 | `matchedRecords` | string | 至少命中一次的记录数 | |
 | `orphanRecords` | string | 完全未命中的记录数（既没 parent_id 也没 path 命中） | 关键治理指标 |
 | `type1` | string | type=1（parent_id + path 同点）命中数 | 最强匹配 |
-| `type2` | string | type=2（仅 parent_id 命中）命中数 | |
-| `type3` | string | type=3（仅 path 兜底）命中数 | **中文 CSV 场景的默认档位** |
+| `type2` | string | type=2（仅 path 兜底）命中数 | **中文 CSV 场景的默认档位** |
+| `type3` | string | type=3（仅 parent_id 命中）命中数 | |
 | `strippedParentIds` | string | 触发 `-N` 尾号剥离规则的记录数 | 用于观察 parent_id 拆分行为占比 |
 
 #### `pointCaseLinker.duplicatePointId`（引擎层 · 错误事件，条件发）
@@ -708,5 +708,5 @@ strippedParentIds = "0"
 | [docs/requirements/point-case-linker-requirements.md](../requirements/point-case-linker-requirements.md) | 引擎层需求文档 |
 | `src/test/pointCaseLinker.test.ts` | 引擎层单元测试（19 项） |
 | `src/test/pointCaseLinker.integration.test.ts` | 引擎层真实样例集成验证（yaml/json/csv 三类共 1000 条） |
-| `src/test/linkerDiagnosticHandler.chineseCsv.test.ts` | 应用层中文表头 CSV 兼容验证（type=3 兜底 + 英文回归） |
+| `src/test/linkerDiagnosticHandler.chineseCsv.test.ts` | 应用层中文表头 CSV 兼容验证（type=2 兜底 + 英文回归） |
 | `examples/case_example.csv` | 中文表头 CSV 示例模板 |

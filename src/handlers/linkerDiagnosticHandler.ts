@@ -41,7 +41,7 @@ import {
 //       如果案例文件是「中文表头 CSV」（examples/case_example.csv 那类），
 //       首行会是 `名称,路径,前置条件,...`，直接用英文字段取值全部为空 → 0 命中。
 // 兼容策略：在调引擎前探测首行表头，命中中文关键字段时，把 LinkOptions 的
-//       字段名指向对应中文键。中文 CSV 无 parent_id 字段，因此只能命中 type=3
+//       字段名指向对应中文键。中文 CSV 无 parent_id 字段，因此只能命中 type=2
 //       （path 兜底），这是数据模型的天花板，非代码缺陷。
 // ============================================================================
 /** 中文 CSV 表头到引擎字段的映射：只覆盖 linker 需要的四个字段 */
@@ -380,7 +380,7 @@ export async function parseMdToPointListSilent(mdPath: string): Promise<PointIte
         const pname = (cells[nameIdx] || '').trim();
         // 仅当「测试点名称」为空才跳过；
         // pointId（序号/编号）为空时，用测试点名称兜底，保证「未填编号的测试要点」
-        // 也能进入 pointList，并凭借 pointPath 参与 path 匹配（type=3），
+        // 也能进入 pointList，并凭借 pointPath 参与 path 匹配（type=2），
         // 从而支持「查看关联案例」。
         if (!pname) continue;
         const pointId = pid || pname;

@@ -84,8 +84,8 @@
 | `matchedRecords` | number | 成功归到某个点下的案例数 |
 | `orphanRecords` | number | `parent_id` 与 `path` 均无法命中任何点的孤儿案例数 |
 | `matchedByType.type1` | number | 强关联（parent_id + path 双命中）案例数 |
-| `matchedByType.type2` | number | 仅 parent_id 命中案例数 |
-| `matchedByType.type3` | number | 仅 path 命中案例数 |
+| `matchedByType.type2` | number | 仅 path 命中案例数 |
+| `matchedByType.type3` | number | 仅 parent_id 命中案例数 |
 | `duplicatePointIds` | string[] | 传入的 pointList 中存在同名 pointId 的列表 |
 | `multiHitCases` | string[] | 同一案例同时命中多个不同点（脏数据兜底触发）的 testcase_id 列表 |
 | `strippedParentIds` | number | 因末尾 `-数字` 被剥离后才成功命中的案例数（用于观测数据质量） |
@@ -99,15 +99,15 @@
 | type | 命中条件 | 匹配强度 | 典型场景 |
 |------|---------|---------|---------|
 | **1** | `parent_id` 命中 **且** 归一化后的 `path` 与要点的 `pointPath` 相等 | **最强** | 案例撰写规范，双字段都对得上 |
-| **2** | 仅 `parent_id` 命中（`path` 缺失或与要点路径不一致） | 中等 | 案例迁移过程中路径尚未同步 |
-| **3** | 仅归一化后的 `path` 命中（`parent_id` 缺失或写错） | 最弱 | 序号丢失时的兜底匹配 |
+| **2** | 仅归一化后的 `path` 命中（`parent_id` 缺失或写错） | 中等 | 序号丢失时的兜底匹配 |
+| **3** | 仅 `parent_id` 命中（`path` 缺失或与要点路径不一致） | 最弱 | 案例迁移过程中路径尚未同步 |
 
 **优先级规则**：`type=1 > type=2 > type=3`（数值越小越可靠）。同一案例在候选点集合中，最终归属选取 **type 值最小的那个点**。
 
 **path 命中的兜底语义**（重要）：
 
 - 只要案例的 `parent_id` 命中了任何一个点（无论 path 是否也匹配），归属选取只在 `parent_id` 候选集合内做，`path` 不再引入额外的候选点。
-- 当且仅当 `parent_id` 完全无法命中任何点（缺失、写错、剥离后仍失败）时，`path` 匹配才作为最后一档兜底，产生 `type=3`。
+- 当且仅当 `parent_id` 完全无法命中任何点（缺失、写错、剥离后仍失败）时，`path` 匹配才作为最后一档兜底，产生 `type=2`。
 - 这样可以避免
 
 ---
@@ -126,7 +126,7 @@
 | 分号分隔 | `"LGN-001;ORD-001"` | 按 `;` 拆分为多值 |
 | 中文分隔 | `"LGN-001，ORD-001"` / `"LGN-001；ORD-001"` | 同样拆分 |
 | 末尾拼接子序号 | `"LGN-001-1"` / `"LGN-002-12"` | 见下方"末尾剥离"规则 |
-| 空值 | `null` / `""` | 该案例不通过 parent_id 匹配（仍可通过 path 匹配为 type=3） |
+| 空值 | `null` / `""` | 该案例不通过 parent_id 匹配（仍可通过 path 匹配为 type=2） |
 
 **末尾 `-数字` 剥离规则**（默认开启，可关）：
 
@@ -375,7 +375,7 @@ export interface CaseItem {
   testcase_id: string;
   caseName: string;
   caseDetail: string;   // 【前置条件】... 【预期结果】...
-  type: 1 | 2 | 3;      // 1: parent_id+path；2: 仅 parent_id；3: 仅 path
+  type: 1 | 2 | 3;      // 1: parent_id+path；2: 仅 path；3: 仅 parent_id
 }
 
 export interface LinkResult {
@@ -402,9 +402,9 @@ export interface LinkResult {
 | 编号 | 用例 |
 |------|------|
 | 1 | 基本匹配 · type=1（parent_id + path 双命中） |
-| 2 | 基本匹配 · type=2（path 不等） |
-| 3 | 基本匹配 · type=2（path 缺失） |
-| 4 | 基本匹配 · type=3（仅 path） |
+| 2 | 基本匹配 · type=3（path 不等） |
+| 3 | 基本匹配 · type=3（path 缺失） |
+| 4 | 基本匹配 · type=2（仅 path） |
 | 5 | 孤儿记录 · parent_id 和 path 都匹配不上 |
 | 6 | parent_id 数组 · 多归属拆分 + Q14 多命中兜底 |
 | 7 | parent_id 分隔字符串 · `LGN-001;ORD-001` |

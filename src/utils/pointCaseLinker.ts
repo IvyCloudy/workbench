@@ -8,8 +8,8 @@
  *    2. 输出主索引 byPoint（供上层直接消费）+ 反向索引 byCase（O(1) 反查）
  *    3. 匹配 type 分档：
  *         type=1  parent_id 命中 且 归一化 path 相等  （最强）
- *         type=2  仅 parent_id 命中                  （path 不等或缺失）
- *         type=3  仅 path 归一化命中                 （parent_id 不匹配/缺失）
+ *         type=2  仅 path 归一化命中                 （parent_id 不匹配/缺失）
+ *         type=3  仅 parent_id 命中                  （path 不等或缺失）
  *
  *  设计要点：
  *    - 用 Map 建索引，主循环 O(P + C × k)，避免嵌套遍历
@@ -45,7 +45,7 @@ export interface CaseItem {
     casePath: string;
     /** 【前置条件】/【步骤描述】/【预期结果】拼接文本，每行用 <p></p> 包裹 */
     caseDetail: string;
-    /** 匹配类型：1 parent_id+path、2 仅 parent_id、3 仅 path */
+    /** 匹配类型：1 parent_id+path、2 仅 path、3 仅 parent_id */
     type: 1 | 2 | 3;
 }
 
@@ -488,9 +488,9 @@ function buildIndex(pointList: PointItem[]): PointIndex {
 
     for (const p of pointList) {
         if (!p) continue;
-        // 只要有合法 pointPath,就纳入 byPath 索引,支持「按路径匹配」(type=3)。
+        // 只要有合法 pointPath,就纳入 byPath 索引,支持「按路径匹配」(type=2)。
         // 这与 pointId 是否为空无关——避免 pointId 为空字符串的要点被整体跳过,
-        // 从而无法凭 pointPath 参与路径兜底命中(type=3)。
+        // 从而无法凭 pointPath 参与路径兜底命中(type=2)。
         const nPath = normalizePointPath(p.pointPath);
         if (nPath) {
             const arr2 = byPath.get(nPath);
@@ -590,7 +590,7 @@ function matchCore(
             if (!points) continue;
             for (const p of points) {
                 const nPP = normalizePointPath(p.pointPath);
-                const t: 1 | 2 = nPath && nPP && nPath === nPP ? 1 : 2;
+                const t: 1 | 3 = nPath && nPP && nPath === nPP ? 1 : 3;
                 const cur = hits.get(p);
                 if (cur === undefined || t < cur) hits.set(p, t);
             }
@@ -598,9 +598,9 @@ function matchCore(
             void pid;
         }
 
-        // 2) 通过 path 命中：仅当 parent_id 未命中任何 point 时作为最后兜底，type=3
+        // 2) 通过 path 命中：仅当 parent_id 未命中任何 point 时作为最后兜底，type=2
         //    - 若 parent_id 已命中，则 path 仅参与"跨 pointId 歧义"检测（multiHit），不再进入归属候选
-        //      （避免同 pointPath 下多个不同要点被引入，造成 type=3 抢夺）
+        //      （避免同 pointPath 下多个不同要点被引入，造成 type=2 抢夺）
         // 用于 multiHit 检测的独立集合：只统计"跨 pointId 的真·候选歧义"
         const pathHitPids = new Set<string>();
         if (nPath) {
@@ -608,7 +608,7 @@ function matchCore(
             if (points) {
                 if (hits.size === 0) {
                     // parent_id 完全没命中 → path 兜底进入 hits
-                    for (const p of points) hits.set(p, 3);
+                    for (const p of points) hits.set(p, 2);
                 } else {
                     // parent_id 已命中 → path 仅用于 multiHit 检测
                     for (const p of points) pathHitPids.add(p.pointId);
@@ -667,7 +667,7 @@ function matchCore(
             caseName: String(rec[opts.caseNameField] ?? '').trim(),
             // casePath 落库同样走 normalizePointPath，保证与匹配（nPath）及 md 侧 pointPath
             // 同构：案例 path 用 \、／、·、首尾/、连续// 等写法都被归一化为「/ 分隔、无首尾斜杠」，
-            // 既让 type=1/type=3 命中，也避免展示层出现「\ 对 /」的不一致。
+            // 既让 type=1/type=2 命中，也避免展示层出现「\ 对 /」的不一致。
             casePath: nPath,
             caseDetail: buildCaseDetail(rec, opts.preconditionFields, opts.expectedFields),
             type: pickedType,

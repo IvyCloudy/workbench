@@ -20,7 +20,7 @@
  *    testCasePath      ← path
  *    testCaseName      ← name              （案例名称）
  *    testCaseDes       ← description       （案例描述）
- *    testType          ← test_type / 执行方式（空或'手工' → '手工'；其他 → '自动化'）
+ *    testType          ← test_type / 执行方式（'手工'/'UI自动化'/'接口自动化'/'自动化'/'半自动化' 原样保留；未填写或其它取值一律抛错，无默认值）
  *    type              ← 固定 '功能点类'
  *    priority          ← priority
  *    preCondition      ← preconditions     （数组按 \n 拼为字符串）
@@ -37,7 +37,7 @@
  *    testCasePath      ← 路径
  *    testCaseName      ← 名称
  *    testCaseDes       ← 案例描述
- *    testType          ← 执行方式（空或'手工' → '手工'；其他 → '自动化'）
+ *    testType          ← 执行方式（'手工'/'UI自动化'/'接口自动化'/'自动化'/'半自动化' 原样保留；未填写或其它取值一律抛错，无默认值）
  *    type              ← 案例类型（空 → '功能点类'）
  *    priority          ← 优先级
  *    preCondition      ← 前置条件
@@ -78,7 +78,7 @@
 // ============================================================================
 export interface MapErrorFields {
     caseTag: string;
-    reason: 'missingTestcaseId' | 'missingOperation' | 'missingStepDesc' | 'missingExpected' | 'invalidPath';
+    reason: 'missingTestcaseId' | 'missingOperation' | 'missingStepDesc' | 'missingExpected' | 'invalidPath' | 'invalidTestType';
     stepIdx?: number;
     rowIndex?: number;
 }
@@ -160,6 +160,26 @@ export function toLines(v: any): string[] {
 /** 把任意值按 \n 拼成单字符串（空值 → ''） */
 export function joinLines(v: any): string {
     return toLines(v).join('\n');
+}
+
+/** 「执行方式 / test_type」合法取值白名单 */
+const TEST_TYPE_VALUES = ['手工', 'UI自动化', '接口自动化', '自动化', '半自动化'];
+
+/**
+ * 校验「执行方式 / test_type」→ 接口 testType（严格白名单，无默认值）：
+ *   - 命中白名单（'手工' / 'UI自动化' / '接口自动化' / '自动化' / '半自动化'）→ 原样保留；
+ *   - 其它情况（含未填写 / 空值 / 仅空白 / 任意拼写错误的非空值）→ 抛结构化映射错误
+ *     （invalidTestType），由上层给出友好文案。
+ * 即：所有不符合白名单的取值（含空）一律报错，不再有默认回退。
+ */
+function resolveTestType(raw: any, caseTag: string, rowIndex?: number): string {
+    const v = toStr(raw).trim();
+    if (TEST_TYPE_VALUES.indexOf(v) !== -1) return v;
+    const detail = v === '' ? '未填写' : `取值 "${v}" 不合法`;
+    throw makeMapError(
+        `案例 [${caseTag}] 的「执行方式」${detail}，仅支持：${TEST_TYPE_VALUES.join(' / ')}。`,
+        { caseTag, reason: 'invalidTestType', rowIndex }
+    );
 }
 
 /**
@@ -322,9 +342,8 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
         );
     }
 
-    // testType：执行方式 → 空或'手工' → '手工'；其他 → '自动化'
-    const execMethod = toStr(row['执行方式']).trim();
-    const testType = (!execMethod || execMethod === '手工') ? '手工' : '自动化';
+    // testType：执行方式 → 严格白名单校验（resolveTestType）：命中白名单保留；未填写/其它取值一律抛错，无默认值
+    const testType = resolveTestType(row['执行方式'], caseTag, rowIndex);
 
     return {
         sourceId,
@@ -411,11 +430,8 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
         );
     }
 
-    // testType：执行方式 → 空或'手工' → '手工'；其他 → '自动化'
-    const testTypeRaw = row['test_type'] != null && String(row['test_type']).trim() !== ''
-        ? String(row['test_type']).trim()
-        : '';
-    const testType = (!testTypeRaw || testTypeRaw === '手工') ? '手工' : '自动化';
+    // testType：执行方式 → 严格白名单校验（resolveTestType）：命中白名单保留；未填写/其它取值一律抛错，无默认值
+    const testType = resolveTestType(row['test_type'], caseTag, rowIndex);
 
     return {
         sourceId,

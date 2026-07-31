@@ -14,6 +14,7 @@ describe('pushDataMapper · 推送案例路径反斜杠转正斜杠', () => {
             name: '账号登录',
             description: '验证账号登录基本流程',
             path: '账户中心\\登录模块\\账号登录',
+            test_type: '自动化',
             steps: [{ operation: '点击登录', data: ['输入账号'], ui_expected: ['进入首页'] }],
             preconditions: ['已注册'],
         };
@@ -27,6 +28,7 @@ describe('pushDataMapper · 推送案例路径反斜杠转正斜杠', () => {
             名称: '账号登录',
             案例描述: '验证账号登录基本流程',
             路径: '账户中心\\登录模块\\账号登录',
+            执行方式: '自动化',
             步骤描述: '步骤1:\n点击登录',
             预期结果: '步骤1:\n进入首页',
         };
@@ -40,6 +42,7 @@ describe('pushDataMapper · 推送案例路径反斜杠转正斜杠', () => {
             name: '混合',
             description: '路径分隔符兼容用例',
             path: '\\账户中心／登录模块·账号登录\\',
+            test_type: '自动化',
             steps: [{ operation: '操作', ui_expected: ['ok'] }],
         };
         const item = mapRowToCaseItem(row as any);
@@ -52,6 +55,7 @@ describe('pushDataMapper · 推送案例路径反斜杠转正斜杠', () => {
             name: '标准',
             description: '标准路径写法用例',
             path: '账户中心/登录模块/账号登录',
+            test_type: '自动化',
             steps: [{ operation: '操作', ui_expected: ['ok'] }],
         };
         const item = mapRowToCaseItem(row as any);

@@ -73,6 +73,9 @@ function renderTable() {
     // 重要：tbody 已被重建（旧 tr 全部丢弃），必须清空上一次渲染留下的可视区间缓存，
     // 否则 _renderVirtualBody 的 "same range" 短路会跳过填充，导致 tbody 始终为空、页面显示为空。
     S._vRange = null;
+    // 清空渲染期自动测量的行高（S._autoRowH）：数据集切换后旧行号可能对应完全不同的内容，
+    // 保留会给出错误的偏移；首次 _renderVirtualBody 会重新测量可见行、滚动时再补齐其余行。
+    S._autoRowH = {};
     // 3) 决定走哪条路径
     var useVirtual = S._viewRows.length >= XS_VIRTUAL_THRESHOLD;
     S._virtualOn = useVirtual;
@@ -864,6 +867,9 @@ function _renderAllBody() {
     var parts = new Array(view.length);
     for (var i = 0; i < view.length; i++) parts[i] = _buildRowHtml(view[i], tsIdColIdx);
     tbody.innerHTML = parts.join('') + _buildGhostRowsHtml(headers);
+      // 同步真实行高（展开步骤会把单行高度撑大，需要把每行 offsetHeight 写回 S._autoRowH，
+    //   否则后续切回虚拟模式 / 二次渲染时 _rowOffsets 仍按默认 36px 算，定位错位）
+    _syncRenderedRowHeights();
 }
 
 // 根据当前 DOM 中第一个未自定义高度的行测量真实默认行高，动态校正 XS_ROW_EST_HEIGHT。
@@ -893,11 +899,52 @@ function _computeRowOffsets() {
     for (var i = 0; i < view.length; i++) {
         offs[i] = acc;
         var ri = view[i];
-        var rh = S.rowHeights[ri];
+        // 高度来源优先级：用户手动调过的行高（S.rowHeights，用户 resize 通道）
+        //   > 渲染期自动测量的真实高度（S._autoRowH，仅用于偏移，不触发 clamp/resize 样式）
+        //   > 默认估算高。两者分离，避免自动测量污染"用户 resize"通道（否则普通行会被
+        //   误判为 xs-tr-resized 并强制 clamp，编辑后不再自适应行高）。
+        var rh = (S.rowHeights && S.rowHeights[ri]) || (S._autoRowH && S._autoRowH[ri]) || 0;
         acc += (rh && rh > 0) ? rh : XS_ROW_EST_HEIGHT;
     }
     offs[view.length] = acc;
     S._rowOffsets = offs;
+}
+
+// 从已渲染的 <tr data-row> 测量真实高度，写回 S._autoRowH 并重算 _rowOffsets。
+//   解决「展开步骤」后子表格把行高撑高、但 _rowOffsets 仍按默认 36px 累加，
+//   导致虚拟滚动 range 错位、匹配行被渲染范围漏掉、查找高亮「滚一下就消失」的问题。
+// 关键点：自动测量的高度存入独立的 S._autoRowH，而非用户 resize 通道 S.rowHeights。
+//   - 若写入 S.rowHeights，_buildRowHtml 会把任意 >0 的行高当成"用户手动调过"，
+//     给 tr 加 xs-tr-resized + 内联 height + 注册 S._rowExpanded，进而强制 clamp 行数，
+//     造成：普通行内容被省略号截断、编辑后不再自适应行高（自动 fit 失效）。
+//   - 分离后：S._rowHeights 只保留真正的用户 resize；S._autoRowH 仅参与偏移计算，
+//     不影响渲染样式，且每次渲染都重新测量（内容编辑后仍能自适应）。
+//   - 跳过用户手动调过行高的行（S.rowHeights[ri]>0 / xs-tr-resized / 内联 height），保留用户设定。
+//   - 仅在高度发生变化时才更新（避免无谓赋值与重算偏移）。
+// 返回是否有行高发生变化。
+function _syncRenderedRowHeights() {
+    var rows = document.querySelectorAll('tbody tr[data-row]');
+    if (!rows || rows.length === 0) return false;
+    if (!S._autoRowH) S._autoRowH = {};
+    var changed = false;
+    for (var i = 0; i < rows.length; i++) {
+        var tr = rows[i];
+        var ri = parseInt(tr.getAttribute('data-row'), 10);
+        if (isNaN(ri)) continue;
+        // 跳过用户手动调过行高的行：高度由 S.rowHeights 持有（用户 resize 通道），
+        // tr 带 xs-tr-resized 或内联 style.height，保持用户设定不变、不被自动测量覆盖。
+        if (S.rowHeights && S.rowHeights[ri] && S.rowHeights[ri] > 0) continue;
+        if (tr.classList.contains('xs-tr-resized')) continue;
+        if (tr.style && tr.style.height) continue;
+        var h = tr.offsetHeight || 0;
+        if (h <= 0) continue;
+        if (!S._autoRowH[ri] || Math.abs(S._autoRowH[ri] - h) > 1) {
+            S._autoRowH[ri] = h;
+            changed = true;
+        }
+    }
+    if (changed) _computeRowOffsets();
+    return changed;
 }
 
 // 二分查找：scrollTop 处于哪个 view 行内
@@ -957,10 +1004,21 @@ function _renderVirtualBody() {
     for (var i = from; i < to; i++) parts.push(_buildRowHtml(view[i], tsIdColIdx));
     parts.push('<tr class="xs-vspacer" aria-hidden="true" style="height:' + bottomH + 'px"><td colspan="' + totalCols + '" style="padding:0;border:0"></td></tr>');
     tbody.innerHTML = parts.join('') + _buildGhostRowsHtml(headers);
+    // 同步已渲染行的真实高度：展开步骤后行高被撑大，但 _rowOffsets 仍按默认 36px 算，
+    //   会让 _calcVisibleRange 算出错的 range，匹配行漏出渲染范围、查找高亮消失。
+    //   这里在 render 完成的第一时间把真实 offsetHeight 写回 S._autoRowH 并重算偏移。
+    var _offsChanged = _syncRenderedRowHeights();
     // 重渲后恢复查找高亮（仅对当前可见行有效）
     if (S._findKw) paintFindHighlight();
     if (typeof updateColSelClasses === 'function') updateColSelClasses();
     if (typeof updateCellSelClasses === 'function') updateCellSelClasses();
+    // 偏移变化后：本次 range 是按旧偏移算的，可能漏掉本应在视口内的匹配行。
+    //   强制清掉 range 缓存再触发一次，用新偏移重算，让高亮覆盖到所有应在视口内的行。
+    //   防自递归：第二次渲染时测量结果与第一次一致，_syncRenderedRowHeights 返回 false → 不会再触第三次。
+    if (_offsChanged && S._virtualOn) {
+        S._vRange = null;
+        _renderVirtualBody();
+    }
 }
 
 // 绑定容器 scroll → 节流（rAF）→ 虚拟重渲

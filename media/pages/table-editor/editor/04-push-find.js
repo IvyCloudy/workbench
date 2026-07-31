@@ -211,6 +211,96 @@ function updateSearchClear(val) {
     if (btn) btn.style.display = (kw || '').length > 0 ? '' : 'none';
 }
 
+// 步骤展开（steps）单元格的查找替换辅助：在展开步骤模式下，steps 合并文本单元格
+// 可被搜索与替换。底层数据来自 dt.rawRowGroups 的结构化步骤（operation/data/ui_expected/...），
+// 替换后通过 _buildStepCombined 重建主表合并文本并同步，保证与保存路径（reconstructDetail 优先用 rawRowGroups）一致。
+
+// 判断 (ri, ci) 在展开步骤模式下是否为可被查找替换的 steps 合并文本单元格
+function _isStepsExpandedFindCell(ri, ci) {
+    if (!S._stepsExpanded) return false;
+    if (typeof isDetailColumn !== 'function' || !isDetailColumn(ci)) return false;
+    var dt = (typeof getDetailTableByCol === 'function') ? getDetailTableByCol(ci) : null;
+    if (!dt || !dt.rawRowGroups) return false;
+    var raws = dt.rawRowGroups[ri];
+    return Array.isArray(raws) && raws.length > 0;
+}
+
+// 按 _buildStepCombined 的拼接顺序展开单个 step 的所有可搜索字符串字段：
+//   operation → data[] → ui_expected[] → api_expected[] → db_expected[]
+function _stepFieldAccessors(step) {
+    var acc = [];
+    acc.push({ get: function () { return step.operation; }, set: function (v) { step.operation = v; } });
+    ['data', 'ui_expected', 'api_expected', 'db_expected'].forEach(function (arrName) {
+        var arr = Array.isArray(step[arrName]) ? step[arrName] : [];
+        for (var i = 0; i < arr.length; i++) {
+            (function (arr, i) {
+                acc.push({ get: function () { return arr[i]; }, set: function (v) { arr[i] = v; } });
+            })(arr, i);
+        }
+    });
+    return acc;
+}
+
+// 在 rawRowGroups[ri] 中按字段顺序找到第一个含 needle 的字段并替换第一处，返回是否替换成功
+function _replaceStepsFirstHit(raws, caseSensitive, needle, newVal) {
+    for (var s = 0; s < raws.length; s++) {
+        var step = raws[s];
+        if (!step || typeof step !== 'object') continue;
+        var acc = _stepFieldAccessors(step);
+        for (var a = 0; a < acc.length; a++) {
+            var val = acc[a].get();
+            if (val == null) continue;
+            var str = String(val);
+            var hay = caseSensitive ? str : str.toLowerCase();
+            var hit = hay.indexOf(needle);
+            if (hit < 0) continue;
+            acc[a].set(str.slice(0, hit) + newVal + str.slice(hit + needle.length));
+            return true;
+        }
+    }
+    return false;
+}
+
+// 替换 rawRowGroups[ri] 所有字段中的所有命中，返回替换处数
+function _replaceStepsAll(raws, caseSensitive, needle, newVal) {
+    var count = 0;
+    for (var s = 0; s < raws.length; s++) {
+        var step = raws[s];
+        if (!step || typeof step !== 'object') continue;
+        var acc = _stepFieldAccessors(step);
+        for (var a = 0; a < acc.length; a++) {
+            var val = acc[a].get();
+            if (val == null) continue;
+            var str = String(val);
+            var hay = caseSensitive ? str : str.toLowerCase();
+            if (hay.indexOf(needle) < 0) continue;
+            var out = '', i = 0;
+            while (i < str.length) {
+                var h = hay.indexOf(needle, i);
+                if (h < 0) { out += str.slice(i); break; }
+                out += str.slice(i, h) + newVal;
+                i = h + needle.length;
+                count++;
+            }
+            acc[a].set(out);
+        }
+    }
+    return count;
+}
+
+// 展开步骤替换后：重建合并文本、写回主表、标记修改、保存、原地刷新单元格
+function _syncStepsCellAfterReplace(ri, ci) {
+    var dt = (typeof getDetailTableByCol === 'function') ? getDetailTableByCol(ci) : null;
+    if (!dt || !dt.rawRowGroups) return;
+    if (!S.data.rows[ri]) return;
+    var combined = _buildStepCombined(dt.rawRowGroups[ri]);
+    S.data.rows[ri][ci] = combined;
+    if (S.mods) S.mods.add(ri + ',' + ci);
+    if (S._detailModCellKeys) S._detailModCellKeys.add(ri + ',' + ci);
+    if (typeof saveFile === 'function') saveFile();
+    if (typeof patchCell === 'function') patchCell(ri, ci);
+}
+
 // 重新构建命中列表 + 渲染高亮
 function rebuildFindMatches(kw) {
     S._findKw = kw || '';
@@ -232,11 +322,31 @@ function rebuildFindMatches(kw) {
     rows.forEach(function (row, ri) {
         if (visibleRows && !visibleRows.has(ri)) return;
         headers.forEach(function (_, ci) {
-            // detail 列（steps 等）跳过：
-            //   - 折叠态下主表显示为 [N 项]，用户搜关键词无意义命中
-            //   - 展开态下主表是长文本，命中后 td 高亮而内部子表格无高亮，视觉困惑
-            //   - detail 列已禁止查找替换（见 replaceCurrent/replaceAll），命中反而误导
-            if (typeof isDetailColumn === 'function' && isDetailColumn(ci)) return;
+            // detail 列（steps 等）：
+            //   - 折叠态下（未展开步骤）主表显示为 [N 项]/链接，搜索无意义，跳过；
+            //   - 展开步骤模式下，steps 合并文本单元格可被查找替换：
+            //     搜索结构化 rawRowGroups 的各字段，命中即记为一个单元格级匹配。
+            if (typeof isDetailColumn === 'function' && isDetailColumn(ci)) {
+                if (S._stepsExpanded && _isStepsExpandedFindCell(ri, ci)) {
+                    var _dt = getDetailTableByCol(ci);
+                    var _raws = _dt.rawRowGroups[ri] || [];
+                    var _found = false;
+                    for (var _s = 0; _s < _raws.length && !_found; _s++) {
+                        var _step = _raws[_s];
+                        if (!_step || typeof _step !== 'object') continue;
+                        var _acc = _stepFieldAccessors(_step);
+                        for (var _a = 0; _a < _acc.length; _a++) {
+                            var _val = _acc[_a].get();
+                            if (_val == null) continue;
+                            var _str = String(_val);
+                            var _hay = caseSensitive ? _str : _str.toLowerCase();
+                            if (_hay.indexOf(needle) >= 0) { _found = true; break; }
+                        }
+                    }
+                    if (_found) S._matches.push({ r: ri, c: ci, steps: true });
+                }
+                return; // 其余 detail 列（非展开步骤）仍跳过
+            }
             var v = row[ci];
             if (v === null || v === undefined) return;
             // 数组列：以 '; ' 拼接后参与查找（与主表 chip 走同一拼接规则）
@@ -268,7 +378,33 @@ function paintFindHighlight() {
             if (idx === S._matchIdx) td.classList.add('highlight-active');
             // 在 cell-wrap 文本内做 mark 高亮
             var wrap = td.querySelector('.xs-cell-wrap');
-            if (wrap) markText(wrap, S._findKw, idx === S._matchIdx);
+            if (wrap) {
+                var _m = S._matches[idx];
+                if (_m && _m.steps) {
+                    // 展开步骤子表格：对所有命中字段做内部高亮。
+                    //   - 步骤描述（xse-td-desc）：纯文本，按行 markText
+                    //   - 数据 / 预期结果（xse-td-data / xse-td-expected）：行内有 .xse-line /
+                    //     chip 结构，markText 替换 innerHTML 会破坏结构；改用 markTextInStructure
+                    //     走 text 节点并包裹 <mark>，保留原结构（chip 标题【UI检查】等跳过不 mark）
+                    var _subTable = td.querySelector('.xs-step-expanded');
+                    if (_subTable) {
+                        var _descTds = _subTable.querySelectorAll('.xse-td-desc');
+                        for (var _di = 0; _di < _descTds.length; _di++) {
+                            markText(_descTds[_di], S._findKw, idx === S._matchIdx);
+                        }
+                        var _dataTds = _subTable.querySelectorAll('.xse-td-data');
+                        for (var _dti = 0; _dti < _dataTds.length; _dti++) {
+                            markTextInStructure(_dataTds[_dti], S._findKw, idx === S._matchIdx);
+                        }
+                        var _expTds = _subTable.querySelectorAll('.xse-td-expected');
+                        for (var _ei = 0; _ei < _expTds.length; _ei++) {
+                            markTextInStructure(_expTds[_ei], S._findKw, idx === S._matchIdx);
+                        }
+                    }
+                } else {
+                    markText(wrap, S._findKw, idx === S._matchIdx);
+                }
+            }
         }
     });
 }
@@ -296,11 +432,113 @@ function markText(node, kw, isActive) {
     node.innerHTML = html;
 }
 
+// 对含结构的子单元格（xse-td-data / xse-td-expected 的 .xse-line / .xse-group 行内）做高亮：
+//   遍历 text 节点，将含 needle 的子串就地拆成「文本 + <mark>」序列，保留 chip / line 结构。
+//   跳过：MARK 内部文本（避免递归 mark）、chip 标题（.xse-sub，如【UI检查】，保持分类标签纯净）。
+function markTextInStructure(root, kw, isActive) {
+    if (!kw || !root) return;
+    var caseSensitive = !!S._findCaseSensitive;
+    var needle = caseSensitive ? kw : kw.toLowerCase();
+    var cls = isActive ? 'xs-mk xs-mk-active' : 'xs-mk';
+    // 一次性收集所有待处理 text 节点（在改 DOM 之前快照，避免游标错位）
+    var nodes = [];
+    try {
+        var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode: function (node) {
+                var p = node.parentNode;
+                if (!p || p.nodeType !== 1) return NodeFilter.FILTER_REJECT;
+                if (p.tagName === 'MARK') return NodeFilter.FILTER_REJECT;
+                if (p.classList && p.classList.contains('xse-sub')) return NodeFilter.FILTER_REJECT;
+                return NodeFilter.FILTER_ACCEPT;
+            }
+        }, false);
+        var n;
+        while ((n = walker.nextNode())) nodes.push(n);
+    } catch (_e) {
+        // 极少数 webview 不支持 TreeWalker，回退到无结构保护版本
+        _markTextInStructureFallback(root, kw, isActive);
+        return;
+    }
+    for (var i = 0; i < nodes.length; i++) {
+        var textNode = nodes[i];
+        var text = textNode.textContent;
+        var hay = caseSensitive ? text : text.toLowerCase();
+        if (hay.indexOf(needle) < 0) continue;
+        var parent = textNode.parentNode;
+        var refNode = textNode;
+        var pos = 0;
+        while (pos < text.length) {
+            var h = hay.indexOf(needle, pos);
+            if (h < 0) {
+                if (pos < text.length) parent.insertBefore(document.createTextNode(text.slice(pos)), refNode);
+                break;
+            }
+            if (h > pos) parent.insertBefore(document.createTextNode(text.slice(pos, h)), refNode);
+            var mark = document.createElement('mark');
+            mark.className = cls;
+            mark.textContent = text.slice(h, h + kw.length);
+            parent.insertBefore(mark, refNode);
+            pos = h + kw.length;
+        }
+        parent.removeChild(refNode);
+    }
+}
+
+// TreeWalker 不可用时的兜底：处理 root 的直接 text 节点
+function _markTextInStructureFallback(root, kw, isActive) {
+    var caseSensitive = !!S._findCaseSensitive;
+    var needle = caseSensitive ? kw : kw.toLowerCase();
+    var cls = isActive ? 'xs-mk xs-mk-active' : 'xs-mk';
+    var children = Array.prototype.slice.call(root.childNodes);
+    for (var i = 0; i < children.length; i++) {
+        var c = children[i];
+        if (c.nodeType !== 3) continue;
+        var text = c.textContent;
+        var hay = caseSensitive ? text : text.toLowerCase();
+        if (hay.indexOf(needle) < 0) continue;
+        var pos = 0;
+        var frag = document.createDocumentFragment();
+        while (pos < text.length) {
+            var h = hay.indexOf(needle, pos);
+            if (h < 0) {
+                if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+                break;
+            }
+            if (h > pos) frag.appendChild(document.createTextNode(text.slice(pos, h)));
+            var mk = document.createElement('mark');
+            mk.className = cls;
+            mk.textContent = text.slice(h, h + kw.length);
+            frag.appendChild(mk);
+            pos = h + kw.length;
+        }
+        root.replaceChild(frag, c);
+    }
+}
+
+// 清除结构化子单元格内的 <mark>：就地拆掉 <mark> 还原为 text 节点，保留 chip / line 结构
+function unmarkTextInStructure(root) {
+    if (!root) return;
+    var marks = root.querySelectorAll('mark.xs-mk, mark.xs-mk-active');
+    for (var i = 0; i < marks.length; i++) {
+        var mark = marks[i];
+        var text = document.createTextNode(mark.textContent);
+        mark.parentNode.replaceChild(text, mark);
+    }
+    if (typeof root.normalize === 'function') root.normalize();
+}
+
 function clearFindHighlight() {
     document.querySelectorAll('td.xs-editable.highlight').forEach(function (td) {
         td.classList.remove('highlight', 'highlight-active');
         var wrap = td.querySelector('.xs-cell-wrap');
-        if (wrap && !wrap.querySelector('.xs-detail-link, .xs-step-expanded')) {
+        if (!wrap) return;
+        // 展开步骤单元格：拆掉子表格内所有 <mark>，保留 .xse-line / chip 结构
+        var _stepExp = wrap.querySelector('.xs-step-expanded');
+        if (_stepExp) {
+            unmarkTextInStructure(_stepExp);
+            return;
+        }
+        if (!wrap.querySelector('.xs-detail-link')) {
             // 还原为纯文本
             wrap.innerHTML = escapeHtml(wrap.textContent || '');
         }
@@ -394,10 +632,34 @@ function replaceCurrent() {
         stepFind(1);
         return;
     }
-    // 明细列（steps 等）：主表单元格仅是显示文本（[N 项]/【步骤描述】...），
-    // 真实数据在 rawRowGroups。写字符串到主表会与 rawRowGroups 不一致
-    // （yaml-parser 优先 raw → 视觉替换但 YAML 未变）。跳过并提示用户改用弹窗。
+    // 明细列（steps 等）：
+    //   - 展开步骤模式下，steps 合并文本单元格支持查找替换：直接在 rawRowGroups 上做字段级替换，
+    //     再经 _buildStepCombined 同步主表合并文本，保证与保存路径一致。
+    //   - 其余 detail 列（未展开步骤 / 其它对象明细）仍禁止：主表仅是链接文本，真实数据在弹窗，
+    //     写字符串会与其余结构不一致，提示用户改用弹窗。
     if (typeof isDetailColumn === 'function' && isDetailColumn(m.c)) {
+        if (m.steps) {
+            var _sdt = getDetailTableByCol(m.c);
+            if (_sdt && _sdt.rawRowGroups && _sdt.rawRowGroups[m.r]) {
+                pushHistory();
+                var _did = _replaceStepsFirstHit(_sdt.rawRowGroups[m.r], caseSensitive, needle, newVal);
+                if (!_did) { stepFind(1); return; }
+                _syncStepsCellAfterReplace(m.r, m.c);
+                // 重新搜索（步骤内可能还有其他命中）
+                rebuildFindMatches(S._findKw);
+                if (S._matches.length === 0) {
+                    showToast('已完成替换', 'success');
+                    closeFindPanel();
+                    return;
+                }
+                if (S._matchIdx >= S._matches.length) S._matchIdx = 0;
+                clearFindHighlight();
+                paintFindHighlight();
+                updateFindInfo();
+                focusActiveMatch();
+                return;
+            }
+        }
         showToast('明细列不支持查找替换，请通过弹窗编辑', 'error');
         stepFind(1);
         return;
@@ -451,9 +713,23 @@ function replaceAll() {
             if (isFrozenCol(ci)) return; // tsId 列跳过
             // 标量数组列跳过全量替换，避免语义窜乱
             if (typeof isArrayCol === 'function' && isArrayCol(ci)) return;
-            // 明细列跳过：主表仅显示文本，真实数据在 rawRowGroups，
-            // 写字符串会与 raw 不一致（yaml-parser 优先 raw → 视觉替换但数据未变）。
-            if (typeof isDetailColumn === 'function' && isDetailColumn(ci)) return;
+            // 明细列：
+            //   - 展开步骤模式下，steps 合并文本单元格支持字段级全量替换并同步主表；
+            //   - 其余 detail 列跳过（真实数据在弹窗，写字符串会与其余结构不一致）。
+            if (typeof isDetailColumn === 'function' && isDetailColumn(ci)) {
+                if (S._stepsExpanded && _isStepsExpandedFindCell(ri, ci)) {
+                    var _adt = getDetailTableByCol(ci);
+                    var _araws = _adt.rawRowGroups[ri] || [];
+                    var _c2 = _replaceStepsAll(_araws, caseSensitive, needle, newVal);
+                    if (_c2 > 0) {
+                        row[ci] = _buildStepCombined(_araws);
+                        S.mods.add(ri + ',' + ci);
+                        if (S._detailModCellKeys) S._detailModCellKeys.add(ri + ',' + ci);
+                        count += _c2;
+                    }
+                }
+                return;
+            }
             var v = row[ci];
             if (v === null || v === undefined) return;
             var s = String(v);

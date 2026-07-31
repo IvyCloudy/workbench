@@ -20,7 +20,7 @@
  *    testCasePath      ← path
  *    testCaseName      ← name              （案例名称）
  *    testCaseDes       ← description       （案例描述）
- *    testType          ← test_type / 执行方式（'手工'/'UI自动化'/'接口自动化'/'自动化'/'半自动化' 原样保留；未填写或其它取值一律抛错，无默认值）
+ *    testType          ← test_type / 执行方式（'手工'/'UI自动化'/'接口自动化'/'自动化'/'半自动化' 去空格后保留；未填写或其它取值一律抛错，无默认值）
  *    type              ← 固定 '功能点类'
  *    priority          ← priority
  *    preCondition      ← preconditions     （数组按 \n 拼为字符串）
@@ -37,7 +37,7 @@
  *    testCasePath      ← 路径
  *    testCaseName      ← 名称
  *    testCaseDes       ← 案例描述
- *    testType          ← 执行方式（'手工'/'UI自动化'/'接口自动化'/'自动化'/'半自动化' 原样保留；未填写或其它取值一律抛错，无默认值）
+ *    testType          ← 执行方式（'手工'/'UI自动化'/'接口自动化'/'自动化'/'半自动化' 去空格后保留；未填写或其它取值一律抛错，无默认值）
  *    type              ← 案例类型（空 → '功能点类'）
  *    priority          ← 优先级
  *    preCondition      ← 前置条件

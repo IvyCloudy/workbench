@@ -166,6 +166,9 @@ async function pushSingleFile(
             frontRowIndexMap: rowIndexMap,
             frontPushIndexToRow: pushIndexToRow,
             telemetryPrefix: 'explorerPush',
+            // 批量推送：逐文件结果由本函数的 explorerPush.batch.fileResult +
+            // 批次 explorerPush.batch.done 统一上报，跳过 runPush 自身的 .complete 避免重复计数。
+            skipCompleteTelemetry: true,
             hooks: {
                 markSelfSave: () => BaseEditorProvider.markPanelSelfSave(filePath),
                 // 批量推送不在此处逐文件刷新 webview（避免循环期间多次全量渲染抖动），
@@ -524,8 +527,67 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         });
     }
 
-    // 推送完成自动切换到总结视图（同一面板，带可点击文件名）
-    await progressPanel.done(results, async (result) => {
+    // ─── 汇总埋点（含耗时、文件类型分布、取消状态）────────────────────────────
+    // 必须在「展示总结视图」之前发出：progressPanel.done() 内部会 await 面板被用户关闭
+    // 才 resolve（见 pushUI.ts），若先 await 它，函数会挂起直到用户手动关面板，
+    // 导致 batch.done 汇总事件迟迟不发、丢失「每天批量推送成功/失败总数」统计。
+    // 这里 try/catch 兜底：无论刷新/展示逻辑是否异常，汇总事件都必须发出。
+    try {
+        const totalSucc = results.reduce((s, r) => s + r.successCount, 0);
+        const totalFail = results.reduce((s, r) => s + r.failCount, 0);
+        const errorFiles = results.filter(r => r.error).length;
+        const resultExtBreakdown = (() => {
+            const map: Record<string, number> = {};
+            for (const r of results) {
+                const ext = path.extname(r.filePath).toLowerCase().slice(1) || 'unknown';
+                map[ext] = (map[ext] || 0) + 1;
+            }
+            return Object.entries(map).map(([ext, count]) => `${ext}:${count}`).join(',');
+        })();
+        TelemetryService.sendTelemetryEvent('explorerPush.batch.done', {
+            fileCount: String(totalFiles),
+            totalSucc: String(totalSucc),
+            totalFail: String(totalFail),
+            errorFiles: String(errorFiles),
+            cancelled: cancelled ? '1' : '0',
+            durationMs: String(Date.now() - batchStartTs),
+            extBreakdown: resultExtBreakdown,
+        });
+    } catch (summaryErr: any) {
+        // 兜底：即使主汇总计算/发送异常，results 中已完成的逐文件结果仍有效，
+        // 必须基于 results 重新安全累加真实的部分成功/失败数，绝不能清零，
+        // 否则会丢失「分批次已成功推送」的统计数据。带 summaryError 标记便于监控识别。
+        try {
+            const safeNum = (v: any) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
+            const partSucc = results.reduce((s, r) => s + safeNum(r?.successCount), 0);
+            const partFail = results.reduce((s, r) => s + safeNum(r?.failCount), 0);
+            const partErrFiles = results.reduce((s, r) => s + (r?.error ? 1 : 0), 0);
+            const partExtBreakdown = (() => {
+                const map: Record<string, number> = {};
+                for (const r of results) {
+                    if (!r || !r.filePath) continue;
+                    const ext = path.extname(r.filePath).toLowerCase().slice(1) || 'unknown';
+                    map[ext] = (map[ext] || 0) + 1;
+                }
+                return Object.entries(map).map(([ext, count]) => `${ext}:${count}`).join(',');
+            })();
+            TelemetryService.sendTelemetryEvent('explorerPush.batch.done', {
+                fileCount: String(totalFiles),
+                totalSucc: String(partSucc),
+                totalFail: String(partFail),
+                errorFiles: String(partErrFiles),
+                cancelled: cancelled ? '1' : '0',
+                durationMs: String(Date.now() - batchStartTs),
+                extBreakdown: partExtBreakdown,
+                summaryError: '1',
+            });
+        } catch { /* 上报通道本身不可用则放弃，避免二次异常 */ }
+        console.error('[推送][批量] 汇总埋点异常，已兜底上报真实部分数据:', summaryErr?.message || summaryErr);
+    }
+
+    // 汇总埋点已发出，下面仅负责展示总结视图（不 await：done() 会等用户关闭面板才 resolve，
+    // 不能让它阻塞主流程，否则埋点要等用户手动关面板才"算完成"）。点击文件回调内展示结果弹窗。
+    void progressPanel.done(results, async (result) => {
         const uri = vscode.Uri.file(result.filePath);
         const fileExt = path.extname(result.filePath).toLowerCase();
         // 总结面板点击文件埋点
@@ -542,26 +604,17 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
             showPushResult(panel, result.fileName, result.successCount, result.failures, result.total, undefined, result.skipped ?? 0);
         }
     });
-
-    // 汇总埋点（含耗时、文件类型分布、取消状态）
-    const totalSucc = results.reduce((s, r) => s + r.successCount, 0);
-    const totalFail = results.reduce((s, r) => s + r.failCount, 0);
-    const errorFiles = results.filter(r => r.error).length;
-    const resultExtBreakdown = (() => {
-        const map: Record<string, number> = {};
-        for (const r of results) {
-            const ext = path.extname(r.filePath).toLowerCase().slice(1) || 'unknown';
-            map[ext] = (map[ext] || 0) + 1;
-        }
-        return Object.entries(map).map(([ext, count]) => `${ext}:${count}`).join(',');
-    })();
-    TelemetryService.sendTelemetryEvent('explorerPush.batch.done', {
-        fileCount: String(totalFiles),
-        totalSucc: String(totalSucc),
-        totalFail: String(totalFail),
-        errorFiles: String(errorFiles),
-        cancelled: cancelled ? '1' : '0',
-        durationMs: String(Date.now() - batchStartTs),
-        extBreakdown: resultExtBreakdown,
-    });
 }
+
+
+
+
+
+
+
+
+
+
+
+
+

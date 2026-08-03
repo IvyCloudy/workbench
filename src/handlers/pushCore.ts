@@ -742,6 +742,13 @@ export interface RunPushOptions {
     /** 埋点前缀：'explorerPush' | 'editorPush' */
     telemetryPrefix: string;
     /**
+     * 是否跳过 runPush 自身发出的 `.complete` 结局埋点。
+     * 批量推送（`handleFilePush` 多文件分支）下为 true：逐文件结果改由
+     * `explorerPush.batch.fileResult` + 批次 `explorerPush.batch.done` 统一上报，
+     * 避免与单文件 `.complete` 重复计数。单文件推送保持 false（照常发 `.complete`）。
+     */
+    skipCompleteTelemetry?: boolean;
+    /**
      * 单次推送行数上限。超过时短路，不发出后端请求。默认 5000。
      * 主要用于防御用户误操作（例如全选一个 10w 行的文件）导致后端超时/雪崩。
      */
@@ -1427,25 +1434,29 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         const caseFailBreakdown = summarizeFieldBreakdown(failFieldStats, 'case');
         const topCaseFailField = topFieldOfLevel(failFieldStats, 'case')?.field || '';
 
-        TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.complete`, {
-            ...baseTelemetryProps(ctx),
-            pushResult: mergedFailures.length === 0
-                ? 'allSuccess'
-                : (successMappings.length === 0 ? 'allFail' : 'partial'),
-            totalRows: String(total),
-            successRows: String(successMappings.length),
-            failedRows: String(mergedFailures.length),
-            preValidationFailedRows: String(preValidationFailures.length),
-            failCategoryBreakdown,
-            topFailCategory,
-            failFieldBreakdown,
-            topFailField,
-            interfaceFailBreakdown,
-            topInterfaceFailField,
-            caseFailBreakdown,
-            topCaseFailField,
-            costMs: String(Date.now() - ctx.pushStart),
-        });
+        // 批量推送场景下，逐文件结果由 handleFilePush 的 explorerPush.batch.fileResult +
+        // 批次 explorerPush.batch.done 统一上报，此处跳过单文件 .complete，避免重复计数。
+        if (!ctx.opts.skipCompleteTelemetry) {
+            TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.complete`, {
+                ...baseTelemetryProps(ctx),
+                pushResult: mergedFailures.length === 0
+                    ? 'allSuccess'
+                    : (successMappings.length === 0 ? 'allFail' : 'partial'),
+                totalRows: String(total),
+                successRows: String(successMappings.length),
+                failedRows: String(mergedFailures.length),
+                preValidationFailedRows: String(preValidationFailures.length),
+                failCategoryBreakdown,
+                topFailCategory,
+                failFieldBreakdown,
+                topFailField,
+                interfaceFailBreakdown,
+                topInterfaceFailField,
+                caseFailBreakdown,
+                topCaseFailField,
+                costMs: String(Date.now() - ctx.pushStart),
+            });
+        }
         emitProgress(ctx.hooks, 'done', { rows: total });
     } catch (err: any) {
         // 顶层未预期异常兜底：MapError / 普通 Error

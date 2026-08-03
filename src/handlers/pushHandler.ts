@@ -16,6 +16,8 @@ import {
     summarizeCategoryBreakdown,
     summarizeFieldBreakdown,
     topFieldOfLevel,
+    classifyFailure,
+    failureFieldOf,
 } from '../utils/pushFailureCategory';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
@@ -135,14 +137,30 @@ async function pushSingleFile(
     // 检查是否在合规目录
     const fileCheck = FileTypeChecker.isQualifiedFile(fileUri);
     if (!fileCheck.qualified) {
-        return { filePath, fileName: relativePath, successCount: 0, failCount: 0, total: 0, failures: [], error: '文件不在合规目录下（测试任务/<任务文件夹>/测试案例/）' };
+        const reason = '文件不在合规目录下（测试任务/<任务文件夹>/测试案例/）';
+        const failure: PushFailureItem = {
+            tsId: '',
+            reason,
+            category: classifyFailure({ reason }),
+            field: failureFieldOf({ reason }),
+        };
+        return { filePath, fileName: relativePath, successCount: 0, failCount: 1, total: 1, failures: [failure], error: reason };
     }
 
     // YAML 前置校验
     if (/\.ya?ml$/i.test(filePath)) {
         const yamlErr = validateYamlSyntax(filePath, fileUri);
         if (yamlErr) {
-            return { filePath, fileName: relativePath, successCount: 0, failCount: 0, total: 0, failures: [], error: yamlErr };
+            // 构造一条带分类的失败项，使批量埋点 failCategoryBreakdown 能聚合到 yamlSyntax，
+            // 不再因走 error 字符串分支而漏统计（单文件场景仍由 handleFilePush 的
+            // explorerPush.aborted{yamlSyntaxError} 单独埋点）。
+            const yamlFailure: PushFailureItem = {
+                tsId: '',
+                reason: yamlErr,
+                category: classifyFailure({ reason: yamlErr }),
+                field: failureFieldOf({ reason: yamlErr }),
+            };
+            return { filePath, fileName: relativePath, successCount: 0, failCount: 1, total: 1, failures: [yamlFailure], error: yamlErr };
         }
     }
 
@@ -151,10 +169,24 @@ async function pushSingleFile(
     try {
         rows = await parseFileToRows(filePath);
     } catch (err: any) {
-        return { filePath, fileName: relativePath, successCount: 0, failCount: 0, total: 0, failures: [], error: `文件解析失败: ${err.message || err}` };
+        const reason = `文件解析失败: ${err.message || err}`;
+        const failure: PushFailureItem = {
+            tsId: '',
+            reason,
+            category: classifyFailure({ reason }),
+            field: failureFieldOf({ reason }),
+        };
+        return { filePath, fileName: relativePath, successCount: 0, failCount: 1, total: 1, failures: [failure], error: reason };
     }
     if (!rows || rows.length === 0) {
-        return { filePath, fileName: relativePath, successCount: 0, failCount: 0, total: 0, failures: [], error: '文件无有效数据' };
+        const reason = '文件无有效数据';
+        const failure: PushFailureItem = {
+            tsId: '',
+            reason,
+            category: classifyFailure({ reason }),
+            field: failureFieldOf({ reason }),
+        };
+        return { filePath, fileName: relativePath, successCount: 0, failCount: 1, total: 1, failures: [failure], error: reason };
     }
 
     const { rowIndexMap, pushIndexToRow } = buildRowIndexMappings(rows);
@@ -182,20 +214,56 @@ async function pushSingleFile(
                 // 由 handleFilePush 在批次结束后统一遍历 results 对"已打开的面板"调用 postExplorerPushRefresh。
                 afterWriteBack: async ({ hasFailure }) => { /* 批量推送不做单文件刷新，见 handleFilePush 批次末尾 */ },
                 onAllFailedSnapshot: async () => { /* 批量推送不做单文件刷新，见 handleFilePush 批次末尾 */ },
-                onUnbound: () => { pushError = '未绑定任务'; resolved = true; },
-                onNoData: () => { pushError = '文件无数据'; resolved = true; },
+                onUnbound: () => {
+                    // 未绑定任务 → taskNotFound 分类，纳入统计
+                    const reason = '未绑定任务，无法推送';
+                    finalResult = { successCount: 0, failures: [{ tsId: '', reason, category: classifyFailure({ reason }), field: failureFieldOf({ reason }) }], total: rows.length, skipped: 0 };
+                    resolved = true;
+                },
+                onNoData: () => {
+                    // 文件无数据 → emptyFile 分类，纳入统计
+                    const reason = '文件无数据';
+                    finalResult = { successCount: 0, failures: [{ tsId: '', reason, category: classifyFailure({ reason }), field: failureFieldOf({ reason }) }], total: rows.length, skipped: 0 };
+                    resolved = true;
+                },
                 onPlaceholderTestcaseId: (_f) => { /* 已废弃：runPush 不再调用此钩子，失败信息统一在 onComplete 中输出 */ },
                 onEmptyTestcaseId: (_f) => { /* 已废弃：同 onPlaceholderTestcaseId */ },
                 onOnlySampleRows: (failures) => {
-                    pushError = `全为样例数据，共 ${failures.length} 行不允许推送`;
+                    // 全样例数据：构造带 sample 分类的 finalResult（而非 error 字符串），
+                    // 使批量埋点 failCategoryBreakdown 能聚合到 sample，不再漏统计。
+                    finalResult = { successCount: 0, failures, total: rows.length, skipped: 0 };
                     resolved = true;
                 },
-                onTaskInfoFailed: (errorMsg) => { pushError = `任务信息获取失败: ${errorMsg}`; resolved = true; },
-                onBackendError: (errorMsg) => { pushError = `后端返回失败: ${errorMsg}`; resolved = true; },
-                onUnexpectedError: (errorMsg) => { pushError = errorMsg; resolved = true; },
+                onTaskInfoFailed: (errorMsg) => {
+                    // 任务信息获取失败 → 通常网络/权限问题，归 network 或 auth
+                    const reason = `任务信息获取失败: ${errorMsg}`;
+                    finalResult = { successCount: 0, failures: [{ tsId: '', reason, category: classifyFailure({ reason }), field: failureFieldOf({ reason }) }], total: rows.length, skipped: 0 };
+                    resolved = true;
+                },
+                onBackendError: (errorMsg) => {
+                    // 后端返回失败 → 文本归类（bizReject/serverError 等）
+                    const reason = `后端返回失败: ${errorMsg}`;
+                    finalResult = { successCount: 0, failures: [{ tsId: '', reason, category: classifyFailure({ reason }), field: failureFieldOf({ reason }) }], total: rows.length, skipped: 0 };
+                    resolved = true;
+                },
+                onUnexpectedError: (errorMsg) => {
+                    // 意外错误 → unknown 兜底（但带 reason 便于回流补充规则）
+                    const reason = errorMsg;
+                    finalResult = { successCount: 0, failures: [{ tsId: '', reason, category: classifyFailure({ reason }), field: failureFieldOf({ reason }) }], total: rows.length, skipped: 0 };
+                    resolved = true;
+                },
                 onWriteBackFailed: (errorMsg) => {
-                    if (!pushError) pushError = '';
-                    pushError += (pushError ? '\n' : '') + `案例编号回写失败: ${errorMsg}`;
+                    // 后端已成功但编号回写失败：保留 onComplete 的成功结果，追加一条带分类的回写失败项。
+                    const reason = `案例编号回写失败: ${errorMsg}`;
+                    const wbFailure: PushFailureItem = { tsId: '', reason, category: classifyFailure({ reason }), field: failureFieldOf({ reason }) };
+                    const base = finalResult || { successCount: 0, failures: [], total: rows.length, skipped: 0 };
+                    finalResult = {
+                        successCount: base.successCount,
+                        failures: [...(base.failures || []), wbFailure],
+                        total: base.total,
+                        skipped: base.skipped ?? 0,
+                    };
+                    resolved = true;
                 },
                 onComplete: (payload) => {
                     finalResult = payload;
@@ -317,6 +385,8 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
                             reason: 'yamlSyntaxError',
                             ext: 'yaml',
                             errorLine: String(first.line),
+                            failCategoryBreakdown: summarizeCategoryBreakdown(aggregateFailures([{ reason: `YAML 语法错误（第 ${first.line} 行）` }], 1)),
+                            topFailCategory: classifyFailure({ reason: `YAML 语法错误（第 ${first.line} 行）` }),
                         });
                         vscode.window.showWarningMessage(
                             `${baseName} 存在 YAML 语法错误（首条：第 ${first.line} 行${countHint}），已终止推送。错误摘要：${errSummary}`,
@@ -338,6 +408,8 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
                     TelemetryService.sendTelemetryEvent('explorerPush.aborted', {
                         reason: 'yamlValidatorCrash',
                         ext: 'yaml',
+                        failCategoryBreakdown: summarizeCategoryBreakdown(aggregateFailures([{ reason: vErr?.message || 'YAML 校验器异常' }], 1)),
+                        topFailCategory: classifyFailure({ reason: vErr?.message || 'YAML 校验器异常' }),
                     });
                     showPushErrorModal(panel, baseName, `YAML 校验器异常，已终止推送。\n\n请手动检查文件语法后重试。\n错误信息：${vErr?.message || vErr}`);
                     return;
@@ -571,6 +643,15 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
             (batchFailStats.find(s => s.category === cat)?.samples ?? [])
                 .map(s => (s || '').slice(0, 200))
                 .join(' || ');
+        // unknown 是未归类措辞，必须带「全部」原文样本才能让后台完整定位、补规则，
+        // 不受聚合 3 条上限限制：直接从原始失败列表全量收集去重后的 reason。
+        const unknownBatchSamples = Array.from(
+            new Set(
+                batchFailItems
+                    .filter(f => classifyFailure(f) === 'unknown')
+                    .map(f => (f.reason || '').slice(0, 200)),
+            ),
+        ).filter(Boolean).join(' || ');
         TelemetryService.sendTelemetryEvent('explorerPush.batch.done', {
             fileCount: String(totalFiles),
             totalSucc: String(totalSucc),
@@ -588,8 +669,11 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
             topInterfaceFailField: topFieldOfLevel(batchFailFieldStats, 'interface')?.field || '',
             caseFailBreakdown: summarizeFieldBreakdown(batchFailFieldStats, 'case'),
             topCaseFailField: topFieldOfLevel(batchFailFieldStats, 'case')?.field || '',
-            notFoundSamples: pickBatchSamples('notFound'),
-            unknownSamples: pickBatchSamples('unknown'),
+            taskNotFoundSamples: pickBatchSamples('taskNotFound'),
+            testPointMissingSamples: pickBatchSamples('testPointMissing'),
+            pathNotMatchPointSamples: pickBatchSamples('pathNotMatchPoint'),
+            sourceNotSupportedSamples: pickBatchSamples('sourceNotSupported'),
+            unknownSamples: unknownBatchSamples,
         });
     } catch (summaryErr: any) {
         // 兜底：即使主汇总计算/发送异常，results 中已完成的逐文件结果仍有效，
@@ -643,16 +727,3 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         }
     });
 }
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -32,6 +32,8 @@ export interface PushResponseFailure {
     category: PushFailCategory;
     /** 命中的接口字段码（聚焦维度；字段类错误才有值，其余为 undefined） */
     field?: PushInterfaceField;
+    /** 客户端字段映射错误的 reason 码（如 missingTestcaseId），用于精确归类到 字段.性质 复合码 */
+    mapErrorReason?: string;
 }
 
 /** parsePushResponse 返回值 */

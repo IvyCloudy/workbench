@@ -47,7 +47,7 @@ describe('pushPreValidate · testcase_id 格式校验 (FORMAT_VALIDATOR)', () =>
         const f = collectInvalidFormatFailures([row('abc123')], idx);
         expect(f).toHaveLength(1);
         expect(f[0].reason).toBe('testcase_id的值不符合案例唯一标识规范');
-        expect(f[0].category).toBe('fieldInvalid');
+        expect(f[0].category).toBe('sourceId.format');
         expect(f[0].field).toBe('sourceId');
     });
 
@@ -74,7 +74,7 @@ describe('pushPreValidate · testcase_id 格式校验 (FORMAT_VALIDATOR)', () =>
         ]);
         const invalid = res.failures.find(f => f.reason.includes('案例唯一标识规范'));
         expect(invalid).toBeDefined();
-        expect(invalid!.category).toBe('fieldInvalid');
+        expect(invalid!.category).toBe('sourceId.format');
         expect(invalid!.field).toBe('sourceId');
         expect(res.failures).toHaveLength(1);      // 只有格式非法那条进失败列表
         expect(res.droppedIndex.has(0)).toBe(true); // 该行被剔除，不会真正推送
@@ -93,7 +93,7 @@ describe('pushPreValidate · testcase_id 格式校验 (FORMAT_VALIDATOR)', () =>
         const failures = persistPushFailures.mock.calls[0][2]; // (filePath, rows, failures, successMappings)
         const hit = failures.find((f: any) => f.tsId === 'TC_EXPECTED_OBJECT_001');
         expect(hit).toBeDefined();
-        expect(hit.category).toBe('fieldInvalid');
+        expect(hit.category).toBe('sourceId.format');
         expect(hit.field).toBe('sourceId');
     });
 

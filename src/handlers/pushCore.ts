@@ -423,6 +423,7 @@ export function extractSampleRows(
                     reason: '为样例数据，不允许推送。请修改"案例唯一标识，不可修改"等占位字段为真实数据后再试',
                     rowIndex,
                     category: 'sample',
+                    field: 'sourceId',
                 });
             }
         }
@@ -986,7 +987,8 @@ async function stepInvokeBackend(
                         tsId: readTsId(r) || e.caseTag || '(未知)',
                         reason: e.message || '数据映射失败',
                         bodyIndex: gidx[bi] ?? bi,
-                        category: classifyFailure({ reason: e.reason || 'dataMappingError' }),
+                        mapErrorReason: e.reason,
+                        category: classifyFailure({ reason: e.message || '数据映射失败', mapErrorReason: e.reason }),
                     });
                 } else {
                     // 非映射类异常（程序 bug），原样上抛由 runPush 顶层 catch 兜底
@@ -1342,6 +1344,34 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
                 caseFailBreakdown: summarizeFieldBreakdown(sampleFieldStats, 'case'),
                 topCaseFailField: topFieldOfLevel(sampleFieldStats, 'case')?.field || '',
             });
+            // 纯样例短路：补发 .complete 结论埋点（带 sample 分类维度），
+            // 使"全为样例数据"也能进入失败分类聚合统计（避免被漏统计）。
+            // 批量场景 skipCompleteTelemetry=true 时已自动跳过，逐文件结果改由
+            // explorerPush.batch.fileResult 统一聚合，不会重复计数。
+            if (!ctx.opts.skipCompleteTelemetry) {
+                TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.complete`, {
+                    ...baseTelemetryProps(ctx),
+                    pushResult: 'allFail',
+                    totalRows: String(originalRowsCount),
+                    successRows: '0',
+                    failedRows: String(sampleFailures.length),
+                    preValidationFailedRows: '0',
+                    failCategoryBreakdown: summarizeCategoryBreakdown(sampleStats),
+                    topFailCategory: sampleStats.length ? sampleStats[0].category : '',
+                    failFieldBreakdown: summarizeFieldBreakdown(sampleFieldStats),
+                    topFailField: sampleFieldStats.length ? sampleFieldStats[0].field : '',
+                    interfaceFailBreakdown: summarizeFieldBreakdown(sampleFieldStats, 'interface'),
+                    topInterfaceFailField: topFieldOfLevel(sampleFieldStats, 'interface')?.field || '',
+                    caseFailBreakdown: summarizeFieldBreakdown(sampleFieldStats, 'case'),
+                    topCaseFailField: topFieldOfLevel(sampleFieldStats, 'case')?.field || '',
+                    taskNotFoundSamples: '',
+                    testPointMissingSamples: '',
+                    pathNotMatchPointSamples: '',
+                    sourceNotSupportedSamples: '',
+                    unknownSamples: '',
+                    costMs: String(Date.now() - ctx.pushStart),
+                });
+            }
             ctx.hooks.onOnlySampleRows(sampleFailures);
             return;
         }
@@ -1436,15 +1466,26 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         const caseFailBreakdown = summarizeFieldBreakdown(failFieldStats, 'case');
         const topCaseFailField = topFieldOfLevel(failFieldStats, 'case')?.field || '';
 
-        // 弱分类原文样本：notFound 已能抽字段（路径/任务/要点），但仍带原文便于确认；
-        // unknown 是未归类措辞，必须带原文样本才能让后台定位、补 BACKEND_CATEGORY_RULES。
+        // 弱分类原文样本：taskNotFound / testPointNotMatched / sourceNotSupported 已能抽字段，
+        // 但仍带原文便于确认业务语义；unknown 是未归类措辞，必须带原文样本才能让后台定位、补规则。
         // 每条截断 200 字，用 ' || ' 分隔，避免与分类串的 ':'/',' 冲突。
         const pickSamples = (cat: string) =>
             (failStats.find(s => s.category === cat)?.samples ?? [])
                 .map(s => (s || '').slice(0, 200))
                 .join(' || ');
-        const notFoundSamples = pickSamples('notFound');
-        const unknownSamples = pickSamples('unknown');
+        // unknown 是未归类措辞，必须带「全部」原文样本才能让后台完整定位、补规则，
+        // 不受聚合 3 条上限限制：直接从原始失败列表全量收集去重后的 reason。
+        const unknownSamples = Array.from(
+            new Set(
+                mergedFailures
+                    .filter(f => (f.category ?? classifyFailure(f)) === 'unknown')
+                    .map(f => (f.reason || '').slice(0, 200)),
+            ),
+        ).filter(Boolean).join(' || ');
+        const taskNotFoundSamples = pickSamples('taskNotFound');
+        const testPointMissingSamples = pickSamples('testPointMissing');
+        const pathNotMatchPointSamples = pickSamples('pathNotMatchPoint');
+        const sourceNotSupportedSamples = pickSamples('sourceNotSupported');
 
         // 批量推送场景下，逐文件结果由 handleFilePush 的 explorerPush.batch.fileResult +
         // 批次 explorerPush.batch.done 统一上报，此处跳过单文件 .complete，避免重复计数。
@@ -1466,7 +1507,10 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
                 topInterfaceFailField,
                 caseFailBreakdown,
                 topCaseFailField,
-                notFoundSamples,
+                taskNotFoundSamples,
+                testPointMissingSamples,
+                pathNotMatchPointSamples,
+                sourceNotSupportedSamples,
                 unknownSamples,
                 costMs: String(Date.now() - ctx.pushStart),
             });

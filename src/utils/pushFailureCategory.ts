@@ -69,15 +69,23 @@ const MAP_ERROR_REASON_TO_CATEGORY: Record<string, PushFailCategory> = {
  */
 const BACKEND_CATEGORY_RULES: Array<{ category: PushFailCategory; patterns: RegExp }> = [
     { category: 'network',      patterns: /超时|timeout|网络|连接失败|ECONN|connect|socket/i },
+    // fieldInvalid（阶段信息强匹配需早于 auth）："测试任务编号未匹配到有效阶段信息" 虽整句含"无权限"，
+    // 但前半句的"阶段信息"是字段校验失败，应归 fieldInvalid 而非 auth，便于下钻到 testTaskNo 字段。
+    // 仅精准匹配"阶段信息"，不影响"设计人无权限"等纯 auth 场景（不含"阶段信息"）。
+    { category: 'fieldInvalid', patterns: /阶段信息/ },
     { category: 'auth',         patterns: /鉴权|权限|未登录|token|无权限|登录|认证|unauthorized|forbidden|401|403/i },
     { category: 'duplicate',    patterns: /已存在|重复|duplicate|already|冲突|conflict/i },
-    // bizReject 需早于 fieldInvalid："当前不支持案例来源" 应归为业务拒绝，而不是字段错误
-    { category: 'bizReject',    patterns: /不支持|不允许|拒绝/i },
+    // bizReject 需早于 fieldInvalid："当前不支持案例来源" / "无效的案例来源" 是业务规则拒绝，
+    // 应归业务拒绝而非字段错误。注意：仅精准匹配"无效的案例来源"，不能用裸"无效"——
+    // 否则"数据中包含无效的案例类型/优先级/执行方式"等行内枚举值非法也会被误归 bizReject，
+    // 那些应归 fieldInvalid（带具体字段下钻）。
+    { category: 'bizReject',    patterns: /不支持|不允许|拒绝|无效的案例来源/ },
     // notFound 需早于 fieldInvalid："任务下未匹配到有效测试要点"、"案例路径错误未匹配到有效测试要点"
     // 里含"未匹配"，若先命中 fieldInvalid（"未"→"未填写"其实不含，但"路径"会走 field 抽取）会误分类
     { category: 'notFound',     patterns: /不存在|未找到|查无|未绑定|未匹配|not\s*found|404/i },
     // fieldInvalid：新增"不一致"（步骤描述与预期结果数量不一致）、"检查点"（案例检查点数为0）、
-    // "无效"（数据中包含无效的案例来源/案例类型/案例优先级/案例默认执行方式）
+    // "无效"（数据中包含无效的案例类型/优先级/执行方式等行内枚举值非法）。
+    // 注意：bizReject 已精准匹配"无效的案例来源"且排在前，故"无效"泛匹配不会抢走来源类错误。
     { category: 'fieldInvalid', patterns: /格式|不合法|非法|无效|必填|长度|字段|参数|param|invalid|格式错误|为空|不能为空|缺失|缺少|未填写|不一致|检查点/i },
     { category: 'serverError',  patterns: /服务[器端]?|5\d\d|系统异常|内部错误|5xx|server\s*error/i },
 ];
@@ -156,7 +164,11 @@ export type PushInterfaceField =
     | 'keyFlag'         // 关键案例（是/否，必填）
     | 'projectDes'      // 项目说明
     | 'planExecNum'     // 计划执行次数
-    | 'testType';       // 执行方式
+    | 'testType'        // 执行方式
+    // ── 扩展字段码（覆盖更多后端报错场景，便于埋点下钻）──
+    | 'caseInfo'        // 案例信息（整行必填校验，如 "案例信息不能为空"）
+    | 'testPoint'       // 测试要点（"任务下未匹配到有效测试要点" / "案例路径错误未匹配到有效测试要点"）
+    | 'stepSeq';        // 步骤/预期数量一致性（"步骤描述与预期结果数量不一致"）
 
 /** 字段级别：interface=接口级公共参数（一次错=整批失败）；case=caseList 行级字段 */
 export type PushFieldLevel = 'interface' | 'case';
@@ -183,6 +195,10 @@ const FIELD_LEVEL: Record<PushInterfaceField, PushFieldLevel> = {
     projectDes: 'case',
     planExecNum: 'case',
     testType: 'case',
+    // 扩展字段码
+    caseInfo: 'case',
+    testPoint: 'case',
+    stepSeq: 'case',
 };
 
 /** 查字段级别（迭代完 FIELD_LEVEL 后外部调用入口） */
@@ -197,7 +213,7 @@ export function fieldLevelOf(field: PushInterfaceField): PushFieldLevel {
 const INTERFACE_FIELD_ALIASES: Array<{ field: PushInterfaceField; aliases: RegExp }> = [
     // ──── 接口级公共参数（优先匹配，避免被 "名称/路径" 等行级别名抢先） ────
     // testTaskNo：后端错误 "测试任务编号...不能为空/未匹配到有效阶段信息"
-    { field: 'testTaskNo',     aliases: /testTaskNo|test_task_no|测试任务编号|任务编号/ },
+    { field: 'testTaskNo',     aliases: /testTaskNo|test_task_no|测试任务编号|任务编号|阶段信息/ },
     // subTestTaskId：后端错误 "子任务Id...不能为空"
     { field: 'subTestTaskId',  aliases: /subTestTaskId|sub_test_task_id|subTaskId|子任务\s*[Ii][dD]|子任务/ },
     // artifactId：后端错误 "产出物Id不能为空/长度不能超过500个字符"
@@ -208,12 +224,16 @@ const INTERFACE_FIELD_ALIASES: Array<{ field: PushInterfaceField; aliases: RegEx
     // ──── caseList[] 行级字段 ────
     // sourceId 补 "案例来源Id"：后端错误 "案例来源Id不能为空/长度不能超过36个字符" 均指向该字段
     // 需排在 sourcePlatform 之前："案例来源Id" 应优先归到 sourceId，避免被 sourcePlatform 的"案例来源"抢先命中
-    { field: 'sourceId',       aliases: /sourceId|testcase_id|testCaseId|案例来源\s*[Ii][dD]|案例唯一标识|案例标识|案例\s*id|案例ID/ },
+    // 另补 "案例已存在"：后端 "案例已存在请勿重复添加" 是 sourceId 唯一性冲突，归到 sourceId 便于下钻
+    { field: 'sourceId',       aliases: /sourceId|testcase_id|testCaseId|案例来源\s*[Ii][dD]|案例唯一标识|案例标识|案例\s*id|案例ID|案例已存在/ },
     // sourcePlatform 案例来源平台：后端错误 "无效的案例来源(TMS/...)/当前不支持案例来源(...)" 均指向该字段
     { field: 'sourcePlatform', aliases: /sourcePlatform|source_platform|案例来源平台|案例来源(?![\s]*[Ii][dD])|来源平台/ },
     { field: 'testCasePath',   aliases: /testCasePath|案例路径|案例\s*path|路径/ },
     { field: 'testCaseName',   aliases: /testCaseName|案例名称|案例\s*name|名称/ },
     { field: 'testCaseDes',    aliases: /testCaseDes|案例描述/ },
+    // 步骤/预期数量一致性（stepSeq）需排在 description 之前："步骤描述与预期结果数量不一致"
+    // 含"步骤"会被 description 抢先，故先匹配 stepSeq 的"数量不一致/步骤描述与预期结果"
+    { field: 'stepSeq',        aliases: /数量不一致|步骤描述与预期结果/ },
     { field: 'description',    aliases: /description|步骤描述|步骤/ },
     // expected 补 "检查点"："案例检查点数为0请查看预期结果检查分类" 归到预期结果字段
     { field: 'expected',       aliases: /expected|预期结果|预期|检查点/ },
@@ -228,6 +248,11 @@ const INTERFACE_FIELD_ALIASES: Array<{ field: PushInterfaceField; aliases: RegEx
     { field: 'planExecNum',    aliases: /planExecNum|plan_exec_num|计划执行次数/ },
     // testType 补 "默认执行方式"：错误原文 "无效的案例默认执行方式"
     { field: 'testType',       aliases: /testType|默认执行方式|执行方式/ },
+    // 案例信息（整行必填校验）："案例信息不能为空" 归到 caseInfo，避免 field=undefined 丢失维度
+    { field: 'caseInfo',       aliases: /案例信息/ },
+    // 测试要点（notFound 类）："任务下未匹配到有效测试要点" / "案例路径错误未匹配到有效测试要点"
+    // 均指向 testPoint 字段，便于在 notFound 大类下下钻到具体是哪个要点维度
+    { field: 'testPoint',      aliases: /测试要点/ },
 ];
 
 /** MapError.reason → 接口字段（客户端字段映射错误已知具体字段） */
@@ -240,8 +265,13 @@ const MAP_ERROR_REASON_TO_FIELD: Record<string, PushInterfaceField> = {
 
 /** 字段相关 category（仅这些大类才有意义去聚焦到具体字段）
  *  包含 duplicate："sourceId 已存在/案例已存在" 也可能带具体字段（如 sourceId），
- *  应允许抽取，避免字段维度丢失重复类错误。 */
-const FIELD_RELATED_CATEGORIES: PushFailCategory[] = ['fieldInvalid', 'mapError', 'placeholder', 'emptyTestcaseId', 'duplicate'];
+ *  应允许抽取，避免字段维度丢失重复类错误。
+ *  包含 notFound："任务下未匹配到有效测试要点" / "案例路径错误未匹配到有效测试要点" /
+ *  "测试任务未绑定" 等均点名具体字段（testCasePath / testTaskNo / subTestTaskId），
+ *  允许抽取后可在 interfaceFailBreakdown / caseFailBreakdown 区分 notFound 的具体字段。
+ *  包含 bizReject："无效的案例来源" / "当前不支持案例来源" 均点名 sourcePlatform 字段，
+ *  允许抽取后可在 caseFailBreakdown 区分是哪种来源平台被拒。 */
+const FIELD_RELATED_CATEGORIES: PushFailCategory[] = ['fieldInvalid', 'mapError', 'placeholder', 'emptyTestcaseId', 'duplicate', 'notFound', 'bizReject'];
 
 /**
  * 从自由文本抽取接口字段码（仅基于 reason 关键词）。命中返回字段码；否则 undefined。

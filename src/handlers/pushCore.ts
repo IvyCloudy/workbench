@@ -1418,7 +1418,9 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         // 失败分类聚合（并入本次推送结果埋点，不单独发事件，避免重复计数）：
         //   - 用户仍看到完整中文原文 reason；
         //   - category 为稳定短码，供后台按错误类型聚合统计。
-        const failStats = aggregateFailures(mergedFailures, 1);
+        // maxSamples 提到 3：让 unknown / notFound 等弱分类多保留几条原文样本，
+        // 便于后台定位新措辞、补归类规则（count 不受影响，summarizeCategoryBreakdown 只用 category:count）。
+        const failStats = aggregateFailures(mergedFailures, 3);
         const failCategoryBreakdown = summarizeCategoryBreakdown(failStats);
         const topFailCategory = failStats.length ? failStats[0].category : '';
 
@@ -1433,6 +1435,16 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         const topInterfaceFailField = topFieldOfLevel(failFieldStats, 'interface')?.field || '';
         const caseFailBreakdown = summarizeFieldBreakdown(failFieldStats, 'case');
         const topCaseFailField = topFieldOfLevel(failFieldStats, 'case')?.field || '';
+
+        // 弱分类原文样本：notFound 已能抽字段（路径/任务/要点），但仍带原文便于确认；
+        // unknown 是未归类措辞，必须带原文样本才能让后台定位、补 BACKEND_CATEGORY_RULES。
+        // 每条截断 200 字，用 ' || ' 分隔，避免与分类串的 ':'/',' 冲突。
+        const pickSamples = (cat: string) =>
+            (failStats.find(s => s.category === cat)?.samples ?? [])
+                .map(s => (s || '').slice(0, 200))
+                .join(' || ');
+        const notFoundSamples = pickSamples('notFound');
+        const unknownSamples = pickSamples('unknown');
 
         // 批量推送场景下，逐文件结果由 handleFilePush 的 explorerPush.batch.fileResult +
         // 批次 explorerPush.batch.done 统一上报，此处跳过单文件 .complete，避免重复计数。
@@ -1454,6 +1466,8 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
                 topInterfaceFailField,
                 caseFailBreakdown,
                 topCaseFailField,
+                notFoundSamples,
+                unknownSamples,
                 costMs: String(Date.now() - ctx.pushStart),
             });
         }

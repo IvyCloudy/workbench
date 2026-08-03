@@ -10,6 +10,13 @@ import { TelemetryService } from '../utils/telemetry';
 import { runPush, buildRowIndexMappings, PushFailureItem } from './pushCore';
 import { validateYamlContent, publishYamlDiagnostics } from '../utils/yamlValidator';
 import { YAML_CMD_FIX_ALL } from '../utils/yamlConstants';
+import {
+    aggregateFailures,
+    aggregateByField,
+    summarizeCategoryBreakdown,
+    summarizeFieldBreakdown,
+    topFieldOfLevel,
+} from '../utils/pushFailureCategory';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
@@ -467,13 +474,23 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
             resultType = 'partialFail';
         }
 
-        // 每文件结果埋点
+        // 每文件结果埋点（含失败分类维度，便于逐文件下钻分析错误类型）
+        const fileFailStats = (result.failures || []).length > 0 ? aggregateFailures(result.failures, 3) : [];
+        const fileFailFieldStats = (result.failures || []).length > 0 ? aggregateByField(result.failures, 1) : [];
         TelemetryService.sendTelemetryEvent('explorerPush.batch.fileResult', {
             ext: fileExt,
             resultType,
             succ: String(result.successCount),
             fail: String(result.failCount),
             total: String(result.total),
+            failCategoryBreakdown: summarizeCategoryBreakdown(fileFailStats),
+            topFailCategory: fileFailStats.length ? fileFailStats[0].category : '',
+            failFieldBreakdown: summarizeFieldBreakdown(fileFailFieldStats),
+            topFailField: fileFailFieldStats.length ? fileFailFieldStats[0].field : '',
+            interfaceFailBreakdown: summarizeFieldBreakdown(fileFailFieldStats, 'interface'),
+            topInterfaceFailField: topFieldOfLevel(fileFailFieldStats, 'interface')?.field || '',
+            caseFailBreakdown: summarizeFieldBreakdown(fileFailFieldStats, 'case'),
+            topCaseFailField: topFieldOfLevel(fileFailFieldStats, 'case')?.field || '',
         });
 
         progressPanel.update({
@@ -544,6 +561,16 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
             }
             return Object.entries(map).map(([ext, count]) => `${ext}:${count}`).join(',');
         })();
+        // 批量失败分类聚合：合并所有文件的 failures（每项已是 PushFailureItem，含 category/field），
+        // 使 batch.done 也能按错误类型/字段下钻分析（与单文件 .complete 同维度）。
+        // 仅当存在失败时才计算，避免无失败时多算一次聚合。
+        const batchFailItems = results.flatMap(r => r.failures || []);
+        const batchFailStats = batchFailItems.length > 0 ? aggregateFailures(batchFailItems, 3) : [];
+        const batchFailFieldStats = batchFailItems.length > 0 ? aggregateByField(batchFailItems, 1) : [];
+        const pickBatchSamples = (cat: string) =>
+            (batchFailStats.find(s => s.category === cat)?.samples ?? [])
+                .map(s => (s || '').slice(0, 200))
+                .join(' || ');
         TelemetryService.sendTelemetryEvent('explorerPush.batch.done', {
             fileCount: String(totalFiles),
             totalSucc: String(totalSucc),
@@ -552,6 +579,17 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
             cancelled: cancelled ? '1' : '0',
             durationMs: String(Date.now() - batchStartTs),
             extBreakdown: resultExtBreakdown,
+            // 失败分类维度（与 .complete 对齐，便于批量/单文件统一看板）
+            failCategoryBreakdown: summarizeCategoryBreakdown(batchFailStats),
+            topFailCategory: batchFailStats.length ? batchFailStats[0].category : '',
+            failFieldBreakdown: summarizeFieldBreakdown(batchFailFieldStats),
+            topFailField: batchFailFieldStats.length ? batchFailFieldStats[0].field : '',
+            interfaceFailBreakdown: summarizeFieldBreakdown(batchFailFieldStats, 'interface'),
+            topInterfaceFailField: topFieldOfLevel(batchFailFieldStats, 'interface')?.field || '',
+            caseFailBreakdown: summarizeFieldBreakdown(batchFailFieldStats, 'case'),
+            topCaseFailField: topFieldOfLevel(batchFailFieldStats, 'case')?.field || '',
+            notFoundSamples: pickBatchSamples('notFound'),
+            unknownSamples: pickBatchSamples('unknown'),
         });
     } catch (summaryErr: any) {
         // 兜底：即使主汇总计算/发送异常，results 中已完成的逐文件结果仍有效，

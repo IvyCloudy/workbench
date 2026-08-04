@@ -351,7 +351,7 @@ function _buildSkeletonHtml() {
                 +     '<span class="xs-sub-resizer" data-sub-idx="0" title="拖动调整子列宽"></span>'
                 +   '</span>'
                 +   '<span class="xs-th-sub xs-th-sub-desc" data-sub-idx="1" style="width:' + _w[1] + 'px">'
-                +     '<span class="xs-th-sub-text">步骤描述</span>'
+                +     '<span class="xs-th-sub-text">步骤名称</span>'
                 +     _subFilterBtn(1)
                 +     '<span class="xs-sub-resizer" data-sub-idx="1" title="拖动调整子列宽"></span>'
                 +   '</span>'
@@ -693,9 +693,13 @@ function _buildStepExpandedHtml(text, frozen) {
     //   （如 step001-1）无法被旧解析器识别，focusout 会把整行当作 desc 存回
     //   operation，下轮拼接再叠加，形成累积污染。
     //   拼接侧已改用自然数序号从根本上杜绝，但历史文件仍可能存在多次累积的脏 desc，
-    //   这里以宽松匹配（步骤 + 任意非空白 token + 空白/行尾）循环剥离，
-    //   保证渲染稳定；下次编辑保存后即写回干净数据。
-    var _cleanRE = /^步骤\S+(?:\s+|$)/;
+    //   这里以宽松匹配循环剥离，保证渲染稳定；下次编辑保存后即写回干净数据。
+    //
+    //   重要：正则必须避免误删以"步骤"开头的合法 operation 内容（如"步骤名称1"、
+    //   "步骤操作描述"等）。区分策略：历史污染的 id 残留为 ASCII 标识符（step001、
+    //   TC-01 等），而合法 operation 文本在"步骤"后紧跟汉字或通用 Unicode 字符。
+    //   因此使用 [a-zA-Z0-9_-] 限定 token 字符集，不再用 \S 贪婪匹配。
+    var _cleanRE = /^步骤[a-zA-Z0-9_\-]+(?:\s+|$)/;
     for (var _cs = 0; _cs < steps.length; _cs++) {
         var _cst = steps[_cs];
         if (!_cst) continue;

@@ -452,7 +452,7 @@ function autoFitStepsSubCol(idx) {
             }
 
             // 表头文字兜底
-            var headTxt = ['序号', '步骤描述', '预期结果', '数据', '操作'][idx];
+            var headTxt = ['序号', '步骤名称', '预期结果', '数据', '操作'][idx];
             ruler.textContent = headTxt;
             var headW = ruler.offsetWidth;
             if (headW + SUB_HEAD_PAD > dataMax) dataMax = headW + SUB_HEAD_PAD - SUB_CELL_PAD;

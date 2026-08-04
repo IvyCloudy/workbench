@@ -333,7 +333,22 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
         expBlocks = [{ num: 1, content: expectedText.trim() }];
     }
     const expMap = new Map(expBlocks.map(b => [b.num, b.content]));
-    const expected: string[] = descBlocks.map(b => expMap.get(b.num) ?? '');
+    // CSV 预期值：单元格内按换行区分多项，对每个内容行加序号（从 1 开始）；
+    // 分组标题【UI检查】/【接口调用】/【数据检查】与步骤号行保持原样、并重置序号计数。
+    const withCsvIndex = (text: string): string => {
+        const lines = toStr(text).split(/\r?\n/);
+        let idx = 0;
+        return lines.map((line) => {
+            const t = line.trim();
+            if (t === '' || /^【(UI检查|接口调用|数据检查)】$/.test(t) || /^步骤\d+/.test(t)) {
+                if (/^【(UI检查|接口调用|数据检查)】$/.test(t) || /^步骤\d+/.test(t)) idx = 0;
+                return line;
+            }
+            idx += 1;
+            return `${idx}. ${line}`;
+        }).join('\n');
+    };
+    const expected: string[] = descBlocks.map(b => withCsvIndex(expMap.get(b.num) ?? ''));
     // 预期结果必填：至少要有一步存在非空预期，否则视为整体缺失预期
     if (expected.every(e => toStr(e).trim() === '')) {
         throw makeMapError(
@@ -411,12 +426,19 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
         return dataLines.length ? `${nl2br(op)}<br>${dataLines.join('<br>')}` : nl2br(op);
     });
 
+    // 预期值数组场景：为每个预期项加序号（从 1 开始），数组内多项以换行分隔
+    const withIndex = (v: any): string[] => {
+        const lines = toLines(v).filter((l) => l.trim() !== '');
+        if (!Array.isArray(v) || lines.length === 0) return lines;
+        return lines.map((l, i) => `${i + 1}. ${l}`);
+    };
+
     // expected：每个 step 拼成「【UI检查】/【接口调用】/【数据检查】」三段，空段不拼接；三段都为空时保留 '' 占位；与 steps 一一对应
     const expected: string[] = steps.map((s) => {
         const segs: string[] = [];
-        const ui = toLines(s && s.ui_expected).filter((l) => l.trim() !== '');
-        const api = toLines(s && s.api_expected).filter((l) => l.trim() !== '');
-        const db = toLines(s && s.db_expected).filter((l) => l.trim() !== '');
+        const ui = withIndex(s && s.ui_expected);
+        const api = withIndex(s && s.api_expected);
+        const db = withIndex(s && s.db_expected);
         if (ui.length) segs.push('【UI检查】\n' + ui.join('\n'));
         if (api.length) segs.push('【接口调用】\n' + api.join('\n'));
         if (db.length) segs.push('【数据检查】\n' + db.join('\n'));

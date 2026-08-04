@@ -66,6 +66,7 @@ export type PushFailCategory =
     | 'checkpointZero'       // 案例检查点数为 0（性质唯一，无需复合）
     | 'stepMismatch'         // 步骤描述与预期结果数量不一致（性质唯一，无需复合）
     | 'taskStageMissing'     // 测试任务编号未匹配到有效阶段信息（阶段信息强匹配，早于 auth）
+    | 'paramFormat'          // 接口请求参数格式/校验错误（整批失败，区别于行级字段格式错）
     | 'fieldInvalid'         // 字段类兜底（无法定位到具体性质的字段错误）
     | 'notFound'             // 其他不存在/未找到（兜底，具体业务已拆到下方细分类）
     // —— notFound 细分类：按"未找到的是什么资源"拆，单看 category 即懂业务 ——
@@ -158,6 +159,11 @@ const BACKEND_TOP_RULES: Array<{ category: PushFailCategory; patterns: RegExp }>
     { category: 'fieldInvalid', patterns: /无法解析|结构异常|字段校验未通过|参数结构错误/ },
     // serverError：要求 5xx 紧跟错误语境，避免误伤"长度不能超过500个字符"中的裸数字 500。
     { category: 'serverError',  patterns: /服务[器端]|系统异常|内部错误|5xx|server\s*error|5\d{2}(?:错误|异常|状态码|报错)/i },
+    // paramFormat：接口请求参数级格式/校验错误（整批失败），区别于行级字段格式错 fieldFormat。
+    // 文本形如 "参数格式不对，请检查参数" / "请求参数格式不正确" / "参数校验失败" / "入参不合法"。
+    // 须排在 fieldInvalid 之前：避免被 "参数结构错误" 之类措辞误伤为字段级兜底；
+    // 但因文案不点名具体字段，仅作为分类维度（field 不强制），便于在运营看板区分"参数级整批失败"与"行级字段格式错"。
+    { category: 'paramFormat', patterns: /参数格式|参数错误|参数为空|参数不合法|参数校验|参数异常|请检查参数|入参|请求参数|参数不完整/ },
 ];
 
 /**

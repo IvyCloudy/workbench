@@ -483,8 +483,9 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
                     showPushResult(panel, baseName, successCount, failures, total, undefined, skipped ?? 0);
                     if (!panel) {
                         TelemetryService.sendTelemetryEvent('explorerPush.noPanelFallback', {
-                            succ: String(successCount),
-                            fail: String(failures.length),
+                            totalRows: String(successCount + failures.length),
+                            successRows: String(successCount),
+                            failedRows: String(failures.length),
                             ext: path.extname(filePath).toLowerCase(),
                         });
                     }
@@ -552,9 +553,9 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         TelemetryService.sendTelemetryEvent('explorerPush.batch.fileResult', {
             ext: fileExt,
             resultType,
-            succ: String(result.successCount),
-            fail: String(result.failCount),
-            total: String(result.total),
+            successRows: String(result.successCount),
+            failedRows: String(result.failCount),
+            totalRows: String(result.total),
             failCategoryBreakdown: summarizeCategoryBreakdown(fileFailStats),
             topFailCategory: fileFailStats.length ? fileFailStats[0].category : '',
             failFieldBreakdown: summarizeFieldBreakdown(fileFailFieldStats),
@@ -652,29 +653,30 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
                     .map(f => (f.reason || '').slice(0, 200)),
             ),
         ).filter(Boolean).join(' || ');
-        TelemetryService.sendTelemetryEvent('explorerPush.batch.done', {
-            fileCount: String(totalFiles),
-            totalSucc: String(totalSucc),
-            totalFail: String(totalFail),
-            errorFiles: String(errorFiles),
-            cancelled: cancelled ? '1' : '0',
-            durationMs: String(Date.now() - batchStartTs),
-            extBreakdown: resultExtBreakdown,
-            // 失败分类维度（与 .complete 对齐，便于批量/单文件统一看板）
-            failCategoryBreakdown: summarizeCategoryBreakdown(batchFailStats),
-            topFailCategory: batchFailStats.length ? batchFailStats[0].category : '',
-            failFieldBreakdown: summarizeFieldBreakdown(batchFailFieldStats),
-            topFailField: batchFailFieldStats.length ? batchFailFieldStats[0].field : '',
-            interfaceFailBreakdown: summarizeFieldBreakdown(batchFailFieldStats, 'interface'),
-            topInterfaceFailField: topFieldOfLevel(batchFailFieldStats, 'interface')?.field || '',
-            caseFailBreakdown: summarizeFieldBreakdown(batchFailFieldStats, 'case'),
-            topCaseFailField: topFieldOfLevel(batchFailFieldStats, 'case')?.field || '',
-            taskNotFoundSamples: pickBatchSamples('taskNotFound'),
-            testPointMissingSamples: pickBatchSamples('testPointMissing'),
-            pathNotMatchPointSamples: pickBatchSamples('pathNotMatchPoint'),
-            sourceNotSupportedSamples: pickBatchSamples('sourceNotSupported'),
-            unknownSamples: unknownBatchSamples,
-        });
+            TelemetryService.sendTelemetryEvent('explorerPush.batch.done', {
+                fileCount: String(totalFiles),
+                totalRows: String(totalSucc + totalFail),
+                successRows: String(totalSucc),
+                failedRows: String(totalFail),
+                errorFiles: String(errorFiles),
+                cancelled: cancelled ? '1' : '0',
+                durationMs: String(Date.now() - batchStartTs),
+                extBreakdown: resultExtBreakdown,
+                // 失败分类维度（与 .complete 对齐，便于批量/单文件统一看板）
+                failCategoryBreakdown: summarizeCategoryBreakdown(batchFailStats),
+                topFailCategory: batchFailStats.length ? batchFailStats[0].category : '',
+                failFieldBreakdown: summarizeFieldBreakdown(batchFailFieldStats),
+                topFailField: batchFailFieldStats.length ? batchFailFieldStats[0].field || '' : '',
+                interfaceFailBreakdown: summarizeFieldBreakdown(batchFailFieldStats, 'interface'),
+                topInterfaceFailField: topFieldOfLevel(batchFailFieldStats, 'interface')?.field || '',
+                caseFailBreakdown: summarizeFieldBreakdown(batchFailFieldStats, 'case'),
+                topCaseFailField: topFieldOfLevel(batchFailFieldStats, 'case')?.field || '',
+                taskNotFoundSamples: pickBatchSamples('taskNotFound'),
+                testPointMissingSamples: pickBatchSamples('testPointMissing'),
+                pathNotMatchPointSamples: pickBatchSamples('pathNotMatchPoint'),
+                sourceNotSupportedSamples: pickBatchSamples('sourceNotSupported'),
+                unknownSamples: unknownBatchSamples,
+            });
     } catch (summaryErr: any) {
         // 兜底：即使主汇总计算/发送异常，results 中已完成的逐文件结果仍有效，
         // 必须基于 results 重新安全累加真实的部分成功/失败数，绝不能清零，
@@ -695,8 +697,9 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
             })();
             TelemetryService.sendTelemetryEvent('explorerPush.batch.done', {
                 fileCount: String(totalFiles),
-                totalSucc: String(partSucc),
-                totalFail: String(partFail),
+                totalRows: String(partSucc + partFail),
+                successRows: String(partSucc),
+                failedRows: String(partFail),
                 errorFiles: String(partErrFiles),
                 cancelled: cancelled ? '1' : '0',
                 durationMs: String(Date.now() - batchStartTs),

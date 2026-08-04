@@ -115,6 +115,17 @@ describe('pushFailureCategory · 后端中文长文本归类', () => {
         expect(classifyBackendFailure('服务内部错误 500')).toBe('serverError');
     });
 
+    it('接口请求参数格式/校验错误 → paramFormat（整批失败，区别于行级字段格式错）', () => {
+        expect(classifyBackendFailure('参数格式不对，请检查参数')).toBe('paramFormat');
+        expect(classifyBackendFailure('参数格式错误，请检查参数')).toBe('paramFormat');
+        expect(classifyBackendFailure('请求参数格式不正确')).toBe('paramFormat');
+        expect(classifyBackendFailure('参数校验失败：格式不对')).toBe('paramFormat');
+        expect(classifyBackendFailure('入参不合法')).toBe('paramFormat');
+        // 不应误伤行级字段格式错：仍走 fieldFormat / 字段.性质 复合码
+        expect(classifyBackendFailure('testCaseName 格式不正确')).toBe('testCaseName.format');
+        expect(classifyBackendFailure('某字段格式不正确')).toBe('fieldFormat');
+    });
+
     it('无法归类 → unknown（兜底）', () => {
         expect(classifyBackendFailure('推送处理中，请关注后续通知')).toBe('unknown');
         expect(classifyBackendFailure('')).toBe('unknown');

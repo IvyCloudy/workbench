@@ -20,7 +20,7 @@
  *    testCasePath      ← path
  *    testCaseName      ← name              （案例名称）
  *    testCaseDes       ← description       （案例描述）
- *    testType          ← test_type / 执行方式（'手工'/'UI自动化'/'接口自动化'/'自动化'/'半自动化' 去空格后保留；未填写或其它取值一律抛错，无默认值）
+ *    testType          ← test_type / 执行方式（口语化输入自动归一化：'接口'→'接口自动化'、'界面'→'UI自动化'；其余命中白名单值保留，未填写或其它取值一律抛错，无默认值）
  *    type              ← 固定 '功能点类'
  *    priority          ← priority
  *    preCondition      ← preconditions     （数组按 \n 拼为字符串）
@@ -37,7 +37,7 @@
  *    testCasePath      ← 路径
  *    testCaseName      ← 名称
  *    testCaseDes       ← 案例描述
- *    testType          ← 执行方式（'手工'/'UI自动化'/'接口自动化'/'自动化'/'半自动化' 去空格后保留；未填写或其它取值一律抛错，无默认值）
+ *    testType          ← 执行方式（口语化输入自动归一化：'接口'→'接口自动化'、'界面'→'UI自动化'；其余命中白名单值保留，未填写或其它取值一律抛错，无默认值）
  *    type              ← 案例类型（空 → '功能点类'）
  *    priority          ← 优先级
  *    preCondition      ← 前置条件
@@ -163,21 +163,49 @@ export function joinLines(v: any): string {
 }
 
 /** 「执行方式 / test_type」合法取值白名单 */
-const TEST_TYPE_VALUES = ['手工', 'UI自动化', '接口自动化', '自动化', '半自动化'];
+const TEST_TYPE_VALUES = ['手工', 'UI自动化', '接口自动化', '自动化'];
+
+/**
+ * 「执行方式 / test_type」口语化输入 → 标准值 的别名归一化。
+ * 目的：允许用户用更口语/简短的词表达执行方式，由映射器自动翻译为标准落库值：
+ *   - '接口'     → '接口自动化'
+ *   - '界面'     → 'UI自动化'
+ * 不在表中的输入原样返回（交给后续白名单校验决定是否合法）。
+ */
+const TEST_TYPE_ALIASES: Record<string, string> = {
+    '接口': '接口自动化',
+    '界面': 'UI自动化'
+};
+
+/**
+ * 将口语化输入归一化为标准执行方式值；命中别名表则翻译，否则原样返回。
+ */
+function normalizeTestTypeInput(raw: any): string {
+    const v = toStr(raw).trim();
+    if (v === '') return v;
+    if (Object.prototype.hasOwnProperty.call(TEST_TYPE_ALIASES, v)) return TEST_TYPE_ALIASES[v];
+    // 忽略大小写再匹配一次（覆盖 'UI'/'API' 等已混入大小写的情况）
+    const lower = v.toLowerCase();
+    for (const key of Object.keys(TEST_TYPE_ALIASES)) {
+        if (key.toLowerCase() === lower) return TEST_TYPE_ALIASES[key];
+    }
+    return v;
+}
 
 /**
  * 校验「执行方式 / test_type」→ 接口 testType（严格白名单，无默认值）：
- *   - 命中白名单（'手工' / 'UI自动化' / '接口自动化' / '自动化' / '半自动化'）→ 原样保留；
+ *   - 先经别名归一化（'接口' → '接口自动化' / '界面' → 'UI自动化' 等口语输入自动翻译）；
+ *   - 命中白名单（'手工' / 'UI自动化' / '接口自动化' / '自动化'）→ 原样保留；
  *   - 其它情况（含未填写 / 空值 / 仅空白 / 任意拼写错误的非空值）→ 抛结构化映射错误
  *     （invalidTestType），由上层给出友好文案。
  * 即：所有不符合白名单的取值（含空）一律报错，不再有默认回退。
  */
 function resolveTestType(raw: any, caseTag: string, rowIndex?: number): string {
-    const v = toStr(raw).trim();
+    const v = normalizeTestTypeInput(raw);
     if (TEST_TYPE_VALUES.indexOf(v) !== -1) return v;
     const detail = v === '' ? '未填写' : `取值 "${v}" 不合法`;
     throw makeMapError(
-        `案例 [${caseTag}] 的「执行方式」${detail}，仅支持：${TEST_TYPE_VALUES.join(' / ')}。`,
+        `案例 [${caseTag}] 的「执行方式」${detail}，仅支持：${TEST_TYPE_VALUES.join(' / ')}（也可简写为「接口」/「界面」）。`,
         { caseTag, reason: 'invalidTestType', rowIndex }
     );
 }

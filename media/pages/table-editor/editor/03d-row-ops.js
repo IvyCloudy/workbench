@@ -461,7 +461,7 @@ function pushFromContextMenu() {
             if (typeof updatePushBtn === 'function') updatePushBtn();
             if (typeof showToast === 'function') showToast('推送超时未响应，已解除按钮锁定', 'error');
         }
-    }, 30000);
+    }, 60000);
     S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap, pushIndexToRow: pushIndexToRow });
 }
 

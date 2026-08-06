@@ -67,7 +67,7 @@ function pushChanges() {
     // 置忙：锁定推送按钮与 UI，正常路径会在 pushDone/pushResult/pushError 清除。
     S._pushing = true;
     if (typeof updatePushBtn === 'function') updatePushBtn();
-    // 兑底：若后端 30s 内未回复任何消息，自动解锁，避免按钮永久置灰
+    // 兑底：若后端 60s 内未回复任何消息，自动解锁，避免按钮永久置灰
     if (S._pushTimeoutTimer) { try { clearTimeout(S._pushTimeoutTimer); } catch (_) {} }
     S._pushTimeoutTimer = setTimeout(function () {
         S._pushTimeoutTimer = null;
@@ -76,7 +76,7 @@ function pushChanges() {
             if (typeof updatePushBtn === 'function') updatePushBtn();
             if (typeof showToast === 'function') showToast('推送超时未响应，已解除按钮锁定', 'error');
         }
-    }, 30000);
+    }, 60000);
     S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap, pushIndexToRow: pushIndexToRow });
 }
 

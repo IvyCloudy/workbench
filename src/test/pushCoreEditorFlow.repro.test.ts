@@ -78,7 +78,7 @@ describe('编辑器全链路：行号映射 / 接口成功计入', () => {
     it('无样例行：8 预校验失败(行号正确) + 3 成功', async () => {
         // 前端选中 11 行（全局行号 1..11），pushIndexToRow = [1..11]
         // 合法行需补齐 mapper 必填字段（description + steps.operation + ui_expected）
-        const legal = { description: '推送测试', steps: [{ operation: '执行', ui_expected: ['ok'] }] };
+        const legal = { description: '推送测试', steps: [{ operation: '执行', ui_expected: ['ok'] }], test_type: '手工', '执行方式': '手工' };
         const rows = [
             { [TS_ID_COLUMN]: 'TESTCASE_ID' },       // 1 占位
             { [TS_ID_COLUMN]: '' },                   // 2 空
@@ -119,7 +119,7 @@ describe('编辑器全链路：行号映射 / 接口成功计入', () => {
         // 全局行 1=样例, 2..9=预校验失败, 10..12=合法(被选中)
         const sampleRow = { [TS_ID_COLUMN]: '案例唯一标识，不可修改' };
         // 合法行需补齐 mapper 必填字段（description + steps.operation + ui_expected）
-        const legal = { description: '推送测试', steps: [{ operation: '执行', ui_expected: ['ok'] }] };
+        const legal = { description: '推送测试', steps: [{ operation: '执行', ui_expected: ['ok'] }], test_type: '手工', '执行方式': '手工' };
         const rows = [
             sampleRow,                               // 1 样例(应被过滤)
             { [TS_ID_COLUMN]: 'TESTCASE_ID' },       // 2 占位

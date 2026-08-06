@@ -292,10 +292,17 @@ describe('pointCaseLinker', () => {
         ];
         const { linkPointsToCases } = await importLinker();
         const r = await linkPointsToCases(fp, POINTS);
-        // ORD-001 因 path 不同 → 是 type=3；path 命中 LGN-001/LGN-002 → type=2
-        // Q14 取最强 type=2（path 命中）→ 只归到 LGN-001
-        expect(r.byPoint['LGN-001_账号密码登录']).toHaveLength(1);
-        expect(r.byPoint['LGN-001_账号密码登录'][0].type).toBe(2);
+        // 设计意图（见 pointCaseLinker.ts:601-616）：parent_id 一旦命中任何 point，
+        // path 仅参与 multiHit 检测，不再进入归属候选（避免同 pointPath 下多个要点被引入、造成 type=2 抢夺）。
+        // 因此 C-MULTI 的 parent_id=ORD-001 命中（path 不等 → type=3），
+        // 而其 path「账户中心/登录模块」指向的 LGN-001/LGN-002 属于完全不同模块，
+        // 与 parent_id 命中的 pointId 集合不相交 → 触发 multiHit（case2），但归属仍落到 ORD-001。
+        expect(r.byPoint['ORD-001_创建订单']).toHaveLength(1);
+        expect(r.byPoint['ORD-001_创建订单'][0].type).toBe(3);
+        // LGN-001/LGN-002 不应被 path 抢走归属
+        expect(r.byPoint['LGN-001_账号密码登录']).toBeUndefined();
+        expect(r.byPoint['LGN-002_密码错误拦截']).toBeUndefined();
+        // 跨模块冲突（path 指向与 parent_id 完全不同的模块）被识别为 multiHit 脏数据
         expect(r.stats.multiHitCases).toContain('C-MULTI');
     });
 

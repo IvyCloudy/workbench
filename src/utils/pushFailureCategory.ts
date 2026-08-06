@@ -194,6 +194,7 @@ const NATURE_FALLBACK_CATEGORY: Record<FailNature, PushFailCategory> = {
     format: 'fieldFormat',
     enum: 'enumInvalid',
     dup: 'fieldDup',
+    notFound: 'notFound',
 };
 
 // ============================================

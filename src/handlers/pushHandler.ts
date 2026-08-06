@@ -187,7 +187,7 @@ async function pushSingleFile(
     const { rowIndexMap, pushIndexToRow } = buildRowIndexMappings(rows);
 
     // 收集结果
-    let finalResult: { successCount: number; failures: PushFailureItem[]; total: number; skipped?: number } | null = null;
+    let finalResult: { successCount: number; failures: PushFailureItem[]; total: number; skipped?: number; preValidationFailCount?: number; traceId?: string; costMs?: number } | null = null;
     let pushError: string | null = null;
     let resolved = false;
 
@@ -392,6 +392,7 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
                             .slice(0, 240);
                         const countHint = errIssues.length > 1 ? `，共 ${errIssues.length} 处错误` : '';
                         const yamlFailures: PushFailureItem[] = errIssues.map((iss) => ({
+                            tsId: '',
                             reason: `YAML 语法错误（第 ${iss.line} 行）`,
                             category: classifyFailure({ reason: `YAML 语法错误（第 ${iss.line} 行）` }),
                         }));
@@ -426,7 +427,7 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
                         ext: 'yaml',
                         traceId: batchTraceId,
                         costMs: String(Date.now() - batchStart),
-                        ...buildFailDimensions([{ reason: crashMsg, category: classifyFailure({ reason: crashMsg }) }]),
+                        ...buildFailDimensions([{ tsId: '', reason: crashMsg, category: classifyFailure({ reason: crashMsg }) }]),
                     });
                     showPushErrorModal(panel, baseName, `YAML 校验器异常，已终止推送。\n\n请手动检查文件语法后重试。\n错误信息：${vErr?.message || vErr}`);
                     return;

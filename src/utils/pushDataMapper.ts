@@ -21,7 +21,7 @@
  *    testCaseName      ← name              （案例名称）
  *    testCaseDes       ← description       （案例描述）
  *    testType          ← test_type / 执行方式（口语化输入自动归一化：'接口'→'接口自动化'、'界面'→'UI自动化'；其余命中白名单值保留，未填写或其它取值一律抛错，无默认值）
- *    type              ← 固定 '功能点类'
+ *    type              ← type 字段（空 → '功能点类'；否则用用户传入值）
  *    priority          ← priority
  *    preCondition      ← preconditions     （数组按 \n 拼为字符串）
  *    description(接口) ← 每个 step 拼为 operation + <br> + data
@@ -489,7 +489,7 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
         testCaseName: fieldOrDefault(row, 'name', ''),
         testCaseDes:  fieldOrDefault(row, 'description', ''),
         testType,
-        type:         '功能点类',
+        type:         fieldOrDefault(row, 'type', '功能点类'),
         priority:     fieldOrDefault(row, 'priority', '低'),
         preCondition: nl2br(joinLines(row['preconditions'])),
         description,

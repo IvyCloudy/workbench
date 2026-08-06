@@ -7,15 +7,10 @@ import { parseFileToRows } from '../parsers';
 import { showPushErrorModal, showModal, showPushResult } from '../utils/message';
 import { createPushProgress, PushFileResult } from '../utils/pushUI';
 import { TelemetryService } from '../utils/telemetry';
-import { runPush, buildRowIndexMappings, PushFailureItem } from './pushCore';
+import { runPush, buildRowIndexMappings, buildFailDimensions, PushFailureItem } from './pushCore';
 import { validateYamlContent, publishYamlDiagnostics } from '../utils/yamlValidator';
 import { YAML_CMD_FIX_ALL } from '../utils/yamlConstants';
 import {
-    aggregateFailures,
-    aggregateByField,
-    summarizeCategoryBreakdown,
-    summarizeFieldBreakdown,
-    topFieldOfLevel,
     classifyFailure,
     failureFieldOf,
 } from '../utils/pushFailureCategory';
@@ -289,6 +284,8 @@ async function pushSingleFile(
             total: rows.length,
             failures: [],
             error: pushError,
+            // 整文件异常：reason 维度对齐 .aborted 的 reason，供批量下钻分析
+            reason: pushError,
         };
     }
 
@@ -301,6 +298,10 @@ async function pushSingleFile(
         total: result.total,
         failures: result.failures,
         skipped: result.skipped ?? 0,
+        // 透传 runPush 回传的链路字段，使 batch.fileResult 与单文件 .complete 格式对齐
+        preValidationFailCount: result.preValidationFailCount,
+        traceId: result.traceId,
+        costMs: result.costMs,
     };
 }
 
@@ -317,10 +318,17 @@ async function pushSingleFile(
 export async function handleFilePush(targets: vscode.Uri[], context: vscode.ExtensionContext): Promise<void> {
     if (!targets || targets.length === 0) return;
 
+    // 调度层链路追踪：一次用户操作的统一 traceId + 起始时刻，
+    // 使 handleFilePush 内的 .aborted 与 runPush 内的 .aborted / .complete 字段口径对齐（traceId / costMs / ext）。
+    const batchTraceId = Math.random().toString(36).slice(2, 10);
+    const batchStart = Date.now();
+
     // ─── 阶段 1：收集可推送文件 ─────────────────────────────────────────────
     const files = await collectPushableFiles(targets);
     if (files.length === 0) {
-        TelemetryService.sendTelemetryEvent('explorerPush.aborted', { reason: 'noFiles', ext: '' });
+        TelemetryService.sendTelemetryEvent('explorerPush.aborted', {
+            reason: 'noFiles', ext: '', traceId: batchTraceId, costMs: String(Date.now() - batchStart),
+        });
         showModal('default', 'warning', '无可推送文件',
             '所选目录或文件中未找到可推送的测试案例文件（.csv / .yaml / .yml / .json）。\n\n请确认文件位于 测试任务/<任务文件夹>/测试案例/ 目录下。');
         return;
@@ -351,7 +359,9 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
 
         const fileCheck = FileTypeChecker.isQualifiedFile(target);
         if (!fileCheck.qualified) {
-            TelemetryService.sendTelemetryEvent('explorerPush.aborted', { reason: 'dirNotQualified', ext: '' });
+            TelemetryService.sendTelemetryEvent('explorerPush.aborted', {
+                reason: 'dirNotQualified', ext: '', traceId: batchTraceId, costMs: String(Date.now() - batchStart),
+            });
             showPushErrorModal(panel, baseName, `文件不在合规目录下\n\n请将文件放入 测试任务/<任务文件夹>/测试案例/ 目录结构中。\n当前文件：${baseName}`);
             return;
         }
@@ -381,12 +391,17 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
                             .split('\n')[0]
                             .slice(0, 240);
                         const countHint = errIssues.length > 1 ? `，共 ${errIssues.length} 处错误` : '';
+                        const yamlFailures: PushFailureItem[] = errIssues.map((iss) => ({
+                            reason: `YAML 语法错误（第 ${iss.line} 行）`,
+                            category: classifyFailure({ reason: `YAML 语法错误（第 ${iss.line} 行）` }),
+                        }));
                         TelemetryService.sendTelemetryEvent('explorerPush.aborted', {
                             reason: 'yamlSyntaxError',
                             ext: 'yaml',
                             errorLine: String(first.line),
-                            failCategoryBreakdown: summarizeCategoryBreakdown(aggregateFailures([{ reason: `YAML 语法错误（第 ${first.line} 行）` }], 1)),
-                            topFailCategory: classifyFailure({ reason: `YAML 语法错误（第 ${first.line} 行）` }),
+                            traceId: batchTraceId,
+                            costMs: String(Date.now() - batchStart),
+                            ...buildFailDimensions(yamlFailures),
                         });
                         vscode.window.showWarningMessage(
                             `${baseName} 存在 YAML 语法错误（首条：第 ${first.line} 行${countHint}），已终止推送。错误摘要：${errSummary}`,
@@ -405,11 +420,13 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
                     }
                 } catch (vErr: any) {
                     console.warn('[推送] YAML 校验器异常:', vErr?.message || vErr);
+                    const crashMsg = vErr?.message || 'YAML 校验器异常';
                     TelemetryService.sendTelemetryEvent('explorerPush.aborted', {
                         reason: 'yamlValidatorCrash',
                         ext: 'yaml',
-                        failCategoryBreakdown: summarizeCategoryBreakdown(aggregateFailures([{ reason: vErr?.message || 'YAML 校验器异常' }], 1)),
-                        topFailCategory: classifyFailure({ reason: vErr?.message || 'YAML 校验器异常' }),
+                        traceId: batchTraceId,
+                        costMs: String(Date.now() - batchStart),
+                        ...buildFailDimensions([{ reason: crashMsg, category: classifyFailure({ reason: crashMsg }) }]),
                     });
                     showPushErrorModal(panel, baseName, `YAML 校验器异常，已终止推送。\n\n请手动检查文件语法后重试。\n错误信息：${vErr?.message || vErr}`);
                     return;
@@ -422,12 +439,18 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         try {
             rows = await parseFileToRows(filePath);
         } catch (err: any) {
-            TelemetryService.sendTelemetryEvent('explorerPush.aborted', { reason: 'parseError', ext: path.extname(filePath).toLowerCase() });
+            TelemetryService.sendTelemetryEvent('explorerPush.aborted', {
+                reason: 'parseError', ext: path.extname(filePath).toLowerCase(),
+                traceId: batchTraceId, costMs: String(Date.now() - batchStart),
+            });
             showPushErrorModal(panel, baseName, `文件解析失败\n\n${baseName} 无法解析为有效的测试案例数据。\n错误信息：${err.message || err}`);
             return;
         }
         if (!rows || rows.length === 0) {
-            TelemetryService.sendTelemetryEvent('explorerPush.aborted', { reason: 'emptyFile', ext: path.extname(filePath).toLowerCase() });
+            TelemetryService.sendTelemetryEvent('explorerPush.aborted', {
+                reason: 'emptyFile', ext: path.extname(filePath).toLowerCase(),
+                traceId: batchTraceId, costMs: String(Date.now() - batchStart),
+            });
             showPushErrorModal(panel, baseName, `文件无数据\n\n${baseName} 中未检测到有效的测试案例数据，请检查文件内容。`);
             return;
         }
@@ -538,32 +561,31 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
             : `成功 ${result.successCount} / 失败 ${result.failCount} / 共 ${result.total} 条`;
 
         let status: 'done' | 'error' | 'warning' = 'done';
-        let resultType = 'success';
+        let pushResult: 'allSuccess' | 'allFail' | 'partial' = 'allSuccess';
         if (result.error) {
             status = 'error';
-            resultType = 'error';
+            pushResult = 'allFail';
         } else if (result.failCount > 0) {
             status = 'warning';
-            resultType = 'partialFail';
+            pushResult = result.successCount > 0 ? 'partial' : 'allFail';
         }
 
-        // 每文件结果埋点（含失败分类维度，便于逐文件下钻分析错误类型）
-        const fileFailStats = (result.failures || []).length > 0 ? aggregateFailures(result.failures, 3) : [];
-        const fileFailFieldStats = (result.failures || []).length > 0 ? aggregateByField(result.failures, 1) : [];
+        // 每文件结果埋点：字段命名与单文件 `${prefix}.complete` 对齐，便于后台统一聚合。
+        //   - pushResult 取代原 resultType（allSuccess/allFail/partial，与 .complete 同口径）
+        //   - 新增 preValidationFailedRows（区分预校验拦截 vs 接口实推失败）
+        //   - 新增 traceId / costMs（逐文件链路追踪与耗时，原 .complete 自带、批量此前缺失）
+        //   - 整文件 error 时带 reason（对齐 .aborted 的 reason 维度，原批量丢失）
         TelemetryService.sendTelemetryEvent('explorerPush.batch.fileResult', {
             ext: fileExt,
-            resultType,
+            pushResult,
             successRows: String(result.successCount),
             failedRows: String(result.failCount),
             totalRows: String(result.total),
-            failCategoryBreakdown: summarizeCategoryBreakdown(fileFailStats),
-            topFailCategory: fileFailStats.length ? fileFailStats[0].category : '',
-            failFieldBreakdown: summarizeFieldBreakdown(fileFailFieldStats),
-            topFailField: fileFailFieldStats.length ? fileFailFieldStats[0].field : '',
-            interfaceFailBreakdown: summarizeFieldBreakdown(fileFailFieldStats, 'interface'),
-            topInterfaceFailField: topFieldOfLevel(fileFailFieldStats, 'interface')?.field || '',
-            caseFailBreakdown: summarizeFieldBreakdown(fileFailFieldStats, 'case'),
-            topCaseFailField: topFieldOfLevel(fileFailFieldStats, 'case')?.field || '',
+            preValidationFailedRows: String(result.preValidationFailCount ?? 0),
+            traceId: result.traceId ?? '',
+            costMs: String(result.costMs ?? 0),
+            ...(result.reason ? { reason: result.reason } : {}),
+            ...buildFailDimensions(result.failures || []),
         });
 
         progressPanel.update({
@@ -636,23 +658,8 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         })();
         // 批量失败分类聚合：合并所有文件的 failures（每项已是 PushFailureItem，含 category/field），
         // 使 batch.done 也能按错误类型/字段下钻分析（与单文件 .complete 同维度）。
-        // 仅当存在失败时才计算，避免无失败时多算一次聚合。
+        // 失败维度（分类/字段/分层/原文样本）统一由 buildFailDimensions 产出，消除重复拼装。
         const batchFailItems = results.flatMap(r => r.failures || []);
-        const batchFailStats = batchFailItems.length > 0 ? aggregateFailures(batchFailItems, 3) : [];
-        const batchFailFieldStats = batchFailItems.length > 0 ? aggregateByField(batchFailItems, 1) : [];
-        const pickBatchSamples = (cat: string) =>
-            (batchFailStats.find(s => s.category === cat)?.samples ?? [])
-                .map(s => (s || '').slice(0, 200))
-                .join(' || ');
-        // unknown 是未归类措辞，必须带「全部」原文样本才能让后台完整定位、补规则，
-        // 不受聚合 3 条上限限制：直接从原始失败列表全量收集去重后的 reason。
-        const unknownBatchSamples = Array.from(
-            new Set(
-                batchFailItems
-                    .filter(f => classifyFailure(f) === 'unknown')
-                    .map(f => (f.reason || '').slice(0, 200)),
-            ),
-        ).filter(Boolean).join(' || ');
             TelemetryService.sendTelemetryEvent('explorerPush.batch.done', {
                 fileCount: String(totalFiles),
                 totalRows: String(totalSucc + totalFail),
@@ -662,20 +669,7 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
                 cancelled: cancelled ? '1' : '0',
                 durationMs: String(Date.now() - batchStartTs),
                 extBreakdown: resultExtBreakdown,
-                // 失败分类维度（与 .complete 对齐，便于批量/单文件统一看板）
-                failCategoryBreakdown: summarizeCategoryBreakdown(batchFailStats),
-                topFailCategory: batchFailStats.length ? batchFailStats[0].category : '',
-                failFieldBreakdown: summarizeFieldBreakdown(batchFailFieldStats),
-                topFailField: batchFailFieldStats.length ? batchFailFieldStats[0].field || '' : '',
-                interfaceFailBreakdown: summarizeFieldBreakdown(batchFailFieldStats, 'interface'),
-                topInterfaceFailField: topFieldOfLevel(batchFailFieldStats, 'interface')?.field || '',
-                caseFailBreakdown: summarizeFieldBreakdown(batchFailFieldStats, 'case'),
-                topCaseFailField: topFieldOfLevel(batchFailFieldStats, 'case')?.field || '',
-                taskNotFoundSamples: pickBatchSamples('taskNotFound'),
-                testPointMissingSamples: pickBatchSamples('testPointMissing'),
-                pathNotMatchPointSamples: pickBatchSamples('pathNotMatchPoint'),
-                sourceNotSupportedSamples: pickBatchSamples('sourceNotSupported'),
-                unknownSamples: unknownBatchSamples,
+                ...buildFailDimensions(batchFailItems),
             });
     } catch (summaryErr: any) {
         // 兜底：即使主汇总计算/发送异常，results 中已完成的逐文件结果仍有效，

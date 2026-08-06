@@ -58,6 +58,8 @@ const run = (rows: Array<Record<string, string>>) => {
     // 本文件关注"非法格式拦截"，不关注字段内容，故用最小合法字段集。
     const enriched = rows.map((r) => ({
         description: '推送测试',
+        path: '/功能测试/子模块/',
+        test_type: '界面',
         steps: [{ operation: '执行', ui_expected: ['ok'] }],
         ...r,
     }));
@@ -85,7 +87,8 @@ describe('pushCore 预校验拦截保证：非法格式行在调用推送接口�
         const failures = hooks.onComplete.mock.calls[0][0].failures;
         expect(failures).toHaveLength(1);
         expect(failures[0].reason).toContain('案例唯一标识规范');
-        expect(failures[0].category).toBe('fieldInvalid');
+        // sourceId 格式非法以字段级复合码 sourceId.format 为主（不兜底为 fieldInvalid）
+        expect(failures[0].category).toBe('sourceId.format');
         expect(failures[0].field).toBe('sourceId');
 
         // 全剔除的 .aborted 事件 reason 应精确归类为格式非法，而非误报 emptyTestcaseIdOnly

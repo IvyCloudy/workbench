@@ -38,7 +38,7 @@ import {
     aggregateByField,
     summarizeCategoryBreakdown,
     summarizeFieldBreakdown,
-    splitFieldStatsByLevel,
+    summarizeAuxFieldSamples,
     topFieldOfLevel,
     failureFieldOf,
     type PushFailCategory,
@@ -146,6 +146,12 @@ export interface PushCoreHooks {
         failures: PushFailureItem[];
         total: number;
         skipped?: number;
+        /** 预校验（占位/空/格式）拦截的行数，与「接口实推失败」区分，便于埋点下钻 */
+        preValidationFailCount?: number;
+        /** 本次推送链路追踪 ID（与 .complete / .aborted 同源），供批量场景逐文件回传 */
+        traceId?: string;
+        /** 本次推送耗时（ms），供批量场景逐文件回传，对齐单文件 .complete 的 costMs */
+        costMs?: number;
     }) => void;
     /**
      * 成功回写 testCaseNo 前后的钩子。用于编辑器场景标记 self-save 时间戳
@@ -777,12 +783,76 @@ function baseTelemetryProps(ctx: PushContext): Record<string, string> {
     return { ext: ctx.fileExt, traceId: ctx.traceId };
 }
 
+/**
+ * 发送 `.aborted` 中断埋点的统一封装。
+ * 内聚各中断分支的公共字段（ext / traceId）与耗时（costMs），避免每个调用点重复拼装。
+ * extra 透传中断原因专属维度（如 totalRows / count / sampleCount / buildFailDimensions 结果）。
+ */
+function emitAborted(ctx: PushContext, reason: string, extra?: Record<string, string>): void {
+    TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
+        ...baseTelemetryProps(ctx),
+        reason,
+        costMs: String(Date.now() - ctx.pushStart),
+        ...extra,
+    });
+}
+
+/**
+ * 失败分类/字段维度的公共埋点 props 组装器。
+ * 把一组 PushFailureItem 聚合并产出「失败结局事件」共用的维度对象，
+ * 供 `.aborted` / `.complete` / `batch.fileResult` / `batch.done` 直接展开复用，
+ * 消除各事件手工重复拼装 summarizeFieldBreakdown / topFieldOfLevel / auxFieldRawSamples / *Samples 的问题。
+ *
+ * 维度含：failCategoryBreakdown / topFailCategory / failFieldBreakdown / topFailField /
+ *        interfaceFailBreakdown / topInterfaceFailField / caseFailBreakdown / topCaseFailField /
+ *        auxFieldRawSamples / taskNotFoundSamples / testPointMissingSamples /
+ *        pathNotMatchPointSamples / sourceNotSupportedSamples / paramFormatSamples /
+ *        fieldInvalidSamples / unknownSamples（全量未归类原文，不受 3 条上限约束）。
+ *
+ * 空 failures 时各维度返回 '' / [] 安全值，调用方可直接展开。
+ */
+export function buildFailDimensions(failures: PushFailureItem[]): Record<string, string> {
+    const stats = failures.length > 0 ? aggregateFailures(failures, 3) : [];
+    const fieldStats = failures.length > 0 ? aggregateByField(failures, 1) : [];
+    const pick = (cat: string) =>
+        (stats.find(s => s.category === cat)?.samples ?? [])
+            .map(s => (s || '').slice(0, 200))
+            .join(' || ');
+    // unknown 是未归类措辞，必须带「全部」原文样本才能让后台完整定位、补规则，
+    // 不受聚合 3 条上限限制：直接从原始失败列表全量收集去重后的 reason。
+    const unknownSamples = Array.from(
+        new Set(
+            failures
+                .filter(f => (f.category ?? classifyFailure(f)) === 'unknown')
+                .map(f => (f.reason || '').slice(0, 200)),
+        ),
+    ).filter(Boolean).join(' || ');
+    return {
+        failCategoryBreakdown: summarizeCategoryBreakdown(stats),
+        topFailCategory: stats.length ? stats[0].category : '',
+        failFieldBreakdown: summarizeFieldBreakdown(fieldStats),
+        topFailField: fieldStats.length ? fieldStats[0].field : '',
+        interfaceFailBreakdown: summarizeFieldBreakdown(fieldStats, 'interface'),
+        topInterfaceFailField: topFieldOfLevel(fieldStats, 'interface')?.field || '',
+        caseFailBreakdown: summarizeFieldBreakdown(fieldStats, 'case'),
+        topCaseFailField: topFieldOfLevel(fieldStats, 'case')?.field || '',
+        auxFieldRawSamples: summarizeAuxFieldSamples(fieldStats),
+        taskNotFoundSamples: pick('taskNotFound'),
+        testPointMissingSamples: pick('testPointMissing'),
+        pathNotMatchPointSamples: pick('pathNotMatchPoint'),
+        sourceNotSupportedSamples: pick('sourceNotSupported'),
+        paramFormatSamples: pick('paramFormat'),
+        fieldInvalidSamples: pick('fieldInvalid'),
+        unknownSamples,
+    };
+}
+
 /** step 0：任务信息拉取 + 分派对应 hook。返回 taskInfo 或 null（表示已中断）。 */
 async function stepResolveTaskInfo(ctx: PushContext): Promise<{ testTaskNo: string; subTestTaskId: string } | null> {
     const { filePath } = ctx.opts;
     const result = await resolveTaskInfoOrNull(filePath);
     if (result.status === 'unbound') {
-        TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, { ...baseTelemetryProps(ctx), reason: 'unbound' });
+        emitAborted(ctx, 'unbound');
         ctx.hooks.onUnbound();
         return null;
     }
@@ -820,9 +890,7 @@ export function stampRowIndex(rows: RowLike[], resolveRowIndex: (i: number) => n
 /** step 1.5：行数上限保护。命中返回 true 表示已中断。 */
 function stepCheckMaxRows(ctx: PushContext, rowCount: number): boolean {
     if (rowCount <= ctx.maxRows) return false;
-    TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
-        ...baseTelemetryProps(ctx),
-        reason: 'exceedMaxRows',
+    emitAborted(ctx, 'exceedMaxRows', {
         totalRows: String(rowCount),
         limit: String(ctx.maxRows),
     });
@@ -1168,7 +1236,14 @@ function handleUnexpectedError(
         // 合并已有失败 + 本次异常，避免预校验等已收集的失败被吞掉
         const merged = [...(extraFailures || []), mapFailure];
         try {
-            ctx.hooks.onComplete({ successCount: 0, failures: merged, total: originalRowsCount });
+            ctx.hooks.onComplete({
+                successCount: 0,
+                failures: merged,
+                total: originalRowsCount,
+                preValidationFailCount: preValidationFailures.length,
+                traceId: ctx.traceId,
+                costMs: Date.now() - ctx.pushStart,
+            });
         } catch (hookErr: any) {
             console.error(`[推送][${ctx.traceId}] onComplete 钩子抛错:`, hookErr?.message || hookErr);
         }
@@ -1229,9 +1304,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         // ---- 1. 空数据短路 ----
         let rows: RowLike[] = Array.isArray(opts.rows) ? opts.rows : [];
         if (rows.length === 0) {
-            TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
-                ...baseTelemetryProps(ctx), reason: 'noData',
-            });
+            emitAborted(ctx, 'noData');
             ctx.hooks.onNoData?.();
             return;
         }
@@ -1258,23 +1331,9 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
 
         // 预校验剔除后已无可推送行 —— 直接短路
         if (rows.length === 0) {
-            const abortStats = aggregateFailures(preValidationFailures, 1);
-            const abortFieldStats = aggregateByField(preValidationFailures, 1);
-            const abortFieldSplit = splitFieldStatsByLevel(abortFieldStats);
-            TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
-                ...baseTelemetryProps(ctx),
-                reason: pickAllDroppedReason(pre.byKind),
+            emitAborted(ctx, pickAllDroppedReason(pre.byKind), {
                 count: String(preValidationFailures.length),
-                failCategoryBreakdown: summarizeCategoryBreakdown(abortStats),
-                topFailCategory: abortStats.length ? abortStats[0].category : '',
-                // 兼容维度（全字段合并）：保留 failFieldBreakdown / topFailField 以避免旧看板断列
-                failFieldBreakdown: summarizeFieldBreakdown(abortFieldStats),
-                topFailField: abortFieldStats.length ? abortFieldStats[0].field : '',
-                // 分层维度（接口级 / 行级）：便于区分"整批失败"与"部分行字段错"
-                interfaceFailBreakdown: summarizeFieldBreakdown(abortFieldStats, 'interface'),
-                topInterfaceFailField: topFieldOfLevel(abortFieldStats, 'interface')?.field || '',
-                caseFailBreakdown: summarizeFieldBreakdown(abortFieldStats, 'case'),
-                topCaseFailField: topFieldOfLevel(abortFieldStats, 'case')?.field || '',
+                ...buildFailDimensions(preValidationFailures),
             });
             pushDiag(`[短路-全部预校验失败] 总数=${originalRowsCount} 失败=${preValidationFailures.length} | 不调用接口`);
             pushDiag('[短路] 失败明细:', preValidationFailures.map((f: any) => ({ row: f.rowIndex, tsId: f.tsId, cat: f.category, reason: f.reason })));
@@ -1284,6 +1343,9 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
                 failures: preValidationFailures,
                 total: originalRowsCount,
                 skipped: 0, // 本分支在样例过滤前提前 return，尚未产生 skipped
+                preValidationFailCount: preValidationFailures.length,
+                traceId: ctx.traceId,
+                costMs: Date.now() - ctx.pushStart,
             });
             emitProgress(ctx.hooks, 'done', { rows: 0 });
             return;
@@ -1296,23 +1358,10 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         if (filtered.length === 0) {
             // 混合场景：样例 + 预校验失败 → 一起在 onComplete 展示
             if (preValidationFailures.length > 0) {
-                const abortStats = aggregateFailures([...preValidationFailures, ...sampleFailures], 1);
-                const abortFieldStats = aggregateByField([...preValidationFailures, ...sampleFailures], 1);
-                TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
-                    ...baseTelemetryProps(ctx),
-                    reason: 'onlyTemplateExampleAndPreValidationFailed',
+                emitAborted(ctx, 'onlyTemplateExampleAndPreValidationFailed', {
                     sampleCount: String(sampleFailures.length),
                     preValidationCount: String(preValidationFailures.length),
-                    failCategoryBreakdown: summarizeCategoryBreakdown(abortStats),
-                    topFailCategory: abortStats.length ? abortStats[0].category : '',
-                    // 兼容维度（全字段合并）
-                    failFieldBreakdown: summarizeFieldBreakdown(abortFieldStats),
-                    topFailField: abortFieldStats.length ? abortFieldStats[0].field : '',
-                    // 分层维度
-                    interfaceFailBreakdown: summarizeFieldBreakdown(abortFieldStats, 'interface'),
-                    topInterfaceFailField: topFieldOfLevel(abortFieldStats, 'interface')?.field || '',
-                    caseFailBreakdown: summarizeFieldBreakdown(abortFieldStats, 'case'),
-                    topCaseFailField: topFieldOfLevel(abortFieldStats, 'case')?.field || '',
+                    ...buildFailDimensions([...preValidationFailures, ...sampleFailures]),
                 });
                 pushDiag(`[短路-仅样例+预校验失败] 总数=${originalRowsCount} 预校验失败=${preValidationFailures.length} 样例失败=${sampleFailures.length} | 不调用接口`);
                 showPushDiag();
@@ -1323,26 +1372,16 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
                     // 说明：这里的 sampleFailures 是"样例行已被作为失败展示"的路径（onlySample 混合场景），
                     // 不再重复计入 skipped，避免同一行被同时计入 failures + skipped
                     skipped: 0,
+                    preValidationFailCount: preValidationFailures.length,
+                    traceId: ctx.traceId,
+                    costMs: Date.now() - ctx.pushStart,
                 });
                 emitProgress(ctx.hooks, 'done', { rows: 0 });
                 return;
             }
-            const sampleStats = aggregateFailures(sampleFailures, 1);
-            const sampleFieldStats = aggregateByField(sampleFailures, 1);
-            TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.aborted`, {
-                ...baseTelemetryProps(ctx),
-                reason: 'onlyTemplateExample',
+            emitAborted(ctx, 'onlyTemplateExample', {
                 count: String(sampleFailures.length),
-                failCategoryBreakdown: summarizeCategoryBreakdown(sampleStats),
-                topFailCategory: sampleStats.length ? sampleStats[0].category : '',
-                // 兼容维度（全字段合并）
-                failFieldBreakdown: summarizeFieldBreakdown(sampleFieldStats),
-                topFailField: sampleFieldStats.length ? sampleFieldStats[0].field : '',
-                // 分层维度
-                interfaceFailBreakdown: summarizeFieldBreakdown(sampleFieldStats, 'interface'),
-                topInterfaceFailField: topFieldOfLevel(sampleFieldStats, 'interface')?.field || '',
-                caseFailBreakdown: summarizeFieldBreakdown(sampleFieldStats, 'case'),
-                topCaseFailField: topFieldOfLevel(sampleFieldStats, 'case')?.field || '',
+                ...buildFailDimensions(sampleFailures),
             });
             // 纯样例短路：补发 .complete 结论埋点（带 sample 分类维度），
             // 使"全为样例数据"也能进入失败分类聚合统计（避免被漏统计）。
@@ -1356,19 +1395,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
                     successRows: '0',
                     failedRows: String(sampleFailures.length),
                     preValidationFailedRows: '0',
-                    failCategoryBreakdown: summarizeCategoryBreakdown(sampleStats),
-                    topFailCategory: sampleStats.length ? sampleStats[0].category : '',
-                    failFieldBreakdown: summarizeFieldBreakdown(sampleFieldStats),
-                    topFailField: sampleFieldStats.length ? sampleFieldStats[0].field : '',
-                    interfaceFailBreakdown: summarizeFieldBreakdown(sampleFieldStats, 'interface'),
-                    topInterfaceFailField: topFieldOfLevel(sampleFieldStats, 'interface')?.field || '',
-                    caseFailBreakdown: summarizeFieldBreakdown(sampleFieldStats, 'case'),
-                    topCaseFailField: topFieldOfLevel(sampleFieldStats, 'case')?.field || '',
-                    taskNotFoundSamples: '',
-                    testPointMissingSamples: '',
-                    pathNotMatchPointSamples: '',
-                    sourceNotSupportedSamples: '',
-                    unknownSamples: '',
+                    ...buildFailDimensions(sampleFailures),
                     costMs: String(Date.now() - ctx.pushStart),
                 });
             }
@@ -1438,7 +1465,15 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         pushDiag('[汇总] 失败明细(按行号):', mergedFailures.map((f: any) => ({ row: f.rowIndex, tsId: f.tsId, cat: f.category, field: f.field, reason: f.reason })));
         showPushDiag();
         // skipped：真正被静默跳过（不算失败）的样例行数，与 successCount / failures 并列的第 4 维度
-        ctx.hooks.onComplete({ successCount: successMappings.length, failures: mergedFailures, total, skipped });
+        ctx.hooks.onComplete({
+            successCount: successMappings.length,
+            failures: mergedFailures,
+            total,
+            skipped,
+            preValidationFailCount: preValidationFailures.length,
+            traceId: ctx.traceId,
+            costMs: Date.now() - ctx.pushStart,
+        });
         try {
             await persistPushFailures(opts.filePath, rows, failures, successMappings);
         } catch (err: any) {
@@ -1450,42 +1485,8 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
         //   - category 为稳定短码，供后台按错误类型聚合统计。
         // maxSamples 提到 3：让 unknown / notFound 等弱分类多保留几条原文样本，
         // 便于后台定位新措辞、补归类规则（count 不受影响，summarizeCategoryBreakdown 只用 category:count）。
-        const failStats = aggregateFailures(mergedFailures, 3);
-        const failCategoryBreakdown = summarizeCategoryBreakdown(failStats);
-        const topFailCategory = failStats.length ? failStats[0].category : '';
-
-        // 字段聚焦维度（仅字段类错误计入）：
-        //   - failFieldBreakdown / topFailField：兼容维度（全字段合并），保留原有大盘看板
-        //   - interface* / case*：分层维度，区分接口级公共参数错（一次错=整批失败）与
-        //     行级 caseList 字段错，避免接口级错误在 count 维度淹没行级字段真实分布。
-        const failFieldStats = aggregateByField(mergedFailures, 1);
-        const failFieldBreakdown = summarizeFieldBreakdown(failFieldStats);
-        const topFailField = failFieldStats.length ? failFieldStats[0].field : '';
-        const interfaceFailBreakdown = summarizeFieldBreakdown(failFieldStats, 'interface');
-        const topInterfaceFailField = topFieldOfLevel(failFieldStats, 'interface')?.field || '';
-        const caseFailBreakdown = summarizeFieldBreakdown(failFieldStats, 'case');
-        const topCaseFailField = topFieldOfLevel(failFieldStats, 'case')?.field || '';
-
-        // 弱分类原文样本：taskNotFound / testPointNotMatched / sourceNotSupported 已能抽字段，
-        // 但仍带原文便于确认业务语义；unknown 是未归类措辞，必须带原文样本才能让后台定位、补规则。
-        // 每条截断 200 字，用 ' || ' 分隔，避免与分类串的 ':'/',' 冲突。
-        const pickSamples = (cat: string) =>
-            (failStats.find(s => s.category === cat)?.samples ?? [])
-                .map(s => (s || '').slice(0, 200))
-                .join(' || ');
-        // unknown 是未归类措辞，必须带「全部」原文样本才能让后台完整定位、补规则，
-        // 不受聚合 3 条上限限制：直接从原始失败列表全量收集去重后的 reason。
-        const unknownSamples = Array.from(
-            new Set(
-                mergedFailures
-                    .filter(f => (f.category ?? classifyFailure(f)) === 'unknown')
-                    .map(f => (f.reason || '').slice(0, 200)),
-            ),
-        ).filter(Boolean).join(' || ');
-        const taskNotFoundSamples = pickSamples('taskNotFound');
-        const testPointMissingSamples = pickSamples('testPointMissing');
-        const pathNotMatchPointSamples = pickSamples('pathNotMatchPoint');
-        const sourceNotSupportedSamples = pickSamples('sourceNotSupported');
+        // 失败维度（分类/字段/分层/原文样本）统一由 buildFailDimensions 产出，消除各事件重复拼装。
+        const failDimensions = buildFailDimensions(mergedFailures);
 
         // 批量推送场景下，逐文件结果由 handleFilePush 的 explorerPush.batch.fileResult +
         // 批次 explorerPush.batch.done 统一上报，此处跳过单文件 .complete，避免重复计数。
@@ -1499,19 +1500,7 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
                 successRows: String(successMappings.length),
                 failedRows: String(mergedFailures.length),
                 preValidationFailedRows: String(preValidationFailures.length),
-                failCategoryBreakdown,
-                topFailCategory,
-                failFieldBreakdown,
-                topFailField,
-                interfaceFailBreakdown,
-                topInterfaceFailField,
-                caseFailBreakdown,
-                topCaseFailField,
-                taskNotFoundSamples,
-                testPointMissingSamples,
-                pathNotMatchPointSamples,
-                sourceNotSupportedSamples,
-                unknownSamples,
+                ...failDimensions,
                 costMs: String(Date.now() - ctx.pushStart),
             });
         }

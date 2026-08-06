@@ -19,6 +19,7 @@ import {
     failureFieldOf,
     aggregateByField,
     summarizeFieldBreakdown,
+    summarizeAuxFieldSamples,
     type PushFailCategory,
     type PushInterfaceField,
 } from '../utils/pushFailureCategory';
@@ -105,9 +106,28 @@ describe('pushFailureCategory · 后端中文长文本归类', () => {
         expect(classifyBackendFailure('无效的案例来源(TMS)')).toBe('sourceNotSupported');
     });
 
-    it('其他业务拒绝仍 → bizReject 兜底', () => {
+    it('冷门资源不存在 → 字段.notFound 复合码（以精确复合码为主）', () => {
+        // 用例库/标签/模块/环境/负责人 等冷门资源维度，能抽到字段则合成 字段.notFound
+        expect(classifyBackendFailure('用例库不存在，请先创建')).toBe('caseLib.notFound');
+        expect(classifyBackendFailure('案例库未找到')).toBe('caseLib.notFound');
+        expect(classifyBackendFailure('标签不存在')).toBe('tag.notFound');
+        expect(classifyBackendFailure('模块不存在')).toBe('module.notFound');
+        expect(classifyBackendFailure('环境不存在或无效')).toBe('env.notFound');
+        expect(classifyBackendFailure('负责人不存在')).toBe('owner.notFound');
+        // 抽不到具体资源字段的"不存在"仍落 notFound 兜底
+        expect(classifyBackendFailure('目标资源不存在')).toBe('notFound');
+        // 404 兜底（无字段关键词）→ notFound
+        expect(classifyBackendFailure('资源 404 not found')).toBe('notFound');
+    });
+
+    it('其他业务拒绝仍 → bizReject 兜底（覆盖"不支持"与"不被支持"两种措辞）', () => {
         expect(classifyBackendFailure('此操作被拒绝')).toBe('bizReject');
         expect(classifyBackendFailure('该案例不支持此操作')).toBe('bizReject');
+        expect(classifyBackendFailure('不支持此操作')).toBe('bizReject');
+        expect(classifyBackendFailure('业务不支持')).toBe('bizReject');
+        // "不被支持"（不+被+支持，中间隔"被"）此前会漏匹配归 unknown，须修复
+        expect(classifyBackendFailure('当前操作不被支持')).toBe('bizReject');
+        expect(classifyBackendFailure('操作不被支持')).toBe('bizReject');
     });
 
     it('服务端异常/5xx → serverError', () => {
@@ -260,6 +280,27 @@ describe('pushFailureCategory · 接口字段聚焦 extractInterfaceField / fail
         // 字段类（fieldInvalid）才聚焦
         expect(failureFieldOf({ reason: '案例名称为空' })).toBe('testCaseName');
     });
+
+    it('辅助字段：文本抽不到具体字段时按 category 业务语义回退', () => {
+        // 含"测试任务编号/阶段信息"会先被文本命中 testTaskNo，这里用纯净语义文案验证辅助回退
+        expect(failureFieldOf({ reason: '测试任务编号未匹配到有效阶段信息' })).toBe('testTaskNo');
+        expect(failureFieldOf({ reason: '任务不存在，请先创建测试任务' })).toBe('testTaskNo');
+        expect(failureFieldOf({ reason: '任务下未匹配到有效测试要点' })).toBe('testPoint');
+        expect(failureFieldOf({ reason: '案例检查点数为0，请查看预期结果检查分类' })).toBe('expected');
+        expect(failureFieldOf({ reason: '步骤描述与预期结果数量不一致，请核对' })).toBe('stepSeq');
+        expect(failureFieldOf({ reason: '当前不支持案例来源(CMBT_APP)' })).toBe('sourcePlatform');
+        expect(failureFieldOf({ reason: '业务规则拒绝：该状态不允许推送' })).toBe('sourcePlatform');
+    });
+
+    it('辅助字段不覆盖非字段类与样例，保持 undefined', () => {
+        // sample 虽含"案例唯一标识"但非字段类，不回退
+        expect(failureFieldOf({ reason: '为样例数据，不允许推送。请修改"案例唯一标识，不可修改"等占位字段为真实数据后再试' })).toBeUndefined();
+        // network / auth 不应被辅助字段误标
+        expect(failureFieldOf({ reason: '请求超时，请检查后端服务是否可用' })).toBeUndefined();
+        expect(failureFieldOf({ reason: '当前用户无权限执行该操作' })).toBeUndefined();
+        // yamlSyntax / fileError 非字段类
+        expect(failureFieldOf({ reason: 'YAML 语法错误（首条：第 3 行）' })).toBeUndefined();
+    });
 });
 
 describe('pushFailureCategory · 按字段聚合 aggregateByField', () => {
@@ -293,6 +334,26 @@ describe('pushFailureCategory · 按字段聚合 aggregateByField', () => {
         ]);
         expect(summarizeFieldBreakdown(stats)).toBe('sourceId:2,testCaseName:1');
         expect(summarizeFieldBreakdown([])).toBe('');
+    });
+
+    it('辅助兜底项的原样 reason 单独收集到 auxSamples，并经 summarizeAuxFieldSamples 透传', () => {
+        // "任务未绑定，无法推送" 能归 taskNotFound（字段相关），但文本无 testTaskNo 别名，
+        // 触发辅助兜底（source='aux'）→ testTaskNo；重复项 count 累加、auxSamples 去重。
+        // "测试要点" 文案含 testPoint 别名 → 文本命中（source='text'），不计入 auxSamples。
+        const stats = aggregateByField([
+            { reason: '任务未绑定，无法推送' },
+            { reason: '任务未绑定，无法推送' },
+            { reason: '任务下未匹配到有效测试要点' },
+        ]);
+        const taskStat = stats.find(s => s.field === 'testTaskNo');
+        const pointStat = stats.find(s => s.field === 'testPoint');
+        expect(taskStat?.count).toBe(2);
+        expect(taskStat?.auxSamples).toEqual(['任务未绑定，无法推送']);
+        // 文本命中的 testPoint 不计入 auxSamples
+        expect(pointStat?.auxSamples).toEqual([]);
+        // 埋点串：仅含辅助兜底项的原样数据（去重）
+        expect(summarizeAuxFieldSamples(stats)).toBe('任务未绑定，无法推送');
+        expect(summarizeAuxFieldSamples([])).toBe('');
     });
 });
 

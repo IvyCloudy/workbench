@@ -26,6 +26,14 @@ export interface PushFileResult {
     error?: string;
     /** 本次推送被识别为样例/模板占位而静默跳过的行数（不计入 success/fail），弹窗汇总用 */
     skipped?: number;
+    /** 预校验（占位/空/格式）拦截的行数，与「接口实推失败」区分，供 batch.fileResult 对齐 .complete */
+    preValidationFailCount?: number;
+    /** 链路追踪 ID（与单文件 .complete 同源），供批量逐文件回传埋点 */
+    traceId?: string;
+    /** 本次推送耗时（ms），对齐单文件 .complete 的 costMs */
+    costMs?: number;
+    /** 整文件异常原因（对应 .aborted 的 reason 维度），批量下钻分析用 */
+    reason?: string;
 }
 
 /** 进度项状态 */

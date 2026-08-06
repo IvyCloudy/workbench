@@ -34,7 +34,8 @@ export type FailNature =
     | 'length'     // 长度超限（xxx 长度不能超过 N 个字符）
     | 'format'     // 格式非法（格式/不合法/必须以?结尾/关键案例格式）
     | 'enum'       // 行内枚举值非法（无效的案例类型/优先级/执行方式 等）
-    | 'dup';       // 重复/已存在（sourceId 已存在 / 案例已存在 / 路径重复）
+    | 'dup'        // 重复/已存在（sourceId 已存在 / 案例已存在 / 路径重复）
+    | 'notFound';  // 资源不存在/未找到（用例库/标签/模块/环境/负责人 等冷门资源维度）
 
 /**
  * 推送失败分类码。取值稳定、可枚举，供统计聚合与埋点维度使用（不建议改命名）。
@@ -54,7 +55,7 @@ export type PushFailCategory =
     | 'network'              // 网络/超时
     | 'auth'                 // 鉴权/权限/未登录
     | 'yamlSyntax'           // YAML 语法/解析错误（文件级前置拦截，早于 runPush）
-    | 'duplicate'            // 重复/已存在（兜底：无法定位具体字段时的性质级 category）
+    | 'fieldDup'            // 字段重复/已存在（性质级兜底：能定位字段时合成 `字段.dup`）
     // —— 字段级复合 category：格式 = `字段.性质`（如 testCaseName.empty / testCasePath.empty /
     //    sourceId.dup），由"命中字段 + 错误性质"两段合成。单看 category 即能定位"哪个字段、出了什么问题"，
     //    不再混进统一的 fieldInvalid。性质固定枚举见 FAILURE_NATURE；字段取自 PushInterfaceField。 ——
@@ -140,23 +141,23 @@ const BACKEND_TOP_RULES: Array<{ category: PushFailCategory; patterns: RegExp }>
     { category: 'auth',         patterns: /鉴权|权限|未登录|token|无权限|登录|认证|unauthorized|forbidden|401|403/i },
     // sourceNotSupported 需早于 bizReject：精准匹配来源相关措辞，避免抢走行内枚举值非法的字段类错误。
     { category: 'sourceNotSupported', patterns: /不支持案例来源|无效的案例来源|案例来源不被支持|案例来源(?![\s]*[Ii][dD])(?:不被支持|无效)/ },
-    // bizReject 仅兜底其他明确业务拒绝（不再含案例来源类，已由 sourceNotSupported 承接；"不允许"已由 sample 前置承接）
-    { category: 'bizReject',    patterns: /不支持|拒绝/ },
+    // bizReject 仅兜底其他明确业务拒绝（不再含案例来源类，已由 sourceNotSupported 承接；"不允许"已由 sample 前置承接）。
+    // 需同时覆盖"不支持"（不+支持连续，如"不支持此操作"）与"不被支持"（不+被+支持，如"当前操作不被支持"），
+    // 否则后者会漏匹配归 unknown。
+    { category: 'bizReject',    patterns: /不支持|不被支持|拒绝/ },
     // taskNotFound 需早于 notFound 兜底：任务级"不存在/未绑定/未找到"归此，不含测试要点未匹配。
     { category: 'taskNotFound', patterns: /任务不存在|任务未绑定|未绑定|未找到对应测试任务|测试任务不存在|任务未找到/ },
     // testPointMissing（任务下未匹配）与 pathNotMatchPoint（案例路径错误未匹配）拆开，
     // 避免两类触发来源不同的失败混在同一 category；二者均含"未匹配到有效测试要点"。
     { category: 'pathNotMatchPoint', patterns: /案例路径错误未匹配到有效测试要点/ },
     { category: 'testPointMissing',   patterns: /未匹配到有效测试要点/ },
-    // notFound 兜底（其他未找到/404），放在细分类之后，避免吞掉上面的具体业务类型
-    { category: 'notFound',     patterns: /不存在|未找到|查无|not\s*found|404/i },
+    // notFound 兜底（其他未找到/404）已从 BACKEND_TOP_RULES 移出，改在 classifyBackendFailure
+    // 的字段级处理中（NATURE 规则之后、fieldInvalid 之前）判定，以便合成 `字段.notFound` 复合码。
+    // 此处不再保留顶层 notFound 规则，避免吞掉能更精确归类的字段级错误。
     // stepMismatch：步骤描述与预期结果数量不一致（性质唯一，无需复合字段）。
     { category: 'stepMismatch', patterns: /步骤描述与预期结果数量不一致|数量不一致/ },
     // checkpointZero：案例检查点数为 0（性质唯一，无需复合字段）。
     { category: 'checkpointZero', patterns: /检查点数为\s*0|检查点为\s*0|检查点数为0|检查点为0/ },
-    // fieldInvalid 兜底（无法定位具体性质的字段错误）：仅兜底极窄的字段级措辞，
-    // 避免抢走已走 BACKEND_NATURE_RULES 的 empty/length/format/enum/dup 类错误。
-    { category: 'fieldInvalid', patterns: /无法解析|结构异常|字段校验未通过|参数结构错误/ },
     // serverError：要求 5xx 紧跟错误语境，避免误伤"长度不能超过500个字符"中的裸数字 500。
     { category: 'serverError',  patterns: /服务[器端]|系统异常|内部错误|5xx|server\s*error|5\d{2}(?:错误|异常|状态码|报错)/i },
     // paramFormat：接口请求参数级格式/校验错误（整批失败），区别于行级字段格式错 fieldFormat。
@@ -202,23 +203,29 @@ const NATURE_FALLBACK_CATEGORY: Record<FailNature, PushFailCategory> = {
 /**
  * 归类一条后端失败（自由中文文本）。
  *
- * 两段式：
+ * 三段式：
  *  1. 先按 BACKEND_TOP_RULES 判定顶层稳定分类（network / auth / taskNotFound /
- *     testPointMissing / pathNotMatchPoint / notFound / stepMismatch / checkpointZero /
- *     fieldInvalid / serverError / sourceNotSupported / bizReject / taskStageMissing），
+ *     testPointMissing / pathNotMatchPoint / stepMismatch / checkpointZero /
+ *     paramFormat / serverError / sourceNotSupported / bizReject / taskStageMissing），
  *     命中即返回，不再下钻字段。
  *  2. 否则按 BACKEND_NATURE_RULES 判定「错误性质」（empty / length / format / enum / dup），
  *     再取接口字段合成 `字段.性质` 复合码；取不到字段则落性质级兜底 category
  *     （fieldEmpty / fieldLength / fieldFormat / enumInvalid / fieldDup）。
- *  3. 都不命中返回 'unknown'。
+ *  3. 否则 notFound 兜底（其他资源不存在/未找到）：先抽取资源字段，命中则合成
+ *     `字段.notFound` 复合码（如 caseLib.notFound / tag.notFound）；抽不到则落 notFound。
+ *     此层优先于 fieldInvalid，确保冷门资源维度也能精确下钻（以 `字段.notFound` 为主）。
+ *  4. 都不命中返回 'unknown'。
  */
 export function classifyBackendFailure(text: string): PushFailCategory {
     const s = text || '';
-    // 1) 顶层稳定分类
+    // 1) 顶层稳定分类（network/auth/taskNotFound/testPointMissing/pathNotMatchPoint/stepMismatch/
+    //    paramFormat/serverError/sourceNotSupported/bizReject/taskStageMissing）
     for (const rule of BACKEND_TOP_RULES) {
         if (rule.patterns.test(s)) return rule.category;
     }
-    // 2) 字段级性质 → 合成 `字段.性质` 复合码
+    // 2) 字段级性质 → 合成 `字段.性质` 复合码（如 sourceId.format / testCasePath.empty）。
+    //    此层优先于 fieldInvalid：凡是能定位到字段+性质的错误（含 sourceId 格式错）都归精确复合码，
+    //    不被笼统的 fieldInvalid 兜底吞掉（以 sourceId.format 为主）。
     for (const rule of BACKEND_NATURE_RULES) {
         if (rule.patterns.test(s)) {
             const field = extractInterfaceField(s);
@@ -226,6 +233,20 @@ export function classifyBackendFailure(text: string): PushFailCategory {
             return NATURE_FALLBACK_CATEGORY[rule.nature];
         }
     }
+    // 3) notFound 兜底（其他未找到/404）。放在性质规则之后、fieldInvalid 之前：
+    //    凡是文本含"不存在/未找到/查无/404"的资源类错误，先尝试抽取具体资源字段，
+    //    命中则合成 `字段.notFound` 精确复合码（如 caseLib.notFound / tag.notFound），
+    //    不再笼统落 notFound（以 `字段.notFound` 为主，与 sourceId.format 同一取向）。
+    //    注意：taskNotFound / testPointMissing / pathNotMatchPoint 等已拆细分类已在 TOP_RULES
+    //    优先命中，此处仅承接"其他冷门资源不存在"场景。
+    if (/不存在|未找到|查无|not\s*found|404/i.test(s)) {
+        const field = extractInterfaceField(s);
+        if (field) return `${field}.notFound` as PushFailCategory;
+        return 'notFound';
+    }
+    // 4) fieldInvalid 兜底（无法定位具体性质的字段级措辞）。放在性质规则之后，
+    //    仅承接"性质也无法归类"的残差字段错误，不再抢走 sourceId.format 等复合码。
+    if (/无法解析|结构异常|字段校验未通过|参数结构错误/.test(s)) return 'fieldInvalid';
     return 'unknown';
 }
 
@@ -291,7 +312,13 @@ export type PushInterfaceField =
     // ── 扩展字段码（覆盖更多后端报错场景，便于埋点下钻）──
     | 'caseInfo'        // 案例信息（整行必填校验，如 "案例信息不能为空"）
     | 'testPoint'       // 测试要点（"任务下未匹配到有效测试要点" / "案例路径错误未匹配到有效测试要点"）
-    | 'stepSeq';        // 步骤/预期数量一致性（"步骤描述与预期结果数量不一致"）
+    | 'stepSeq'         // 步骤/预期数量一致性（"步骤描述与预期结果数量不一致"）
+    // ── 冷门资源字段码（notFound / fieldInvalid 类报错中常见、但非主流程字段的资源维度）──
+    | 'caseLib'         // 用例库（"用例库不存在/未找到" 等 notFound 落点）
+    | 'tag'             // 标签（"标签不存在/未找到"）
+    | 'module'          // 模块（"模块不存在/未找到"）
+    | 'env'             // 环境（"环境不存在/未找到/无效"）
+    | 'owner';          // 负责人/归属人（"负责人不存在/未找到"，区别于 designer 设计人）
 
 /** 字段级别：interface=接口级公共参数（一次错=整批失败）；case=caseList 行级字段 */
 export type PushFieldLevel = 'interface' | 'case';
@@ -322,6 +349,12 @@ const FIELD_LEVEL: Record<PushInterfaceField, PushFieldLevel> = {
     caseInfo: 'case',
     testPoint: 'case',
     stepSeq: 'case',
+    // 冷门资源字段码（均为 case 级，行级资源维度）
+    caseLib: 'case',
+    tag: 'case',
+    module: 'case',
+    env: 'case',
+    owner: 'case',
 };
 
 /** 查字段级别（迭代完 FIELD_LEVEL 后外部调用入口） */
@@ -376,7 +409,44 @@ const INTERFACE_FIELD_ALIASES: Array<{ field: PushInterfaceField; aliases: RegEx
     // 测试要点（notFound 类）："任务下未匹配到有效测试要点" / "案例路径错误未匹配到有效测试要点"
     // 均指向 testPoint 字段，便于在 notFound 大类下下钻到具体是哪个要点维度
     { field: 'testPoint',      aliases: /测试要点/ },
+    // ──── 冷门资源字段（notFound / fieldInvalid 落点，承载能力/标签/模块/环境等维度下钻） ────
+    // 均为独占词，不与上面通用别名冲突，放末尾顺序安全。
+    { field: 'caseLib',       aliases: /用例库|案例库|caseLib|case_lib/ },
+    { field: 'tag',           aliases: /标签|tag\b|tags/ },
+    { field: 'module',        aliases: /模块|module|moduleId|module_id/ },
+    { field: 'env',           aliases: /环境|env\b|environment|运行环境|测试环境/ },
+    // owner 用"负责人/归属人"区分 designer（设计人）：designer 别名仅含"设计人"，不抢"负责人"
+    { field: 'owner',         aliases: /负责人|归属人|owner|ownerId|owner_id/ },
 ];
+
+/**
+ * category → 辅助字段码（兜底维度）。
+ * 当自由文本抽不到具体字段（extractInterfaceField 返回 undefined）时，
+ * 基于「已命中 category 的业务语义」回退出一个辅助字段，使字段维度更丰富、
+ * 减少 undefined 丢失。优先级低于 INTERFACE_FIELD_ALIASES 直接文本抽取。
+ *
+ * 仅对「字段相关大类」生效（见 FIELD_RELATED_CATEGORIES）；
+ * network / auth / yamlSyntax / fileError / emptyFile / serverError / unknown 等
+ * 非字段类不在此表（这些 category 本就不该打字段）。
+ *
+ * 说明：这是"辅助/弱信号"推断，目的是丰富字段维度而非精确判定；
+ * 能直接文本命中的场景仍以 extractInterfaceField 为准，二者互斥（先文本后辅助）。
+ */
+const AUX_FIELD_BY_CATEGORY: Partial<Record<PushFailCategory, PushInterfaceField>> = {
+    taskStageMissing: 'testTaskNo',     // 阶段信息强关联测试任务编号
+    taskNotFound: 'testTaskNo',         // 任务不存在/未绑定/未找到
+    testPointMissing: 'testPoint',      // 任务下未匹配到有效测试要点
+    pathNotMatchPoint: 'testCasePath',  // 案例路径错误未匹配到有效测试要点（路径维度）
+    checkpointZero: 'expected',         // 检查点数为 0（预期结果维度）
+    stepMismatch: 'stepSeq',            // 步骤描述与预期结果数量不一致
+    sourceNotSupported: 'sourcePlatform', // 案例来源不被支持（来源平台维度）
+    bizReject: 'sourcePlatform',        // 其他业务拒绝（多为来源类，归来源平台便于下钻）
+};
+
+/** 基于已命中 category 的辅助字段推断（见 AUX_FIELD_BY_CATEGORY 说明）。 */
+export function auxiliaryFieldOf(category: PushFailCategory): PushInterfaceField | undefined {
+    return AUX_FIELD_BY_CATEGORY[category];
+}
 
 /** MapError.reason → 接口字段（客户端字段映射错误已知具体字段） */
 const MAP_ERROR_REASON_TO_FIELD: Record<string, PushInterfaceField> = {
@@ -406,15 +476,15 @@ const FIELD_RELATED_CATEGORIES: PushFailCategory[] = [
 /** 判断某 category 是否字段相关（含复合码 `字段.性质` 与性质级兜底名）。 */
 export function isFieldRelatedCategory(cat: PushFailCategory): boolean {
     if (FIELD_RELATED_CATEGORIES.includes(cat)) return true;
-    // 复合码：形如 `${field}.${nature}`
-    const m = typeof cat === 'string' ? cat.match(/^(.+)\.(empty|length|format|enum|dup)$/) : null;
+    // 复合码：形如 `${field}.${nature}`（含 notFound 性质）
+    const m = typeof cat === 'string' ? cat.match(/^(.+)\.(empty|length|format|enum|dup|notFound)$/) : null;
     return !!m;
 }
 
 /** 从复合码 `字段.性质` 解析出字段（无需再走文本抽取，更精准）。 */
 export function fieldOfComposite(cat: PushFailCategory): PushInterfaceField | undefined {
     if (typeof cat !== 'string') return undefined;
-    const m = cat.match(/^(.+)\.(empty|length|format|enum|dup)$/);
+    const m = cat.match(/^(.+)\.(empty|length|format|enum|dup|notFound)$/);
     return m ? (m[1] as PushInterfaceField) : undefined;
 }
 
@@ -431,6 +501,51 @@ export function extractInterfaceField(text: string): PushInterfaceField | undefi
 }
 
 /**
+ * 字段来源（用于埋点区分"强信号命中"与"辅助兜底"，并保留兜底项的原样数据）。
+ * - structured：客户端结构化信号（mapErrorReason / validatorKind）直接给出字段
+ * - text：      后端文本关键词直接命中接口字段（强信号）
+ * - aux：       文本抽不到字段，基于已命中 category 的业务语义回退（弱信号兜底）
+ */
+export type FieldSource = 'structured' | 'text' | 'aux';
+
+/**
+ * 统一字段聚焦入口（带来源）：返回 `{ field, source }`，source 区分字段是
+ * 结构化信号 / 文本命中 / 辅助兜底推断。供埋点标记辅助兜底项、并透传其原样 reason。
+ */
+export function failureFieldDetail(input: {
+    reason?: string;
+    validatorKind?: string;
+    mapErrorReason?: string;
+    category?: PushFailCategory;
+}): { field: PushInterfaceField | undefined; source: FieldSource | undefined } {
+    if (input.mapErrorReason && MAP_ERROR_REASON_TO_FIELD[input.mapErrorReason]) {
+        return { field: MAP_ERROR_REASON_TO_FIELD[input.mapErrorReason], source: 'structured' };
+    }
+    // 占位 / 空 tsId 本质是 sourceId（testcase_id）字段问题
+    if (input.validatorKind && VALIDATOR_KIND_TO_CATEGORY[input.validatorKind]) {
+        return { field: 'sourceId', source: 'structured' };
+    }
+    const cat = input.category
+        ?? classifyFailure({
+            reason: input.reason || '',
+            validatorKind: input.validatorKind,
+            mapErrorReason: input.mapErrorReason,
+        });
+    if (isFieldRelatedCategory(cat)) {
+        // 复合码直接取字段（最精准，避免文本二次抽取歧义）
+        const fromComposite = fieldOfComposite(cat);
+        if (fromComposite) return { field: fromComposite, source: 'text' };
+        // 1) 文本直接抽取字段（强信号，优先）
+        const fromText = extractInterfaceField(input.reason || '');
+        if (fromText) return { field: fromText, source: 'text' };
+        // 2) 辅助字段：文本抽不到时，基于已命中 category 的业务语义回退（弱信号兜底）
+        const aux = auxiliaryFieldOf(cat);
+        if (aux) return { field: aux, source: 'aux' };
+    }
+    return { field: undefined, source: undefined };
+}
+
+/**
  * 统一字段聚焦入口：优先用结构化信号（mapErrorReason / validatorKind），
  * 否则仅在"字段相关大类"错误中才从 reason 抽取字段码，避免 network/auth 等
  * 文本偶含别名（如鉴权文案里出现"名称"）被误打上错误字段。
@@ -439,34 +554,19 @@ export function failureFieldOf(input: {
     reason?: string;
     validatorKind?: string;
     mapErrorReason?: string;
+    category?: PushFailCategory;
 }): PushInterfaceField | undefined {
-    if (input.mapErrorReason && MAP_ERROR_REASON_TO_FIELD[input.mapErrorReason]) {
-        return MAP_ERROR_REASON_TO_FIELD[input.mapErrorReason];
-    }
-    // 占位 / 空 tsId 本质是 sourceId（testcase_id）字段问题
-    if (input.validatorKind && VALIDATOR_KIND_TO_CATEGORY[input.validatorKind]) {
-        return 'sourceId';
-    }
-    const cat = classifyFailure({
-        reason: input.reason || '',
-        validatorKind: input.validatorKind,
-        mapErrorReason: input.mapErrorReason,
-    });
-    if (isFieldRelatedCategory(cat)) {
-        // 复合码直接取字段（最精准，避免文本二次抽取歧义）
-        const fromComposite = fieldOfComposite(cat);
-        if (fromComposite) return fromComposite;
-        return extractInterfaceField(input.reason || '');
-    }
-    return undefined;
+    return failureFieldDetail(input).field;
 }
 
-/** 单条失败的字段统计（含原文样本，供 UI / 埋点）。level 区分接口级/行级，便于分层展示。 */
+/** 单条失败的字段统计（含原文样本，供 UI / 埋点）。level 区分接口级/行级，便于分层展示。
+ *  auxSamples 仅收集「辅助兜底推断」出来的项的原样 reason，便于埋点单独透传、区分弱信号。 */
 export interface FailureFieldStat {
     field: PushInterfaceField;
     level: PushFieldLevel;
     count: number;
     samples: string[];
+    auxSamples: string[];
 }
 
 /**
@@ -483,20 +583,40 @@ export function aggregateByField(
     const buckets = new Map<PushInterfaceField, FailureFieldStat>();
     for (const it of items || []) {
         const reason = it.reason || '';
-        const field = it.field
-            ?? failureFieldOf({ reason, validatorKind: it.validatorKind, mapErrorReason: it.mapErrorReason });
+        const detail = failureFieldDetail({
+            reason,
+            validatorKind: it.validatorKind,
+            mapErrorReason: it.mapErrorReason,
+            category: it.category,
+        });
+        const field = it.field ?? detail.field;
         if (!field) continue;
         let stat = buckets.get(field);
         if (!stat) {
-            stat = { field, level: FIELD_LEVEL[field], count: 0, samples: [] };
+            stat = { field, level: FIELD_LEVEL[field], count: 0, samples: [], auxSamples: [] };
             buckets.set(field, stat);
         }
         stat.count++;
         if (stat.samples.length < maxSamples && reason && !stat.samples.includes(reason)) {
             stat.samples.push(reason);
         }
+        // 辅助兜底项：原样 reason 全量收集（不受 maxSamples 上限约束），
+        // 便于埋点 auxFieldRawSamples 单独透传弱信号推断的原始数据。
+        if (detail.source === 'aux' && reason && !stat.auxSamples.includes(reason)) {
+            stat.auxSamples.push(reason);
+        }
     }
     return Array.from(buckets.values()).sort((a, b) => b.count - a.count);
+}
+
+/**
+ * 把辅助兜底项的原样 reason 压成埋点友好的紧凑串（reason || reason 分隔，去重）。
+ * 仅含「字段由辅助兜底推断」出来的失败项原文，便于后台区分弱信号并回流补充归类规则。
+ * 空聚合返回 ''。
+ */
+export function summarizeAuxFieldSamples(stats: FailureFieldStat[]): string {
+    const all = (stats || []).flatMap(s => s.auxSamples);
+    return Array.from(new Set(all.filter(Boolean))).join(' || ');
 }
 
 /**

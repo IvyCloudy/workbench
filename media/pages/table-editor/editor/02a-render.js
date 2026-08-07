@@ -597,10 +597,17 @@ function _buildCellInner(ri, ci, v) {
     var rawText = formatCellValue(v);
     var isDetail = (typeof hasDetailRowsAtCol === 'function') && hasDetailRowsAtCol(ri, ci);
     // 即使是空单元格，只要该列是 detail 列，也提供可点击入口（[空] 链接 → 打开弹窗初始化数据）
+    // 注：steps 为空时数据层可能存为字符串 '[]' / '{}' 占位（而非真数组），此时 formatCellValue
+    // 返回 '[]' 非空，需一并视为"空明细"，否则单元格会生硬显示 '[]' 而非可点击的 [空] 链接。
     var isEmptyDetail = false;
-    if (!isDetail && (typeof isDetailColumn === 'function') && isDetailColumn(ci) && (rawText === '' || v == null || v === undefined)) {
-        isDetail = true;
-        isEmptyDetail = true;
+    // 仅"展开步骤"态下，空明细单元格才内联渲染为加号入口（点击复用向下插入新增一条步骤）。
+    // 收起态下空步骤回落为原始行为：直接显示 rawText（'[]'/'{}' 占位），点击打开明细弹窗。
+    if (S._stepsExpanded) {
+        var _emptyish = (rawText === '' || rawText === '[]' || rawText === '{}' || v == null || v === undefined);
+        if ((typeof isDetailColumn === 'function') && isDetailColumn(ci) && _emptyish) {
+            isDetail = true;
+            isEmptyDetail = true;
+        }
     }
     var isArrCol = (typeof isArrayCol === 'function') && isArrayCol(ci);
     // tooltip：展开模式 steps 子表格已内联展示，无需原生 tooltip 显示原始文本
@@ -619,8 +626,12 @@ function _buildCellInner(ri, ci, v) {
             inner = '<div class="xs-step-expanded' + _frozenCls + '" data-detail-row="' + ri + '" data-detail-col="' + ci + '"' + (_rowFrozenForExpand ? ' data-xse-frozen="1"' : '') + '>' + _buildStepExpandedHtml(rawText, _rowFrozenForExpand) + '</div>';
         } else {
             var detailLinkCls = isEmptyDetail ? 'xs-detail-link xs-detail-empty' : 'xs-detail-link';
-            var detailDisplay = isEmptyDetail ? '[空]' : rawText;
-            inner = '<span class="' + detailLinkCls + '" data-detail-row="' + ri + '" data-detail-col="' + ci + '">' + escapeHtml(detailDisplay) + '</span>';
+            // 展开态空明细：加号图标，点击在内联展开表格中直接新增一条步骤；其余显示 rawText（'[]' 等）
+            var detailDisplay = isEmptyDetail
+                ? '<span class="xs-detail-plus" title="向下插入">'
+                    + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg></span>'
+                : rawText;
+            inner = '<span class="' + detailLinkCls + '" data-detail-row="' + ri + '" data-detail-col="' + ci + '">' + detailDisplay + '</span>';
         }
     } else if (isArrCol) {
         var arr = Array.isArray(v) ? v : [];

@@ -844,10 +844,20 @@ function bindTable() {
         if (!dlink) dlink = t.closest && t.closest('.xs-step-expanded');
         if (dlink) {
             e.stopPropagation();
-            // 展开模式下子表格内联编辑，不弹出明细弹窗；操作按钮已在 2a 处理
-            if (S._stepsExpanded) return;
             var dri = parseInt(dlink.getAttribute('data-detail-row'), 10);
             var dci = parseInt(dlink.getAttribute('data-detail-col'), 10);
+            // 展开态下的空明细加号入口：内联直接新增一条步骤（复用向下插入），不弹窗
+            if (dlink.classList && dlink.classList.contains('xs-detail-empty')) {
+                if (typeof isFrozenRow === 'function' && isFrozenRow(dri)) {
+                    if (typeof showToast === 'function') showToast('样例数据行已冻结，不可操作', 'error');
+                    return;
+                }
+                _addFirstStep(dri, dci);
+                return;
+            }
+            // 展开模式下子表格内联编辑，不弹出明细弹窗；操作按钮已在 2a 处理
+            if (S._stepsExpanded) return;
+            // 其余明细链接（含收起态的 [] 占位）：打开明细弹窗编辑
             var headers = (S.data && S.data.headers) || [];
             var field = (!isNaN(dci) && headers[dci] !== undefined) ? headers[dci] : '';
             openDetailModal(dri, field);
@@ -1113,6 +1123,30 @@ function _toExpectedLines(v) {
     return s ? [s] : [];
 }
 
+// 展开态空步骤行点击加号：直接在内联展开表格中新增一条步骤（不弹窗）。
+// 复用展开态"向下插入"同一条插入逻辑（_addSubStep，stepIdx=-1 表示新增第一条）。
+// 调用方保证仅展开态命中，故此处无需再切换全局展开模式。
+function _addFirstStep(ri, ci) {
+    _addSubStep(ri, ci, -1);
+    if (typeof renderTable === 'function') renderTable();
+    setTimeout(function () {
+        try {
+            var cont = document.getElementById('tableContainer');
+            if (!cont) return;
+            var sel = '.xs-step-expanded[data-detail-row="' + ri + '"][data-detail-col="' + ci + '"] .xse-td-desc';
+            var descTd = cont.querySelector(sel);
+            if (descTd && descTd.focus) {
+                descTd.focus();
+                var rg = document.createRange();
+                rg.selectNodeContents(descTd);
+                rg.collapse(true);
+                var s = window.getSelection();
+                if (s) { s.removeAllRanges(); s.addRange(rg); }
+            }
+        } catch (_e) { /* 聚焦失败降级为无操作 */ }
+    }, 0);
+}
+
 // ==================== 子表格步骤增删 ====================
 // 在 rawRowGroups 指定索引后插入一个新空步骤，重建合并文本后 patchCell 原地刷新
 function _addSubStep(ri, ci, stepIdx) {
@@ -1120,7 +1154,13 @@ function _addSubStep(ri, ci, stepIdx) {
     if (!dt || !dt.rawRowGroups) return;
     if (!dt.rawRowGroups[ri]) dt.rawRowGroups[ri] = [];
     var raws = dt.rawRowGroups[ri];
-    if (stepIdx < 0 || stepIdx >= raws.length) return;
+    // stepIdx === -1：空步骤行（尚未有任何步骤）的"新增第一条"入口，
+    // 与展开态"向下插入"共用同一插入逻辑 —— 在列表末尾追加一条。
+    if (stepIdx === -1) {
+        if (raws.length !== 0) return; // 已有步骤时不应走 -1 分支（由 xse-btn-add 走正常索引）
+    } else if (stepIdx < 0 || stepIdx >= raws.length) {
+        return;
+    }
     // 不主动写 id 字段：业务自定义的 step.id 完全由 YAML 决定，
     // 新增步骤保持无 id，避免 YAML 落盘出现噪音空字段（id: ''）。
     raws.splice(stepIdx + 1, 0, { operation: '', data: [], ui_expected: [], api_expected: [], db_expected: [] });

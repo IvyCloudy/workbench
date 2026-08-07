@@ -716,9 +716,13 @@ tbody tr.xs-tr-push-failed .xse-table .xse-td-id .xse-idx-dot,
 .xse-btn-add-group:hover{background:#e7f1ff;color:#0550ae;border-color:#c8dcf7;border-style:solid}
 .xse-btn-add-group[data-kind="api"]:hover{background:#f2ebff;color:#5b21b6;border-color:#d8caf5}
 .xse-btn-add-group[data-kind="data"]:hover{background:#e6ffec;color:#1a7f37;border-color:#b4ecc4}
-/* 主表空 detail 链接：灰色虚线，与有内容链路区分 */
-.xs-detail-link.xs-detail-empty{color:#aaa;background:#f5f5f5;border:1px dashed #ddd}
-.xs-detail-link.xs-detail-empty:hover{color:#999;background:#e8e8e8}
+/* 主表空 detail 链接：灰色虚线容器，与有内容链路区分 */
+.xs-detail-link.xs-detail-empty{color:#aaa;background:#f5f5f5;border:1px dashed #ddd;padding:1px 8px}
+.xs-detail-link.xs-detail-empty:hover{color:#1a7f37;background:#e6ffec;border-color:#9fe0c8}
+/* 空明细加号图标：复用展开态"向下插入"(xse-btn-add) 同款绿色圆形加号 */
+.xs-detail-plus{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:1px solid transparent;border-radius:4px;background:transparent;line-height:1;color:#1a7f37;cursor:pointer;transition:background .12s,border-color .12s,color .12s,transform .12s}
+.xs-detail-plus svg{width:14px;height:14px}
+.xs-detail-link.xs-detail-empty:hover .xs-detail-plus{background:#e6ffec;color:#116329;transform:scale(1.06)}
 /* 空占位：斜体淡化 */
 .xse-empty{color:#bbb;font-style:italic}
 /* 操作列图标按钮：竞列排列（每行一个），尺寸从 14px 提升到 22px，默认即带颜色（避免图标失色） */

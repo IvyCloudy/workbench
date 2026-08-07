@@ -252,14 +252,9 @@ function showPushResultModal(payload) {
     }
     // 交由门面统一收敛清理动作：S.mods / _detailModCellKeys / _addedRowSet /
     // _lastPushBatchRowIndices / _lastPushBatchTsIds（一次推送结果消费完毕）
-    console.log('[推送诊断][webview] clearByPushBatch 生效 | rowIndices=' + (pushRowIndices && pushRowIndices.length > 0 ? '[' + pushRowIndices.join(',') + ']' : '(空)')
-        + ' | mods(before)=' + ((S.mods && S.mods.size) || 0));
     HighlightModel.clearByPushBatch(S, {
         rowIndices: (pushRowIndices && pushRowIndices.length > 0) ? pushRowIndices : null,
     });
-    console.log('[推送诊断][webview] clearByPushBatch 完成 | mods(after)=' + ((S.mods && S.mods.size) || 0)
-        + ' | _lastPushBatchTsIds(after)=' + (S._lastPushBatchTsIds ? Array.from(S._lastPushBatchTsIds).join(',') : '(null)')
-        + ' | _lastPushBatchRowIndices(after)=' + (S._lastPushBatchRowIndices ? '[' + S._lastPushBatchRowIndices.join(',') + ']' : '(null)'));
 
     // 推送后回写的 testCaseNo 单元格高亮信息（同时清除旧高亮，确保弹窗显示最新结果）
     // 说明：p.highlightedCells 未传时保留已有高亮；传空/无效时按 null 清除。

@@ -170,3 +170,43 @@ describe('yaml-parser 明细表提取（λ 简化回归）', () => {
         expect(steps!.headers).toContain('action');
     });
 });
+
+describe('yaml-parser 删除最后一条步骤后保存（隐藏 bug 回归）', () => {
+    it('前端删除最后一条步骤后保存，reload 不应恢复旧步骤', async () => {
+        const raw =
+            '- testcase_id: TC070\n' +
+            '  name: 用例\n' +
+            '  steps:\n' +
+            '    - action: click\n' +
+            '      target: btn1\n' +
+            '    - action: input\n' +
+            '      target: box1\n';
+        const { file, parsed } = await loadFromRaw('del-last-step', raw);
+
+        // 模拟前端展开态内联删除最后一条步骤后的内存状态：
+        //   主表 steps 列变空字符串（_buildStepCombined([]) 的返回值），
+        //   rowGroups[0] 与 rawRowGroups[0] 都被同步清空为 []（前端 _syncSubSteps 负责）。
+        const stepsCol = parsed.tableData.headers.indexOf('steps');
+        expect(stepsCol).toBeGreaterThanOrEqual(0);
+        parsed.tableData.rows[0][stepsCol] = '';
+        const dt = (parsed.tableData.detailTables || []).find(t => t.field === 'steps');
+        expect(dt).toBeDefined();
+        dt!.rowGroups[0] = [];
+        if (dt!.rawRowGroups) dt!.rawRowGroups[0] = [];
+
+        // 保存 + 重新解析，等价于"保存后点重置 / 重新打开文件"
+        await parser.save(file, parsed.tableData, parsed.sourceData);
+        const reloaded = await parser.parse(file);
+        const reTables = reloaded.tableData.detailTables || [];
+        const steps = reTables.find(t => t.field === 'steps');
+
+        // 关键断言：步骤确实被清空，旧步骤（click/input）不能恢复
+        expect(steps).toBeDefined();
+        expect((steps!.rawRowGroups && steps!.rawRowGroups[0]) || []).toEqual([]);
+        expect((steps!.rowGroups && steps!.rowGroups[0]) || []).toEqual([]);
+        // 主表 steps 列应为空（[] 占位或空串）
+        const reStepsCol = reloaded.tableData.headers.indexOf('steps');
+        const cell = reloaded.tableData.rows[0][reStepsCol];
+        expect(cell === '' || cell === '[]' || (Array.isArray(cell) && cell.length === 0)).toBe(true);
+    });
+});

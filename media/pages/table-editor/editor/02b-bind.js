@@ -1206,6 +1206,27 @@ function _syncSubSteps(ri, ci, raws) {
     if (typeof pushHistory === 'function') pushHistory();
     if (!S.data.rows[ri]) return;
     S.data.rows[ri][ci] = combined;
+    // 同步旧链路 rowGroups（字符串二维结构），与 saveDetailModal 弹窗保存路径保持一致：
+    // 否则删除最后一条步骤后 rawRowGroups[ri] 变空，但 rowGroups[ri] 仍残留旧步骤文本，
+    // 后端 reconstructDetail 会误判为"有 editedRows"而按旧数据重建步骤，
+    // 导致保存后重置/重开时步骤被恢复（隐藏 bug）。
+    var dt = (typeof getDetailTableByCol === 'function') ? getDetailTableByCol(ci) : null;
+    if (dt && dt.rowGroups) {
+        if (!raws || raws.length === 0) {
+            dt.rowGroups[ri] = [];
+        } else {
+            var heads = dt.headers || [];
+            dt.rowGroups[ri] = raws.map(function (raw) {
+                return heads.map(function (h) {
+                    var v = raw ? raw[h] : undefined;
+                    if (v == null) return '';
+                    if (Array.isArray(v)) return v.length === 0 ? '[]' : v.map(function (x) { return String(x == null ? '' : x); }).join('; ');
+                    if (typeof v === 'object') { try { return JSON.stringify(v); } catch (_) { return ''; } }
+                    return String(v);
+                });
+            });
+        }
+    }
     if (S.mods) S.mods.add(ri + ',' + ci);
     if (typeof saveFile === 'function') saveFile();
     if (typeof patchCell === 'function') patchCell(ri, ci);

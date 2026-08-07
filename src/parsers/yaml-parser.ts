@@ -508,7 +508,12 @@ export class YamlFileParser implements FileParser {
         //   2) 否则按 rawType 回退到空对象/空数组/parseCellValue —— 关键：插入新行时
         //      origDetailData 为 undefined，避免错位继承相邻行数据
         if (editedRows.length === 0 && rawRowsFromFront.length === 0) {
-            if (origDetailData !== undefined) return origDetailData;
+            // 主表该单元格是明确空标记（'' / '[]' / '{}'）→ 用户主动清空了明细，
+            // 此时即使 origDetailData 存在也不应回退，否则"删除所有步骤"会被原始数据覆盖、
+            // 保存后再 reload 数据恢复（隐藏 bug）。仅当主表仍是非空折叠文本（如 "[2 项]"）
+            // 才视为"无编辑"回退 origDetailData。
+            const _cellExplicitEmpty = row[i] === '' || row[i] === '[]' || row[i] === '{}';
+            if (origDetailData !== undefined && !_cellExplicitEmpty) return origDetailData;
             if (rawType === 'object') return {};
             if (rawType === 'array') return [];
             return this.parseCellValue(row[i]);

@@ -14,6 +14,7 @@ import {
     type PushInterfaceField,
 } from '../utils/pushFailureCategory';
 import { isSampleTsId, filterTemplateExampleRows, TEMPLATE_EXAMPLE_TS_ID } from '../utils/fileIdentifier';
+import { isTestAgentUuid, isTestFlowUuid } from '../utils/testcaseId';
 import { TS_ID_COLUMN, stackHead } from '../services/utils';
 import { TelemetryService } from '../utils/telemetry';
 import { telemetryErrProps } from '../utils/extensionHelpers';
@@ -85,11 +86,26 @@ const EMPTY_VALIDATOR: RowValidator = {
 /** 案例唯一标识（testcase_id）合法格式：标准 UUID，或 TC/MA 前缀 + 32 位 uuid.hex */
 const TESTCASE_ID_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(TC|MA)[0-9a-f]{32})$/i;
 
-/** 内置校验：testcase_id 值必须符合案例唯一标识规范（UUID / TC+uuid.hex / MA+uuid.hex） */
+/**
+ * 综合校验 testcase_id 合法性，兼容两类 TC 前缀"掩码 uuid"场景：
+ *   - 标准 UUID / TC|MA + 32 位 hex（TESTCASE_ID_PATTERN）
+ *   - testagent 掩码 uuid（isTestAgentUuid）
+ *   - testflow 掩码 uuid（isTestFlowUuid）
+ * 掩码 uuid 的判定逻辑独立沉淀于 utils/testcaseId，便于其它模块复用。
+ */
+export function isTestcaseIdValid(tsId: string): boolean {
+    return (
+        TESTCASE_ID_PATTERN.test(tsId) ||
+        isTestAgentUuid(tsId) ||
+        isTestFlowUuid(tsId)
+    );
+}
+
+/** 内置校验：testcase_id 值必须符合案例唯一标识规范（UUID / TC+uuid.hex / MA+uuid.hex / testagent / testflow） */
 const FORMAT_VALIDATOR: RowValidator = {
     kind: 'invalidFormat',
     check(_row, tsId) {
-        if (!TESTCASE_ID_PATTERN.test(tsId)) {
+        if (!isTestcaseIdValid(tsId)) {
             return {
                 tsId,
                 reason: 'testcase_id的值不符合案例唯一标识规范',
@@ -377,11 +393,17 @@ const DEFAULT_MAX_PUSH_ROWS = 5000;
 /** 推送来源平台类型（与接口 sourcePlatform 取值对应）。 */
 type PushSource = 'testAgent' | 'testAgentMA';
 
-/** 来源判定：testcase_id 满足 TC + 32 位 uuid.hex → 'testAgent'，其余（含 MA / 标准 UUID）→ 'testAgentMA'。 */
+/**
+ * 来源判定：testcase_id 满足 TC + 32 位 uuid.hex → 'testAgent'，其余（含 MA / 标准 UUID）→ 'testAgentMA'。
+ * TC 前缀的"掩码 uuid"（testagent / testflow）同样归属 testAgent 批次。
+ */
 const TC_SOURCE_PATTERN = /^TC[0-9a-f]{32}$/i;
 
 function resolveRowSource(tsId: string): PushSource {
-    return TC_SOURCE_PATTERN.test(tsId) ? 'testAgent' : 'testAgentMA';
+    if (TC_SOURCE_PATTERN.test(tsId) || isTestAgentUuid(tsId) || isTestFlowUuid(tsId)) {
+        return 'testAgent';
+    }
+    return 'testAgentMA';
 }
 
 /**

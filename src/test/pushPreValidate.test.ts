@@ -12,6 +12,7 @@ import {
     collectInvalidFormatFailures,
     stepPreValidate,
 } from '../handlers/pushCore';
+import { isTestAgentUuid, isTestFlowUuid, isValidTestcaseId } from '../utils/testcaseId';
 import { persistPushFailures } from '../utils/pushFailureStore';
 
 vi.mock('../utils/telemetry', () => ({
@@ -132,5 +133,61 @@ describe('pushPreValidate · testcase_id 格式校验 (FORMAT_VALIDATOR)', () =>
         expect(res.droppedIndex.has(0)).toBe(false); // 样例行保留，交由 step 3 过滤
         expect(res.droppedIndex.has(1)).toBe(false);
         expect(res.droppedIndex.has(2)).toBe(true);  // 格式非法行剔除
+    });
+});
+
+describe('pushPreValidate · testagent / testflow 掩码 uuid 兼容校验', () => {
+    // 以真实示例为准：除 TC 与 0 外即为掩码字母，掩码位为 3/7/10/14/17/21/24/28/31
+    const AGENT_ID = 'TC00t000e00s000t00a000g00e000n00t0';
+    // 掩码位为 3/7/10/14/17/21/24/28（testflow 仅 8 字母，末两位为 hex）
+    const FLOW_ID = 'TC00t000e00s000t00f000l00o000w0000';
+
+    it('isTestAgentUuid 命中场景一掩码 uuid', () => {
+        expect(isTestAgentUuid(AGENT_ID)).toBe(true);
+        expect(isTestFlowUuid(AGENT_ID)).toBe(false);
+    });
+
+    it('isTestFlowUuid 命中场景二掩码 uuid', () => {
+        expect(isTestFlowUuid(FLOW_ID)).toBe(true);
+        expect(isTestAgentUuid(FLOW_ID)).toBe(false);
+    });
+
+    it('位数错位 / 字母串不匹配 → 两类掩码均判非法', () => {
+        // 把 testagent 第 31 位的 t 改成 0，不再满足场景一
+        expect(isTestAgentUuid('TC00t000e00s000t00a000g00e000n0000')).toBe(false);
+        // 把 testflow 第 17 位的 f 改成 a，错位 → 非法
+        expect(isTestFlowUuid('TC00t000e00s000t00a000l00o000w0000')).toBe(false);
+        // 掩码位出现非预期字母（如第 7 位非 e）
+        expect(isTestFlowUuid('TC00t000x00s000t00f000l00o000w0000')).toBe(false);
+    });
+
+    it('isValidTestcaseId 同时兼容标准 UUID / TC|MA+hex / 两类掩码', () => {
+        expect(isValidTestcaseId('123e4567-e89b-12d3-a456-426614174000')).toBe(true);
+        expect(isValidTestcaseId(`TC${HEX32}`)).toBe(true);
+        expect(isValidTestcaseId(`MA${HEX32}`)).toBe(true);
+        expect(isValidTestcaseId(AGENT_ID)).toBe(true);
+        expect(isValidTestcaseId(FLOW_ID)).toBe(true);
+        expect(isValidTestcaseId('garbage')).toBe(false);
+    });
+
+    it('FORMAT_VALIDATOR 放行 testagent / testflow 掩码 uuid（不判非法格式）', () => {
+        expect(collectInvalidFormatFailures([row(AGENT_ID)], idx)).toHaveLength(0);
+        expect(collectInvalidFormatFailures([row(FLOW_ID)], idx)).toHaveLength(0);
+    });
+
+    it('stepPreValidate 不剔除掩码 uuid 行，并入正常推送', async () => {
+        const ctx = {
+            telemetryPrefix: 'push',
+            fileExt: '.yaml',
+            traceId: 't5',
+            opts: { filePath: 'x.yaml', resolveRowIndex: (i: number) => i + 1 },
+        } as any;
+        const res = await stepPreValidate(ctx, [
+            row(AGENT_ID),
+            row(FLOW_ID),
+            row('123e4567-e89b-12d3-a456-426614174000'),
+        ]);
+        expect(res.failures).toHaveLength(0);
+        expect(res.droppedIndex.size).toBe(0);
     });
 });

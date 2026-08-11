@@ -21,6 +21,15 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 .xs-bind-tag-on{color:#107c10;background:#e8f5e9;border-color:#c5e1a5}
 .xs-bind-tag-off{color:#888;background:#eee;border-color:#ddd}
 
+/* testcase_id 列打标：testagent / testflow 掩码 uuid 共用同一小图标 */
+.xs-tc-badge{display:inline-flex;align-items:center;gap:3px;flex-shrink:0;font-size:11px;font-weight:600;line-height:1;padding:1px 6px;border-radius:9px;border:1px solid transparent;user-select:none;vertical-align:middle}
+.xs-tc-badge .xs-tc-badge-letter{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:16px;padding:0 2px;border-radius:8px;color:#fff;font-size:10px;font-weight:700;letter-spacing:.5px}
+.xs-tc-badge .xs-tc-badge-text{letter-spacing:.2px}
+.xs-tc-badge-mask{color:#2e7d32;background:#e8f5e9;border-color:#c8e6c9}
+.xs-tc-badge-mask .xs-tc-badge-letter{background:#43a047}
+/* 与文本之间留白，避免紧贴 */
+.xs-tc-badge + .xs-tc-text{margin-left:6px}
+
 /* TextEditor 入口：图标 + "测试案例"字样 */
 .xs-text-open{display:inline-flex;align-items:center;gap:4px;cursor:pointer;flex-shrink:0}
 .xs-text-open .xs-icon-btn{cursor:pointer}

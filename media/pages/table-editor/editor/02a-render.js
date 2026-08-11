@@ -644,8 +644,41 @@ function _buildCellInner(ri, ci, v) {
         //   - .xs-tr-resized .xs-cell-wrap 为 white-space:pre-wrap → \n 产生真实换行
         // 这样无需占位 span，行为最简单稳健。
         inner = escapeHtml(rawText).replace(/\\n/g, '\n');
+        // testcase_id 列：若值为 testagent / testflow 掩码 uuid，在内容前追加打标小图标。
+        var _hdrForCell = (S.data && S.data.headers && S.data.headers[ci] !== undefined) ? String(S.data.headers[ci]) : '';
+        if (_hdrForCell === 'testcase_id') {
+            var _maskKind = _detectTcMaskKind(v);
+            if (_maskKind) {
+                inner = _buildTcMaskBadge(_maskKind, String(v)) + '<span class="xs-tc-text">' + inner + '</span>';
+            }
+        }
     }
     return { inner: inner, isDetail: isDetail, isArrCol: isArrCol, arrCellCls: arrCellCls, titleAttr: titleAttr, rawText: rawText };
+}
+
+// 判断 testcase_id 值是否为 testagent / testflow 掩码 uuid（与 src/utils/testcaseId.ts 同名方法保持一致）。
+// 前端为纯 JS，无法 import TS 模块，此处内联等价正则（掩码字母固定小写，不加 i 标志）。
+// testagent 与 testflow 掩码共用同一标识，不再区分，故命中任一即返回 'mask'。
+// testagent：TC 后 32 位（2hex t 3hex e 2hex s 3hex t 2hex a 3hex g 2hex e 3hex n 2hex t 1hex）
+var _TC_AGENT_RE = /^TC[0-9a-f]{2}t[0-9a-f]{3}e[0-9a-f]{2}s[0-9a-f]{3}t[0-9a-f]{2}a[0-9a-f]{3}g[0-9a-f]{2}e[0-9a-f]{3}n[0-9a-f]{2}t[0-9a-f]$/;
+// testflow：TC 后 32 位（2hex t 3hex e 2hex s 3hex t 2hex f 3hex l 2hex o 3hex w 4hex）
+var _TC_FLOW_RE = /^TC[0-9a-f]{2}t[0-9a-f]{3}e[0-9a-f]{2}s[0-9a-f]{3}t[0-9a-f]{2}f[0-9a-f]{3}l[0-9a-f]{2}o[0-9a-f]{3}w[0-9a-f]{4}$/;
+// 返回 '' | 'mask'，仅当值为 TC 前缀且命中 testagent / testflow 掩码时。
+function _detectTcMaskKind(value) {
+    if (typeof value !== 'string') return '';
+    var v = value.trim();
+    if (!v) return '';
+    if (_TC_AGENT_RE.test(v) || _TC_FLOW_RE.test(v)) return 'mask';
+    return '';
+}
+
+// 构造 testcase_id 单元格的打标小图标（testagent/testflow 掩码共用同一标识）。
+// 返回一段可内联到单元格内的 HTML 徽标。
+function _buildTcMaskBadge(kind, value) {
+    if (kind !== 'mask') return '';
+    return '<span class="xs-tc-badge xs-tc-badge-mask" title="' + escapeHtml('TC 掩码标识（testagent/testflow）：' + value) + '">'
+        + '<span class="xs-tc-badge-letter">TA</span>'
+        + '</span>';
 }
 
 // 将已展开的步骤合并文本解析为四列表格：序号 | 步骤描述 | 数据 | 预期结果

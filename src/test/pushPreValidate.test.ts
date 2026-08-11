@@ -137,9 +137,9 @@ describe('pushPreValidate · testcase_id 格式校验 (FORMAT_VALIDATOR)', () =>
 });
 
 describe('pushPreValidate · testagent / testflow 掩码 uuid 兼容校验', () => {
-    // 以真实示例为准：除 TC 与 0 外即为掩码字母，掩码位为 3/7/10/14/17/21/24/28/31
+    // 以真实示例为准：testagent TC 后共 32 位，掩码位为 3/7/10/14/17/21/24/28/31（第 32 位为 hex）
     const AGENT_ID = 'TC00t000e00s000t00a000g00e000n00t0';
-    // 掩码位为 3/7/10/14/17/21/24/28（testflow 仅 8 字母，末两位为 hex）
+    // testflow TC 后共 32 位，掩码位为 3/7/10/14/17/21/24/28（第 28 位 w 之后仍有 4 位 hex）
     const FLOW_ID = 'TC00t000e00s000t00f000l00o000w0000';
 
     it('isTestAgentUuid 命中场景一掩码 uuid', () => {
@@ -152,13 +152,17 @@ describe('pushPreValidate · testagent / testflow 掩码 uuid 兼容校验', () 
         expect(isTestAgentUuid(FLOW_ID)).toBe(false);
     });
 
-    it('位数错位 / 字母串不匹配 → 两类掩码均判非法', () => {
-        // 把 testagent 第 31 位的 t 改成 0，不再满足场景一
+    it('位数错位 / 字母串不匹配 / 长度越界 → 两类掩码均判非法', () => {
+        // 把 testagent 第 31 位的 t 改成 0（body 仍 32 位）→ 不再满足场景一
         expect(isTestAgentUuid('TC00t000e00s000t00a000g00e000n0000')).toBe(false);
         // 把 testflow 第 17 位的 f 改成 a，错位 → 非法
-        expect(isTestFlowUuid('TC00t000e00s000t00a000l00o000w0000')).toBe(false);
+        expect(isTestFlowUuid('TC00t000e00s000t00a000l00o000w000')).toBe(false);
         // 掩码位出现非预期字母（如第 7 位非 e）
-        expect(isTestFlowUuid('TC00t000x00s000t00f000l00o000w0000')).toBe(false);
+        expect(isTestFlowUuid('TC00t000x00s000t00f000l00o000w000')).toBe(false);
+        // testagent 末尾多一位（body 长度 33）→ 非法
+        expect(isTestAgentUuid('TC00t000e00s000t00a000g00e000n00t00')).toBe(false);
+        // testflow 末尾少一位（body 长度 31）→ 非法
+        expect(isTestFlowUuid('TC00t000e00s000t00f000l00o000w00')).toBe(false);
     });
 
     it('isValidTestcaseId 同时兼容标准 UUID / TC|MA+hex / 两类掩码', () => {

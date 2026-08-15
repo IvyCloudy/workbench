@@ -553,7 +553,12 @@ export async function stepInvokeBackend(
 ): Promise<{ successMappings: PushSuccessMapping[]; failures: PushResponseFailure[] }> {
     console.log(`[推送][${ctx.traceId}] 文件: ${ctx.opts.filePath}, ${rows.length} 行`);
     TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.start`, {
-        ...baseTelemetryProps(ctx), totalRows: String(rows.length),
+        ...baseTelemetryProps(ctx),
+        totalRows: String(rows.length),
+        caseCount: String(rows.length),
+        testTaskNo: taskInfo.testTaskNo || '',
+        subTestTaskId: taskInfo.subTestTaskId || '',
+        artifactId: ctx.baseName,
     });
     emitProgress(ctx.hooks, 'start', { rows: rows.length });
     emitProgress(ctx.hooks, 'pushing', { rows: rows.length });

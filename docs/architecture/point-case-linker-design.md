@@ -590,6 +590,43 @@ flowchart TD
 
 > **约定**：`sendTelemetryEvent` 用于正常业务事件；`sendTelemetryErrorEvent` 用于错误/告警事件（后端告警面板会单独观察）。所有字段均为 **String 类型**（Telemetry SDK 要求）。
 
+#### 8.1.1 埋点触发关系图
+
+下图展示从用户触发命令到各埋点事件上报的完整链路，覆盖应用层与引擎层的调用关系与条件分支：
+
+```mermaid
+flowchart TB
+    A["用户触发<br/>『查看关联测试案例』命令"] --> B["handleLinkerDiagnostic()<br/>应用层命令入口"]
+    B --> C["getLinkedCasesByMdFile(mdPath)<br/>业务级一站入口"]
+    C --> D["linkPointsToCases()<br/>引擎层单文件匹配"]
+
+    D -.每次必发.-> E(["pointCaseLinker.done<br/>fileExt / pointCount / totalRecords /<br/>matchedRecords / orphanRecords /<br/>type1-3 / strippedParentIds"])
+    D -.重复 pointId.-> F(["pointCaseLinker.duplicatePointId<br/>fileExt / dupCount"])
+    D -.一案例命中多要点.-> G(["pointCaseLinker.multiHitCase<br/>fileExt / caseCount"])
+
+    C -.envelope.errorMsg.-> H(["linkerDiagnostic.linkerError<br/>errorMessage / stackHead /<br/>mdFile / costMs"])
+    C -.流程正常完成.-> I(["linkerDiagnostic.done<br/>mdFile / caseFile /<br/>matchedPointKeys / totalRecords /<br/>matched / costMs"])
+
+    J["批量入口<br/>linkPointsToCasesBatch()<br/>（能力预留，1:1 语义下不触发）"] -.单文件解析异常.-> K(["pointCaseLinker.fileError<br/>fileExt / errorMessage"])
+
+    classDef ok fill:#DCEDC8,stroke:#7CB342,color:#33691E
+    classDef warn fill:#FFF9C4,stroke:#FBC02D,color:#F57F17
+    classDef err fill:#FFCDD2,stroke:#E57373,color:#B71C1C
+    class E,I ok
+    class F,G warn
+    class H,K err
+```
+
+**图例说明**：
+
+- 🟢 **绿色**：`sendTelemetryEvent` 正常事件，用于聚合功能使用量、性能与匹配质量指标
+- 🟡 **黄色**：`sendTelemetryErrorEvent` 数据质量告警，来自 md/xmind 侧的脏数据信号（不影响主流程）
+- 🔴 **红色**：`sendTelemetryErrorEvent` 功能级错误，代表本次诊断未能给出正确结果
+- **虚线**：条件触发（仅在满足条件时发出）
+- **实线**：调用关系
+
+**级联规律**：应用层每次成功执行会发 1 条 `linkerDiagnostic.done`，其内部调用引擎层 `linkPointsToCases` 会级联发出 1 条 `pointCaseLinker.done`（必发）+ 0~2 条脏数据告警，共 **1~3 条引擎层事件 + 1 条应用层事件**。失败路径则替换为 `linkerDiagnostic.linkerError`（引擎层事件在早期错误场景下可能不发）。
+
 ### 8.2 事件字段详表
 
 #### `linkerDiagnostic.done`（应用层 · 正常事件）
@@ -603,7 +640,7 @@ flowchart TD
 | `matchedPointKeys` | string | envelope.data 里的 point 键数（“有命中的要点数”、≤ pointList 总数）|
 | `totalRecords` | string | 案例文件总记录数 |
 | `matched` | string | 命中的记录数 |
-| `elapsedMs` | string | 端到端耗时（ms）|
+| `costMs` | string | 端到端耗时（ms）|
 
 #### `linkerDiagnostic.linkerError`（应用层 · 错误事件）
 **位置**：[linkerDiagnosticCommand.ts](../../src/handlers/linkerDiagnosticCommand.ts)
@@ -614,7 +651,7 @@ flowchart TD
 | `errorMessage` | string | 来自 `telemetryErrProps(new Error(envelope.errorMsg))` 展开的 Error.message |
 | `stackHead` | string | Error 栈顶部行，用于定位抛点 |
 | `mdFile` | string | md 文件名（`path.basename(mdPath)`），用于统计“哪些要点文件更易触发错误” |
-| `elapsedMs` | string | 端到端耗时（ms），用于区分“快速短路错误”与“匹配中途抛错” |
+| `costMs` | string | 端到端耗时（ms），用于区分“快速短路错误”与“匹配中途抛错” |
 
 #### `pointCaseLinker.done`（引擎层 · 正常事件）
 **位置**：[pointCaseLinker.ts:639](../../src/utils/pointCaseLinker.ts) · `emitTelemetry`
@@ -631,6 +668,7 @@ flowchart TD
 | `type2` | string | type=2（仅 path 兜底）命中数 | **中文 CSV 场景的默认档位** |
 | `type3` | string | type=3（仅 parent_id 命中）命中数 | |
 | `strippedParentIds` | string | 触发 `-N` 尾号剥离规则的记录数 | 用于观察 parent_id 拆分行为占比 |
+| `costMs` | string | 引擎层单文件匹配耗时（ms） | 覆盖：建索引 + 读文件（含缓存命中）+ 匹配全过程；与应用层 `linkerDiagnostic.done` 的 `costMs` 满足「引擎耗时 ⊆ 端到端耗时」 |
 
 #### `pointCaseLinker.duplicatePointId`（引擎层 · 错误事件，条件发）
 **位置**：[pointCaseLinker.ts:651](../../src/utils/pointCaseLinker.ts)
@@ -664,7 +702,7 @@ flowchart TD
 | **匹配质量档位分布** | `pointCaseLinker.done` 按 `fileExt` 分组，看 `type1:type2:type3` 比例 |
 | **中文 CSV 用户占比** | `pointCaseLinker.done` 中 `fileExt=".csv"` 且 `type3 > 0 && type1 == 0` 的占比 |
 | **数据质量长期告警** | `pointCaseLinker.duplicatePointId` + `pointCaseLinker.multiHitCase` 的日均量 |
-| **性能观测** | `linkerDiagnostic.done` 的 `elapsedMs` 分位数（P50/P95/P99） |
+| **性能观测** | `linkerDiagnostic.done` 的 `costMs`（端到端 P50/P95/P99）与 `pointCaseLinker.done` 的 `costMs`（引擎层）对比 —— 差值≈应用层解析 md/xmind + UI 渲染的时间；引擎层耗时可按 `fileExt` 分桶做规模效应分析 |
 | **孤儿记录率** | `pointCaseLinker.done` 的 `orphanRecords ÷ totalRecords`，>50% 提示 md/case 大纲脱节 |
 
 ### 8.4 中文 CSV 场景埋点解读

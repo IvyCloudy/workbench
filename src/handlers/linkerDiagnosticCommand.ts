@@ -174,11 +174,11 @@ export async function handleLinkerDiagnostic(): Promise<void> {
         // 即使有错误也把 envelope 完整 JSON dump 出来，与历史规格一致（total=0, data={}）
         ch.appendLine('[TC-Linker] ===== 最终出参（约定格式） =====');
         ch.appendLine(JSON.stringify(envelope, null, 2));
-        // 错误分支同样携带 mdFile / elapsedMs，方便统计「哪些要点文件更易触发错误」
+        // 错误分支同样携带 mdFile / costMs，方便统计「哪些要点文件更易触发错误」
         TelemetryService.sendTelemetryErrorEvent('linkerDiagnostic.linkerError', {
             ...telemetryErrProps(new Error(envelope.errorMsg)),
             mdFile: path.basename(mdPath),
-            elapsedMs: String(elapsed),
+            costMs: String(elapsed),
         });
         showToast(undefined, 'warning', envelope.errorMsg);
         return;
@@ -200,7 +200,7 @@ export async function handleLinkerDiagnostic(): Promise<void> {
         totalOrphan: envelope.stats?.totalOrphan,
         totalStripped: envelope.stats?.totalStripped,
         matchedPointKeys: Object.keys(envelope.data).length,
-        elapsedMs: elapsed,
+        costMs: elapsed,
     };
     ch.appendLine('[TC-Linker] ===== 统计 =====');
     ch.appendLine(JSON.stringify(stats, null, 2));
@@ -216,6 +216,6 @@ export async function handleLinkerDiagnostic(): Promise<void> {
         matchedPointKeys: String(Object.keys(envelope.data).length),
         totalRecords: String(envelope.stats?.totalRecords ?? 0),
         matched: String(envelope.total),
-        elapsedMs: String(elapsed),
+        costMs: String(elapsed),
     });
 }

@@ -341,6 +341,10 @@ export async function linkPointsToCases(
         telemetry: options.telemetry ?? true,
     };
 
+    // 计时起点：涵盖「建索引 + 读文件(含缓存) + 匹配」全过程，
+    // 与应用层 linkerDiagnostic.done 的 costMs 形成"引擎耗时 ⊆ 端到端耗时"关系
+    const t0 = Date.now();
+
     // 1) 建索引（一次遍历 pointList）
     const { byId, byPath, duplicatePointIds } = buildIndex(pointList);
 
@@ -353,7 +357,7 @@ export async function linkPointsToCases(
 
     // 4) 埋点
     if (opts.telemetry) {
-        emitTelemetry(filePath, result, pointList.length);
+        emitTelemetry(filePath, result, pointList.length, Date.now() - t0);
     }
     logger.debug('link done', {
         filePath: path.basename(filePath),
@@ -426,13 +430,14 @@ export async function linkPointsToCasesBatch(
         while (cursor < filePaths.length) {
             const idx = cursor++;
             const fp = filePaths[idx];
+            const t0 = Date.now();
             try {
                 const records = await loadRecords(fp, opts.enableCache);
                 const result = matchCore(records, byId, byPath, opts);
                 result.stats.duplicatePointIds = duplicatePointIds;
                 out[fp] = result;
                 if (opts.telemetry) {
-                    emitTelemetry(fp, result, pointList.length);
+                    emitTelemetry(fp, result, pointList.length, Date.now() - t0);
                 }
             } catch (err: any) {
                 logger.error('linkPointsToCasesBatch item failed', fp, err?.message);
@@ -702,7 +707,7 @@ function matchCore(
 // 内部：埋点
 // ============================================================================
 
-function emitTelemetry(filePath: string, result: LinkResult, pointCount: number): void {
+function emitTelemetry(filePath: string, result: LinkResult, pointCount: number, costMs: number): void {
     try {
         TelemetryService.sendTelemetryEvent('pointCaseLinker.done', {
             fileExt: path.extname(filePath).toLowerCase(),
@@ -714,6 +719,7 @@ function emitTelemetry(filePath: string, result: LinkResult, pointCount: number)
             type2: String(result.stats.matchedByType.type2),
             type3: String(result.stats.matchedByType.type3),
             strippedParentIds: String(result.stats.strippedParentIds),
+            costMs: String(costMs),
         });
         if (result.stats.duplicatePointIds.length > 0) {
             TelemetryService.sendTelemetryErrorEvent('pointCaseLinker.duplicatePointId', {

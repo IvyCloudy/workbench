@@ -577,15 +577,22 @@ flowchart TD
 ┌───────────── 应用层（linkerDiagnosticCommand.ts） ─────────────┐
 │  linkerDiagnostic.done           命令面板诊断完成                     │
 │  linkerDiagnostic.linkerError    命令面板诊断遇到 errorMsg（Error）   │
-└───────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────────┐
                      │ 每次 linkPointsToCases 调用都会级联下面 1~3 个事件
                      ▼
-┌───────────── 引擎层（pointCaseLinker.ts） ─────────────────────┐
+┌───────────── 引擎层（pointCaseLinker.ts） ──────────────────┐
 │  pointCaseLinker.done            单文件匹配完成（必发）               │
 │  pointCaseLinker.duplicatePointId 输入含重复 pointId（Error，条件发）  │
 │  pointCaseLinker.multiHitCase    同 case 被多点命中（Error，条件发）   │
 │  pointCaseLinker.fileError       预留：批量下单文件解析失败            │
-└────────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────────┘
+
+┌───────────── 公共方法层（基于 linker 的下游能力） ───────────┐
+│  pointCaseDeleter.done   删除关联案例完成（命中 0 条也上报）；含测试   │
+│                          任务 / 要点 / 案例 / 性能 四块完整字段。参 8.5。│
+│  pointCaseDeleter.error  删除关联案例抛异常（入参非法 / 未绑定 /       │
+│                          文件不存在 / 解析失败）                          │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 > **约定**：`sendTelemetryEvent` 用于正常业务事件；`sendTelemetryErrorEvent` 用于错误/告警事件（后端告警面板会单独观察）。所有字段均为 **String 类型**（Telemetry SDK 要求）。
@@ -718,6 +725,87 @@ strippedParentIds = "0"
 ```
 
 若观测到 CSV 用户的 `orphanRecords / totalRecords` 显著偏高，说明用户模板里连"路径"列也缺失或格式不匹配，可作为**产品侧引导补列**的信号。
+
+### 8.5 删除案例（deleter）埋点
+
+> **模块**：[src/utils/pointCaseDeleter.ts](../../src/utils/pointCaseDeleter.ts) · 公共方法 `deleteCasesByPoint(pointFilePath, point, taskInfo?)`
+>
+> **场景**：外部调用方（Tree/CodeLens/命令等）根据「测试要点」删除其关联的所有测试案例。该方法**基于 linker 的匹配语义**（type=1/2/3），但独立于「查看关联案例」链路，因此有独立的两个埋点事件。
+
+#### `pointCaseDeleter.done`（公共方法层 · 正常事件）
+**位置**：[pointCaseDeleter.ts](../../src/utils/pointCaseDeleter.ts) · `emitDoneTelemetry`
+**触发**：每次 `deleteCasesByPoint` 成功返回都上报（**命中 0 条也上报**，用于观察"发起删除"的整体使用量、命中率与性能）
+
+| 分类 | 字段 | 类型 | 含义 |
+|---|---|---|---|
+| **测试任务维度** | `testTaskNo` | string | 调用方传入的测试任务编号，缺省 `""` |
+| | `subTestTaskId` | string | 调用方传入的子任务 ID，缺省 `""` |
+| | `artifactId` | string | 调用方传入的产出物 ID；**缺省时以案例文件 basename 兜底** |
+| **要点维度** | `pointId` | string | 入参 `pointId`（原文，可空） |
+| | `pointName` | string | 入参 `pointName`（原文，可空） |
+| | `pointPath` | string | 入参 `pointPath`（**上报原文**，未做归一化，可空） |
+| **案例维度** | `fileExt` | string | 案例文件扩展名（`.yaml` / `.json` / `.csv`） |
+| | `deletedCount` | string | 实际被删除案例数（核心业务指标） |
+| | `totalRecords` | string | 案例文件原总行数 |
+| | `remainingRecords` | string | 删除后剩余行数 |
+| | `type1` | string | type=1（parent_id + path 同点）命中数 |
+| | `type2` | string | type=2（仅 path 兜底）命中数 |
+| | `type3` | string | type=3（仅 parent_id 命中）命中数 |
+| **性能** | `costMs` | string | 端到端耗时（ms），含匹配 + 落盘 + 追踪存储同步 |
+
+> **关于 taskInfo 的来源约定**：deleter 采用 **Q2-a 决策**——`taskInfo` 由调用方通过入参传入，模块内部**不主动**反查 `taskInfoStore` 或 workspace API，以保持模块解耦与单元测试友好。若调用方未提供，字段以空串上报，但 `artifactId` 会自动使用案例文件 basename 兜底，避免完全丢失产出物维度。
+
+#### `pointCaseDeleter.error`（公共方法层 · 错误事件）
+**位置**：[pointCaseDeleter.ts](../../src/utils/pointCaseDeleter.ts) · `emitErrorTelemetry`
+**触发**：`deleteCasesByPoint` 抛任何异常时统一上报（入参非法 / 未绑定案例文件 / 案例文件不存在 / 文件类型不支持 / 解析或保存失败）
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `errorMessage` | string | Error.message，截断到 500 字符 |
+| `stackHead` | string | Error 栈顶部行，用于定位抛点 |
+| `testTaskNo` | string | 调用方传入的 taskInfo.testTaskNo（缺省 `""`）|
+| `subTestTaskId` | string | 调用方传入的 taskInfo.subTestTaskId（缺省 `""`）|
+| `artifactId` | string | 优先 taskInfo.artifactId，其次案例文件 basename，均无则 `""` |
+| `pointId` | string | 入参 pointId（原文，可空）|
+| `pointName` | string | 入参 pointName（原文，可空）|
+| `pointPath` | string | 入参 pointPath（原文，可空）|
+| `fileExt` | string | 案例文件扩展名（若尚未定位到案例文件则 `""`）|
+
+#### 8.5.1 触发关系图
+
+```mermaid
+flowchart TB
+    A["调用方<br/>（Tree / CodeLens / 命令等）"] --> B["deleteCasesByPoint<br/>(pointFilePath, point, taskInfo?)"]
+    B --> C{"入参校验"}
+    C -.pointId + pointPath 均空.-> ERR1(["pointCaseDeleter.error"])
+    C -->|OK| D["getCaseOfPoint<br/>解析绑定"]
+    D -.未绑定.-> ERR2(["pointCaseDeleter.error"])
+    D -->|已绑定| E{"案例文件存在?"}
+    E -.不存在.-> ERR3(["pointCaseDeleter.error"])
+    E -->|存在| F["withFileLock 加锁"]
+    F --> G["parse → match → splice → save"]
+    G -.解析/保存抛错.-> ERR4(["pointCaseDeleter.error"])
+    G -->|成功（含命中 0 条）| DONE(["pointCaseDeleter.done<br/>testTaskNo / subTestTaskId / artifactId /<br/>pointId / pointName / pointPath /<br/>fileExt / deletedCount / totalRecords /<br/>remainingRecords / type1-3 / costMs"])
+
+    classDef ok fill:#DCEDC8,stroke:#7CB342,color:#33691E
+    classDef err fill:#FFCDD2,stroke:#E57373,color:#B71C1C
+    class DONE ok
+    class ERR1,ERR2,ERR3,ERR4 err
+```
+
+**级联规律**：每次 `deleteCasesByPoint` 只发 1 条埋点——**要么** `pointCaseDeleter.done`（含命中 0 条），**要么** `pointCaseDeleter.error`（任一环节抛错），二者互斥。
+
+#### 8.5.2 常用观测视角（deleter 专属）
+
+| 指标 | 表达式 |
+|---|---|
+| **删除功能使用量** | `pointCaseDeleter.done` 日/周计数 |
+| **失败率** | `pointCaseDeleter.error` count ÷ (`pointCaseDeleter.done` count + `pointCaseDeleter.error` count) |
+| **命中率分布** | `pointCaseDeleter.done` 中 `deletedCount > 0` 的占比（0 值占比过高说明入参 point 与磁盘 case 严重错位）|
+| **单点批量分档** | `pointCaseDeleter.done` 按 `deletedCount` 分桶（1 / 2-5 / 6-20 / 20+），反映测试点粒度 |
+| **匹配置信度** | `type1 : type2 : type3` 比例 |
+| **产出物维度分布** | 按 `artifactId` 分组，看哪些产出物删除操作最频繁 |
+| **性能分位** | `costMs` 的 P50/P95/P99；对比 `pointCaseLinker.done.costMs`（deleter 额外含磁盘写 + snapshot / deletedRows / highlight 三项同步）|
 
 ---
 

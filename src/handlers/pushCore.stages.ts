@@ -26,6 +26,7 @@ import { pushDiag, showPushDiag } from '../utils/pushDiagnostics';
 import { parsePushResponse } from '../utils/pushResponse';
 import { persistPushFailures } from '../utils/pushFailureStore';
 import { normalizePushData } from '../utils/headerLabels';
+import { withFileLock } from '../utils/asyncLock';
 import type { PushResponseFailure, PushSuccessMapping } from '../utils/pushResponse';
 import type { PushFailureItem, WriteBackOptions, ExtractSampleRowsResult, RowIndexResolveCtx, ResolveTaskInfoResult, PreValidationResult, PushContext, RunPushOptions, PushCoreHooks, RowLike } from './pushCore.types';
 
@@ -343,6 +344,12 @@ export function buildFailureItems(
 
 export async function writeBackTestCaseNos(opts: WriteBackOptions): Promise<void> {
     if (!opts.successMappings || opts.successMappings.length === 0) return;
+    // 与 pointCaseDeleter 共用同一把 per-file 异步锁，避免"推送成功回写"与"删除案例"并发
+    // 覆盖同一案例文件（parse → mutate → save 三步链路互斥）。
+    return withFileLock(opts.filePath, () => writeBackTestCaseNosLocked(opts));
+}
+
+async function writeBackTestCaseNosLocked(opts: WriteBackOptions): Promise<void> {
     try {
         let parser: FileParser | undefined = opts.parser;
         if (!parser) {

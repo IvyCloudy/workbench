@@ -7,6 +7,7 @@
 import * as path from 'path';
 import type * as vscode from 'vscode';
 import { pushTestCase } from '../services/http';
+import { getFileIds } from '../utils/fileUtils';
 import {
     classifyFailure,
     failureFieldOf,
@@ -559,13 +560,17 @@ export async function stepInvokeBackend(
     taskInfo: { testTaskNo: string; subTestTaskId: string },
 ): Promise<{ successMappings: PushSuccessMapping[]; failures: PushResponseFailure[] }> {
     console.log(`[推送][${ctx.traceId}] 文件: ${ctx.opts.filePath}, ${rows.length} 行`);
+    // 文件/文件夹的 fs 标识（inode / dev），来自 getFileIds
+    const fileFields = await getFileIds(ctx.opts.filePath);
     TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.start`, {
         ...baseTelemetryProps(ctx),
         totalRows: String(rows.length),
         caseCount: String(rows.length),
         testTaskNo: taskInfo.testTaskNo || '',
         subTestTaskId: taskInfo.subTestTaskId || '',
-        artifactId: ctx.baseName,
+        file_id: fileFields.file_id,
+        device_id: fileFields.device_id,
+        filePath: ctx.opts.filePath,
     });
     emitProgress(ctx.hooks, 'start', { rows: rows.length });
     emitProgress(ctx.hooks, 'pushing', { rows: rows.length });
@@ -625,7 +630,7 @@ export async function stepInvokeBackend(
             ctx.opts.extensionContext,
             validRows,
             taskInfo,
-            ctx.baseName,
+            fileFields.file_id,
             batch.source,
         );
         pushDiag(`[接口] 批次${batch.source}返回 | returnCode=${pushResult.returnCode || '(空)'} | errorMsg=${(pushResult.errorMsg || '').slice(0, 120)} | body长度=${Array.isArray(pushResult.body) ? pushResult.body.length : '非数组'}`);

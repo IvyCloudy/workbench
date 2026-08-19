@@ -4,10 +4,8 @@
  * 「阶段 4 失败行号」「阶段 5 成功回写」合并为单文件，减少拆分粒度。
  */
 
-import * as path from 'path';
-import type * as vscode from 'vscode';
 import { pushTestCase } from '../services/http';
-import { getFileIds } from '../utils/fileUtils';
+import { getFileIds, toWorkspaceRelativePath } from '../utils/fileUtils';
 import {
     classifyFailure,
     failureFieldOf,
@@ -560,8 +558,12 @@ export async function stepInvokeBackend(
     taskInfo: { testTaskNo: string; subTestTaskId: string },
 ): Promise<{ successMappings: PushSuccessMapping[]; failures: PushResponseFailure[] }> {
     console.log(`[推送][${ctx.traceId}] 文件: ${ctx.opts.filePath}, ${rows.length} 行`);
-    // 文件/文件夹的 fs 标识（inode / dev），来自 getFileIds
-    const fileFields = await getFileIds(ctx.opts.filePath);
+    // 文件/文件夹的 fs 标识（inode / dev），来自 getFileIds；
+    // 读取失败/路径不存在时 getFileIds 返回 { file_id: '', device_id: '' }，
+    // 这里再做一次空值兜底，避免 fileFields 为 null/undefined 时访问属性抛错。
+    const fileFields = (await getFileIds(ctx.opts.filePath)) || { file_id: '', device_id: '' };
+    // 文件路径仅保留基于工作区根的相对路径
+    const relativeFilePath = toWorkspaceRelativePath(ctx.opts.filePath);
     TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.start`, {
         ...baseTelemetryProps(ctx),
         totalRows: String(rows.length),
@@ -570,7 +572,7 @@ export async function stepInvokeBackend(
         subTestTaskId: taskInfo.subTestTaskId || '',
         file_id: fileFields.file_id,
         device_id: fileFields.device_id,
-        filePath: ctx.opts.filePath,
+        filePath: relativeFilePath,
     });
     emitProgress(ctx.hooks, 'start', { rows: rows.length });
     emitProgress(ctx.hooks, 'pushing', { rows: rows.length });

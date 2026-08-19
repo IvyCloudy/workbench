@@ -29,10 +29,16 @@ vi.mock('../utils/telemetry', () => ({
     },
 }));
 
-import { __test_only__, deleteCasesByPoint } from '../utils/pointCaseDeleter';
+import { __test_only__, deleteCasesByPoint, deleteCasesByPoints } from '../utils/pointCaseDeleter';
 import { withFileLock, _clearAllLocks } from '../utils/asyncLock';
 
-const { deleteCasesFromCaseFile } = __test_only__;
+// ---- Mock getCaseOfPoint：让公共方法可绕开真实绑定查询 ----
+vi.mock('../utils/pointCaseBindingStore', () => ({
+    getCaseOfPoint: vi.fn(),
+}));
+import { getCaseOfPoint } from '../utils/pointCaseBindingStore';
+
+const { deleteCasesFromCaseFile, deleteCasesFromCaseFileMulti } = __test_only__;
 
 // ============================================================================
 // 临时目录辅助
@@ -425,6 +431,154 @@ describe('pointCaseDeleter · 埋点', () => {
         );
         expect(telemetryEvents[0].props.artifactId).toBe('');
         expect(telemetryEvents[0].props.fileExt).toBe('');
+    });
+});
+
+// ============================================================================
+// 7.5) 多要点（points）删除场景
+// ============================================================================
+describe('pointCaseDeleter · 多要点删除', () => {
+    let dir: string;
+    beforeEach(() => { dir = mkTmpDir(); telemetryEvents.length = 0; });
+    afterEach(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
+
+    const YAML = `- testcase_id: TC001
+  name: 登录成功
+  parent_id: LGN-001
+  path: 账户中心/登录
+- testcase_id: TC002
+  name: 登录失败-密码错
+  parent_id: LGN-001
+  path: 账户中心/登录
+- testcase_id: TC003
+  name: 订单创建
+  parent_id: ORD-001
+  path: 交易/订单
+- testcase_id: TC004
+  name: 订单支付
+  parent_id: ORD-001
+  path: 交易/订单
+- testcase_id: TC005
+  name: 注册校验
+  parent_id: REG-001
+  path: 账户中心/注册
+`;
+
+    it('传入 2 个要点（不同 parent_id）→ 并集删除，去重后计数正确', async () => {
+        const fp = writeYaml(dir, 'cases.yaml', YAML);
+        const res = await deleteCasesFromCaseFileMulti(fp, [
+            { pointId: 'LGN-001', pointPath: '', pointName: '' },
+            { pointId: 'ORD-001', pointPath: '', pointName: '' },
+        ]);
+
+        // LGN-001 → 2 条, ORD-001 → 2 条，互不重叠
+        expect(res.deletedCount).toBe(4);
+        expect(res.deletedCases.map(c => c.testcaseId).sort()).toEqual(
+            ['TC001', 'TC002', 'TC003', 'TC004'],
+        );
+        expect(res.remainingRecords).toBe(1); // 仅剩 TC005
+        // 逐要点明细
+        expect(res.perPoint[0].deletedCount).toBe(2);
+        expect(res.perPoint[1].deletedCount).toBe(2);
+        // 落盘校验
+        const disk = fs.readFileSync(fp, 'utf-8');
+        expect(disk).toContain('TC005');
+        expect(disk).not.toContain('TC001');
+        expect(disk).not.toContain('TC004');
+    });
+
+    it('两个要点命中同一行 → 不重复删除（去重）', async () => {
+        const fp = writeYaml(dir, 'cases.yaml', YAML);
+        // 同一条 TC001 同时被两个要点命中（parent_id 与 path 各命中一次）
+        const res = await deleteCasesFromCaseFileMulti(fp, [
+            { pointId: 'LGN-001', pointPath: '', pointName: '' },
+            { pointId: 'LGN-001', pointPath: '账户中心/登录', pointName: '' },
+        ]);
+
+        // 并集：LGN-001 两条，第二要点不再新增
+        expect(res.deletedCount).toBe(2);
+        expect(res.perPoint[0].deletedCount).toBe(2);
+        // 第二要点命中的是同一批行，perPoint[1] 也计入其明细
+        expect(res.perPoint[1].deletedCount).toBe(2);
+        expect(res.remainingRecords).toBe(3);
+    });
+
+    it('单要点数组（points 长度 1）等价于单点调用', async () => {
+        const fp = writeYaml(dir, 'cases.yaml', YAML);
+        const res = await deleteCasesFromCaseFileMulti(fp, [
+            { pointId: '', pointPath: '交易/订单', pointName: '' },
+        ]);
+        expect(res.deletedCount).toBe(2);
+        expect(res.perPoint).toHaveLength(1);
+        expect(res.perPoint[0].typeCount.type2).toBe(2);
+        expect(res.remainingRecords).toBe(3);
+    });
+
+    it('命中 0 条（所有要点都不匹配）→ 不写盘', async () => {
+        const fp = writeYaml(dir, 'cases.yaml', YAML);
+        const mtimeBefore = fs.statSync(fp).mtimeMs;
+        await new Promise(r => setTimeout(r, 20));
+
+        const res = await deleteCasesFromCaseFileMulti(fp, [
+            { pointId: 'NOPE-1', pointPath: '', pointName: '' },
+            { pointId: '', pointPath: '不存在/路径', pointName: '' },
+        ]);
+        expect(res.deletedCount).toBe(0);
+        expect(res.perPoint).toHaveLength(2);
+        expect(res.perPoint[0].deletedCount).toBe(0);
+        expect(res.perPoint[1].deletedCount).toBe(0);
+        expect(fs.statSync(fp).mtimeMs).toBe(mtimeBefore);
+    });
+
+    it('公共方法 deleteCasesByPoints 触发埋点：逐要点 done ×N + 聚合 done.aggregate', async () => {
+        // 用 mock 的 getCaseOfPoint 把要点文件绑定到临时案例文件
+        const fp = writeYaml(dir, 'cases.yaml', YAML);
+        vi.mocked(getCaseOfPoint).mockReturnValue(fp);
+
+        await deleteCasesByPoints('/tmp/point.md', {
+            points: [
+                { pointId: 'LGN-001', pointPath: '', pointName: '登录' },
+                { pointId: 'ORD-001', pointPath: '', pointName: '订单' },
+            ],
+        });
+
+        // 共 3 条 done：2 条逐要点 + 1 条聚合
+        const doneEvents = telemetryEvents.filter(e => e.kind === 'event');
+        expect(doneEvents).toHaveLength(3);
+
+        const agg = doneEvents.find(e => e.name === 'pointCaseDeleter.done.aggregate')!;
+        expect(agg).toBeDefined();
+        // 聚合：全局去重 deletedCount = 4（LGN 2 + ORD 2）
+        expect(agg.props.deletedCount).toBe('4');
+        expect(agg.props.pointCount).toBe('2');
+        expect(agg.props.pointId).toBe('LGN-001|ORD-001');
+        expect(agg.props.pointName).toBe('登录|订单');
+        expect(agg.props.remainingRecords).toBe('1');
+        // 真实耗时（数值型字符串，非 '0'）
+        expect(Number(agg.props.costMs)).toBeGreaterThanOrEqual(0);
+
+        // 逐要点 done：各自的 deletedCount 为单要点命中数，合计与聚合一致（无重叠时）
+        const perPointDone = doneEvents.filter(e => e.name === 'pointCaseDeleter.done');
+        expect(perPointDone).toHaveLength(2);
+        const sum = perPointDone.reduce((s, e) => s + Number(e.props.deletedCount), 0);
+        expect(sum).toBe(4); // 无重叠时逐要点合计 == 聚合去重
+    });
+});
+
+// ============================================================================
+// 7.6) deleteCasesByPoints 公共方法 · 入参校验
+// ============================================================================
+describe('deleteCasesByPoints · 公共方法入参校验', () => {
+    it('points 为空数组 → 抛错', async () => {
+        await expect(
+            deleteCasesByPoints('/tmp/x.md', { points: [] }),
+        ).rejects.toThrow(/points 不能为空数组/);
+    });
+
+    it('单个要点 pointId / pointPath 均空 → 抛错', async () => {
+        await expect(
+            deleteCasesByPoints('/tmp/x.md', { points: [{ pointName: '只传名字' }] }),
+        ).rejects.toThrow(/至少一个非空/);
     });
 });
 

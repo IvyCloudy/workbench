@@ -728,13 +728,16 @@ strippedParentIds = "0"
 
 ### 8.5 删除案例（deleter）埋点
 
-> **模块**：[src/utils/pointCaseDeleter.ts](../../src/utils/pointCaseDeleter.ts) · 公共方法 `deleteCasesByPoint(pointFilePath, point, taskInfo?)`
+> **模块**：[src/utils/pointCaseDeleter.ts](../../src/utils/pointCaseDeleter.ts)
 >
-> **场景**：外部调用方（Tree/CodeLens/命令等）根据「测试要点」删除其关联的所有测试案例。该方法**基于 linker 的匹配语义**（type=1/2/3），但独立于「查看关联案例」链路，因此有独立的两个埋点事件。
+> **公共方法（单点）** `deleteCasesByPoint(pointFilePath, point, taskInfo?)` —— 删除单个要点关联的所有案例。
+> **公共方法（多点）** `deleteCasesByPoints(pointFilePath, { points }, taskInfo?)` —— 一次调用删除**多个要点**关联的所有案例，要点之间为**并集**语义（命中任一要点的案例即删除，同一案例命中多个要点也只删一次）。`deleteCasesByPoint` 内部委托 `deleteCasesByPoints({ points: [point] })`，二者行为一致。
+>
+> **场景**：外部调用方（Tree/CodeLens/命令等）根据「测试要点」删除其关联的所有测试案例。该方法**基于 linker 的匹配语义**（type=1/2/3），但独立于「查看关联案例」链路，因此有独立的两个埋点事件。多要点场景额外增加一条聚合事件。
 
-#### `pointCaseDeleter.done`（公共方法层 · 正常事件）
+#### `pointCaseDeleter.done`（公共方法层 · 正常事件 · 逐要点口径）
 **位置**：[pointCaseDeleter.ts](../../src/utils/pointCaseDeleter.ts) · `emitDoneTelemetry`
-**触发**：每次 `deleteCasesByPoint` 成功返回都上报（**命中 0 条也上报**，用于观察"发起删除"的整体使用量、命中率与性能）
+**触发**：每次 `deleteCasesByPoints`（含单点委托）成功返回，对 `points` 中**每个要点各上报 1 条**（**命中 0 条也上报**，用于观察"发起删除"的整体使用量、命中率与性能）。`deletedCount` 等字段为**单要点命中数**口径。
 
 | 分类 | 字段 | 类型 | 含义 |
 |---|---|---|---|
@@ -771,41 +774,72 @@ strippedParentIds = "0"
 | `pointPath` | string | 入参 pointPath（原文，可空）|
 | `fileExt` | string | 案例文件扩展名（若尚未定位到案例文件则 `""`）|
 
+#### `pointCaseDeleter.done.aggregate`（公共方法层 · 正常事件 · 聚合口径）
+**位置**：[pointCaseDeleter.ts](../../src/utils/pointCaseDeleter.ts) · `emitAggregateDoneTelemetry`
+**触发**：仅 `deleteCasesByPoints` 调用触发（单点委托也会触发，因本质走同一条路径）。每次调用在逐要点 `done` 之外**额外上报 1 条**，用于从「一次批量操作」视角观测总量与真实耗时，避免重叠命中导致的重复计数。
+
+| 分类 | 字段 | 类型 | 含义 |
+|---|---|---|---|
+| **测试任务维度** | `testTaskNo` | string | 调用方传入的测试任务编号，缺省 `""` |
+| | `subTestTaskId` | string | 调用方传入的子任务 ID，缺省 `""` |
+| | `artifactId` | string | 调用方传入的产出物 ID；**缺省时以案例文件 basename 兜底** |
+| **多要点维度** | `pointCount` | string | 本次传入的要点个数 |
+| | `pointId` | string | 各要点 `pointId` 以 `\|` 拼接（原文，可空项留空） |
+| | `pointName` | string | 各要点 `pointName` 以 `\|` 拼接 |
+| | `pointPath` | string | 各要点 `pointPath` 以 `\|` 拼接（**上报原文**，未归一化） |
+| **案例维度** | `fileExt` | string | 案例文件扩展名（`.yaml` / `.json` / `.csv`） |
+| | `deletedCount` | string | **全局去重**后实际被删除案例数（核心业务指标，已消除重叠命中的重复） |
+| | `totalRecords` | string | 案例文件原总行数 |
+| | `remainingRecords` | string | 删除后剩余行数 |
+| | `type1` | string | 全局合并的 type=1 命中数 |
+| | `type2` | string | 全局合并的 type=2 命中数 |
+| | `type3` | string | 全局合并的 type=3 命中数 |
+| **性能** | `costMs` | string | **真实**端到端耗时（ms），含匹配 + 落盘 + 追踪存储同步 |
+
+> **与逐要点 `done` 的口径差异**：逐要点 `done` 的 `deletedCount` 是「该要点自身命中数」（重叠场景下多个要点会重复计入同一案例），而 `done.aggregate` 的 `deletedCount` 是「并集去重后的真实删除数」。观测"实际删了多少条"应以 `done.aggregate.deletedCount` 为准；观测"每个要点的命中分布"才用逐要点 `done`。
+
 #### 8.5.1 触发关系图
 
 ```mermaid
 flowchart TB
-    A["调用方<br/>（Tree / CodeLens / 命令等）"] --> B["deleteCasesByPoint<br/>(pointFilePath, point, taskInfo?)"]
+    A["调用方<br/>（Tree / CodeLens / 命令等）"] --> B["deleteCasesByPoints<br/>(pointFilePath, { points }, taskInfo?)<br/>单点 deleteCasesByPoint 委托此入口"]
     B --> C{"入参校验"}
-    C -.pointId + pointPath 均空.-> ERR1(["pointCaseDeleter.error"])
+    C -.points 空 / 单点 pointId+pointPath 均空.-> ERR1(["pointCaseDeleter.error"])
     C -->|OK| D["getCaseOfPoint<br/>解析绑定"]
     D -.未绑定.-> ERR2(["pointCaseDeleter.error"])
     D -->|已绑定| E{"案例文件存在?"}
     E -.不存在.-> ERR3(["pointCaseDeleter.error"])
     E -->|存在| F["withFileLock 加锁"]
-    F --> G["parse → match → splice → save"]
+    F --> G["parse → 逐要点 match（并集去重）→ splice → save"]
     G -.解析/保存抛错.-> ERR4(["pointCaseDeleter.error"])
-    G -->|成功（含命中 0 条）| DONE(["pointCaseDeleter.done<br/>testTaskNo / subTestTaskId / artifactId /<br/>pointId / pointName / pointPath /<br/>fileExt / deletedCount / totalRecords /<br/>remainingRecords / type1-3 / costMs"])
+    G -->|成功（含命中 0 条）| DONE_N["N 条 pointCaseDeleter.done<br/>（逐要点口径：各要点 pointId/path/name + 自身 deletedCount）"]
+    G -->|成功（含命中 0 条）| DONE_AGG["1 条 pointCaseDeleter.done.aggregate<br/>pointCount / pointId\|pointName\|pointPath 拼接 /<br/>deletedCount（全局去重）/ costMs（真实耗时）"]
 
     classDef ok fill:#DCEDC8,stroke:#7CB342,color:#33691E
     classDef err fill:#FFCDD2,stroke:#E57373,color:#B71C1C
-    class DONE ok
+    class DONE_N,DONE_AGG ok
     class ERR1,ERR2,ERR3,ERR4 err
 ```
 
-**级联规律**：每次 `deleteCasesByPoint` 只发 1 条埋点——**要么** `pointCaseDeleter.done`（含命中 0 条），**要么** `pointCaseDeleter.error`（任一环节抛错），二者互斥。
+**级联规律**：
+- **单点（`deleteCasesByPoint`）**：成功时发 **1 条** `pointCaseDeleter.done`；抛错时发 **1 条** `pointCaseDeleter.error`，二者互斥。
+- **多点（`deleteCasesByPoints`，含单点委托）**：成功时发 **N+1 条**——对 `points` 中每个要点各 1 条 `pointCaseDeleter.done`（共 N 条，逐要点口径）+ **1 条** `pointCaseDeleter.done.aggregate`（聚合口径）；抛错时仅发 **1 条** `pointCaseDeleter.error`。
+
+> 注意：`pointCaseDeleter.error` 与 `done` / `done.aggregate` 仍互斥——异常路径不上报任何 done 事件。
 
 #### 8.5.2 常用观测视角（deleter 专属）
 
 | 指标 | 表达式 |
 |---|---|
-| **删除功能使用量** | `pointCaseDeleter.done` 日/周计数 |
-| **失败率** | `pointCaseDeleter.error` count ÷ (`pointCaseDeleter.done` count + `pointCaseDeleter.error` count) |
-| **命中率分布** | `pointCaseDeleter.done` 中 `deletedCount > 0` 的占比（0 值占比过高说明入参 point 与磁盘 case 严重错位）|
+| **删除功能使用量** | `pointCaseDeleter.done` 日/周计数（逐要点次数）；**批量操作次数**用 `pointCaseDeleter.done.aggregate` 计数更准 |
+| **失败率** | `pointCaseDeleter.error` count ÷ (`pointCaseDeleter.done.aggregate` count + `pointCaseDeleter.error` count) |
+| **实际删除量** | 以 `pointCaseDeleter.done.aggregate.deletedCount`（全局去重）为准，避免逐要点 `done` 的重叠重复计数 |
+| **命中率分布** | `pointCaseDeleter.done.aggregate` 中 `deletedCount > 0` 的占比（0 值占比过高说明入参 point 与磁盘 case 严重错位）|
+| **批量粒度** | `pointCaseDeleter.done.aggregate.pointCount` 分布（1=单点 / 2+=批量），反映调用方是否使用多要点能力 |
 | **单点批量分档** | `pointCaseDeleter.done` 按 `deletedCount` 分桶（1 / 2-5 / 6-20 / 20+），反映测试点粒度 |
-| **匹配置信度** | `type1 : type2 : type3` 比例 |
+| **匹配置信度** | `pointCaseDeleter.done.aggregate` 的 `type1 : type2 : type3` 比例（全局合并） |
 | **产出物维度分布** | 按 `artifactId` 分组，看哪些产出物删除操作最频繁 |
-| **性能分位** | `costMs` 的 P50/P95/P99；对比 `pointCaseLinker.done.costMs`（deleter 额外含磁盘写 + snapshot / deletedRows / highlight 三项同步）|
+| **性能分位** | `pointCaseDeleter.done.aggregate.costMs` 的 P50/P95/P99；对比 `pointCaseLinker.done.costMs`（deleter 额外含磁盘写 + snapshot / deletedRows / highlight 三项同步）|
 
 ---
 

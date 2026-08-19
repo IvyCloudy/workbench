@@ -73,6 +73,7 @@ const logger = createLogger('pcDeleter');
 // 埋点：事件名常量（集中维护，避免拼写发散）
 // ============================================================================
 const EVT_DONE = 'pointCaseDeleter.done';
+const EVT_DONE_AGG = 'pointCaseDeleter.done.aggregate';
 const EVT_ERROR = 'pointCaseDeleter.error';
 
 /**
@@ -105,6 +106,23 @@ export interface DeleteCasesByPointInput {
     pointPath?: string;
     /** 测试要点名称（可空）——仅用于日志/分组，不参与匹配 */
     pointName?: string;
+}
+
+/**
+ * 多要点删除入参：一组要点（pointId / pointPath 至少一个非空）。
+ *
+ * 语义：多个要点之间存在「并集」关系——凡是命中其中任意一个要点的案例
+ * 都会被删除（同一个案例只会删除一次，不会因命中多个要点而被重复剔除）。
+ * 用法示例：
+ *   · 单次调用传入单个要点：points 长度为 1，完全等价于 deleteCasesByPoint
+ *   · 批量场景：points 长度 > 1，一次调用删除多个要点关联的案例
+ *
+ * 约束：points 中每一项自身仍需满足「pointId 与 pointPath 至少一个非空」，
+ * 全部为空或全部仅传 pointName 会抛错。
+ */
+export interface DeleteCasesByPointsInput {
+    /** 要点列表（至少 1 项，每项约束同 DeleteCasesByPointInput） */
+    points: DeleteCasesByPointInput[];
 }
 
 /**
@@ -148,6 +166,26 @@ export interface DeleteCasesByPointResult {
     costMs: number;
 }
 
+/** 多要点删除的聚合结果（每个要点一项 DeleteCasesByPointResult） */
+export interface DeleteCasesByPointsResult {
+    /** 案例文件绝对路径 */
+    filePath: string;
+    /** 逐要点的删除明细（顺序与入参 points 一致） */
+    perPoint: DeleteCasesByPointResult[];
+    /** 被删除的案例列表（去重后的并集，顺序为磁盘中出现顺序） */
+    deletedCases: DeletedCaseItem[];
+    /** 实际被删除的案例去重计数（== deletedCases.length） */
+    deletedCount: number;
+    /** 匹配类型分档汇总（所有要点合并） */
+    typeCount: { type1: number; type2: number; type3: number };
+    /** 案例文件原总行数 */
+    totalRecords: number;
+    /** 删除后剩余行数 */
+    remainingRecords: number;
+    /** 端到端耗时(ms)——仅返回给调用方 */
+    costMs: number;
+}
+
 /** 内部字段名（与 pointCaseLinker 默认字段保持一致） */
 const CASE_ID_FIELD = 'testcase_id';
 const CASE_NAME_FIELD = 'name';
@@ -159,7 +197,10 @@ const PATH_FIELD = 'path';
 // ============================================================================
 
 /**
- * 【公共方法】根据测试要点信息删除其关联的所有测试案例。
+ * 【公共方法·单点】根据单个测试要点信息删除其关联的所有测试案例。
+ *
+ * 等价于 deleteCasesByPoints(pointFilePath, { points: [point] })，保留老的
+ * 调用方签名不变（向后兼容）。
  *
  * @param pointFilePath  测试要点文件绝对路径（通用参数，支持 md / xmind
  *                       及其他任何受 pointCaseBindingStore 支持的类型），
@@ -180,6 +221,33 @@ export async function deleteCasesByPoint(
     point: DeleteCasesByPointInput,
     taskInfo?: DeleteCasesTaskInfo,
 ): Promise<DeleteCasesByPointResult> {
+    const agg = await deleteCasesByPoints(pointFilePath, { points: [point] }, taskInfo);
+    return agg.perPoint[0];
+}
+
+/**
+ * 【公共方法·多点】根据多个测试要点信息，一次性删除其关联的所有测试案例。
+ *
+ * 多个要点之间是「并集」语义：命中其中任意要点的案例都会被删除；同一个案例
+ * 即使同时命中多个要点，也只会被剔除一次（不会重复删除）。
+ *
+ * @param pointFilePath  测试要点文件绝对路径（同 deleteCasesByPoint）
+ * @param input          { points: DeleteCasesByPointInput[] }；points 至少 1 项，
+ *                       每项自身仍需满足「pointId 与 pointPath 至少一个非空」
+ * @param taskInfo       可选，测试任务上下文，仅用于埋点
+ *
+ * @throws
+ *   - points 为空数组 / 非数组 → 抛错
+ *   - 任一要点 pointId 与 pointPath 同时为空 → 抛错
+ *   - pointFilePath 未绑定任何案例文件
+ *   - 案例文件不存在 / 类型不支持
+ *   - 文件解析或保存失败
+ */
+export async function deleteCasesByPoints(
+    pointFilePath: string,
+    input: DeleteCasesByPointsInput,
+    taskInfo?: DeleteCasesTaskInfo,
+): Promise<DeleteCasesByPointsResult> {
     // 埋点上下文的规范化 —— 全部转为 string，缺省用 ''
     const tInfo: Required<DeleteCasesTaskInfo> = {
         testTaskNo: (taskInfo?.testTaskNo ?? '').toString(),
@@ -189,52 +257,66 @@ export async function deleteCasesByPoint(
 
     // ---- 1) 入参校验 ----
     if (!pointFilePath || typeof pointFilePath !== 'string') {
-        const err = new Error('deleteCasesByPoint: pointFilePath 不能为空');
-        emitErrorTelemetry(err, tInfo, point, '');
+        const err = new Error('deleteCasesByPoints: pointFilePath 不能为空');
+        emitErrorTelemetry(err, tInfo, { points: input?.points }, '');
         throw err;
     }
-    if (!point || typeof point !== 'object') {
-        const err = new Error('deleteCasesByPoint: point 参数不能为空');
-        emitErrorTelemetry(err, tInfo, point, '');
+    if (!input || !Array.isArray(input.points) || input.points.length === 0) {
+        const err = new Error('deleteCasesByPoints: points 不能为空数组');
+        emitErrorTelemetry(err, tInfo, { points: input?.points }, '');
         throw err;
     }
-    const pid = (point.pointId ?? '').toString().trim();
-    const ppath = (point.pointPath ?? '').toString().trim();
-    if (!pid && !ppath) {
-        // 仅传 pointName 也会命中此分支——按需求"仅传 pointName 报错"
-        const err = new Error('deleteCasesByPoint: pointId 与 pointPath 至少一个非空');
-        emitErrorTelemetry(err, tInfo, point, '');
-        throw err;
+
+    // 规范化并校验每个要点
+    const points: Required<DeleteCasesByPointInput>[] = [];
+    for (const raw of input.points) {
+        if (!raw || typeof raw !== 'object') {
+            const err = new Error('deleteCasesByPoints: 单个 point 参数不能为空');
+            emitErrorTelemetry(err, tInfo, { points: input.points }, '');
+            throw err;
+        }
+        const pid = (raw.pointId ?? '').toString().trim();
+        const ppath = (raw.pointPath ?? '').toString().trim();
+        if (!pid && !ppath) {
+            const err = new Error('deleteCasesByPoints: 单个 point 的 pointId 与 pointPath 至少一个非空');
+            emitErrorTelemetry(err, tInfo, { points: input.points }, '');
+            throw err;
+        }
+        points.push({
+            pointId: pid,
+            pointPath: ppath,
+            pointName: (raw.pointName ?? '').toString(),
+        });
     }
 
     // ---- 2) 查绑定 → 案例文件路径 ----
     const casePath = getCaseOfPoint(pointFilePath);
     if (!casePath) {
-        const err = new Error(`deleteCasesByPoint: 测试要点未绑定案例文件 (${pointFilePath})`);
-        emitErrorTelemetry(err, tInfo, point, '');
+        const err = new Error(`deleteCasesByPoints: 测试要点未绑定案例文件 (${pointFilePath})`);
+        emitErrorTelemetry(err, tInfo, { points: input.points }, '');
         throw err;
     }
     if (!fs.existsSync(casePath)) {
-        const err = new Error(`deleteCasesByPoint: 案例文件不存在 (${casePath})`);
-        emitErrorTelemetry(err, tInfo, point, casePath);
+        const err = new Error(`deleteCasesByPoints: 案例文件不存在 (${casePath})`);
+        emitErrorTelemetry(err, tInfo, { points: input.points }, casePath);
         throw err;
     }
 
     // ---- 3) 加锁进入临界区（与 writeBackTestCaseNos 共用同一把锁） ----
     return withFileLock(casePath, async () => {
         try {
-            const result = await deleteCasesFromCaseFile(casePath, {
-                pointId: pid,
-                pointPath: ppath,
-                pointName: (point.pointName ?? '').toString(),
-            });
-            emitDoneTelemetry(result, tInfo, {
-                pointId: pid, pointPath: ppath,
-                pointName: (point.pointName ?? '').toString(),
-            });
+            const result = await deleteCasesFromCaseFileMulti(casePath, points);
+            // 回填真实耗时到逐要点明细（内部为 0，仅用于埋点展示）
+            for (const pp of result.perPoint) pp.costMs = result.costMs;
+            // ① 逐要点各上报一条 done（明细口径：deletedCount 为单要点命中数）
+            for (let i = 0; i < points.length; i++) {
+                emitDoneTelemetry(result.perPoint[i], tInfo, points[i]);
+            }
+            // ② 额外上报一条聚合 done（全局口径：去重 deletedCount + 真实 costMs）
+            emitAggregateDoneTelemetry(result, tInfo, points);
             return result;
         } catch (err) {
-            emitErrorTelemetry(err, tInfo, point, casePath);
+            emitErrorTelemetry(err, tInfo, { points: input.points }, casePath);
             throw err;
         }
     });
@@ -245,14 +327,30 @@ export async function deleteCasesByPoint(
 // ============================================================================
 
 /**
- * 【内部】直接对案例文件执行删除。已在锁内，不再加锁。
- * 单元测试可通过 __test_only__ 命名空间访问，避免测试环境依赖 vscode.workspace
- * （跳过要点文件 → 案例文件的绑定查询层，直接以案例文件绝对路径作为入口）。
+ * 【内部】单点便捷入口（向后兼容 __test_only__ 单点测试）。
+ * 委托给 deleteCasesFromCaseFileMulti，语义完全一致。
  */
 async function deleteCasesFromCaseFile(
     casePath: string,
     point: Required<DeleteCasesByPointInput>,
 ): Promise<DeleteCasesByPointResult> {
+    const agg = await deleteCasesFromCaseFileMulti(casePath, [point]);
+    return agg.perPoint[0];
+}
+
+/**
+ * 【内部】直接对案例文件执行删除（多要点并集）。已在锁内，不再加锁。
+ * 单元测试可通过 __test_only__ 命名空间访问，避免测试环境依赖 vscode.workspace
+ * （跳过要点文件 → 案例文件的绑定查询层，直接以案例文件绝对路径作为入口）。
+ *
+ * 多要点语义：逐行扫描案例，命中 points 中任意一个要点即标记删除；
+ * 同一行即使命中多个要点也只在 deletedRowIdxSet 中记录一次（Set 去重），
+ * 因此不会产生重复删除。
+ */
+async function deleteCasesFromCaseFileMulti(
+    casePath: string,
+    points: Required<DeleteCasesByPointInput>[],
+): Promise<DeleteCasesByPointsResult> {
     const t0 = Date.now();
 
     // ---- 3.1) 解析文件 ----
@@ -280,14 +378,15 @@ async function deleteCasesFromCaseFile(
     const parentIdIdx = headers.indexOf(PARENT_ID_FIELD);
     const pathIdx = headers.indexOf(PATH_FIELD);
 
-    const nTargetPath = normalizePointPath(point.pointPath);
-    const targetPid = point.pointId;
-
-    /** 要删除的主行下标集合（有序） */
+    /** 要删除的主行下标集合（有序、去重） */
     const deletedRowIdxSet = new Set<number>();
+    /** 每个要点命中的行下标集合（用于逐要点明细，避免重复计入 deletedCases） */
+    const perPointRowIdx: Set<number>[] = points.map(() => new Set<number>());
     /** 被删除案例的摘要（顺序为磁盘中出现顺序） */
     const deletedCases: DeletedCaseItem[] = [];
     const typeCount = { type1: 0, type2: 0, type3: 0 };
+    /** 逐要点匹配的 type 分档 */
+    const perPointTypeCount = points.map(() => ({ type1: 0, type2: 0, type3: 0 }));
 
     for (let i = 0; i < rows.length; i++) {
         // 优先从 sourceData 取原始字段（能命中嵌套结构里的 parent_id/path），
@@ -296,25 +395,65 @@ async function deleteCasesFromCaseFile(
             parentIdIdx, pathIdx, caseIdIdx, nameIdx,
         });
 
-        const matchType = matchType_(rec, targetPid, nTargetPath);
-        if (matchType == null) continue;
+        // 逐要点判断，命中任意一个即标记删除；同一行只计入首次命中的要点明细
+        for (let p = 0; p < points.length; p++) {
+            const pt = points[p];
+            const matchType = matchType_(
+                rec, pt.pointId, normalizePointPath(pt.pointPath),
+            );
+            if (matchType == null) continue;
 
-        deletedRowIdxSet.add(i);
-        const tid = readField(rec, CASE_ID_FIELD, rows[i], caseIdIdx);
-        const cname = readField(rec, CASE_NAME_FIELD, rows[i], nameIdx);
+            deletedRowIdxSet.add(i);
+            perPointRowIdx[p].add(i);
+            if (matchType === 1) { typeCount.type1++; perPointTypeCount[p].type1++; }
+            else if (matchType === 2) { typeCount.type2++; perPointTypeCount[p].type2++; }
+            else { typeCount.type3++; perPointTypeCount[p].type3++; }
+        }
+    }
+
+    // 构造逐要点结果（仅首次命中要点带走该案例，避免重复计入 deletedCases）
+    const perPoint: DeleteCasesByPointResult[] = points.map((pt, p) => {
+        const cases: DeletedCaseItem[] = [];
+        for (const idx of perPointRowIdx[p]) {
+            const rec = getRecordFromRow(sourceData, rows[idx], idx, headers, {
+                parentIdIdx, pathIdx, caseIdIdx, nameIdx,
+            });
+            const tid = readField(rec, CASE_ID_FIELD, rows[idx], caseIdIdx);
+            const cname = readField(rec, CASE_NAME_FIELD, rows[idx], nameIdx);
+            cases.push({
+                testcaseId: String(tid ?? '').trim(),
+                caseName: String(cname ?? '').trim(),
+            });
+        }
+        return {
+            filePath: casePath,
+            deletedCases: cases,
+            deletedCount: cases.length,
+            typeCount: perPointTypeCount[p],
+            totalRecords,
+            remainingRecords: totalRecords - cases.length,
+            costMs: 0,
+        };
+    });
+
+    // 去重后的被删除案例摘要（顺序为磁盘中出现顺序）
+    for (const idx of Array.from(deletedRowIdxSet).sort((a, b) => a - b)) {
+        const rec = getRecordFromRow(sourceData, rows[idx], idx, headers, {
+            parentIdIdx, pathIdx, caseIdIdx, nameIdx,
+        });
+        const tid = readField(rec, CASE_ID_FIELD, rows[idx], caseIdIdx);
+        const cname = readField(rec, CASE_NAME_FIELD, rows[idx], nameIdx);
         deletedCases.push({
             testcaseId: String(tid ?? '').trim(),
             caseName: String(cname ?? '').trim(),
         });
-        if (matchType === 1) typeCount.type1++;
-        else if (matchType === 2) typeCount.type2++;
-        else typeCount.type3++;
     }
 
     // ---- 3.3) 命中 0 条：直接返回，不写盘不刷 snapshot ----
     if (deletedRowIdxSet.size === 0) {
         return {
             filePath: casePath,
+            perPoint,
             deletedCases: [],
             deletedCount: 0,
             typeCount,
@@ -361,16 +500,16 @@ async function deleteCasesFromCaseFile(
         clearLinkerCache();
     } catch { /* ignore */ }
 
-    logger.info('deleteCasesByPoint done', {
+    logger.info('deleteCasesByPoints done', {
         casePath: path.basename(casePath),
-        pointId: point.pointId,
-        pointPath: point.pointPath,
+        pointCount: points.length,
         deletedCount: deletedCases.length,
         typeCount,
     });
 
     return {
         filePath: casePath,
+        perPoint,
         deletedCases,
         deletedCount: deletedCases.length,
         typeCount,
@@ -569,6 +708,51 @@ function emitDoneTelemetry(
 }
 
 /**
+ * 上报 pointCaseDeleter.done.aggregate —— 仅多要点（deleteCasesByPoints）场景。
+ *
+ * 与逐要点 done 的区别：
+ *   - pointId / pointName / pointPath 三个字段合并为「多值拼接」字符串
+ *     （以 '|' 分隔，便于在埋点平台按要点数拆分统计）
+ *   - deletedCount / remainingRecords / type1..3 均为**全局去重**口径
+ *     （与逐要点 done 的「单要点命中数」口径不同，避免重叠命中被重复计数）
+ *   - 额外新增 pointCount 字段：本次传入的要点个数
+ *   - costMs 为真实端到端耗时（逐要点 done 的 costMs 为回填值，此处为权威耗时）
+ */
+function emitAggregateDoneTelemetry(
+    result: DeleteCasesByPointsResult,
+    tInfo: Required<DeleteCasesTaskInfo>,
+    points: Required<DeleteCasesByPointInput>[],
+): void {
+    try {
+        const joinField = (sel: (p: Required<DeleteCasesByPointInput>) => string) =>
+            points.map(sel).join('|');
+        TelemetryService.sendTelemetryEvent(EVT_DONE_AGG, {
+            // 测试任务维度
+            testTaskNo: tInfo.testTaskNo,
+            subTestTaskId: tInfo.subTestTaskId,
+            artifactId: tInfo.artifactId || path.basename(result.filePath),
+            // 多要点维度（拼接）
+            pointCount: String(points.length),
+            pointId: joinField(p => p.pointId),
+            pointName: joinField(p => p.pointName),
+            pointPath: joinField(p => p.pointPath),
+            // 案例维度（全局去重口径）
+            fileExt: path.extname(result.filePath).toLowerCase(),
+            deletedCount: String(result.deletedCount),
+            totalRecords: String(result.totalRecords),
+            remainingRecords: String(result.remainingRecords),
+            type1: String(result.typeCount.type1),
+            type2: String(result.typeCount.type2),
+            type3: String(result.typeCount.type3),
+            // 性能（真实耗时）
+            costMs: String(result.costMs),
+        });
+    } catch {
+        // 埋点绝不阻断业务
+    }
+}
+
+/**
  * 上报 pointCaseDeleter.error —— 覆盖所有抛异常路径：
  * 入参非法 / 未绑定 / 案例文件不存在 / 解析失败 / 保存失败。
  *
@@ -598,11 +782,24 @@ function emitErrorTelemetry(
     }
 }
 
+/**
+ * 上报 pointCaseDeleter.done.aggregate —— 仅多要点（deleteCasesByPoints）场景。
+ *
+ * 与逐要点 done 的区别：
+ *   - pointId / pointName / pointPath 三个字段合并为「多值拼接」字符串
+ *     （以 '|' 分隔，便于在埋点平台按要点数拆分统计）
+ *   - deletedCount / remainingRecords / type1..3 均为**全局去重**口径
+ *     （与逐要点 done 的「单要点命中数」口径不同，避免重叠命中被重复计数）
+ *   - 额外新增 pointCount 字段：本次传入的要点个数
+ *   - costMs 为真实端到端耗时（逐要点 done 的 costMs 为回填值，此处为权威耗时）
+ */
+
 // ============================================================================
 // 单测专用出口（不作为公共 API 的一部分，请勿在业务代码中调用）
 // ============================================================================
 export const __test_only__ = {
     deleteCasesFromCaseFile,
+    deleteCasesFromCaseFileMulti,
     matchType_,
     applyRemoveByIndices,
     emitDoneTelemetry,

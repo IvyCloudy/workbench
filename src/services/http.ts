@@ -17,6 +17,7 @@
 import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
+import { execFile } from 'child_process';
 import { readConfig } from './storage';
 import { TelemetryService } from '../utils/telemetry';
 import { stackHead } from './utils';
@@ -80,6 +81,59 @@ function addSm2Signature(headers: Record<string, string>, appConfig: AppConfig):
 }
 
 // ============================================
+// 内部：curl 兜底请求
+// ----------------------------------------------------------------------------
+// 背景：VSCode 扩展宿主的 Node http 客户端在某些场景下会出现
+//   "响应头拿到但 data 事件一次都不触发" 的诡异现象（chunked / Content-Length
+//   都无法规避），curl / 独立 Node 进程均能正常拿到 body。
+// 因此在 Node http 拿到 status=200 但 bytes=0 且 header 声明有 content-length
+// 时，自动 fallback 到 curl 子进程重试一次。
+// ============================================
+
+interface CurlResult {
+    status: number;
+    bodyText: string;
+}
+
+function curlRequest(
+    method: string,
+    url: string,
+    headers: Record<string, string>,
+    body?: string
+): Promise<CurlResult> {
+    return new Promise((resolve, reject) => {
+        const args: string[] = ['-sS', '-X', method, '-o', '-', '-w', '\n__CURL_HTTP_CODE__%{http_code}'];
+        for (const [k, v] of Object.entries(headers)) {
+            if (v == null) continue;
+            args.push('-H', `${k}: ${v}`);
+        }
+        if (body != null && body !== '') {
+            args.push('--data-binary', body);
+        }
+        args.push(url);
+
+        execFile('curl', args, { timeout: DEFAULT_TIMEOUT, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
+            if (err) {
+                reject(new Error(`curl 兜底请求失败: ${(err as any).message || err}${stderr ? ' | ' + stderr : ''}`));
+                return;
+            }
+            const out = String(stdout || '');
+            const marker = '__CURL_HTTP_CODE__';
+            const idx = out.lastIndexOf(marker);
+            let status = 0;
+            let bodyText = out;
+            if (idx >= 0) {
+                status = parseInt(out.slice(idx + marker.length).trim(), 10) || 0;
+                bodyText = out.slice(0, idx);
+                // 去掉我们自己插入的换行分隔符
+                if (bodyText.endsWith('\n')) bodyText = bodyText.slice(0, -1);
+            }
+            resolve({ status, bodyText });
+        });
+    });
+}
+
+// ============================================
 // 内部：执行 HTTP 请求
 // ============================================
 
@@ -93,25 +147,72 @@ function makeRequest<T = any>(
         const urlObj = new URL(url);
         if (urlObj.hostname === 'localhost') urlObj.hostname = '127.0.0.1';
 
+        // 禁用 keep-alive，避免扩展宿主中复用陈旧 socket 导致 res 只触发 end 而不触发 data
+        // 同时显式带上 Content-Length，明确 body 边界，规避某些中间层/服务端识别问题
+        const bodyBuffer = body ? Buffer.from(body, 'utf8') : undefined;
+        const finalHeaders: Record<string, string> = { ...headers, 'Connection': 'close' };
+        if (bodyBuffer) finalHeaders['Content-Length'] = String(bodyBuffer.length);
+
         const options: http.RequestOptions = {
             hostname: urlObj.hostname,
             port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
             path: urlObj.pathname + urlObj.search,
             method,
-            headers,
+            headers: finalHeaders,
+            agent: false,
         };
 
         const client = urlObj.protocol === 'https:' ? https : http;
         const req = client.request(options, (res) => {
             res.setEncoding('utf8');
             let data = '';
-            res.on('data', chunk => { data += chunk; });
-            res.on('end', () => {
+            let chunkCount = 0;
+            res.on('data', chunk => { data += chunk; chunkCount++; });
+            res.on('end', async () => {
+                // 诊断日志：对删除接口打印原始字节流，便于定位 body 为空/被中间层改写的问题
+                if (urlObj.pathname && urlObj.pathname.indexOf('/delete-testcase') >= 0) {
+                    console.log('[makeRequest][delete-testcase][原始响应] status=%d bytes=%d chunks=%d headers=%s raw=%s',
+                        res.statusCode || 0,
+                        Buffer.byteLength(data, 'utf8'),
+                        chunkCount,
+                        JSON.stringify(res.headers),
+                        data.slice(0, 500));
+                }
+
+                // 兜底：Node http 拿到 status=2xx 但 bytes=0，而响应头里声明了非零 content-length
+                // 这是 VSCode 扩展宿主的已知劫持问题，转用 curl 子进程重试
+                const status = res.statusCode || 0;
+                const bytes = Buffer.byteLength(data, 'utf8');
+                const declaredLen = parseInt(String(res.headers['content-length'] || '0'), 10) || 0;
+                if (bytes === 0 && status >= 200 && status < 300 && declaredLen > 0) {
+                    console.warn('[makeRequest][fallback] Node http body 为空但服务端声明 content-length=%d，改用 curl 重试 url=%s',
+                        declaredLen, url);
+                    try {
+                        const curlResp = await curlRequest(method, url, finalHeaders, body);
+                        if (urlObj.pathname && urlObj.pathname.indexOf('/delete-testcase') >= 0) {
+                            console.log('[makeRequest][delete-testcase][curl兜底] status=%d bytes=%d raw=%s',
+                                curlResp.status,
+                                Buffer.byteLength(curlResp.bodyText, 'utf8'),
+                                curlResp.bodyText.slice(0, 500));
+                        }
+                        try {
+                            const responseData = curlResp.bodyText ? JSON.parse(curlResp.bodyText) : {};
+                            resolve({ status: curlResp.status || status, data: responseData });
+                        } catch {
+                            resolve({ status: curlResp.status || status, data: { raw: curlResp.bodyText } as T });
+                        }
+                        return;
+                    } catch (fallbackErr) {
+                        console.error('[makeRequest][fallback] curl 兜底失败:', (fallbackErr as any)?.message || fallbackErr);
+                        // 兜底也失败则维持原逻辑（返回空 body）
+                    }
+                }
+
                 try {
                     const responseData = data ? JSON.parse(data) : {};
-                    resolve({ status: res.statusCode || 200, data: responseData });
+                    resolve({ status: status || 200, data: responseData });
                 } catch {
-                    resolve({ status: res.statusCode || 200, data: { raw: data } as T });
+                    resolve({ status: status || 200, data: { raw: data } as T });
                 }
             });
         });
@@ -143,7 +244,7 @@ function makeRequest<T = any>(
         });
         req.setTimeout(DEFAULT_TIMEOUT);
 
-        if (body) req.write(body);
+        if (bodyBuffer) req.write(bodyBuffer);
         req.end();
     });
 }

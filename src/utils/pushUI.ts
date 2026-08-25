@@ -15,6 +15,21 @@ import { PushFailure } from './message';
 // 类型定义
 // ============================================
 
+/**
+ * 总结弹窗可选文案配置
+ * 用于让「推送结果」与「删除结果」等场景复用同一弹窗，只替换标题/副标题/操作词等文案。
+ */
+export interface SummaryUiOptions {
+    /** VSCode 面板 tab 标题（默认 "推送结果"） */
+    panelTitle?: string;
+    /** 汇总栏主标题（默认 "推送完成"） */
+    headerTitle?: string;
+    /** 汇总栏文档标题（<title>，默认取 panelTitle） */
+    documentTitle?: string;
+    /** 是否在文件行下方展开失败明细（tsId · reason 列表），默认 false */
+    showFailureDetails?: boolean;
+}
+
 /** 批量推送单文件结果 */
 export interface PushFileResult {
     filePath: string;
@@ -141,7 +156,7 @@ function buildUnifiedFileRow(params: {
 }
 
 /** 总结视图单文件行 HTML */
-function buildFileRow(index: number, r: PushFileResult): string {
+function buildFileRow(index: number, r: PushFileResult, opts?: SummaryUiOptions): string {
     const isError = !!r.error;
     const icon = isError ? '✕' : (r.failCount > 0 ? '⚠' : '✓');
     const rowColor = isError ? '#dc3545' : (r.failCount > 0 ? '#f0a020' : '#28a745');
@@ -159,7 +174,7 @@ function buildFileRow(index: number, r: PushFileResult): string {
         : `成功 ${r.successCount} / 失败 ${r.failCount} / 共 ${r.total} 条`;
     const statusClass = isError ? 'status-err' : (r.failCount > 0 ? 'status-warn' : '');
 
-    return buildUnifiedFileRow({
+    const mainRow = buildUnifiedFileRow({
         index,
         fileName: r.fileName || r.filePath,
         tooltip: r.filePath,
@@ -170,20 +185,34 @@ function buildFileRow(index: number, r: PushFileResult): string {
         statusTooltip,
         statusClass,
     });
+
+    // 可选：在文件行下方展开失败明细（tsId · reason 列表）
+    // 用于「删除结果」等需要罗列失败行原因的场景；推送结果弹窗保持默认关闭。
+    if (opts?.showFailureDetails && r.failures && r.failures.length > 0) {
+        const items = r.failures.map(f => {
+            const tsId = escapeHtml(String(f.tsId || '(无 testcase_id)'));
+            const reason = escapeHtml(String(f.reason || '未知原因'));
+            return `<li><span class="fail-tsid" title="${tsId}">${tsId}</span><span class="fail-reason" title="${reason}">${reason}</span></li>`;
+        }).join('');
+        return mainRow + `<div class="fail-detail-wrap"><ul class="fail-detail-list">${items}</ul></div>`;
+    }
+    return mainRow;
 }
 
 /** 总结视图完整 HTML */
-function buildSummaryHtml(results: PushFileResult[]): string {
+function buildSummaryHtml(results: PushFileResult[], opts?: SummaryUiOptions): string {
     const stats = buildSummaryStats(results);
-    const fileRowsHtml = results.map((r, i) => buildFileRow(i, r)).join('');
+    const fileRowsHtml = results.map((r, i) => buildFileRow(i, r, opts)).join('');
     const btnColor = stats.statusColor;
+    const _docTitle = escapeHtml(opts?.documentTitle || opts?.panelTitle || '推送结果');
+    const _headerTitle = escapeHtml(opts?.headerTitle || '推送完成');
 
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>推送结果</title>
+<title>${_docTitle}</title>
 <style>
     ${sharedCss()}
     .summary-bar{display:flex;align-items:center;padding:16px 20px;background:${stats.statusBg};border-bottom:1px solid var(--bd);gap:12px;flex-shrink:0}
@@ -192,6 +221,12 @@ function buildSummaryHtml(results: PushFileResult[]): string {
     .summary-stats{font-size:13px;color:var(--text-secondary);white-space:nowrap}
     .summary-stats .s-ok{color:#28a745;font-weight:600}
     .summary-stats .s-err{color:#dc3545;font-weight:600}
+    .fail-detail-wrap{background:#fff8f8;border-bottom:1px solid #f0dcdc;padding:6px 20px 10px 48px}
+    .fail-detail-list{list-style:none;margin:0;padding:0;font-size:12px}
+    .fail-detail-list li{display:flex;align-items:center;gap:12px;padding:3px 0;border-bottom:1px dashed #f2e2e2}
+    .fail-detail-list li:last-child{border-bottom:none}
+    .fail-detail-list .fail-tsid{flex-shrink:0;font-family:'SF Mono','Menlo','Consolas',monospace;color:#666;min-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .fail-detail-list .fail-reason{flex:1;color:#dc3545;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .btn-primary{background:${btnColor}}
     .search-wrap{flex-shrink:0;padding:10px 20px;border-bottom:1px solid var(--bd);background:#fafbfc;display:flex;align-items:center;gap:8px}
     .search-input-wrap{position:relative;width:50%}
@@ -211,7 +246,7 @@ function buildSummaryHtml(results: PushFileResult[]): string {
 <body>
 <div class="summary-bar">
     <span class="summary-icon">${stats.statusIcon}</span>
-    <span class="summary-title">推送完成</span>
+    <span class="summary-title">${_headerTitle}</span>
     <span class="summary-stats">
         <span class="s-ok">${stats.totalSucc} 成功</span>
         ${stats.totalFail > 0 ? ` / <span class="s-err">${stats.totalFail} 失败</span>` : ''}
@@ -533,13 +568,17 @@ let _summaryResults: PushFileResult[] = [];
 export function showPushSummary(
     results: PushFileResult[],
     onOpenFile?: (result: PushFileResult) => Promise<void>,
+    options?: SummaryUiOptions,
 ): void {
     _summaryResults = results;
+
+    const _panelTitle = options?.panelTitle || '推送结果';
 
     function renderPanel() {
         if (_summaryPanel) {
             try {
-                _summaryPanel.webview.html = buildSummaryHtml(results);
+                _summaryPanel.webview.html = buildSummaryHtml(results, options);
+                try { _summaryPanel.title = _panelTitle; } catch (_) { /* ignore */ }
                 _summaryPanel.reveal(vscode.ViewColumn.Active);
                 return;
             } catch {
@@ -549,11 +588,11 @@ export function showPushSummary(
 
         _summaryPanel = vscode.window.createWebviewPanel(
             'pushSummary',
-            '推送结果',
+            _panelTitle,
             { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },
             { enableScripts: true, retainContextWhenHidden: false },
         );
-        _summaryPanel.webview.html = buildSummaryHtml(results);
+        _summaryPanel.webview.html = buildSummaryHtml(results, options);
 
         _summaryPanel.webview.onDidReceiveMessage(async (msg) => {
             if (msg.type === 'closePushSummary') {

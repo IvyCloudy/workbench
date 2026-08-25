@@ -290,11 +290,13 @@ var server = http.createServer(function (req, res) {
             var subTestTaskId = payload.subTestTaskId || '';
             var sourceIds = Array.isArray(payload.sourceIds) ? payload.sourceIds : [];
 
-            console.log('收到删除测试案例请求 testTaskNo=%s subTestTaskId=%s 共 %d 条 sourceIds=%s',
-                testTaskNo || '(未提供)', subTestTaskId || '(未提供)', sourceIds.length, JSON.stringify(sourceIds));
+            var _ts = new Date().toISOString();
+            console.log('[%s] 收到删除测试案例请求 testTaskNo=%s subTestTaskId=%s 共 %d 条 sourceIds=%s',
+                _ts, testTaskNo || '(未提供)', subTestTaskId || '(未提供)', sourceIds.length, JSON.stringify(sourceIds));
+            console.log('  UA=%s remote=%s:%s', req.headers['user-agent'] || '(无)', req.socket.remoteAddress, req.socket.remotePort);
 
             // 逐条返回删除结果：type:'1' 成功，type:'2' 失败
-            var FAIL_RATIO = 0;
+            var FAIL_RATIO = 0.5;
             var failCount = 0;
             var resultBody = sourceIds.map(function (id, i) {
                 var shouldFail = FAIL_RATIO > 0 && (
@@ -320,18 +322,24 @@ var server = http.createServer(function (req, res) {
                 console.log('  模拟失败: %d / %d 条 (FAIL_RATIO=%s)', failCount, sourceIds.length, FAIL_RATIO);
             }
 
-            res.writeHead(200, {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'POST, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type'
-            });
             var responseBody = {
                 returnCode: 'SUC0000',
                 errorMsg: '',
                 body: resultBody
             };
-            res.end(JSON.stringify(responseBody));
+            var _respStr = JSON.stringify(responseBody);
+            var _respBuf = Buffer.from(_respStr, 'utf8');
+            // 显式带 Content-Length，避免 Node http 自动切换到 chunked 编码
+            // （VSCode 扩展宿主对 chunked 响应存在丢 body 的问题）
+            res.writeHead(200, {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Length': _respBuf.length,
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type'
+            });
+            console.log('  ↩ 返回字节流(%d bytes): %s', _respBuf.length, _respStr);
+            res.end(_respBuf);
         });
     } else if (req.method === 'OPTIONS') {
         res.writeHead(204, {

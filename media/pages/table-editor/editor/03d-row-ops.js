@@ -131,135 +131,243 @@ function insertRow(at, count) {
     renderTable();
 }
 
+/**
+ * 收集待删除行的 testcase_id，并标记为"待删除"（置灰+划线），不立即物理删除。
+ * 由扩展端调线上删除接口，回包成功后（applyDeleteRowsResult）才真正 splice + 落盘。
+ * 返回收集到的 tsId 列表（供上层发消息用）。
+ */
+function _collectPendingDelete(rowsToDelete) {
+    var headers = (S.data && S.data.headers) || [];
+    var tsIdIdx = headers.indexOf('testcase_id');
+    if (tsIdIdx < 0) return [];
+    if (!S._pendingDeleteTsIds) S._pendingDeleteTsIds = new Set();
+    var tsIds = [];
+    rowsToDelete.forEach(function (row) {
+        var tsId = row[tsIdIdx] != null ? String(row[tsIdIdx]) : '';
+        // 只有 testcase_id 非空（线上可能存在）才调删除接口；纯本地行（无 tsId）直接物理删除。
+        if (tsId) {
+            S._pendingDeleteTsIds.add(tsId);
+            tsIds.push(tsId);
+        }
+    });
+    return tsIds;
+}
+
+/**
+ * 扩展端删除接口回包后调用：
+ *  - syncedTsIds：接口删除成功的行 → 真正 splice + 落盘（从表格消失）
+ *  - failedTsIds：接口删除失败的行 → 保留在表格内，以置灰+划线 + 失败原因标记（不丢数据）
+ *  - reasons：[[tsId, reason], ...] 失败原因映射，用于行内展示
+ *
+ * 删除结果完全在表格内行展示，不再使用独立弹窗。
+ */
+function applyDeleteRowsResult(syncedTsIds, failedTsIds, reasons) {
+    var synced = Array.isArray(syncedTsIds) ? syncedTsIds.map(String) : [];
+    var failed = Array.isArray(failedTsIds) ? failedTsIds.map(String) : [];
+    var headers = (S.data && S.data.headers) || [];
+    var tsIdIdx = headers.indexOf('testcase_id');
+    console.log('[applyDeleteRowsResult] synced=', JSON.stringify(synced), 'failed=', JSON.stringify(failed), 'tsIdIdx=', tsIdIdx);
+
+    if (synced.length > 0 && tsIdIdx >= 0) {
+        // 从后往前删，避免索引错位
+        var indices = [];
+        for (var ri = 0; ri < S.data.rows.length; ri++) {
+            var tid = S.data.rows[ri][tsIdIdx];
+            if (tid != null && synced.indexOf(String(tid)) >= 0) indices.push(ri);
+        }
+        indices.sort(function (a, b) { return b - a; });
+        indices.forEach(function (idx) {
+            S.data.rows.splice(idx, 1);
+            // 同步明细表
+            var ddts = getDetailTables();
+            ddts.forEach(function (dt) {
+                if (!dt) return;
+                if (dt.rowGroups) dt.rowGroups.splice(idx, 1);
+                if (dt.rawRowGroups) dt.rawRowGroups.splice(idx, 1);
+                if (dt.rawRowTypes) dt.rawRowTypes.splice(idx, 1);
+            });
+            _shiftRowIdxHighlights('delete', idx);
+            // 行高/展开集合同步
+            if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
+                var nrh = {};
+                for (var rk in S.rowHeights) {
+                    if (!S.rowHeights.hasOwnProperty(rk)) continue;
+                    var i = parseInt(rk, 10);
+                    if (isNaN(i)) continue;
+                    if (i === idx) continue;
+                    nrh[i > idx ? i - 1 : i] = S.rowHeights[rk];
+                }
+                S.rowHeights = nrh;
+            }
+            if (S._rowExpanded && S._rowExpanded.size > 0) {
+                var nre = new Set();
+                S._rowExpanded.forEach(function (i) { if (i !== idx) nre.add(i > idx ? i - 1 : i); });
+                S._rowExpanded = nre;
+            }
+        });
+        // 选中集合清理
+        var ns = new Set();
+        S.sel.forEach(function (i) {
+            var keep = i;
+            indices.forEach(function (idx) { if (keep > idx) keep--; });
+            if (indices.indexOf(i) < 0) ns.add(keep);
+        });
+        S.sel = ns;
+        S.cellSel = null;
+        saveFile();
+    }
+
+    // 清除"待删除中"临时标记（无论成功失败都不再处于"删除中"态）
+    if (!S._pendingDeleteTsIds) S._pendingDeleteTsIds = new Set();
+    synced.concat(failed).forEach(function (id) { S._pendingDeleteTsIds.delete(id); });
+    if (S._pendingDeleteTsIds.size === 0) S._pendingDeleteTsIds = null;
+
+    // 失败行：保留在表格内，记入 _failedDeleteTsIds（置灰+划线 + 失败原因标记），不丢数据
+    if (!S._failedDeleteTsIds) S._failedDeleteTsIds = new Set();
+    if (!S._failedDeleteReasons) S._failedDeleteReasons = {};
+    failed.forEach(function (id) { S._failedDeleteTsIds.add(id); });
+    if (Array.isArray(reasons)) {
+        reasons.forEach(function (pair) {
+            if (Array.isArray(pair) && pair.length >= 2) {
+                S._failedDeleteReasons[String(pair[0])] = String(pair[1] || '');
+            }
+        });
+    }
+
+    renderTable();
+
+    // 轻量汇总提示（非弹窗）：成功行数 / 失败行数
+    if (typeof showToast === 'function') {
+        if (synced.length > 0 && failed.length === 0) {
+            showToast('已删除 ' + synced.length + ' 行（同步线上成功）', 'success');
+        } else if (synced.length > 0 && failed.length > 0) {
+            showToast('已删除 ' + synced.length + ' 行，' + failed.length + ' 行删除失败（已在表格内标记）', 'warning');
+        } else if (synced.length === 0 && failed.length > 0) {
+            showToast(failed.length + ' 行删除失败（已在表格内标记，可重试）', 'error');
+        }
+    }
+}
+
 function deleteRow(ri) {
     if (ri < 0 || ri >= S.data.rows.length) return;
     pushHistory();
-    // 立即记录删除行信息，实现实时 ghost 行展示（不等扩展端异步回包）
-    // 判定条件：仅当该行 testCaseNo 列非空（即已成功推送过）才记录 ghost；
-    // 未推送过的行删除后直接物理删除，与扩展端 diff 行为一致（避免重开后 ghost 消失的不一致体验）。
     var headers = (S.data && S.data.headers) || [];
     var tsIdIdx = headers.indexOf('testcase_id');
-    var tcIdx = headers.indexOf('testCaseNo');
     var rowToDelete = S.data.rows[ri];
-    if (tsIdIdx >= 0 && tcIdx >= 0) {
-        var tsId = rowToDelete[tsIdIdx] != null ? String(rowToDelete[tsIdIdx]) : '';
-        var tcNo = rowToDelete[tcIdx] != null ? String(rowToDelete[tcIdx]) : '';
-        if (tsId && tcNo) {
-            var delCells = [];
-            for (var hi = 0; hi < headers.length; hi++) {
-                var v = hi < rowToDelete.length ? rowToDelete[hi] : undefined;
-                delCells.push(v == null ? '' : String(v));
-            }
-            S._deletedInfos = (S._deletedInfos || []).concat([{ tsId: tsId, cells: delCells }]);
-        }
-    }
-    S.data.rows.splice(ri, 1);
-    // 同步所有明细表：删除被删行对应的条目，确保 rowGroups/rawRowGroups/rawRowTypes
-    // 与主表 rows 长度一致，避免后续 buildRowDetailSignature 按行索引误读其他行的明细数据
-    var ddts = getDetailTables();
-    ddts.forEach(function (dt) {
-        if (!dt) return;
-        if (dt.rowGroups) dt.rowGroups.splice(ri, 1);
-        if (dt.rawRowGroups) dt.rawRowGroups.splice(ri, 1);
-        if (dt.rawRowTypes) dt.rawRowTypes.splice(ri, 1);
-    });
-    // 同步转移高亮集合（S.mods / _modsTime / _detailModCellKeys / _highlightedCells.cells / _highlightedCells.rowSet / _addedRowSet）
-    // 说明：_addedRowSet 的"移除被删行 + 后续行 -1"已合并到 HighlightModel.shiftRowIndex，无需再单独处理
-    _shiftRowIdxHighlights('delete', ri);
-    var ns = new Set();
-    S.sel.forEach(function (i) { if (i !== ri) ns.add(i > ri ? i - 1 : i); });
-    S.sel = ns;
-    // 同步行高索引：被删行丢弃，后续行 -1
-    if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
-        var nrh = {};
-        for (var rk in S.rowHeights) {
-            if (!S.rowHeights.hasOwnProperty(rk)) continue;
-            var i = parseInt(rk, 10);
-            if (isNaN(i)) continue;
-            if (i === ri) continue;
-            nrh[i > ri ? i - 1 : i] = S.rowHeights[rk];
-        }
-        S.rowHeights = nrh;
-    }
-    // 同步“完全展开”行集合：与 rowHeights 保持一致
-    if (S._rowExpanded && S._rowExpanded.size > 0) {
-        var nre = new Set();
-        S._rowExpanded.forEach(function (i) {
-            if (i === ri) return;
-            nre.add(i > ri ? i - 1 : i);
+    var tsId = (tsIdIdx >= 0 && rowToDelete[tsIdIdx] != null) ? String(rowToDelete[tsIdIdx]) : '';
+
+    // 纯本地行（无 testcase_id）：直接物理删除，不调接口（线上无记录）
+    if (!tsId) {
+        S.data.rows.splice(ri, 1);
+        var ddts = getDetailTables();
+        ddts.forEach(function (dt) {
+            if (!dt) return;
+            if (dt.rowGroups) dt.rowGroups.splice(ri, 1);
+            if (dt.rawRowGroups) dt.rawRowGroups.splice(ri, 1);
+            if (dt.rawRowTypes) dt.rawRowTypes.splice(ri, 1);
         });
-        S._rowExpanded = nre;
+        _shiftRowIdxHighlights('delete', ri);
+        var ns0 = new Set();
+        S.sel.forEach(function (i) { if (i !== ri) ns0.add(i > ri ? i - 1 : i); });
+        S.sel = ns0;
+        if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
+            var nrh0 = {};
+            for (var rk0 in S.rowHeights) {
+                if (!S.rowHeights.hasOwnProperty(rk0)) continue;
+                var i0 = parseInt(rk0, 10);
+                if (isNaN(i0)) continue;
+                if (i0 === ri) continue;
+                nrh0[i0 > ri ? i0 - 1 : i0] = S.rowHeights[rk0];
+            }
+            S.rowHeights = nrh0;
+        }
+        if (S._rowExpanded && S._rowExpanded.size > 0) {
+            var nre0 = new Set();
+            S._rowExpanded.forEach(function (i) { if (i !== ri) nre0.add(i > ri ? i - 1 : i); });
+            S._rowExpanded = nre0;
+        }
+        S.cellSel = null;
+        saveFile();
+        renderTable();
+        return;
     }
-    S.cellSel = null;
-    saveFile();
+
+    // 已推送行：先标记为待删除（置灰+划线），发消息让扩展端调接口，等回包再真删
+    _collectPendingDelete([rowToDelete]);
     renderTable();
+    if (typeof S.vscode !== 'undefined' && S.vscode) {
+        console.log('[deleteRow] 发送 deleteRows 消息 tsIds=', JSON.stringify([tsId]));
+        S.vscode.postMessage({ type: 'deleteRows', data: { tsIds: [tsId] } });
+    } else {
+        console.log('[deleteRow] 未发送 deleteRows 消息（无 vscode 对象）tsId=', tsId);
+    }
 }
 
 function deleteSelectedRows() {
     if (S.sel.size === 0) return;
     pushHistory();
     var sorted = Array.from(S.sel).sort(function (a, b) { return b - a; });
-    // 立即记录所有被删除行的信息，实现实时 ghost 行展示
-    // 判定条件：仅当该行 testCaseNo 列非空（即已成功推送过）才记录 ghost；
-    // 未推送过的行删除后直接物理删除，与扩展端 diff 行为一致（避免重开后 ghost 消失的不一致体验）。
     var headers = (S.data && S.data.headers) || [];
     var tsIdIdx = headers.indexOf('testcase_id');
-    var tcIdx = headers.indexOf('testCaseNo');
-    if (tsIdIdx >= 0 && tcIdx >= 0) {
-        for (var di = 0; di < sorted.length; di++) {
-            var rowToDelete = S.data.rows[sorted[di]];
-            var tsId = rowToDelete[tsIdIdx] != null ? String(rowToDelete[tsIdIdx]) : '';
-            var tcNo = rowToDelete[tcIdx] != null ? String(rowToDelete[tcIdx]) : '';
-            if (tsId && tcNo) {
-                var delCells = [];
-                for (var hi = 0; hi < headers.length; hi++) {
-                    var v = hi < rowToDelete.length ? rowToDelete[hi] : undefined;
-                    delCells.push(v == null ? '' : String(v));
-                }
-                S._deletedInfos = (S._deletedInfos || []).concat([{ tsId: tsId, cells: delCells }]);
-            }
-        }
-    }
-    sorted.forEach(function (i) { S.data.rows.splice(i, 1); });
-    // 同步所有明细表：删除被删行对应的条目（sorted 已按降序排列，逐个 splice 安全）
-    var sdts = getDetailTables();
-    sdts.forEach(function (dt) {
-        if (!dt) return;
-        sorted.forEach(function (i) {
+
+    // 拆成两组：纯本地行（无 tsId，直接物理删除）+ 已推送行（先标记待删，等接口回包）
+    var localRows = [];   // 待物理删除的行索引（降序）
+    var pendingRows = []; // 待接口删除的行对象
+    sorted.forEach(function (i) {
+        var row = S.data.rows[i];
+        var tsId = (tsIdIdx >= 0 && row[tsIdIdx] != null) ? String(row[tsIdIdx]) : '';
+        if (tsId) pendingRows.push(row);
+        else localRows.push(i);
+    });
+
+    // 1) 纯本地行直接物理删除
+    localRows.forEach(function (i) {
+        S.data.rows.splice(i, 1);
+        var ddts = getDetailTables();
+        ddts.forEach(function (dt) {
+            if (!dt) return;
             if (dt.rowGroups) dt.rowGroups.splice(i, 1);
             if (dt.rawRowGroups) dt.rawRowGroups.splice(i, 1);
             if (dt.rawRowTypes) dt.rawRowTypes.splice(i, 1);
         });
+        _shiftRowIdxHighlights('delete', i);
+        if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
+            var nrh = {};
+            for (var rk in S.rowHeights) {
+                if (!S.rowHeights.hasOwnProperty(rk)) continue;
+                var ri2 = parseInt(rk, 10);
+                if (isNaN(ri2)) continue;
+                if (ri2 === i) continue;
+                nrh[ri2 > i ? ri2 - 1 : ri2] = S.rowHeights[rk];
+            }
+            S.rowHeights = nrh;
+        }
+        if (S._rowExpanded && S._rowExpanded.size > 0) {
+            var nre = new Set();
+            S._rowExpanded.forEach(function (x) { if (x !== i) nre.add(x > i ? x - 1 : x); });
+            S._rowExpanded = nre;
+        }
     });
-    // 同步转移高亮集合（S.mods / _modsTime / _detailModCellKeys / _highlightedCells.cells / _highlightedCells.rowSet / _addedRowSet）
-    // 说明：_addedRowSet 的批量删除+左移已合并到 HighlightModel.shiftRowIndex，无需再单独处理
-    _shiftRowIdxHighlights('deleteBatch', sorted);
-    // 同步行高索引：依次处理所有被删行（已按降序，逐个 -1 调整后续索引）
-    if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
-        var rhArr = Object.keys(S.rowHeights).map(function (k) { return { i: parseInt(k, 10), v: S.rowHeights[k] }; });
-        sorted.forEach(function (delI) {
-            rhArr = rhArr.filter(function (it) { return it.i !== delI; }).map(function (it) {
-                return { i: it.i > delI ? it.i - 1 : it.i, v: it.v };
-            });
-        });
-        var nrh2 = {};
-        rhArr.forEach(function (it) { if (!isNaN(it.i)) nrh2[it.i] = it.v; });
-        S.rowHeights = nrh2;
+
+    // 2) 已推送行：标记待删（置灰+划线），收集 tsId 待发消息
+    var pendingTsIds = [];
+    if (pendingRows.length > 0) {
+        pendingTsIds = _collectPendingDelete(pendingRows);
     }
-    // 同步“完全展开”行集合：与 rowHeights 保持一致
-    if (S._rowExpanded && S._rowExpanded.size > 0) {
-        var reArr = Array.from(S._rowExpanded);
-        sorted.forEach(function (delI) {
-            reArr = reArr.filter(function (i) { return i !== delI; }).map(function (i) {
-                return i > delI ? i - 1 : i;
-            });
-        });
-        S._rowExpanded = new Set(reArr);
-    }
+
     S.sel.clear();
     S.cellSel = null;
+    // 本地行已删，需落盘；待删行仅标记未删，也需 renderTable 展示置灰
     saveFile();
     renderTable();
+
+    // 3) 发消息让扩展端调删除接口；回包后由 applyDeleteRowsResult 真正删成功的行
+    if (pendingTsIds.length > 0 && typeof S.vscode !== 'undefined' && S.vscode) {
+        console.log('[deleteSelectedRows] 发送 deleteRows 消息 tsIds=', JSON.stringify(pendingTsIds));
+        S.vscode.postMessage({ type: 'deleteRows', data: { tsIds: pendingTsIds } });
+    } else {
+        console.log('[deleteSelectedRows] 未发送 deleteRows 消息 pendingTsIds=', JSON.stringify(pendingTsIds));
+    }
 }
 
 // 一步式复制：在当前行下方直接插入一份副本

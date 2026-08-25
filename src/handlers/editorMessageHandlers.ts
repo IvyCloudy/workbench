@@ -26,6 +26,8 @@ import { applyDiffHighlight, type EditorSession } from '../services/diffHighligh
 import { getMarks, setMarks, clearMarks } from '../utils/markStore';
 import { getHeaderLabels, onHeaderLabelsChange } from '../utils/headerLabels';
 import { showSaveResult, showPushErrorModal } from '../utils/message';
+import { syncDeletedRows } from '../utils/deletedRowsStore';
+import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { TelemetryService } from '../utils/telemetry';
 import { buildErrorProps } from '../services/utils';
 import type { PushStrategy, PushContext } from '../providers/BaseEditorProvider';
@@ -70,6 +72,7 @@ function buildHandlers(): Record<string, Handler> {
         mark: handleMark,
         setMarkRects: handleSetMarkRects,
         clearAllMarks: handleClearAllMarks,
+        deleteRows: handleDeleteRows,
     };
 }
 
@@ -232,6 +235,57 @@ async function handleClearAllMarks(_msg: any, ctx: EditorMsgCtx): Promise<void> 
     await clearMarks(filePath);
     ctx.webviewPanel.webview.postMessage({ type: 'userMarksUpdated', userMarks: [] });
     TelemetryService.sendTelemetryEvent('editor.clearAllMarks', { fileFormat: ctx.session.type });
+}
+
+/**
+ * 编辑器右键"删除该行 / 删除选中行"后，由前端把本次删除的 testcase_id 列表
+ * 通过 postMessage 上报，本 handler 直接调用线上删除接口并弹窗反馈。
+ *
+ * 与命令面板「同步已删除行」的区别：本 handler 只同步"本次删除"的行
+ * （显式传入 tsIds），而不是文件内全部待同步行。
+ */
+async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
+    const filePath = ctx.getFilePath();
+    const tsIds: string[] = Array.isArray(msg?.data?.tsIds)
+        ? msg.data.tsIds.map((x: any) => String(x)).filter(Boolean)
+        : [];
+    ctx.log(`🗑 deleteRows from webview tsIds=${JSON.stringify(tsIds)} filePath=${filePath}`);
+    console.log(`[editor.deleteRows] 收到消息 tsIds=${JSON.stringify(tsIds)} filePath=${filePath}`);
+    if (tsIds.length === 0) {
+        // 没有可同步的已推送行（例如删除的是未推送行），无需调接口
+        return;
+    }
+    try {
+        const result = await syncDeletedRows(filePath, tsIds);
+        // 不再使用独立弹窗反馈删除结果（与用户预期冲突：结果应在表格内行展示）。
+        // 统一把成功/失败的 tsId 回传前端，前端据此真正删除成功的行（接口失败的行保留不丢，
+        // 并在表格内以置灰+划线 + 失败原因标记），实现"表格内行展示"的反馈方式。
+        const failedTsIds = result.failed.map(f => f.tsId);
+        const reasonsById = new Map<string, string>();
+        result.failed.forEach(f => reasonsById.set(f.tsId, f.reason));
+        try {
+            const panel = BaseEditorProvider.getPanel(filePath);
+            if (panel) {
+                panel.webview.postMessage({
+                    type: 'deleteRowsResult',
+                    synced: result.synced,
+                    failed: failedTsIds,
+                    reasons: Array.from(reasonsById.entries()),
+                });
+            }
+        } catch (_e) { /* ignore */ }
+        TelemetryService.sendTelemetryEvent('editor.deleteRows.synced', {
+            syncedTotal: String(result.synced.length),
+            failedRows: String(result.failed.length),
+        });
+    } catch (err: any) {
+        console.error('[editor.deleteRows] 同步失败:', err?.message || err);
+        TelemetryService.sendTelemetryErrorEvent('editor.deleteRows.error', buildErrorProps(err, {
+            fileFormat: ctx.session.type,
+            errorMessage: String(err?.message || String(err)).slice(0, 500),
+        }));
+        vscode.window.showErrorMessage(`[${ctx.typeName}] 删除案例同步失败: ${err?.message || err}`);
+    }
 }
 
 /** ============ 顶层错误处理 ============ */

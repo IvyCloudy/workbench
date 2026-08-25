@@ -81,7 +81,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const unifiedEditorProvider = new UnifiedEditorProvider(context.extensionUri, context);
 
     // 工作区监听器
-    const workspaceListeners = registerWorkspaceListeners();
+    const workspaceListeners = registerWorkspaceListeners(context);
 
     // Tab 切换监听
     const tabChangeListener = vscode.window.tabGroups.onDidChangeTabs(() => updateShowIcon());

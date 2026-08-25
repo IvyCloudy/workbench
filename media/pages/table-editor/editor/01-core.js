@@ -997,6 +997,16 @@ window.addEventListener('message', function (e) {
         if (m.reason === 'reload' && typeof showToast === 'function') {
             showToast('已获取最新数据并重置筛选', 'success');
         }
+    } else if (m.type === 'deleteRowsResult') {
+        // 扩展端删除接口回包：成功行真正删除，失败行取消置灰保留（置灰+划线 + 失败原因）
+        var _synced = Array.isArray(m.synced) ? m.synced : [];
+        var _failed = Array.isArray(m.failed) ? m.failed : [];
+        // reasons: [[tsId, reason], ...] 失败原因映射
+        var _reasons = (m.reasons && Array.isArray(m.reasons)) ? m.reasons : [];
+        console.log('[recv deleteRowsResult] synced=', JSON.stringify(_synced), 'failed=', JSON.stringify(_failed), 'reasons=', JSON.stringify(_reasons));
+        if (typeof applyDeleteRowsResult === 'function') {
+            applyDeleteRowsResult(_synced, _failed, _reasons);
+        }
     } else if (m.type === 'saved') {
         dbg('📨 recv saved curRows=' + ((S.data && S.data.rows && S.data.rows.length) || 0)
             + ' mods=' + (S.mods ? S.mods.size : 0)

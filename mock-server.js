@@ -272,11 +272,66 @@ var server = http.createServer(function (req, res) {
                 'Access-Control-Allow-Methods': 'POST, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type'
             });
-            res.end(JSON.stringify({
+            var responseBody = {
                 returnCode: 'SUC0000',
                 errorMsg: '',
                 body: resultBody
-            }));
+            };
+            res.end(JSON.stringify(responseBody));
+        });
+    } else if (req.method === 'POST' && req.url === '/test-task/delete-testcase') {
+        var body = '';
+        req.on('data', function (chunk) { body += chunk; });
+        req.on('end', function () {
+            var payload = {};
+            try { payload = JSON.parse(body); } catch (e) { payload = {}; }
+
+            var testTaskNo = payload.testTaskNo || '';
+            var subTestTaskId = payload.subTestTaskId || '';
+            var sourceIds = Array.isArray(payload.sourceIds) ? payload.sourceIds : [];
+
+            console.log('收到删除测试案例请求 testTaskNo=%s subTestTaskId=%s 共 %d 条 sourceIds=%s',
+                testTaskNo || '(未提供)', subTestTaskId || '(未提供)', sourceIds.length, JSON.stringify(sourceIds));
+
+            // 逐条返回删除结果：type:'1' 成功，type:'2' 失败
+            var FAIL_RATIO = 0;
+            var failCount = 0;
+            var resultBody = sourceIds.map(function (id, i) {
+                var shouldFail = FAIL_RATIO > 0 && (
+                    sourceIds.length === 1
+                        ? true
+                        : (i % Math.round(1 / FAIL_RATIO) !== 0)
+                );
+                if (!shouldFail) {
+                    return {
+                        data: 'TT' + Date.now() + (1000 + i),
+                        sourceId: String(id),
+                        type: '1'
+                    };
+                }
+                failCount++;
+                return {
+                    data: '无效的案例类型',
+                    sourceId: String(id),
+                    type: '2'
+                };
+            });
+            if (failCount > 0) {
+                console.log('  模拟失败: %d / %d 条 (FAIL_RATIO=%s)', failCount, sourceIds.length, FAIL_RATIO);
+            }
+
+            res.writeHead(200, {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type'
+            });
+            var responseBody = {
+                returnCode: 'SUC0000',
+                errorMsg: '',
+                body: resultBody
+            };
+            res.end(JSON.stringify(responseBody));
         });
     } else if (req.method === 'OPTIONS') {
         res.writeHead(204, {
@@ -297,5 +352,6 @@ server.listen(8081, function () {
     console.log('  POST /test-task/task-tree       - 任务树');
     console.log('  POST /test-task/test-case       - 测试案例');
     console.log('  POST /test-task/push-testcase   - 推送测试案例');
+    console.log('  POST /test-task/delete-testcase - 删除测试案例');
     console.log('Total records: ' + TOTAL + ', default pageSize: 200');
 });

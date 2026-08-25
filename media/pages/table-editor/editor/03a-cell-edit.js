@@ -31,6 +31,22 @@ function onCellDblClick(e) {
         showToast('样例数据行已冻结，不可编辑（testcase_id 为占位值）', 'error');
         return;
     }
+    // 待删除行 / 删除失败行：不可编辑（删除中等待确认、或接口已拒绝删除）
+    var _tsIdCol = (S.data.headers || []).indexOf('testcase_id');
+    var _curTsId = (S.data.rows[ri] && _tsIdCol >= 0) ? S.data.rows[ri][_tsIdCol] : null;
+    if (_curTsId != null && _curTsId !== '' && typeof String(_curTsId) === 'string') {
+        var _curTsIdStr = String(_curTsId);
+        if (S._pendingDeleteTsIds && S._pendingDeleteTsIds.has(_curTsIdStr)) {
+            e.preventDefault();
+            showToast('该行正在删除中，暂不可编辑', 'info');
+            return;
+        }
+        if (S._failedDeleteTsIds && S._failedDeleteTsIds.has(_curTsIdStr)) {
+            e.preventDefault();
+            showToast('该行删除失败（线上拒绝），暂不可编辑', 'error');
+            return;
+        }
+    }
     // testcase_id 列冻结：不允许双击进入编辑
     if (isFrozenCol(ci)) {
         e.preventDefault();
@@ -119,6 +135,20 @@ function startEdit(e) {
     if (isFrozenRow(ri)) {
         showToast('样例数据行已冻结，不可编辑（testcase_id 为占位值）', 'error');
         return;
+    }
+    // 待删除行 / 删除失败行：不可编辑（删除中等待确认、或接口已拒绝删除）
+    var _tsIdCol2 = (S.data.headers || []).indexOf('testcase_id');
+    var _curTsId2 = (S.data.rows[ri] && _tsIdCol2 >= 0) ? S.data.rows[ri][_tsIdCol2] : null;
+    if (_curTsId2 != null && _curTsId2 !== '' && typeof String(_curTsId2) === 'string') {
+        var _curTsIdStr2 = String(_curTsId2);
+        if (S._pendingDeleteTsIds && S._pendingDeleteTsIds.has(_curTsIdStr2)) {
+            showToast('该行正在删除中，暂不可编辑', 'info');
+            return;
+        }
+        if (S._failedDeleteTsIds && S._failedDeleteTsIds.has(_curTsIdStr2)) {
+            showToast('该行删除失败（线上拒绝），暂不可编辑', 'error');
+            return;
+        }
     }
     // testcase_id 列冻结：不允许进入编辑
     if (isFrozenCol(ci)) {

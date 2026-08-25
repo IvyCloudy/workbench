@@ -310,6 +310,79 @@ export async function pushTestCase(
 }
 
 /**
+ * 删除测试案例（线上）。
+ *
+ * @param taskInfo  必填，从文件路径解析得到的任务信息
+ *                  { testTaskNo, subTestTaskId }
+ * @param sourceIds 必填，待删除案例的 testcase_id 列表（对应后端入参 sourceIds: List<string>）
+ *
+ * 入参与后端契约（POST /test-task/delete-testcase）一一对应：
+ *   - testTaskNo   → testTaskNo
+ *   - subTestTaskId→ subTestTaskId
+ *   - sourceIds   → sourceIds（每个元素即案例的 testcase_id 字段值）
+ *
+ * 出参与推送接口（pushTestCase）保持一致：
+ *   - 外层：returnCode / errorMsg / body
+ *   - body[]：{ data, sourceId, type }，type:'1' 成功 / type:'2' 失败
+ *
+ * @returns 后端原始响应（ApiResponse），由调用方解析 body 逐条结果。
+ */
+export async function deleteTestCase(
+    context: vscode.ExtensionContext,
+    taskInfo: { testTaskNo: string; subTestTaskId: string },
+    sourceIds: string[],
+): Promise<ApiResponse> {
+    const url = `${await getApiBaseUrl(context)}/test-task/delete-testcase`;
+    const body = {
+        testTaskNo: taskInfo.testTaskNo,
+        subTestTaskId: taskInfo.subTestTaskId,
+        sourceIds: Array.isArray(sourceIds) ? sourceIds : [],
+    };
+
+    const headers = await buildHeaders(context);
+    const safeHeaders = maskSensitiveHeaders(headers);
+    console.log('[删除案例][请求] ───────────────────────────────');
+    console.log('[删除案例][请求] POST', url);
+    console.log('[删除案例][请求] headers:', JSON.stringify(safeHeaders, null, 2));
+    console.log('[删除案例][请求] body  :', JSON.stringify(body, null, 2));
+
+    const _apiStart = Date.now();
+    try {
+        const response = await makeRequest<ApiResponse>('POST', url, headers, JSON.stringify(body));
+        console.log('[删除案例][响应] status=', response.status,
+            'returnCode=', (response.data as any)?.returnCode,
+            'errorMsg=', (response.data as any)?.errorMsg || '');
+        console.log('[删除案例][响应] body  :', JSON.stringify(response.data, null, 2));
+
+        maybeReportAuthFailure(response.status, 'deleteTestCase');
+        const _rc = (response.data as any)?.returnCode || '';
+        const _costMs = String(Date.now() - _apiStart);
+        if (_rc === 'SUC0000') {
+            TelemetryService.sendTelemetryEvent('api.deleteTestCase.ok', {
+                httpStatus: String(response.status),
+                totalRows: String(sourceIds.length),
+                costMs: _costMs,
+            });
+        } else {
+            TelemetryService.sendTelemetryErrorEvent('api.deleteTestCase.fail', {
+                httpStatus: String(response.status),
+                returnCode: _rc,
+                totalRows: String(sourceIds.length),
+                costMs: _costMs,
+            });
+        }
+        return response.data;
+    } catch (err: any) {
+        TelemetryService.sendTelemetryErrorEvent('api.deleteTestCase.exception', {
+            totalRows: String(sourceIds.length),
+            errorMessage: String(err?.message || String(err)).slice(0, 500),
+            stackHead: stackHead(err),
+        });
+        throw err;
+    }
+}
+
+/**
  * 当响应状态码为 401/403 时，上报一次鉴权失效事件。
  * 用于运营侧观察：登录态过期 / token 失效 / 权限被收回 的整体趋势。
  */

@@ -287,6 +287,29 @@ tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-push-added{background:#fde8e8
 .xs-ghost-row td.xs-td-ghost del{color:#999}
 .xs-ghost-row td.xs-ghost-cb{background:#fce4e4;color:#d32f2f;text-align:center;font-size:11px;padding:2px 4px}
 
+/* 待删除行（已发删除请求、等待线上确认）：灰色置灰 + 删除线，不可编辑 */
+tbody tr.xs-tr-pending-delete{background:#f2f2f2;color:#999}
+tbody tr.xs-tr-pending-delete:hover{background:#ececec}
+tbody tr.xs-tr-pending-delete td{background:#f2f2f2;color:#999}
+tbody tr.xs-tr-pending-delete:hover td{background:#ececec}
+tbody tr.xs-tr-pending-delete td.xs-td-cb{background:#f2f2f2;box-shadow:inset 3px 0 0 #999}
+tbody tr.xs-tr-pending-delete:hover td.xs-td-cb{background:#ececec}
+tbody tr.xs-tr-pending-delete td:not(.xs-td-cb) del,
+tbody tr.xs-tr-pending-delete td:not(.xs-td-cb){text-decoration:line-through}
+/* 待删除行禁止编辑（覆盖可编辑态光标） */
+tbody tr.xs-tr-pending-delete td.xs-editable{cursor:not-allowed}
+
+/* 删除失败行（接口返回失败，保留在表中）：红色系置灰 + 删除线，不可编辑，区别于"待删除中"的灰底 */
+tbody tr.xs-tr-delete-failed{background:#fdecea;color:#b71c1c}
+tbody tr.xs-tr-delete-failed:hover{background:#f9d6d2}
+tbody tr.xs-tr-delete-failed td{background:#fdecea;color:#b71c1c}
+tbody tr.xs-tr-delete-failed:hover td{background:#f9d6d2}
+tbody tr.xs-tr-delete-failed td.xs-td-cb{background:#fdecea;box-shadow:inset 3px 0 0 #d32f2f}
+tbody tr.xs-tr-delete-failed:hover td.xs-td-cb{background:#f9d6d2}
+tbody tr.xs-tr-delete-failed td:not(.xs-td-cb){text-decoration:line-through}
+/* 删除失败行禁止编辑（覆盖可编辑态光标） */
+tbody tr.xs-tr-delete-failed td.xs-editable{cursor:not-allowed}
+
 /* 用户标记高亮（手动标记的单元格/区域）：默认蓝紫色系；具体颜色通过内联 style 覆盖 */
 /* 标记单元格无边框，由相邻普通格的边框提供外边界，相邻标记格之间自然融为一体 */
 .xs-td.xs-td-user-marked{border:0;background:#e3f2fd}

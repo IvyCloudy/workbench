@@ -26,6 +26,9 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getDeletedSnapshotIds, clearDeletedSnapshots, type DeletedRowInfo } from './pushSnapshotStore';
+import { deleteTestCase } from '../services/http';
+import { resolveTaskInfoOrNull } from '../handlers/pushCore.stages';
+import { TelemetryService } from './telemetry';
 
 // ============================================
 // 类型定义
@@ -57,6 +60,7 @@ export interface SyncDeletedResult {
 // ============================================
 
 let resolvedFilePath: string | null = null;
+let cachedContext: vscode.ExtensionContext | null = null;
 let cachedStore: DeletedRowsStore | null = null;
 let cachedMtimeMs = 0;
 
@@ -124,6 +128,7 @@ export async function ensureDeletedRowsFile(context: vscode.ExtensionContext): P
     const dir = context.globalStorageUri.fsPath;
     const fp = path.join(dir, 'deleted-rows.json');
     resolvedFilePath = fp;
+    cachedContext = context;
     try {
         await fs.promises.mkdir(dir, { recursive: true });
         try { await fs.promises.access(fp, fs.constants.F_OK); }
@@ -228,17 +233,64 @@ export async function syncDeletedRows(
     const synced: string[] = [];
     const failed: Array<{ tsId: string; reason: string }> = [];
 
-    // TODO: 后续接入实际的线上删除 API
-    // 示例：
-    //   const apiResult = await httpDeleteRows(filePath, targetIds);
-    //   synced.push(...apiResult.success);
-    //   failed.push(...apiResult.failures);
-    //
-    // 当前为占位实现：所有行直接标记为"待实现"
-    failed.push(...targetIds.map(id => ({
-        tsId: id,
-        reason: '线上删除同步接口尚未接入（deletedRowsStore 预留扩展点）',
-    })));
+    // ---- 调用线上删除接口（POST /test-task/delete-testcase） ----
+    //   入参：testTaskNo / subTestTaskId / sourceIds（即待删除案例的 testcase_id 列表）
+    //   出参：body[] 中每项含 sourceId 与 type（'1' 成功 / '2' 失败），与推送接口一致
+    try {
+        if (!cachedContext) {
+            throw new Error('已删除行存储尚未初始化（请确认扩展已激活）');
+        }
+        const taskInfo = await resolveTaskInfoOrNull(filePath);
+        if (taskInfo.status !== 'ok') {
+            throw new Error(
+                taskInfo.status === 'unbound'
+                    ? '当前文件未绑定测试任务，无法同步删除'
+                    : (taskInfo.errorMessage || '获取测试任务信息失败'),
+            );
+        }
+
+        const resp = await deleteTestCase(
+            cachedContext,
+            { testTaskNo: taskInfo.taskInfo.testTaskNo, subTestTaskId: taskInfo.taskInfo.subTestTaskId },
+            targetIds,
+        );
+
+        if (resp.returnCode !== 'SUC0000') {
+            throw new Error(resp.errorMsg || `删除接口返回 ${resp.returnCode}`);
+        }
+
+        // 依据 body 逐条 type 判定成功/失败；sourceId 对应 testcase_id
+        const resultBody: Array<{ sourceId?: string; type?: string }> = Array.isArray(resp.body) ? resp.body : [];
+        const typeBySourceId = new Map<string, string>();
+        for (const item of resultBody) {
+            const sid = String(item?.sourceId ?? '').trim();
+            if (sid) typeBySourceId.set(sid, String(item?.type ?? ''));
+        }
+
+        for (const id of targetIds) {
+            const t = typeBySourceId.get(id);
+            if (t === '1') {
+                synced.push(id);
+            } else if (t === '2') {
+                failed.push({ tsId: id, reason: '线上删除失败（接口返回 type=2）' });
+            } else {
+                // 接口未返回该 sourceId 的结果，按失败保守处理
+                failed.push({ tsId: id, reason: '线上删除结果缺失（接口未返回该 sourceId）' });
+            }
+        }
+    } catch (err: any) {
+        console.error('[DeletedRowsStore] 同步删除失败:', err?.message || err);
+        TelemetryService.sendTelemetryErrorEvent('deletedRowsStore.syncFailed', {
+            errorMessage: String(err?.message || String(err)).slice(0, 500),
+            filePath: path.basename(filePath),
+            totalRows: String(targetIds.length),
+        });
+        // 整体失败时，所有待同步行标记为失败（保持待同步状态，下次可重试）
+        failed.push(...targetIds.map(id => ({
+            tsId: id,
+            reason: `同步异常: ${err?.message || String(err)}`,
+        })));
+    }
 
     // 同步成功的：从追踪记录和快照中清除
     if (synced.length > 0) {

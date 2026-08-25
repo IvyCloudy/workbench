@@ -1131,6 +1131,13 @@ window.addEventListener('message', function (e) {
             }
         }
         showPushResultModal(m);
+    } else if (m.type === 'deleteResult') {
+        // 删除结果弹窗（与推送结果弹窗同款样式，但独立于推送状态，见 05f-delete-result.js）
+        try {
+            if (typeof showDeleteResultModal === 'function') {
+                showDeleteResultModal(m);
+            }
+        } catch (_e) { /* ignore */ }
     } else if (m.type === 'pushError') {
         S._pushing = false;
         if (typeof updatePushBtn === 'function') updatePushBtn();

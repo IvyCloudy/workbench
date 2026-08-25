@@ -3,15 +3,16 @@
  *  workspaceListeners.ts
  *  注册工作区文件变化监听器（重命名、删除）
  * ----------------------------------------------------------------------------
- *  案例文件删除拦截：
- *    在 onWillDeleteFiles 阶段（文件被物理删除之前）先调用线上删除接口
- *    （POST /test-task/delete-testcase），按返回 type 区分每行删除结果：
- *      - type='1'（成功）：将成功行从文件物理剔除并保存（仅失败行保留）
- *      - type='2'（失败）或未返回：该行视为"无法删除"，保留在文件中
- *    随后：
- *      - 全部成功 → 文件被正常删除
- *      - 存在失败行 → onDidDeleteFiles 阶段重建文件，仅写入失败行，
- *        实现"不删除文件、只删除文件内满足条件的案例行"。
+ *  案例文件删除拦截（移植自 884a8152，保留 modal 弹窗改进）：
+ *    在 onWillDeleteFiles 阶段（文件被物理删除之前）通过 event.waitUntil
+ *    调用线上删除接口（复用编辑器内删除案例的同一入口 syncDeletedRows），
+ *    按返回按行区分成功/失败：
+ *      - 全部成功 → 让 VSCode 正常完成物理删除
+ *      - 部分失败 / 全部失败 / 接口整体失败 → 记录 needRestore，在
+ *        onDidDeleteFiles 阶段用 parser.save 把文件重建回来（只写失败行），
+ *        实现"不删除文件、只删除文件内满足条件的案例行"
+ *    弹窗使用 showDeleteResult（案例编辑器 panel 内 modal），
+ *    与"案例编辑器里右键删除案例行"的反馈方式保持一致。
  * ============================================================================
  */
 
@@ -29,13 +30,14 @@ import {
     removePathInBindings,
 } from '../utils/pointCaseBindingStore';
 import { detectFileType, createParser } from '../parsers';
-import { deleteTestCase } from '../services/http';
-import { resolveTaskInfoOrNull } from './pushCore.stages';
+import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { TS_ID_COLUMN } from '../services/utils';
 import { TelemetryService } from '../utils/telemetry';
-import { showPushSummary } from '../utils/pushUI';
-import type { PushFileResult } from '../utils/pushUI';
+import { showDeleteResult } from '../utils/message';
 import type { PushFailure } from '../utils/message';
+
+/** 案例编辑器 viewType（保持与 BaseEditorProvider 注册值一致） */
+const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
 /** 若某文件的扩展名属于 point/case 绑定域，才有必要通知绑定库 */
 function isBindingRelevant(fp: string): boolean {
@@ -43,36 +45,79 @@ function isBindingRelevant(fp: string): boolean {
     return ['.md', '.xmind', '.csv', '.yaml', '.yml', '.json'].includes(ext);
 }
 
-/** 是否可解析为案例文件（csv / yaml / json） */
+/** 是否位于「测试任务/xxx/测试案例/」下且可解析为案例文件（csv/yaml/json） */
 function isCaseFile(fp: string): boolean {
+    if (!fp) return false;
+    const norm = fp.replace(/\\/g, '/');
+    if (!/\/测试任务\/[^/]+\/测试案例\//.test(norm)) return false;
     return detectFileType(fp) !== null;
 }
+
+/** waitUntil 超时时长：接口若卡住，不能让 VSCode 的删除确认框无限挂起 */
+const DELETE_INTERCEPT_TIMEOUT_MS = 30_000;
+
+/** willDeleteResults 条目兜底清理时长：万一 did 阶段没触发，也不至于永久驻留 */
+const WILL_DELETE_ENTRY_TTL_MS = 60_000;
 
 /**
  * onWillDeleteFiles 阶段的处理结果缓存，供 onDidDeleteFiles 还原 + 弹窗使用。
  *   - needRestore=true：存在线上删除失败的案例行，did 阶段需重建文件仅保留失败行
- *   - needRestore=false：全部成功或无案例行，文件可正常被删除，走原清理逻辑
- *   - total / successCount / failedIds / error：用于构造与"推送案例结果"同款的弹窗
+ *   - needRestore=false：全部成功或无案例行，文件可正常被删除
  */
 interface WillDeleteResult {
+    filePath: string;
+    fileName: string;
     needRestore: boolean;
     restoreTableData: any;
     restoreSourceData: any;
-    fileName: string;
     total: number;
     successCount: number;
-    failedIds: string[];
-    /** 是否纳入弹窗汇报（无 testcase_id 或无案例行的文件不汇报） */
+    /** 逐条失败明细（tsId + 原因） */
+    failures: PushFailure[];
+    /** 是否弹出"删除结果"modal（无 testcase_id 或无案例行的文件不弹） */
     reportable: boolean;
+    /** 整文件级错误（未绑定任务 / 接口整体失败） */
     error?: string;
 }
 
-export function registerWorkspaceListeners(context: vscode.ExtensionContext): vscode.Disposable[] {
-    /** filePath → WillDeleteResult（仅案例文件在处理后写入） */
-    const willDeleteResults = new Map<string, WillDeleteResult>();
-    /** 本次删除操作中被拦截处理的案例文件结果（用于弹窗汇总） */
-    const caseDeleteResults: PushFileResult[] = [];
+/** filePath → WillDeleteResult（仅案例文件在处理后写入） */
+const willDeleteResults = new Map<string, WillDeleteResult>();
 
+/** filePath → 兜底清理定时器句柄，避免条目泄漏 */
+const willDeleteEvictTimers = new Map<string, NodeJS.Timeout>();
+
+/** 写入 willDeleteResults 时同步注册兜底清理定时器，如果 did 阶段没触发，避免永久驻留 */
+function setWillDeleteResult(fp: string, result: WillDeleteResult): void {
+    willDeleteResults.set(fp, result);
+    // 复位已有定时器
+    const prev = willDeleteEvictTimers.get(fp);
+    if (prev) { try { clearTimeout(prev); } catch (_) { /* ignore */ } }
+    const timer = setTimeout(() => {
+        if (willDeleteResults.has(fp)) {
+            willDeleteResults.delete(fp);
+            TelemetryService.sendTelemetryEvent('caseFileDelete.willResult.evictTimeout', {
+                filePath: path.basename(fp),
+            });
+        }
+        willDeleteEvictTimers.delete(fp);
+    }, WILL_DELETE_ENTRY_TTL_MS);
+    willDeleteEvictTimers.set(fp, timer);
+}
+
+/** did 阶段消费条目时同步取消兜底清理定时器 */
+function consumeWillDeleteResult(fp: string): WillDeleteResult | undefined {
+    const r = willDeleteResults.get(fp);
+    willDeleteResults.delete(fp);
+    const timer = willDeleteEvictTimers.get(fp);
+    if (timer) { try { clearTimeout(timer); } catch (_) { /* ignore */ } }
+    willDeleteEvictTimers.delete(fp);
+    return r;
+}
+
+/**
+ * 注册所有工作区文件变化监听器
+ */
+export function registerWorkspaceListeners(_context: vscode.ExtensionContext): vscode.Disposable[] {
     return [
         // 监听文件重命名，同步更新记录
         vscode.workspace.onDidRenameFiles((event) => {
@@ -106,38 +151,50 @@ export function registerWorkspaceListeners(context: vscode.ExtensionContext): vs
             }
         }),
 
-        // 文件删除"之前"：案例文件先调用线上删除接口，剔除成功行（失败行保留）
+        // ★ 案例文件"将删除"拦截（同步注册 waitUntil，让 VSCode 等待接口完成）
+        //   - 解析文件 → 调线上删除接口 → 剔除成功行、保存文件
+        //   - 部分失败会记录 needRestore=true，did 阶段重建文件
+        //   - 加了 30s 超时保护：接口卡住时不无限阻塞 VSCode 的删除确认框
         vscode.workspace.onWillDeleteFiles((event) => {
             const tasks: Promise<void>[] = [];
             for (const file of event.files) {
                 const fp = file.fsPath;
                 if (!isCaseFile(fp)) continue;
-                tasks.push(handleCaseFileWillDelete(fp, context, willDeleteResults).then(() => {
-                    // 收集删除结果用于弹窗（与推送案例结果同款）
-                    const r = willDeleteResults.get(fp);
-                    if (r && r.reportable) {
-                        caseDeleteResults.push(buildCaseDeleteFileResult(r));
-                    }
-                }).catch(err => {
-                    // 异常时保守处理：保留文件全部行，不删除文件
+                // 单个文件的处理承诺：正常/异常/超时 三种结果都要在有限时间内落地为 willDeleteResults 条目
+                const singleTask = Promise.race<void>([
+                    handleCaseFileWillDelete(fp),
+                    new Promise<void>((_, reject) => {
+                        setTimeout(() => reject(new Error(`删除拦截超时（${DELETE_INTERCEPT_TIMEOUT_MS / 1000}s）`)),
+                            DELETE_INTERCEPT_TIMEOUT_MS);
+                    }),
+                ]).catch(err => {
                     console.error('[workspaceListeners] 案例文件删除拦截异常:', err?.message || err);
                     TelemetryService.sendTelemetryErrorEvent('caseFileDelete.intercept.error', {
                         errorMessage: String(err?.message || err).slice(0, 500),
                         filePath: path.basename(fp),
                     });
-                }));
+                    // 异常保底：保留文件全部行不删除
+                    setWillDeleteResult(fp, {
+                        filePath: fp,
+                        fileName: path.basename(fp),
+                        needRestore: true,
+                        restoreTableData: null,
+                        restoreSourceData: null,
+                        total: 0,
+                        successCount: 0,
+                        failures: [],
+                        reportable: true,
+                        error: `拦截异常: ${err?.message || err}`,
+                    });
+                });
+                tasks.push(singleTask);
             }
             if (tasks.length > 0) {
-                event.waitUntil(Promise.all(tasks).then(() => {
-                    // 删除动作完成后统一弹窗反馈（仅当有案例文件被拦截处理）
-                    if (caseDeleteResults.length > 0) {
-                        showPushSummary(caseDeleteResults.slice());
-                    }
-                }));
+                event.waitUntil(Promise.all(tasks));
             }
         }),
 
-        // 监听文件删除，同步清理所有本地缓存记录
+        // 监听文件删除，同步清理所有本地缓存记录 + 案例文件失败还原
         vscode.workspace.onDidDeleteFiles((event) => {
             for (const file of event.files) {
                 const fp = file.fsPath;
@@ -146,30 +203,46 @@ export function registerWorkspaceListeners(context: vscode.ExtensionContext): vs
                 }
 
                 // 案例文件删除拦截的还原处理
-                const willResult = willDeleteResults.get(fp);
-                willDeleteResults.delete(fp);
+                const willResult = consumeWillDeleteResult(fp);
                 if (willResult && willResult.needRestore) {
                     // 有失败行：重建文件，仅写入失败行（即"不删除文件，只删成功行"）
-                    restoreCaseFile(fp, willResult).catch(err => {
-                        console.error('[workspaceListeners] 案例文件还原失败:', err?.message || err);
-                        TelemetryService.sendTelemetryErrorEvent('caseFileDelete.restore.error', {
-                            errorMessage: String(err?.message || err).slice(0, 500),
-                            filePath: path.basename(fp),
+                    restoreCaseFile(fp, willResult)
+                        .then(() => {
+                            // 还原完成后再弹窗，避免用户先看到弹窗再看到文件闪现
+                            if (willResult.reportable) {
+                                showDeleteResultModal(willResult);
+                            }
+                        })
+                        .catch(err => {
+                            console.error('[workspaceListeners] 案例文件还原失败:', err?.message || err);
+                            TelemetryService.sendTelemetryErrorEvent('caseFileDelete.restore.error', {
+                                errorMessage: String(err?.message || err).slice(0, 500),
+                                filePath: path.basename(fp),
+                            });
+                            if (willResult.reportable) {
+                                showDeleteResultModal({
+                                    ...willResult,
+                                    error: (willResult.error ? willResult.error + '；' : '') + `文件还原失败: ${err?.message || err}`,
+                                });
+                            }
                         });
-                    });
-                    // 失败行仍在文件中，不清理 highlight/failure/snapshot/mark 之外的追踪；
-                    // 这里仅清理 highlight（临时态），其余保留以便后续可重试同步删除
+                    // 失败行仍在文件中，仅清理临时态高亮/失败
                     removeHighlightFile(fp).catch(() => {});
                     removeFailureFile(fp).catch(() => {});
                     continue;
                 }
 
-                // 清理各存储中该文件的缓存（原逻辑）
-                removeHighlightFile(fp).catch(() => {});
-                removeFailureFile(fp).catch(() => {});
-                removeSnapshotFile(fp).catch(() => {});
-                removeDeletedRowsFile(fp).catch(() => {});
-                removeMarkFile(fp).catch(() => {});
+                // 全部成功或非案例文件：先并行清理本地缓存，再弹窗汇报（确保用户看到通知时状态一致）
+                const cleanupTask = Promise.allSettled([
+                    removeHighlightFile(fp),
+                    removeFailureFile(fp),
+                    removeSnapshotFile(fp),
+                    removeDeletedRowsFile(fp),
+                    removeMarkFile(fp),
+                ]);
+                if (willResult && willResult.reportable) {
+                    cleanupTask.then(() => showDeleteResultModal(willResult));
+                }
 
                 // 同步 point ↔ case 绑定库（删除引用）
                 if (isBindingRelevant(fp)) {
@@ -195,15 +268,11 @@ export function registerWorkspaceListeners(context: vscode.ExtensionContext): vs
 /**
  * 案例文件"将删除"拦截：
  *   1. 解析文件，提取每行的 testcase_id
- *   2. 调用线上删除接口（sourceIds = testcase_id 列表）
- *   3. 按返回 type 区分成功/失败行
- *   4. 物理剔除成功行并保存（失败行保留）；记录 needRestore 供 did 阶段还原
+ *   2. 调用线上删除接口（syncDeletedRows，与编辑器内右键删除行走同一入口）
+ *   3. 按返回逐条区分成功/失败行
+ *   4. 全部成功 → 允许删除；部分/全部失败 → needRestore=true 交给 did 阶段重建
  */
-async function handleCaseFileWillDelete(
-    filePath: string,
-    context: vscode.ExtensionContext,
-    willDeleteResults: Map<string, WillDeleteResult>,
-): Promise<void> {
+async function handleCaseFileWillDelete(filePath: string): Promise<void> {
     const fileType = detectFileType(filePath);
     if (!fileType) return;
 
@@ -216,197 +285,217 @@ async function handleCaseFileWillDelete(
 
     const tsIdx = headers.indexOf(TS_ID_COLUMN);
     if (tsIdx < 0 || rows.length === 0) {
-        // 无 testcase_id 列或空文件：无需线上删除，允许文件被正常删除（不纳入弹窗）
-        willDeleteResults.set(filePath, {
+        // 无 testcase_id 列或空文件：无需线上删除，允许文件被正常删除
+        // reportable=false：空文件删除无实质业务动作，静默即可（避免噪音通知）
+        setWillDeleteResult(filePath, {
+            filePath,
+            fileName: path.basename(filePath),
             needRestore: false,
             restoreTableData: tableData,
             restoreSourceData: sourceData,
-            fileName: path.basename(filePath),
             total: 0,
             successCount: 0,
-            failedIds: [],
+            failures: [],
             reportable: false,
         });
         return;
     }
 
-    const ids = rows.map(r => (r[tsIdx] == null ? '' : String(r[tsIdx]).trim())).filter(Boolean);
-    if (ids.length === 0) {
-        willDeleteResults.set(filePath, {
+    // 收集每行的 tsId（可能为空）与非空 id 列表
+    const rowTsIds: string[] = rows.map(r => (r[tsIdx] == null ? '' : String(r[tsIdx]).trim()));
+    const nonEmptyIds = rowTsIds.filter(Boolean);
+
+    if (nonEmptyIds.length === 0) {
+        // 全部本地未推送：无需调接口，允许文件被正常删除
+        // reportable=true：让用户明确知道"文件已删除（无线上案例）"，避免误删无反馈
+        setWillDeleteResult(filePath, {
+            filePath,
+            fileName: path.basename(filePath),
             needRestore: false,
             restoreTableData: tableData,
             restoreSourceData: sourceData,
-            fileName: path.basename(filePath),
-            total: 0,
-            successCount: 0,
-            failedIds: [],
-            reportable: false,
+            total: rows.length,
+            successCount: rows.length,
+            failures: [],
+            reportable: true,
         });
         return;
     }
 
-    // 调用线上删除接口前先取任务上下文
-    const taskInfo = await resolveTaskInfoOrNull(filePath);
-    if (taskInfo.status !== 'ok') {
-        // 未绑定测试任务：无法调用线上删除，保守保留全部行（不删除文件）
-        willDeleteResults.set(filePath, {
+    // 调用同款删除入口（内部会读取任务上下文、调 deleteTestCase 接口、维护本地记录）
+    let syncResult: { synced: string[]; failed: Array<{ tsId: string; reason: string }> };
+    try {
+        syncResult = await syncDeletedRows(filePath, nonEmptyIds);
+    } catch (err: any) {
+        // 接口调用整体异常：保守保留全部行、不删除文件
+        const idToRowIndex = new Map<string, number>();
+        for (let i = 0; i < rows.length; i++) {
+            const id = rowTsIds[i];
+            if (id) idToRowIndex.set(id, i + 1);
+        }
+        const failures: PushFailure[] = nonEmptyIds.map(id => ({
+            tsId: id,
+            reason: err?.message ? String(err.message) : '删除接口调用失败',
+            rowIndex: idToRowIndex.get(id),
+        }));
+        setWillDeleteResult(filePath, {
+            filePath,
+            fileName: path.basename(filePath),
             needRestore: true,
             restoreTableData: tableData,
             restoreSourceData: sourceData,
-            fileName: path.basename(filePath),
-            total: ids.length,
+            total: nonEmptyIds.length,
             successCount: 0,
-            failedIds: ids,
+            failures,
             reportable: true,
-            error: taskInfo.status === 'unbound' ? '文件未绑定测试任务，无法执行线上删除' : (taskInfo.errorMessage || '获取测试任务信息失败'),
+            error: err?.message || String(err),
         });
         return;
     }
 
-    const resp = await deleteTestCase(
-        context,
-        { testTaskNo: taskInfo.taskInfo.testTaskNo, subTestTaskId: taskInfo.taskInfo.subTestTaskId },
-        ids,
-    );
+    const syncedSet = new Set(syncResult.synced.map(String));
+    const failedMap = new Map(syncResult.failed.map(f => [String(f.tsId), String(f.reason || '线上删除失败')]));
 
-    if (resp.returnCode !== 'SUC0000') {
-        // 接口整体失败：保守保留全部行（不删除文件）
-        willDeleteResults.set(filePath, {
-            needRestore: true,
-            restoreTableData: tableData,
-            restoreSourceData: sourceData,
-            fileName: path.basename(filePath),
-            total: ids.length,
-            successCount: 0,
-            failedIds: ids,
-            reportable: true,
-            error: resp.errorMsg || `接口返回 ${resp.returnCode}`,
-        });
-        return;
-    }
-
-    // 依据 body 中 sourceId → type 判定每行结果
-    const typeBySourceId = new Map<string, string>();
-    const resultBody: Array<{ sourceId?: string; type?: string }> = Array.isArray(resp.body) ? resp.body : [];
-    for (const item of resultBody) {
-        const sid = String(item?.sourceId ?? '').trim();
-        if (sid) typeBySourceId.set(sid, String(item?.type ?? ''));
-    }
-
-    const successIdx: number[] = [];
-    const failedIdx: number[] = [];
-    const failedIds: string[] = [];
+    // 逐行分派：有 tsId 且落在 syncedSet 则视为成功；其余保留
+    // 失败行的 rowIndex 使用「删除后视图」的行号（即在 keepRows 里的位置），
+    // 这样弹窗行号与用户看到的表格顺序一致
+    const keepRows: any[][] = [];
+    const keepSource: any[] = [];
+    const failures: PushFailure[] = [];
+    let successCount = 0;
     for (let i = 0; i < rows.length; i++) {
-        const id = (rows[i][tsIdx] == null ? '' : String(rows[i][tsIdx]).trim());
-        if (!id) { failedIdx.push(i); failedIds.push(id); continue; }
-        if (typeBySourceId.get(id) === '1') {
-            successIdx.push(i);
-        } else {
-            failedIdx.push(i);
-            failedIds.push(id);
+        const id = rowTsIds[i];
+        if (id && syncedSet.has(id)) {
+            successCount++;
+            continue; // 剔除
+        }
+        keepRows.push(rows[i]);
+        if (Array.isArray(sourceData)) keepSource.push(sourceData[i]);
+        if (id) {
+            const reason = failedMap.get(id) || (syncedSet.has(id) ? '' : '线上删除失败');
+            if (reason) failures.push({ tsId: id, reason, rowIndex: keepRows.length });
         }
     }
+    // 弹窗展示时按行号升序（无行号排最后）——文件删除路径下 rowIndex 天然递增，
+    // 这里做一次稳定排序保底，避免上游改动后顺序错乱
+    failures.sort((a, b) => {
+        const ai = a.rowIndex == null ? Number.POSITIVE_INFINITY : a.rowIndex;
+        const bi = b.rowIndex == null ? Number.POSITIVE_INFINITY : b.rowIndex;
+        if (ai !== bi) return ai - bi;
+        return String(a.tsId).localeCompare(String(b.tsId));
+    });
 
-    if (successIdx.length === 0) {
-        // 全部失败：保留文件全部行，不删除文件
-        willDeleteResults.set(filePath, {
-            needRestore: true,
-            restoreTableData: tableData,
-            restoreSourceData: sourceData,
-            fileName: path.basename(filePath),
-            total: ids.length,
-            successCount: 0,
-            failedIds,
-            reportable: true,
-        });
-        return;
-    }
+    TelemetryService.sendTelemetryEvent('caseFileDelete.intercept.done', {
+        total: String(nonEmptyIds.length),
+        success: String(successCount),
+        failed: String(failures.length),
+        filePath: path.basename(filePath),
+    });
 
-    // 物理剔除成功行，仅保留失败行并保存
-    const keepRows = failedIdx.map(i => rows[i]);
-    const keepSource = Array.isArray(sourceData)
-        ? failedIdx.map(i => sourceData[i])
-        : sourceData;
+    // 注意：此处不再 parser.save 剔除成功行后的内容。
+    //   - 全部成功场景：VSCode 紧接着物理删除整个文件，写盘完全无意义；
+    //   - 部分失败场景：restoreCaseFile 会在 onDidDeleteFiles 阶段以同样的 keepRows 写一次，
+    //     此处再写只会多触发一次 fsWatcher → panel reload，导致页面刷新多余抖动。
+    // 因此把要写盘的数据放到 restoreTableData/restoreSourceData 里，did 阶段统一写。
     tableData.rows = keepRows;
-    const newTableData = tableData;
-    const newSourceData = keepSource;
+    const finalSource = Array.isArray(sourceData) ? keepSource : sourceData;
 
-    await parser.save(filePath, newTableData, newSourceData);
-
-    if (failedIdx.length === 0) {
-        // 全部成功：文件将被正常删除，无需还原
-        willDeleteResults.set(filePath, {
-            needRestore: false,
-            restoreTableData: newTableData,
-            restoreSourceData: newSourceData,
+    if (failures.length === 0) {
+        // 全部成功：允许 VSCode 继续物理删除文件（无需重建）
+        setWillDeleteResult(filePath, {
+            filePath,
             fileName: path.basename(filePath),
-            total: ids.length,
-            successCount: successIdx.length,
-            failedIds: [],
+            needRestore: false,
+            restoreTableData: tableData,
+            restoreSourceData: finalSource,
+            total: nonEmptyIds.length,
+            successCount,
+            failures: [],
             reportable: true,
         });
     } else {
-        // 部分失败：did 阶段重建文件仅保留失败行
-        willDeleteResults.set(filePath, {
-            needRestore: true,
-            restoreTableData: newTableData,
-            restoreSourceData: newSourceData,
+        // 有失败行：did 阶段重建文件仅保留失败行（表现为"文件未删除、仅删了成功行"）
+        setWillDeleteResult(filePath, {
+            filePath,
             fileName: path.basename(filePath),
-            total: ids.length,
-            successCount: successIdx.length,
-            failedIds,
+            needRestore: true,
+            restoreTableData: tableData,
+            restoreSourceData: finalSource,
+            total: nonEmptyIds.length,
+            successCount,
+            failures,
             reportable: true,
         });
     }
-
-    TelemetryService.sendTelemetryEvent('caseFileDelete.intercept.done', {
-        total: String(rows.length),
-        success: String(successIdx.length),
-        failed: String(failedIdx.length),
-        filePath: path.basename(filePath),
-    });
 }
 
 /**
  * 重建案例文件，仅写入失败行（即保留"无法删除"的案例）。
- * 用于 onDidDeleteFiles 阶段：文件已被 VSCode 删除后还原为"仅失败行"版本，
- * 实现"有不能删除的案例时不删除文件，只删除满足条件的案例行"。
+ * 用于 onDidDeleteFiles 阶段：文件已被 VSCode 删除后还原为"仅失败行"版本。
  */
 async function restoreCaseFile(filePath: string, result: WillDeleteResult): Promise<void> {
     const fileType = detectFileType(filePath);
     if (!fileType) return;
+    if (!result.restoreTableData) return; // 拦截异常场景，无法重建
     const parser = createParser(fileType);
-    // 文件已被删除，这里直接以"失败行"内容重建
     await parser.save(filePath, result.restoreTableData, result.restoreSourceData);
     TelemetryService.sendTelemetryEvent('caseFileDelete.restore.done', {
-        failedRows: String(result.failedIds.length),
+        failedRows: String(result.failures.length),
         filePath: path.basename(filePath),
     });
 }
 
-// ============================================================
-// 结果弹窗构造（与"推送案例结果"同款）
-// ============================================================
-
 /**
- * 由 WillDeleteResult 构造 PushFileResult，供 showPushSummary 弹窗渲染。
- * 与推送案例结果弹窗保持一致的字段与展示口径：
- *   - successCount / failCount / total 统计
- *   - failures：逐条失败（testcase_id + 原因）
- *   - error：整文件级错误（未绑定任务 / 接口失败）时填充
+ * 弹出"删除结果"反馈：
+ *   - 部分/全部失败（needRestore=true，文件已被 restoreCaseFile 重建）：
+ *     重新以案例编辑器打开该文件 → 等待 webview ready → postMessage 到 panel 内 modal
+ *     （与"编辑器内右键删除案例行"、"推送案例结果"完全一致的弹窗形态）
+ *   - 全部成功（文件已被物理删除）：
+ *     没有可承载 modal 的"当前案例页面"，改用 VSCode 原生 information 通知，
+ *     避免打开一个独立的新 webview 窗口。
  */
-function buildCaseDeleteFileResult(result: WillDeleteResult): PushFileResult {
-    const failures: PushFailure[] = result.failedIds.map(id => ({
-        tsId: id,
-        reason: result.error || '线上删除失败',
-    }));
-    return {
-        filePath: '',
-        fileName: result.fileName,
-        successCount: result.successCount,
-        failCount: failures.length,
-        total: result.total,
-        failures,
-        error: result.error,
-    };
+async function showDeleteResultModal(r: WillDeleteResult): Promise<void> {
+    try {
+        const failCount = r.failures.length;
+
+        // 场景 A：全部成功 —— 文件已被删除，用 VSCode 原生通知
+        if (failCount === 0 && !r.needRestore) {
+            if (r.error) {
+                vscode.window.showErrorMessage(`删除失败：${r.fileName} —— ${r.error}`);
+            } else if (r.successCount > 0) {
+                vscode.window.showInformationMessage(`删除成功：${r.fileName}（共 ${r.successCount} 条）`);
+            }
+            return;
+        }
+
+        // 场景 B：需要还原（部分/全部失败）—— 文件被 restoreCaseFile 重建后再打开为案例编辑器
+        const uri = vscode.Uri.file(r.filePath);
+        let panel = BaseEditorProvider.getPanel(r.filePath);
+        if (!panel) {
+            try {
+                await vscode.commands.executeCommand('vscode.openWith', uri, TESTCASE_EDITOR_VIEWTYPE);
+            } catch (err: any) {
+                console.warn('[workspaceListeners] 打开案例编辑器承载删除结果 modal 失败:', err?.message || err);
+            }
+            // 等待 panel 注册（resolveCustomEditor 完成后 panelMap 才被写入）
+            for (let i = 0; i < 30; i++) {
+                await new Promise(res => setTimeout(res, 100));
+                panel = BaseEditorProvider.getPanel(r.filePath);
+                if (panel) break;
+            }
+        }
+        if (panel) {
+            // 再等 webview ready（避免消息被丢弃）
+            try {
+                await BaseEditorProvider.waitReady(r.filePath, 3000);
+            } catch (_) { /* ignore：超时也尝试 post，前端已就绪的场景下仍能收到 */ }
+        }
+        showDeleteResult(panel, r.fileName, r.successCount, r.failures, r.total, r.error);
+    } catch (err: any) {
+        console.warn('[workspaceListeners] 弹出删除结果失败:', err?.message || err);
+        // 兜底：直接原生通知
+        try {
+            vscode.window.showErrorMessage(`删除结果反馈异常：${r.fileName}`);
+        } catch (_) { /* ignore */ }
+    }
 }

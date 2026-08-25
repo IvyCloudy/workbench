@@ -272,6 +272,53 @@ export function showPushResult(
 }
 
 // ============================================
+// 4b. 删除结果弹窗 (showDeleteResult)
+// ============================================
+
+/**
+ * 删除结果弹窗（成功 / 部分成功 / 全部失败）。
+ *
+ * 与 showPushResult 同款签名，但消息类型为 'deleteResult'，
+ * 前端 05f-delete-result.js 会渲染专属删除文案（"删除成功/删除失败/删除部分成功"），
+ * 且不会污染推送高亮状态。
+ *
+ * - panel 可用 → postMessage({ type:'deleteResult', fileName, successCount, failures, total, error })
+ * - panel 不可用 → 独立 webview 模态框展示结果摘要（复用 showModal）
+ */
+export function showDeleteResult(
+    panel: vscode.WebviewPanel | undefined,
+    fileName: string,
+    successCount: number,
+    failures: PushFailure[],
+    total: number,
+    error?: string,
+): void {
+    if (panel) {
+        panel.webview.postMessage({ type: 'deleteResult', fileName, successCount, failures, total, error });
+        return;
+    }
+    if (error) {
+        showModal('default', 'error', '删除结果',
+            `删除失败：${fileName}\n\n${error}` + (total > 0 ? `\n\n共 ${total} 条，全部未删除。` : ''));
+        return;
+    }
+    const failCount = failures.length;
+    if (failCount === 0 && successCount === 0) {
+        showModal('default', 'warning', '删除结果', `删除未产生结果：${fileName}\n请检查文件后重试。`);
+    } else if (failCount === 0) {
+        showModal('default', 'success', '删除结果', `删除成功：${fileName}\n共 ${successCount} 条全部删除成功。`);
+    } else if (successCount === 0) {
+        showModal('default', 'error', '删除结果',
+            `删除失败：${fileName}\n共 ${failCount} 条全部失败。\n\n` +
+            failures.map(f => `• ${f.tsId}: ${f.reason}`).join('\n'));
+    } else {
+        showModal('default', 'warning', '删除结果',
+            `删除部分成功：${fileName}\n成功 ${successCount} / 失败 ${failCount} / 共 ${total} 条。\n\n` +
+            `失败明细：\n` + failures.map(f => `• ${f.tsId}: ${f.reason}`).join('\n'));
+    }
+}
+
+// ============================================
 // 5. 保存结果提示 (showSaveResult)
 // ============================================
 

@@ -671,6 +671,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         //   05c-detail-modal    —— 明细弹窗（v2 双栏）主体 + 渲染
         //   05d-detail-write    —— 明细弹窗（v2）写操作（增删 step / 字段写入 / 保存）
         //   05e-array-editor    —— 数组列编辑器，并在末尾调用 init()
+        //   05f-delete-result   —— 删除结果弹窗（与推送结果同款样式，独立状态）
         const editorScriptFiles = [
                 'editor/00-highlight-util.js',
                 'editor/01-core.js',
@@ -691,7 +692,8 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             'editor/05b-prompt-confirm.js',
             'editor/05c-detail-modal.js',
             'editor/05d-detail-write.js',
-            'editor/05e-array-editor.js'
+            'editor/05e-array-editor.js',
+            'editor/05f-delete-result.js'
         ];
         const editorScriptsHtml = editorScriptFiles.map((rel) => {
             const uri = webviewPanel.webview.asWebviewUri(

@@ -469,7 +469,7 @@ function _buildRowHtml(ri, tsIdColIdx) {
     }
     // 待删除行（已发删除请求、接口尚未返回）：置灰+划线，不可编辑
     var pendingDelCls = '';
-    // 删除失败行（接口返回失败，保留在表中，红标 + 删除线 + 失败原因）：最终态，优先级高于"待删除中"
+    // 删除失败行（接口返回失败，保留在表中，红标 + 失败原因）：最终态，优先级高于"待删除中"
     var failedDelCls = '';
     var failedDelReason = '';
     if (tsIdColIdx >= 0) {
@@ -487,13 +487,14 @@ function _buildRowHtml(ri, tsIdColIdx) {
             }
         }
     }
-    // 行号格 title：失败行显示「原始行号: N | 推送失败：<原因>」，便于鼠标悬停查看失败原因。
+    // 行号格 title：失败行显示「原始行号: N」与「推送失败/删除失败」等信息，
+    // 各段使用换行符分隔，浏览器原生 tooltip 会自动分行展示，便于阅读长原因。
     var rowNumTitle = '原始行号: ' + (ri + 1);
-    if (failReason) rowNumTitle += ' | 推送失败：' + failReason;
+    if (failReason) rowNumTitle += '\n推送失败：' + failReason;
     if (failedDelCls) {
-        rowNumTitle += ' | 删除失败：' + (failedDelReason || '线上拒绝删除');
+        rowNumTitle += '\n删除失败：' + (failedDelReason || '线上拒绝删除');
     } else if (pendingDelCls) {
-        rowNumTitle += ' | 删除中（等待线上确认）';
+        rowNumTitle += '\n删除中（等待线上确认）';
     }
     // 渲染为普通行；不再提供整行 HTML5 拖动排序能力（与矩形拖选、行横扫存在交互冲突）。
     // 先遍历一次构造所有单元格 inner HTML，检测是否含真实换行符 \n

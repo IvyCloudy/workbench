@@ -173,10 +173,22 @@ export class JsonFileParser implements FileParser {
             return this.unflattenRow(headers, row);
         });
 
-        const isObjectSource = originalData && !Array.isArray(originalData) && records.length === 1;
-        const out = isObjectSource
-            ? records[0]
-            : (records.length === 1 ? records[0] : records);
+        // 序列化输出：
+        //   - 原始文件是单个对象（非数组）→ 保持单对象形态
+        //   - 原始文件是数组（无论现在剩 1 条还是多条）→ 始终写回数组，避免 parse 阶段
+        //     因看到"顶层单对象"而把 sourceData 视为单条 [x] 但 tableData 返回空表格
+        //     （见本文件 parse: !Array.isArray(data) 分支直接返回空 headers/rows）。
+        //   - 无 originalData（新建文件等）→ 保守：多条走数组，单条走对象（兼容旧行为）。
+        const originalIsArray = Array.isArray(originalData);
+        const originalIsObject = originalData && !Array.isArray(originalData) && typeof originalData === 'object';
+        let out: any;
+        if (originalIsArray) {
+            out = records;
+        } else if (originalIsObject && records.length === 1) {
+            out = records[0];
+        } else {
+            out = records.length === 1 ? records[0] : records;
+        }
 
         await fs.promises.writeFile(filePath, JSON.stringify(out, null, 2), 'utf-8');
     }

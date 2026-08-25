@@ -296,8 +296,11 @@ function deleteRow(ri) {
     _collectPendingDelete([rowToDelete]);
     renderTable();
     if (typeof S.vscode !== 'undefined' && S.vscode) {
+        // 携带当前表格中所有非空 tsId 的有序快照，供扩展端算「删除后视图行号」
+        // 避免扩展端重新读盘（磁盘可能滞后于内存）
+        var _tsIdOrder = _snapshotTsIdOrder();
         console.log('[deleteRow] 发送 deleteRows 消息 tsIds=', JSON.stringify([tsId]));
-        S.vscode.postMessage({ type: 'deleteRows', data: { tsIds: [tsId] } });
+        S.vscode.postMessage({ type: 'deleteRows', data: { tsIds: [tsId], tsIdOrder: _tsIdOrder } });
     } else {
         console.log('[deleteRow] 未发送 deleteRows 消息（无 vscode 对象）tsId=', tsId);
     }
@@ -363,11 +366,32 @@ function deleteSelectedRows() {
 
     // 3) 发消息让扩展端调删除接口；回包后由 applyDeleteRowsResult 真正删成功的行
     if (pendingTsIds.length > 0 && typeof S.vscode !== 'undefined' && S.vscode) {
+        // 携带当前表格中所有非空 tsId 的有序快照，供扩展端算「删除后视图行号」
+        var _tsIdOrder2 = _snapshotTsIdOrder();
         console.log('[deleteSelectedRows] 发送 deleteRows 消息 tsIds=', JSON.stringify(pendingTsIds));
-        S.vscode.postMessage({ type: 'deleteRows', data: { tsIds: pendingTsIds } });
+        S.vscode.postMessage({ type: 'deleteRows', data: { tsIds: pendingTsIds, tsIdOrder: _tsIdOrder2 } });
     } else {
         console.log('[deleteSelectedRows] 未发送 deleteRows 消息 pendingTsIds=', JSON.stringify(pendingTsIds));
     }
+}
+
+/**
+ * 快照当前表格中所有非空 testcase_id 的有序列表（1-based 视图顺序）。
+ * 发送 deleteRows 消息时携带，让扩展端可以直接按此顺序算「删除后视图行号」，
+ * 避免扩展端从磁盘读旧内容导致行号错位。
+ */
+function _snapshotTsIdOrder() {
+    var headers = (S.data && S.data.headers) || [];
+    var idx = headers.indexOf('testcase_id');
+    if (idx < 0) return [];
+    var out = [];
+    var rows = (S.data && S.data.rows) || [];
+    for (var i = 0; i < rows.length; i++) {
+        var raw = rows[i] && rows[i][idx];
+        var id = raw == null ? '' : String(raw).trim();
+        if (id) out.push(id);
+    }
+    return out;
 }
 
 // 一步式复制：在当前行下方直接插入一份副本

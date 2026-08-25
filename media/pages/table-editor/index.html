@@ -186,6 +186,25 @@
             </div>
         </div>
     </div>
+    <!-- 删除结果弹窗：与推送结果弹窗同款样式，由 05b-delete-result.js 控制显隐 -->
+    <div class="xs-modal-overlay xs-pr-overlay" id="deleteResultModal">
+        <div class="xs-modal-dialog xs-pr-dialog">
+            <div class="xs-modal-header xs-pr-header" id="deleteResultHeader">
+                <span class="xs-pr-icon" id="deleteResultIcon"></span>
+                <span class="xs-modal-title" id="deleteResultTitle">删除结果</span>
+                <button class="xs-modal-close" id="deleteResultClose" title="关闭">✕</button>
+            </div>
+            <div class="xs-pr-summary" id="deleteResultSummary"></div>
+            <div class="xs-modal-body xs-pr-body">
+                <div class="xs-pr-list" id="deleteResultList"></div>
+            </div>
+            <div class="xs-modal-footer">
+                <span id="deleteResultHint" style="flex:1;font-size:12px;color:#888"></span>
+                <button class="xs-btn" id="deleteResultCopyBtn" title="复制全部失败明细">复制失败明细</button>
+                <button class="xs-btn xs-btn-p" id="deleteResultOkBtn">确定</button>
+            </div>
+        </div>
+    </div>
     <!-- 通用 prompt / confirm 模态（替代受 sandbox 限制的 window.prompt / window.confirm） -->
     <div class="xs-modal-overlay" id="xsPromptModal">
         <div class="xs-modal-dialog" style="width:380px;max-height:none">

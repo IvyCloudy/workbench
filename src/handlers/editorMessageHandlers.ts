@@ -25,11 +25,13 @@ import { WebviewDataPusher } from '../services/webviewDataPusher';
 import { applyDiffHighlight, type EditorSession } from '../services/diffHighlight';
 import { getMarks, setMarks, clearMarks } from '../utils/markStore';
 import { getHeaderLabels, onHeaderLabelsChange } from '../utils/headerLabels';
-import { showSaveResult, showPushErrorModal } from '../utils/message';
+import { showSaveResult, showPushErrorModal, showDeleteResult, type PushFailure } from '../utils/message';
 import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { TelemetryService } from '../utils/telemetry';
 import { buildErrorProps } from '../services/utils';
+import { TS_ID_COLUMN } from '../services/utils';
+import { detectFileType, createParser } from '../parsers';
 import type { PushStrategy, PushContext } from '../providers/BaseEditorProvider';
 import { pushDiag, showPushDiag } from '../utils/pushDiagnostics';
 
@@ -249,6 +251,11 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
     const tsIds: string[] = Array.isArray(msg?.data?.tsIds)
         ? msg.data.tsIds.map((x: any) => String(x)).filter(Boolean)
         : [];
+    // 前端一并提供的「当前表格 testcase_id 有序快照」，用于失败行「删除后视图行号」计算
+    // 优先使用此数据（内存态、最新），磁盘解析仅作兜底
+    const tsIdOrderFromWebview: string[] = Array.isArray(msg?.data?.tsIdOrder)
+        ? msg.data.tsIdOrder.map((x: any) => String(x)).filter(Boolean)
+        : [];
     ctx.log(`🗑 deleteRows from webview tsIds=${JSON.stringify(tsIds)} filePath=${filePath}`);
     console.log(`[editor.deleteRows] 收到消息 tsIds=${JSON.stringify(tsIds)} filePath=${filePath}`);
     if (tsIds.length === 0) {
@@ -256,10 +263,45 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
         return;
     }
     try {
+        // 优先使用前端提供的 tsIdOrder；缺失时才降级为读磁盘（历史前端版本兼容）
+        let effectiveTsIdOrder: string[] = tsIdOrderFromWebview;
+        if (effectiveTsIdOrder.length === 0) {
+            try {
+                const fileType = detectFileType(filePath);
+                if (fileType) {
+                    const parser = createParser(fileType);
+                    const parsed = await parser.parse(filePath);
+                    const parsedHeaders: string[] = parsed?.tableData?.headers || [];
+                    const parsedRows: any[][] = parsed?.tableData?.rows || [];
+                    const tsIdxInFile = parsedHeaders.indexOf(TS_ID_COLUMN);
+                    if (tsIdxInFile >= 0) {
+                        effectiveTsIdOrder = [];
+                        for (let i = 0; i < parsedRows.length; i++) {
+                            const raw = parsedRows[i]?.[tsIdxInFile];
+                            const id = raw == null ? '' : String(raw).trim();
+                            if (id) effectiveTsIdOrder.push(id);
+                        }
+                    }
+                }
+            } catch (_pe) { /* 解析失败不阻断主流程，弹窗降级为不显示行号 */ }
+        }
+
         const result = await syncDeletedRows(filePath, tsIds);
-        // 不再使用独立弹窗反馈删除结果（与用户预期冲突：结果应在表格内行展示）。
-        // 统一把成功/失败的 tsId 回传前端，前端据此真正删除成功的行（接口失败的行保留不丢，
-        // 并在表格内以置灰+划线 + 失败原因标记），实现"表格内行展示"的反馈方式。
+
+        // 「删除后视图」行号：跳过成功行，其余行按新顺序 1-based 编号
+        // 用 tsId 反查每一条失败行在剩余表格中的位置
+        const syncedSet = new Set(result.synced.map(String));
+        const tsIdToPostRowIndex = new Map<string, number>();
+        let cursor = 0;
+        for (const id of effectiveTsIdOrder) {
+            if (syncedSet.has(id)) continue; // 成功行被删除，不占位
+            cursor++;
+            if (!tsIdToPostRowIndex.has(id)) tsIdToPostRowIndex.set(id, cursor);
+        }
+
+        // 一方面把成功/失败的 tsId 回传前端，前端据此真正删除成功行（失败行保留不丢，
+        // 并在表格内以置灰+划线 + 失败原因标记）；另一方面弹“删除结果”汇总弹窗
+        // （与文件删除的弹窗同款）罗列失败行及原因。
         const failedTsIds = result.failed.map(f => f.tsId);
         const reasonsById = new Map<string, string>();
         result.failed.forEach(f => reasonsById.set(f.tsId, f.reason));
@@ -274,6 +316,32 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
                 });
             }
         } catch (_e) { /* ignore */ }
+
+        // 弹删除结果弹窗（在当前案例编辑器内嵌 modal，同款样式；见 05f-delete-result.js）
+        try {
+            const failures: PushFailure[] = result.failed
+                .map(f => ({
+                    tsId: f.tsId,
+                    reason: f.reason || '线上删除失败',
+                    rowIndex: tsIdToPostRowIndex.get(f.tsId),
+                }))
+                // 按行号升序展示；无行号的排最后，其内部按 tsId 稳定排序
+                .sort((a, b) => {
+                    const ai = a.rowIndex == null ? Number.POSITIVE_INFINITY : a.rowIndex;
+                    const bi = b.rowIndex == null ? Number.POSITIVE_INFINITY : b.rowIndex;
+                    if (ai !== bi) return ai - bi;
+                    return String(a.tsId).localeCompare(String(b.tsId));
+                });
+            const panel = BaseEditorProvider.getPanel(filePath);
+            showDeleteResult(
+                panel,
+                path.basename(filePath || ''),
+                result.synced.length,
+                failures,
+                tsIds.length,
+            );
+        } catch (_e) { /* ignore */ }
+
         TelemetryService.sendTelemetryEvent('editor.deleteRows.synced', {
             syncedTotal: String(result.synced.length),
             failedRows: String(result.failed.length),
@@ -284,6 +352,22 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
             fileFormat: ctx.session.type,
             errorMessage: String(err?.message || String(err)).slice(0, 500),
         }));
+        // 兜底：把本次删除的所有 tsId 作为「失败」回传给前端，避免行永远停在
+        // "删除中（置灰+划线）" 的 pending 态直到用户 F5。前端 applyDeleteRowsResult
+        // 会清理 _pendingDeleteTsIds 并把行标为删除失败，同时展示接口异常原因。
+        try {
+            const panel = BaseEditorProvider.getPanel(filePath);
+            if (panel) {
+                const errText = String(err?.message || err || '删除接口调用异常');
+                const reasons: Array<[string, string]> = tsIds.map(id => [String(id), errText]);
+                panel.webview.postMessage({
+                    type: 'deleteRowsResult',
+                    synced: [],
+                    failed: tsIds.map(String),
+                    reasons,
+                });
+            }
+        } catch (_e) { /* ignore */ }
         vscode.window.showErrorMessage(`[${ctx.typeName}] 删除案例同步失败: ${err?.message || err}`);
     }
 }

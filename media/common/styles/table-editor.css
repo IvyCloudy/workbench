@@ -299,14 +299,13 @@ tbody tr.xs-tr-pending-delete td:not(.xs-td-cb){text-decoration:line-through}
 /* 待删除行禁止编辑（覆盖可编辑态光标） */
 tbody tr.xs-tr-pending-delete td.xs-editable{cursor:not-allowed}
 
-/* 删除失败行（接口返回失败，保留在表中）：红色系置灰 + 删除线，不可编辑，区别于"待删除中"的灰底 */
+/* 删除失败行（接口返回失败，保留在表中）：红色系置灰，不可编辑，区别于"待删除中"的灰底 */
 tbody tr.xs-tr-delete-failed{background:#fdecea;color:#b71c1c}
 tbody tr.xs-tr-delete-failed:hover{background:#f9d6d2}
 tbody tr.xs-tr-delete-failed td{background:#fdecea;color:#b71c1c}
 tbody tr.xs-tr-delete-failed:hover td{background:#f9d6d2}
 tbody tr.xs-tr-delete-failed td.xs-td-cb{background:#fdecea;box-shadow:inset 3px 0 0 #d32f2f}
 tbody tr.xs-tr-delete-failed:hover td.xs-td-cb{background:#f9d6d2}
-tbody tr.xs-tr-delete-failed td:not(.xs-td-cb){text-decoration:line-through}
 /* 删除失败行禁止编辑（覆盖可编辑态光标） */
 tbody tr.xs-tr-delete-failed td.xs-editable{cursor:not-allowed}
 
@@ -805,6 +804,9 @@ tbody tr.xs-tr-push-failed .xse-table .xse-td-id .xse-idx-dot,
 .xs-pr-row.is-link:hover{color:#005a9e}
 .xs-pr-reason{flex:1;color:#444;word-break:break-word;white-space:pre-wrap}
 .xs-pr-truncated{padding:8px 16px;font-size:12px;color:#888;background:#fafafa;border-top:1px solid #eee}
+
+/* ===== 删除结果弹窗：复用推送弹窗单行三列样式，仅放开长 tsId 的换行约束 ===== */
+#deleteResultModal .xs-pr-row{white-space:normal;word-break:break-all;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;max-width:none}
 
 /* ===== 明细弹窗 v2：左右双栏布局（步骤列表 + 字段卡片） ===== */
 .xs-detail-dialog-v2{width:90vw;max-width:1280px;height:82vh;max-height:82vh}

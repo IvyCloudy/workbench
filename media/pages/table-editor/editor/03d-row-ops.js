@@ -296,11 +296,24 @@ function deleteRow(ri) {
     _collectPendingDelete([rowToDelete]);
     renderTable();
     if (typeof S.vscode !== 'undefined' && S.vscode) {
-        // 携带当前表格中所有非空 tsId 的有序快照，供扩展端算「删除后视图行号」
-        // 避免扩展端重新读盘（磁盘可能滞后于内存）
-        var _tsIdOrder = _snapshotTsIdOrder();
-        console.log('[deleteRow] 发送 deleteRows 消息 tsIds=', JSON.stringify([tsId]));
-        S.vscode.postMessage({ type: 'deleteRows', data: { tsIds: [tsId], tsIdOrder: _tsIdOrder } });
+        // 谨慎操作：删除会同步删除 TMS 平台上的案例，先弹窗确认
+        var _doDelete = function () {
+            // 携带当前表格中所有非空 tsId 的有序快照，供扩展端算「删除后视图行号」
+            // 避免扩展端重新读盘（磁盘可能滞后于内存）
+            var _tsIdOrder = _snapshotTsIdOrder();
+            console.log('[deleteRow] 发送 deleteRows 消息 tsIds=', JSON.stringify([tsId]));
+            S.vscode.postMessage({ type: 'deleteRows', data: { tsIds: [tsId], tsIdOrder: _tsIdOrder } });
+        };
+        if (typeof xsConfirm === 'function') {
+            xsConfirm({
+                title: '删除案例',
+                message: '谨慎操作：删除该行会同步删除 TMS 平台上的对应案例，是否继续删除？',
+                type: 'warning',
+                okText: '继续删除',
+            }, _doDelete);
+        } else {
+            _doDelete();
+        }
     } else {
         console.log('[deleteRow] 未发送 deleteRows 消息（无 vscode 对象）tsId=', tsId);
     }
@@ -323,55 +336,76 @@ function deleteSelectedRows() {
         else localRows.push(i);
     });
 
-    // 1) 纯本地行直接物理删除
-    localRows.forEach(function (i) {
-        S.data.rows.splice(i, 1);
-        var ddts = getDetailTables();
-        ddts.forEach(function (dt) {
-            if (!dt) return;
-            if (dt.rowGroups) dt.rowGroups.splice(i, 1);
-            if (dt.rawRowGroups) dt.rawRowGroups.splice(i, 1);
-            if (dt.rawRowTypes) dt.rawRowTypes.splice(i, 1);
-        });
-        _shiftRowIdxHighlights('delete', i);
-        if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
-            var nrh = {};
-            for (var rk in S.rowHeights) {
-                if (!S.rowHeights.hasOwnProperty(rk)) continue;
-                var ri2 = parseInt(rk, 10);
-                if (isNaN(ri2)) continue;
-                if (ri2 === i) continue;
-                nrh[ri2 > i ? ri2 - 1 : ri2] = S.rowHeights[rk];
+    // 谨慎操作：只要本次删除涉及"已推送案例"（删除会同步删除 TMS 平台上的案例），
+    // 就先弹窗确认；纯本地未推送行不涉及 TMS，无需确认。
+    var _needConfirm = pendingRows.length > 0;
+    var _doDeleteSelected = function () {
+        // 1) 纯本地行直接物理删除
+        localRows.forEach(function (i) {
+            S.data.rows.splice(i, 1);
+            var ddts = getDetailTables();
+            ddts.forEach(function (dt) {
+                if (!dt) return;
+                if (dt.rowGroups) dt.rowGroups.splice(i, 1);
+                if (dt.rawRowGroups) dt.rawRowGroups.splice(i, 1);
+                if (dt.rawRowTypes) dt.rawRowTypes.splice(i, 1);
+            });
+            _shiftRowIdxHighlights('delete', i);
+            if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
+                var nrh = {};
+                for (var rk in S.rowHeights) {
+                    if (!S.rowHeights.hasOwnProperty(rk)) continue;
+                    var ri2 = parseInt(rk, 10);
+                    if (isNaN(ri2)) continue;
+                    if (ri2 === i) continue;
+                    nrh[ri2 > i ? ri2 - 1 : ri2] = S.rowHeights[rk];
+                }
+                S.rowHeights = nrh;
             }
-            S.rowHeights = nrh;
+            if (S._rowExpanded && S._rowExpanded.size > 0) {
+                var nre = new Set();
+                S._rowExpanded.forEach(function (x) { if (x !== i) nre.add(x > i ? x - 1 : x); });
+                S._rowExpanded = nre;
+            }
+        });
+
+        // 2) 已推送行：标记待删（置灰+划线），收集 tsId 待发消息
+        var pendingTsIds = [];
+        if (pendingRows.length > 0) {
+            pendingTsIds = _collectPendingDelete(pendingRows);
         }
-        if (S._rowExpanded && S._rowExpanded.size > 0) {
-            var nre = new Set();
-            S._rowExpanded.forEach(function (x) { if (x !== i) nre.add(x > i ? x - 1 : x); });
-            S._rowExpanded = nre;
+
+        S.sel.clear();
+        S.cellSel = null;
+        // 本地行已删，需落盘；待删行仅标记未删，也需 renderTable 展示置灰
+        saveFile();
+        renderTable();
+
+        // 3) 发消息让扩展端调删除接口；回包后由 applyDeleteRowsResult 真正删成功的行
+        if (pendingTsIds.length > 0 && typeof S.vscode !== 'undefined' && S.vscode) {
+            // 携带当前表格中所有非空 tsId 的有序快照，供扩展端算「删除后视图行号」
+            var _tsIdOrder2 = _snapshotTsIdOrder();
+            console.log('[deleteSelectedRows] 发送 deleteRows 消息 tsIds=', JSON.stringify(pendingTsIds));
+            S.vscode.postMessage({ type: 'deleteRows', data: { tsIds: pendingTsIds, tsIdOrder: _tsIdOrder2 } });
+        } else {
+            console.log('[deleteSelectedRows] 未发送 deleteRows 消息 pendingTsIds=', JSON.stringify(pendingTsIds));
         }
-    });
+    };
 
-    // 2) 已推送行：标记待删（置灰+划线），收集 tsId 待发消息
-    var pendingTsIds = [];
-    if (pendingRows.length > 0) {
-        pendingTsIds = _collectPendingDelete(pendingRows);
-    }
-
-    S.sel.clear();
-    S.cellSel = null;
-    // 本地行已删，需落盘；待删行仅标记未删，也需 renderTable 展示置灰
-    saveFile();
-    renderTable();
-
-    // 3) 发消息让扩展端调删除接口；回包后由 applyDeleteRowsResult 真正删成功的行
-    if (pendingTsIds.length > 0 && typeof S.vscode !== 'undefined' && S.vscode) {
-        // 携带当前表格中所有非空 tsId 的有序快照，供扩展端算「删除后视图行号」
-        var _tsIdOrder2 = _snapshotTsIdOrder();
-        console.log('[deleteSelectedRows] 发送 deleteRows 消息 tsIds=', JSON.stringify(pendingTsIds));
-        S.vscode.postMessage({ type: 'deleteRows', data: { tsIds: pendingTsIds, tsIdOrder: _tsIdOrder2 } });
+    if (_needConfirm) {
+        if (typeof xsConfirm === 'function') {
+            xsConfirm({
+                title: '删除案例',
+                message: '谨慎操作：删除选中行会同步删除 TMS 平台上的对应案例，是否继续删除？',
+                type: 'warning',
+                okText: '继续删除',
+            }, _doDeleteSelected);
+        } else {
+            _doDeleteSelected();
+        }
     } else {
-        console.log('[deleteSelectedRows] 未发送 deleteRows 消息 pendingTsIds=', JSON.stringify(pendingTsIds));
+        // 仅本地行，无 TMS 同步风险，直接执行
+        _doDeleteSelected();
     }
 }
 

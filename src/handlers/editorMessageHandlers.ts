@@ -26,6 +26,7 @@ import { applyDiffHighlight, type EditorSession } from '../services/diffHighligh
 import { getMarks, setMarks, clearMarks } from '../utils/markStore';
 import { getHeaderLabels, onHeaderLabelsChange } from '../utils/headerLabels';
 import { showSaveResult, showPushErrorModal, showDeleteResult, type PushFailure } from '../utils/message';
+import { resolveDeleteConfirm } from './workspaceListeners';
 import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { TelemetryService } from '../utils/telemetry';
@@ -75,6 +76,7 @@ function buildHandlers(): Record<string, Handler> {
         setMarkRects: handleSetMarkRects,
         clearAllMarks: handleClearAllMarks,
         deleteRows: handleDeleteRows,
+        confirmResult: handleConfirmResult,
     };
 }
 
@@ -313,6 +315,9 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
                     synced: result.synced,
                     failed: failedTsIds,
                     reasons: Array.from(reasonsById.entries()),
+                    // 汇总分档：区分 type=1（删除成功）与 type=3（sourceId 不存在，仍算成功）
+                    deletedSuccess: result.deletedSuccess,
+                    deletedSourceMissing: result.deletedSourceMissing,
                 });
             }
         } catch (_e) { /* ignore */ }
@@ -339,12 +344,18 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
                 result.synced.length,
                 failures,
                 tsIds.length,
+                undefined,
+                result.deletedSuccess.length,
+                result.deletedSourceMissing.length,
             );
         } catch (_e) { /* ignore */ }
 
         TelemetryService.sendTelemetryEvent('editor.deleteRows.synced', {
             syncedTotal: String(result.synced.length),
             failedRows: String(result.failed.length),
+            // 汇总分档：区分 type=1 / type=3（均计入 synced，但口径不同）
+            deletedSuccess: String(result.deletedSuccess.length),
+            deletedSourceMissing: String(result.deletedSourceMissing.length),
         });
     } catch (err: any) {
         console.error('[editor.deleteRows] 同步失败:', err?.message || err);
@@ -404,5 +415,16 @@ async function handleDispatchError(err: any, msg: any, ctx: EditorMsgCtx): Promi
         }
     } else {
         vscode.window.showErrorMessage(`[${ctx.typeName}] ${errMsg}`);
+    }
+}
+
+/**
+ * webview 内"文件删除确认"结果回传（requestConfirm 的回调）。
+ * 由 BaseEditorProvider 对应 panel 的 onDidReceiveMessage 路由而来，
+ * 调用 workspaceListeners.resolveDeleteConfirm 解除 onWillDeleteFiles 的 waitUntil。
+ */
+async function handleConfirmResult(msg: any, _ctx: EditorMsgCtx): Promise<void> {
+    if (msg && typeof msg.requestId === 'string') {
+        resolveDeleteConfirm(msg.requestId, !!msg.confirmed);
     }
 }

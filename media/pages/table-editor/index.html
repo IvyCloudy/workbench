@@ -208,11 +208,12 @@
     <!-- 通用 prompt / confirm 模态（替代受 sandbox 限制的 window.prompt / window.confirm） -->
     <div class="xs-modal-overlay" id="xsPromptModal">
         <div class="xs-modal-dialog" style="width:380px;max-height:none">
-            <div class="xs-modal-header">
-                <span class="xs-modal-title" id="xsPromptTitle">请输入</span>
+            <div class="xs-modal-header xs-prompt-header" id="xsPromptHeader">
+                <span class="xs-modal-title xs-prompt-title" id="xsPromptTitle">请输入</span>
                 <button class="xs-modal-close" id="xsPromptClose" title="关闭">✕</button>
             </div>
             <div class="xs-modal-body" style="padding:16px;min-height:auto">
+                <div class="xs-prompt-message" id="xsPromptMessage" style="display:none"></div>
                 <input type="text" id="xsPromptInput" style="width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:3px;outline:none;font-size:13px">
             </div>
             <div class="xs-modal-footer">

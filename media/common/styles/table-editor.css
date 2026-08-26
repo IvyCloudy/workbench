@@ -1,6 +1,6 @@
 /* 表格编辑器样式 */
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#fff;--tl:#666;--bd:#ddd;--p:#0078d4;--s:#107c10;--d:#e34d59;--w:#f29d39;--sh:0 2px 8px rgba(0,0,0,.1)}
+:root{--bg:#fff;--tl:#666;--bd:#ddd;--p:#0078d4;--s:#107c10;--d:#d06b76;--w:#f29d39;--sh:0 2px 8px rgba(0,0,0,.1)}
 body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:var(--bg);color:#333;overflow:hidden}
 
 /* 应用布局 */
@@ -499,6 +499,33 @@ tbody tr.xs-tr-frozen.selected td.xs-td{background:#dde7f3}
 .xs-modal-close:hover{background:#e0e0e0;color:#333}
 .xs-modal-body{flex:1;overflow:auto;padding:8px 0;min-height:120px}
 .xs-modal-footer{display:flex;align-items:center;justify-content:flex-end;padding:8px 16px;border-top:1px solid var(--bd);gap:8px;flex-shrink:0}
+
+/* ===== 通用 prompt/confirm 弹窗：标题靠左 + 类型化配色 ===== */
+/* 标题左对齐、加粗、加大字号，并通过 .xs-prompt-type-warning / danger 切换配色 */
+.xs-prompt-header{justify-content:flex-start;position:relative;padding:14px 16px}
+.xs-prompt-header .xs-modal-close{position:absolute;right:8px;top:50%;transform:translateY(-50%)}
+.xs-prompt-title{font-size:16px;font-weight:700;letter-spacing:1px;flex:0 0 auto;display:flex;align-items:center;gap:8px;color:#333}
+/* 标题前缀的「!」圆形图标：warning 用橙色背景、danger 用红色背景、其它类型不显示 */
+.xs-prompt-title::before{content:'';display:inline-block;width:22px;height:22px;border-radius:50%;background:var(--p,#0078d4);color:#fff;font-size:14px;font-weight:700;line-height:22px;text-align:center;flex-shrink:0}
+.xs-prompt-type-warning .xs-prompt-title::before{background:#f29d39;content:'!'}
+.xs-prompt-type-danger .xs-prompt-title::before{background:#d06b76;content:'!'}
+.xs-prompt-type-warning .xs-prompt-title{color:#333}
+.xs-prompt-type-danger .xs-prompt-title{color:#333}
+.xs-prompt-message{font-size:13px;line-height:1.7;color:#333;padding:0 4px 8px;word-break:break-word;white-space:pre-wrap}
+/* 背景与主按钮使用 ID+类 提高选择器权重，避免被通用 .xs-modal-header / .xs-btn-p 覆盖 */
+#xsPromptHeader.xs-prompt-type-warning{background:#fdf3e3;border-bottom:1px solid #f5e1c1}
+#xsPromptHeader.xs-prompt-type-danger{background:#fbe6e9;border-bottom:1px solid #f0c8cc}
+/* warning 类型的主按钮：橙色（与头部图标一致），danger 类型用柔和红色（与之前调整的 --d 一致） */
+#xsPromptModal.xs-prompt-type-warning .xs-btn-p,
+#xsPromptModal .xs-prompt-type-warning .xs-btn-p,
+#xsPromptModal.xs-prompt-type-warning .xs-modal-footer .xs-btn-p{background:#f29d39;border-color:#f29d39}
+#xsPromptModal.xs-prompt-type-warning .xs-btn-p:hover,
+#xsPromptModal .xs-prompt-type-warning .xs-btn-p:hover{background:#e08820;border-color:#e08820}
+#xsPromptModal.xs-prompt-type-danger .xs-btn-p,
+#xsPromptModal .xs-prompt-type-danger .xs-btn-p,
+#xsPromptModal .xs-modal-footer .xs-btn-p{background:#b15a62;border-color:#b15a62}
+#xsPromptModal.xs-prompt-type-danger .xs-btn-p:hover,
+#xsPromptModal .xs-prompt-type-danger .xs-btn-p:hover{background:#9e4f57;border-color:#9e4f57}
 
 /* 明细表格 */
 .xs-detail-table{border-collapse:collapse;table-layout:fixed;width:100%;font-size:12px}

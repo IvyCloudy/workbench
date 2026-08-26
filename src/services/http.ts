@@ -424,7 +424,11 @@ export async function pushTestCase(
  *
  * 出参与推送接口（pushTestCase）保持一致：
  *   - 外层：returnCode / errorMsg / body
- *   - body[]：{ data, sourceId, type }，type:'1' 成功 / type:'2' 失败
+ *   - body[]：{ data, sourceId, type }，type 取值：
+ *       '1' 成功（sourceId 真实存在并已删除）
+ *       '2' 失败（调用方放入 failed，本地保留可重试）
+ *       '3' sourceId 不存在 —— 仍视为删除成功，本地同样清理，
+ *           但汇总口径上需与 type=1 区分（见 deletedRowsStore.SyncDeletedResult）
  *
  * @returns 后端原始响应（ApiResponse），由调用方解析 body 逐条结果。
  */

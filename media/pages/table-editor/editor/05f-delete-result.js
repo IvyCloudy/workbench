@@ -11,7 +11,9 @@
  *     successCount: number,
  *     failures: [{ rowIndex?, tsId, reason }],
  *     total: number,
- *     error?: string }        // 流程级错误（如"接口不可达"），有此字段时按纯错误分支渲染
+ *     error?: string,           // 流程级错误（如"接口不可达"），有此字段时按纯错误分支渲染
+ *     deletedSuccess?: number,        // type=1 线上真实删除成功数
+ *     deletedSourceMissing?: number } // type=3 sourceId 不存在、仍算删除成功数
  * ========================================================================== */
 
 var __DR_MAX_INLINE = 200; // 列表最多渲染条数，超出折叠
@@ -25,6 +27,9 @@ function showDeleteResultModal(payload) {
     var successCount = p.successCount || 0;
     var failures = Array.isArray(p.failures) ? p.failures : [];
     var total = (p.total != null) ? p.total : (successCount + failures.length);
+    // type 分档：deletedSuccess=type=1（线上真实删除），deletedSourceMissing=type=3（线上不存在，仍算成功）
+    var deletedSuccess = (p.deletedSuccess != null) ? Number(p.deletedSuccess) : successCount;
+    var deletedSourceMissing = (p.deletedSourceMissing != null) ? Number(p.deletedSourceMissing) : 0;
 
     var header = document.getElementById('deleteResultHeader');
     var iconEl = document.getElementById('deleteResultIcon');
@@ -59,18 +64,36 @@ function showDeleteResultModal(payload) {
         titleEl.textContent = titleText + (fileName ? ('：' + fileName) : '');
     }
 
-    // 概要：总计 / 成功 / 失败
+    // 概要：总计 / 成功（真实删除）/ 线上不存在（仍算成功）/ 失败
+    //   - deletedSuccess：type=1 线上真实删除成功
+    //   - deletedSourceMissing：type=3 sourceId 不存在，但本地同样清理，仍计入成功总数
+    //   - 不变量：deletedSuccess + deletedSourceMissing === successCount
     if (summaryEl) {
-        summaryEl.innerHTML =
+        var summaryHtml =
             '<span class="xs-pr-summary-item">总计 <span class="xs-pr-num">' + total + '</span></span>' +
-            '<span class="xs-pr-summary-item">成功 <span class="xs-pr-num is-success">' + successCount + '</span></span>' +
-            '<span class="xs-pr-summary-item">失败 <span class="xs-pr-num is-failed">' + failures.length + '</span></span>';
+            '<span class="xs-pr-summary-item">删除成功 <span class="xs-pr-num is-success">' + successCount + '</span></span>';
+        if (deletedSourceMissing > 0) {
+            // 当有"线上不存在"时，把成功拆成两档，便于用户区分"真删"与"本就无"
+            summaryHtml =
+                '<span class="xs-pr-summary-item">总计 <span class="xs-pr-num">' + total + '</span></span>' +
+                '<span class="xs-pr-summary-item">成功(线上删除) <span class="xs-pr-num is-success">' + deletedSuccess + '</span></span>' +
+                '<span class="xs-pr-summary-item">线上不存在 <span class="xs-pr-num is-missing">' + deletedSourceMissing + '</span></span>';
+        }
+        summaryHtml += '<span class="xs-pr-summary-item">失败 <span class="xs-pr-num is-failed">' + failures.length + '</span></span>';
+        summaryEl.innerHTML = summaryHtml;
     }
 
     // 失败明细列表
     if (listEl) {
         if (failures.length === 0) {
-            listEl.innerHTML = '<div class="xs-pr-empty">全部 ' + successCount + ' 条案例删除成功 🎉</div>';
+            // 纯成功：若含"线上不存在"分档，文案显式区分
+            if (deletedSourceMissing > 0) {
+                listEl.innerHTML = '<div class="xs-pr-empty">共 ' + successCount + ' 条删除成功 🎉'
+                    + '（其中 ' + deletedSuccess + ' 条线上真实删除，'
+                    + deletedSourceMissing + ' 条线上本不存在已同步清理）</div>';
+            } else {
+                listEl.innerHTML = '<div class="xs-pr-empty">全部 ' + successCount + ' 条案例删除成功 🎉</div>';
+            }
         } else {
             var renderCount = Math.min(failures.length, __DR_MAX_INLINE);
             var html = '';

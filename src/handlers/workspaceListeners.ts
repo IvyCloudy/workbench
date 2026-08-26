@@ -33,11 +33,87 @@ import { detectFileType, createParser } from '../parsers';
 import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { TS_ID_COLUMN } from '../services/utils';
 import { TelemetryService } from '../utils/telemetry';
-import { showDeleteResult } from '../utils/message';
+import { showDeleteResult, showConfirmDialog } from '../utils/message';
 import type { PushFailure } from '../utils/message';
 
 /** 案例编辑器 viewType（保持与 BaseEditorProvider 注册值一致） */
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
+
+/**
+ * 用户在删除前确认框中点击「取消」时抛出，外层 onWillDeleteFiles 的 .catch 会识别它，
+ * 静默放弃删除（不重建文件、不报错、不弹窗），使文件保持原样。
+ */
+class UserCancelledDeleteError extends Error {
+    constructor(public readonly filePath: string) {
+        super('用户取消删除');
+        this.name = 'UserCancelledDeleteError';
+    }
+}
+
+/**
+ * 文件删除确认的 pending 解析器表：requestId -> { resolve, timer }。
+ * webview 在已打开的案例文件中弹确认框，用户点击后回传 confirmResult，
+ * 由 resolveDeleteConfirm 触发对应 promise，使 onWillDeleteFiles 的 waitUntil 落地。
+ */
+interface PendingDeleteConfirm {
+    resolve: (confirmed: boolean) => void;
+    timer: NodeJS.Timeout;
+}
+const pendingDeleteConfirms = new Map<string, PendingDeleteConfirm>();
+
+/** 供 editorMessageHandlers 回传 webview 内的"文件删除确认"结果 */
+export function resolveDeleteConfirm(requestId: string, confirmed: boolean): void {
+    const entry = pendingDeleteConfirms.get(requestId);
+    if (!entry) return;
+    pendingDeleteConfirms.delete(requestId);
+    clearTimeout(entry.timer);
+    entry.resolve(confirmed);
+}
+
+/**
+ * 删除案例文件前的二次确认：删除会同步删除 TMS 平台上的全部案例，必须显式确认。
+ *
+ * 优先在「已打开该文件的案例编辑器 webview」内弹确认框（复用 xsConfirm 的 warning 样式：
+ * 浅橙头部 + 橙色"!"圆形图标 + 橙色"继续删除"按钮），不额外开新 tab；
+ * 仅当该文件并未在编辑器打开时，才回退到独立 webview 模态弹窗（showConfirmDialog）。
+ *
+ * @returns true=继续删除，false=用户取消。
+ */
+async function confirmCaseFileDelete(filePath: string, caseCount: number): Promise<boolean> {
+    const fileName = path.basename(filePath);
+    const message =
+        `谨慎操作：删除「${fileName}」将同步删除 TMS 平台上的 ${caseCount} 条案例，` +
+        `此操作不可恢复。是否继续删除？`;
+
+    const panel = BaseEditorProvider.getPanel(filePath);
+    if (panel) {
+        const requestId = `del-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        return await new Promise<boolean>((resolve) => {
+            const timer = setTimeout(() => {
+                if (pendingDeleteConfirms.delete(requestId)) resolve(false); // 兜底：超时视为取消
+            }, 60_000);
+            pendingDeleteConfirms.set(requestId, { resolve, timer });
+            panel.webview.postMessage({
+                type: 'requestConfirm',
+                requestId,
+                title: '删除案例',
+                message,
+                confirmType: 'warning',
+                okText: '继续删除',
+                cancelText: '取消',
+            });
+        });
+    }
+
+    // 兜底：文件未在编辑器打开，用独立 webview 面板弹同款样式弹窗
+    return await showConfirmDialog({
+        type: 'warning',
+        title: '删除案例',
+        message,
+        okText: '继续删除',
+        cancelText: '取消',
+    });
+}
 
 /** 若某文件的扩展名属于 point/case 绑定域，才有必要通知绑定库 */
 function isBindingRelevant(fp: string): boolean {
@@ -72,6 +148,10 @@ interface WillDeleteResult {
     restoreSourceData: any;
     total: number;
     successCount: number;
+    /** type=1 线上真实删除成功数（与 deletedSourceMissing 之和 === successCount） */
+    deletedSuccess: number;
+    /** type=3 sourceId 不存在、仍算删除成功数 */
+    deletedSourceMissing: number;
     /** 逐条失败明细（tsId + 原因） */
     failures: PushFailure[];
     /** 是否弹出"删除结果"modal（无 testcase_id 或无案例行的文件不弹） */
@@ -168,6 +248,12 @@ export function registerWorkspaceListeners(_context: vscode.ExtensionContext): v
                             DELETE_INTERCEPT_TIMEOUT_MS);
                     }),
                 ]).catch(err => {
+                    // 用户主动取消删除：reject waitUntil 以中止本次文件删除（VSCode 会保留文件）。
+                    // 消息以中性措辞呈现，仅作为反馈，不算异常。
+                    if (err instanceof UserCancelledDeleteError) {
+                        console.log('[workspaceListeners] 用户取消删除案例文件:', path.basename(fp));
+                        throw err;
+                    }
                     console.error('[workspaceListeners] 案例文件删除拦截异常:', err?.message || err);
                     TelemetryService.sendTelemetryErrorEvent('caseFileDelete.intercept.error', {
                         errorMessage: String(err?.message || err).slice(0, 500),
@@ -182,6 +268,8 @@ export function registerWorkspaceListeners(_context: vscode.ExtensionContext): v
                         restoreSourceData: null,
                         total: 0,
                         successCount: 0,
+                        deletedSuccess: 0,
+                        deletedSourceMissing: 0,
                         failures: [],
                         reportable: true,
                         error: `拦截异常: ${err?.message || err}`,
@@ -295,6 +383,8 @@ async function handleCaseFileWillDelete(filePath: string): Promise<void> {
             restoreSourceData: sourceData,
             total: 0,
             successCount: 0,
+            deletedSuccess: 0,
+            deletedSourceMissing: 0,
             failures: [],
             reportable: false,
         });
@@ -316,14 +406,23 @@ async function handleCaseFileWillDelete(filePath: string): Promise<void> {
             restoreSourceData: sourceData,
             total: rows.length,
             successCount: rows.length,
+            deletedSuccess: 0,
+            deletedSourceMissing: 0,
             failures: [],
             reportable: true,
         });
         return;
     }
 
+    // 谨慎操作：删除案例文件会同步删除 TMS 平台上的全部案例，先向用户确认。
+    // 用户取消 → 抛出 UserCancelledDeleteError，由外层 .catch 静默放弃删除（文件保留）。
+    const confirmed = await confirmCaseFileDelete(filePath, nonEmptyIds.length);
+    if (!confirmed) {
+        throw new UserCancelledDeleteError(filePath);
+    }
+
     // 调用同款删除入口（内部会读取任务上下文、调 deleteTestCase 接口、维护本地记录）
-    let syncResult: { synced: string[]; failed: Array<{ tsId: string; reason: string }> };
+    let syncResult: { synced: string[]; failed: Array<{ tsId: string; reason: string }>; deletedSuccess: string[]; deletedSourceMissing: string[] };
     try {
         syncResult = await syncDeletedRows(filePath, nonEmptyIds);
     } catch (err: any) {
@@ -346,6 +445,8 @@ async function handleCaseFileWillDelete(filePath: string): Promise<void> {
             restoreSourceData: sourceData,
             total: nonEmptyIds.length,
             successCount: 0,
+            deletedSuccess: 0,
+            deletedSourceMissing: 0,
             failures,
             reportable: true,
             error: err?.message || String(err),
@@ -410,6 +511,8 @@ async function handleCaseFileWillDelete(filePath: string): Promise<void> {
             restoreSourceData: finalSource,
             total: nonEmptyIds.length,
             successCount,
+            deletedSuccess: syncResult.deletedSuccess.length,
+            deletedSourceMissing: syncResult.deletedSourceMissing.length,
             failures: [],
             reportable: true,
         });
@@ -423,6 +526,8 @@ async function handleCaseFileWillDelete(filePath: string): Promise<void> {
             restoreSourceData: finalSource,
             total: nonEmptyIds.length,
             successCount,
+            deletedSuccess: syncResult.deletedSuccess.length,
+            deletedSourceMissing: syncResult.deletedSourceMissing.length,
             failures,
             reportable: true,
         });
@@ -490,7 +595,7 @@ async function showDeleteResultModal(r: WillDeleteResult): Promise<void> {
                 await BaseEditorProvider.waitReady(r.filePath, 3000);
             } catch (_) { /* ignore：超时也尝试 post，前端已就绪的场景下仍能收到 */ }
         }
-        showDeleteResult(panel, r.fileName, r.successCount, r.failures, r.total, r.error);
+        showDeleteResult(panel, r.fileName, r.successCount, r.failures, r.total, r.error, r.deletedSuccess, r.deletedSourceMissing);
     } catch (err: any) {
         console.warn('[workspaceListeners] 弹出删除结果失败:', err?.message || err);
         // 兜底：直接原生通知

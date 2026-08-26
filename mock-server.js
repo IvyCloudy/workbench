@@ -295,10 +295,23 @@ var server = http.createServer(function (req, res) {
                 _ts, testTaskNo || '(未提供)', subTestTaskId || '(未提供)', sourceIds.length, JSON.stringify(sourceIds));
             console.log('  UA=%s remote=%s:%s', req.headers['user-agent'] || '(无)', req.socket.remoteAddress, req.socket.remotePort);
 
-            // 逐条返回删除结果：type:'1' 成功，type:'2' 失败
+            // 逐条返回删除结果：type:'1' 成功 / type:'2' 失败 / type:'3' sourceId 不存在
+            // 模拟分布：第 3 条（索引 i%3===2）视为 sourceId 不存在 → type:'3'
+            //           其余按 FAIL_RATIO 概率返回 type:'1' / type:'2'
             var FAIL_RATIO = 0.5;
             var failCount = 0;
+            var missingCount = 0;
             var resultBody = sourceIds.map(function (id, i) {
+                // sourceId 以 "MISSING" 开头，或直接是第 3 条（i%3===2）→ 模拟线上不存在
+                var isMissing = /^MISSING/i.test(String(id)) || (sourceIds.length >= 3 && i % 3 === 2);
+                if (isMissing) {
+                    missingCount++;
+                    return {
+                        data: 'sourceId 不存在',
+                        sourceId: String(id),
+                        type: '3'
+                    };
+                }
                 var shouldFail = FAIL_RATIO > 0 && (
                     sourceIds.length === 1
                         ? true
@@ -318,6 +331,9 @@ var server = http.createServer(function (req, res) {
                     type: '2'
                 };
             });
+            if (failCount > 0 || missingCount > 0) {
+                console.log('  模拟结果: 失败 %d / 不存在 %d / 共 %d 条', failCount, missingCount, sourceIds.length);
+            }
             if (failCount > 0) {
                 console.log('  模拟失败: %d / %d 条 (FAIL_RATIO=%s)', failCount, sourceIds.length, FAIL_RATIO);
             }

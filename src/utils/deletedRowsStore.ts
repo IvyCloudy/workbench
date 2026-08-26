@@ -49,10 +49,22 @@ export interface DeletedRowRecord {
 
 /** 同步结果 */
 export interface SyncDeletedResult {
-    /** 同步成功的 tsId 列表 */
+    /**
+     * 同步成功的 tsId 列表（本地视为删除成功，会清除追踪记录与快照）。
+     * 包含 type=1（线上删除成功）与 type=3（sourceId 不存在，仍算删除成功）两类。
+     */
     synced: string[];
-    /** 同步失败的 tsId 列表（含原因） */
+    /** 同步失败的 tsId 列表（含原因），仅对应接口返回 type=2 */
     failed: Array<{ tsId: string; reason: string }>;
+    /**
+     * 删除成功-汇总分档（新增，用于结果汇总时区分两种"成功"来源）：
+     *   - deletedSuccess      type=1 线上删除成功（sourceId 真实存在并已删除）
+     *   - deletedSourceMissing type=3 sourceId 不存在，但按需求仍视为删除成功
+     *                          （本地标记删除 / 清理，仅汇总口径上区分于 type=1）
+     * 二者并集 === synced；failed 仅对应 type=2。
+     */
+    deletedSuccess: string[];
+    deletedSourceMissing: string[];
 }
 
 // ============================================
@@ -216,7 +228,7 @@ export async function syncDeletedRows(
     filePath: string,
     tsIds?: string[],
 ): Promise<SyncDeletedResult> {
-    if (!filePath) return { synced: [], failed: [] };
+    if (!filePath) return { synced: [], failed: [], deletedSuccess: [], deletedSourceMissing: [] };
 
     // 确定要同步的行
     let targetIds: string[];
@@ -227,15 +239,23 @@ export async function syncDeletedRows(
         targetIds = pending.map(r => r.tsId);
     }
     if (targetIds.length === 0) {
-        return { synced: [], failed: [] };
+        return { synced: [], failed: [], deletedSuccess: [], deletedSourceMissing: [] };
     }
 
     const synced: string[] = [];
+    /** type=1：线上删除成功（sourceId 真实存在并已删除） */
+    const deletedSuccess: string[] = [];
+    /** type=3：sourceId 不存在，但仍视为删除成功（本地清理） */
+    const deletedSourceMissing: string[] = [];
     const failed: Array<{ tsId: string; reason: string }> = [];
 
     // ---- 调用线上删除接口（POST /test-task/delete-testcase） ----
     //   入参：testTaskNo / subTestTaskId / sourceIds（即待删除案例的 testcase_id 列表）
-    //   出参：body[] 中每项含 sourceId 与 type（'1' 成功 / '2' 失败），与推送接口一致
+    //   出参：body[] 中每项含 sourceId 与 type，type 取值：
+    //     '1' 成功（sourceId 真实存在并已删除）
+    //     '2' 失败（放入 failed，不清除本地追踪，可重试）
+    //     '3' sourceId 不存在 —— 按需求仍视为"删除成功"，本地同样清理，
+    //         但汇总时通过 deletedSourceMissing 与 type=1 的 deletedSuccess 区分
     try {
         if (!cachedContext) {
             throw new Error('已删除行存储尚未初始化（请确认扩展已激活）');
@@ -260,19 +280,33 @@ export async function syncDeletedRows(
         }
 
         // 依据 body 逐条 type 判定成功/失败；sourceId 对应 testcase_id
-        const resultBody: Array<{ sourceId?: string; type?: string }> = Array.isArray(resp.body) ? resp.body : [];
+        //   - type='2' 失败的失败原因使用接口返回的 data 字段（更贴合后端实际语义）
+        const resultBody: Array<{ sourceId?: string; type?: string; data?: any }> = Array.isArray(resp.body) ? resp.body : [];
         const typeBySourceId = new Map<string, string>();
+        const dataBySourceId = new Map<string, any>();
         for (const item of resultBody) {
             const sid = String(item?.sourceId ?? '').trim();
-            if (sid) typeBySourceId.set(sid, String(item?.type ?? ''));
+            if (!sid) continue;
+            typeBySourceId.set(sid, String(item?.type ?? ''));
+            if (item?.data != null) dataBySourceId.set(sid, item.data);
         }
 
         for (const id of targetIds) {
             const t = typeBySourceId.get(id);
             if (t === '1') {
+                // 线上删除成功：清理本地追踪与快照
                 synced.push(id);
+                deletedSuccess.push(id);
+            } else if (t === '3') {
+                // sourceId 不存在：按需求仍视为删除成功，本地同样清理，
+                // 但汇总分档到 deletedSourceMissing，便于区分"线上本就没有这条"的情况
+                synced.push(id);
+                deletedSourceMissing.push(id);
             } else if (t === '2') {
-                failed.push({ tsId: id, reason: '线上删除失败（接口返回 type=2）' });
+                // 失败原因取接口返回的 data（兜底文案仅在接口未给 data 时使用）
+                const failData = dataBySourceId.get(id);
+                const reason = failData != null ? String(failData) : '线上删除失败';
+                failed.push({ tsId: id, reason });
             } else {
                 // 接口未返回该 sourceId 的结果，按失败保守处理
                 failed.push({ tsId: id, reason: '线上删除结果缺失（接口未返回该 sourceId）' });
@@ -310,7 +344,7 @@ export async function syncDeletedRows(
         console.log(`[DeletedRowsStore] 已同步并清除 ${synced.length} 行: ${filePath}`);
     }
 
-    return { synced, failed };
+    return { synced, failed, deletedSuccess, deletedSourceMissing };
 }
 
 /**

@@ -49,16 +49,24 @@ export async function handleSyncDeletedRows(): Promise<void> {
                 synced: result.synced,
                 failed: failedTsIds,
                 reasons,
+                // 汇总分档：区分 type=1（删除成功）与 type=3（sourceId 不存在，仍算成功）
+                deletedSuccess: result.deletedSuccess,
+                deletedSourceMissing: result.deletedSourceMissing,
             });
         } else {
             // 无面板（文件未打开）时，退化为 toast 提示，避免静默无反馈
             const msg = `已同步删除 ${result.synced.length} 行` +
-                (result.failed.length > 0 ? `，${result.failed.length} 行失败` : '');
+                (result.failed.length > 0 ? `，${result.failed.length} 行失败` : '') +
+                (result.deletedSourceMissing.length > 0
+                    ? `（其中 ${result.deletedSourceMissing.length} 行 sourceId 不存在）` : '');
             showToast(undefined, result.failed.length > 0 ? 'warning' : 'info', msg);
         }
         TelemetryService.sendTelemetryEvent('syncDeletedRows.complete', {
             syncedTotal: String(result.synced.length),
             failedRows: String(result.failed.length),
+            // 汇总分档：区分 type=1 / type=3（均计入 synced，但口径不同）
+            deletedSuccess: String(result.deletedSuccess.length),
+            deletedSourceMissing: String(result.deletedSourceMissing.length),
         });
     } catch (err: any) {
         console.error('[syncDeletedRows] 失败:', err?.message || err);

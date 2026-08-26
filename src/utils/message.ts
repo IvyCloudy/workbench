@@ -176,6 +176,137 @@ export function showModal(
 }
 
 // ============================================
+// 1b. 双按钮确认弹窗 (showConfirmDialog) — 独立 webview 模态，样式与图2一致
+// ============================================
+
+/**
+ * 双按钮确认弹窗（取消 + 确定）。
+ *
+ * 与 showModal 的区别：showModal 只支持单按钮（用于单向通知）；
+ * showConfirmDialog 用于"需要用户决策"的双按钮场景（如删除文件确认）。
+ *
+ * 样式：与 table-editor.css 中的 xs-prompt-type-warning 完全一致——
+ *   - 浅橙色头部（#fdf3e3 + #f5e1c1 下边框）
+ *   - 圆形橙色"!"图标（#f29d39 背景 + 白色 ! 字符）
+ *   - 标题深色加粗
+ *   - 浅灰边框"取消"按钮 + 橙色实心"确定"按钮
+ *
+ * 行为：创建独立 webview 面板渲染；用户点取消/确定/关闭 → resolve(false/true)；
+ * 面板自动 dispose。返回 Promise<boolean>。
+ */
+export interface ConfirmDialogOptions {
+    type?: 'warning' | 'danger';
+    title: string;
+    message: string;
+    okText?: string;
+    cancelText?: string;
+    /** 用于反查的请求 id（多弹窗并存时区分）；不传则随机生成 */
+    requestId?: string;
+}
+
+const CONFIRM_DIALOG_BG: Record<NonNullable<ConfirmDialogOptions['type']>, { headerBg: string; borderColor: string; iconBg: string }> = {
+    warning: { headerBg: '#fdf3e3', borderColor: '#f5e1c1', iconBg: '#f29d39' },
+    danger:  { headerBg: '#fbe6e9', borderColor: '#f0c8cc', iconBg: '#d06b76' },
+};
+
+function buildConfirmDialogHtml(opts: Required<Omit<ConfirmDialogOptions, 'requestId'>> & { requestId: string }): string {
+    const t = opts.type;
+    const palette = CONFIRM_DIALOG_BG[t];
+    const safeMsg = opts.message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const icon = t === 'warning' ? '!' : '!';
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${opts.title}</title>
+<style>
+    :root{--bg:#fff;--bd:#e0e0e0;--p:#f29d39;--ph:#e08820}
+    *{margin:0;padding:0;box-sizing:border-box}
+    html,body{height:100%;overflow:hidden}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;font-size:13px;color:#333;background:#fff}
+    .xs-modal-overlay{display:flex;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);align-items:center;justify-content:center;z-index:2000}
+    .xs-modal-dialog{background:var(--bg);border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.2);width:520px;max-width:90vw;display:flex;flex-direction:column;overflow:hidden}
+    .xs-modal-header{display:flex;align-items:center;padding:14px 16px;background:${palette.headerBg};border-bottom:1px solid ${palette.borderColor};gap:10px;flex-shrink:0;position:relative}
+    .xs-confirm-icon{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;font-size:14px;font-weight:700;line-height:22px;color:#fff;background:${palette.iconBg};flex-shrink:0}
+    .xs-modal-title{font-size:16px;font-weight:700;letter-spacing:1px;flex:0 0 auto;color:#333;display:flex;align-items:center;gap:8px}
+    .xs-modal-close{position:absolute;right:8px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:16px;color:#666;padding:4px 10px;border-radius:3px;line-height:1;border:none;background:transparent}
+    .xs-modal-close:hover{background:rgba(0,0,0,.06);color:#333}
+    .xs-modal-body{flex:1;padding:16px 20px;min-height:60px;font-size:13px;color:#333;line-height:1.7;white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word}
+    .xs-modal-footer{display:flex;align-items:center;justify-content:flex-end;padding:10px 16px;border-top:1px solid #e0e0e0;gap:8px;flex-shrink:0}
+    .xs-btn{padding:5px 18px;border-radius:3px;font-size:13px;cursor:pointer;border:1px solid #ccc;background:#fff;color:#333;outline:none;line-height:1.5}
+    .xs-btn:hover{background:#f0f0f0}
+    .xs-btn-p{background:${palette.iconBg};color:#fff;border-color:${palette.iconBg}}
+    .xs-btn-p:hover{filter:brightness(.92)}
+</style>
+</head>
+<body>
+<div class="xs-modal-overlay" id="overlay">
+    <div class="xs-modal-dialog">
+        <div class="xs-modal-header">
+            <span class="xs-modal-title"><span class="xs-confirm-icon">${icon}</span>${opts.title}</span>
+            <button class="xs-modal-close" id="closeBtn" title="关闭">✕</button>
+        </div>
+        <div class="xs-modal-body">${safeMsg}</div>
+        <div class="xs-modal-footer">
+            <button class="xs-btn" id="cancelBtn">${opts.cancelText}</button>
+            <button class="xs-btn xs-btn-p" id="okBtn">${opts.okText}</button>
+        </div>
+    </div>
+</div>
+<script>
+    (function(){
+        var vscode = acquireVsCodeApi();
+        var requestId = ${JSON.stringify(opts.requestId)};
+        function post(confirmed){
+            vscode.postMessage({ type:'confirmDialogResult', requestId: requestId, confirmed: confirmed });
+        }
+        document.getElementById('okBtn').onclick = function(){ post(true); };
+        document.getElementById('cancelBtn').onclick = function(){ post(false); };
+        document.getElementById('closeBtn').onclick = function(){ post(false); };
+        document.getElementById('overlay').addEventListener('click',function(e){ if(e.target===this) post(false); });
+        document.addEventListener('keydown',function(e){
+            if(e.key==='Escape'){ post(false); }
+            else if(e.key==='Enter'){ post(true); }
+        });
+        setTimeout(function(){ document.getElementById('okBtn').focus(); }, 0);
+    })();
+</script>
+</body>
+</html>`;
+}
+
+export function showConfirmDialog(opts: ConfirmDialogOptions): Promise<boolean> {
+    const type = opts.type || 'warning';
+    const okText = opts.okText || '确定';
+    const cancelText = opts.cancelText || '取消';
+    const requestId = opts.requestId || `confirm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise<boolean>((resolve) => {
+        const modalPanel = vscode.window.createWebviewPanel(
+            'standaloneConfirmDialog',
+            opts.title,
+            { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },
+            { enableScripts: true, retainContextWhenHidden: false },
+        );
+        let settled = false;
+        const settle = (confirmed: boolean) => {
+            if (settled) return;
+            settled = true;
+            try { modalPanel.dispose(); } catch (_) { /* ignore */ }
+            resolve(confirmed);
+        };
+        modalPanel.webview.html = buildConfirmDialogHtml({ type, title: opts.title, message: opts.message, okText, cancelText, requestId });
+        modalPanel.webview.onDidReceiveMessage(msg => {
+            if (msg && msg.type === 'confirmDialogResult' && msg.requestId === requestId) {
+                settle(!!msg.confirmed);
+            }
+        });
+        // 兜底：面板被外部关闭（用户点 tab ✕、命令 dispose 等）→ 视为取消，避免 waitUntil 永久挂起
+        const closedSub = modalPanel.onDidDispose(() => { settle(false); closedSub.dispose(); });
+    });
+}
+
+// ============================================
 // 2. 轻量 Toast (showToast)
 // ============================================
 
@@ -292,9 +423,19 @@ export function showDeleteResult(
     failures: PushFailure[],
     total: number,
     error?: string,
+    /** type=1 线上删除成功数（与 successCount 中"真实存在并删除"的部分对应） */
+    deletedSuccess?: number,
+    /** type=3 sourceId 不存在仍算删除成功的数（汇总口径上需与 type=1 区分） */
+    deletedSourceMissing?: number,
 ): void {
+    const _deletedSuccess = typeof deletedSuccess === 'number' ? deletedSuccess : successCount;
+    const _deletedSourceMissing = typeof deletedSourceMissing === 'number' ? deletedSourceMissing : 0;
     if (panel) {
-        panel.webview.postMessage({ type: 'deleteResult', fileName, successCount, failures, total, error });
+        panel.webview.postMessage({
+            type: 'deleteResult', fileName, successCount, failures, total, error,
+            deletedSuccess: _deletedSuccess,
+            deletedSourceMissing: _deletedSourceMissing,
+        });
         return;
     }
     if (error) {
@@ -303,17 +444,19 @@ export function showDeleteResult(
         return;
     }
     const failCount = failures.length;
+    // 无面板兜底文案：标注"其中 N 条线上本不存在"
+    const _missingHint = _deletedSourceMissing > 0 ? `（其中 ${_deletedSourceMissing} 条线上本不存在，已同步清理）` : '';
     if (failCount === 0 && successCount === 0) {
         showModal('default', 'warning', '删除结果', `删除未产生结果：${fileName}\n请检查文件后重试。`);
     } else if (failCount === 0) {
-        showModal('default', 'success', '删除结果', `删除成功：${fileName}\n共 ${successCount} 条全部删除成功。`);
+        showModal('default', 'success', '删除结果', `删除成功：${fileName}\n共 ${successCount} 条全部删除成功。${_missingHint}`);
     } else if (successCount === 0) {
         showModal('default', 'error', '删除结果',
             `删除失败：${fileName}\n共 ${failCount} 条全部失败。\n\n` +
             failures.map(f => `• ${f.tsId}: ${f.reason}`).join('\n'));
     } else {
         showModal('default', 'warning', '删除结果',
-            `删除部分成功：${fileName}\n成功 ${successCount} / 失败 ${failCount} / 共 ${total} 条。\n\n` +
+            `删除部分成功：${fileName}\n成功 ${successCount} / 失败 ${failCount} / 共 ${total} 条。${_missingHint}\n\n` +
             `失败明细：\n` + failures.map(f => `• ${f.tsId}: ${f.reason}`).join('\n'));
     }
 }

@@ -279,7 +279,10 @@ var server = http.createServer(function (req, res) {
             };
             res.end(JSON.stringify(responseBody));
         });
-    } else if (req.method === 'POST' && req.url === '/test-task/delete-testcase') {
+    } else if ((req.method === 'DELETE' && req.url === '/api/v1/delete-testAgent-case') ||
+               (req.method === 'POST' && req.url === '/test-task/delete-testcase')) {
+        // 新契约：DELETE /api/v1/delete-testAgent-case（body 含 operationUser）
+        // 旧契约：POST   /test-task/delete-testcase（保留以兼容历史调用）
         var body = '';
         req.on('data', function (chunk) { body += chunk; });
         req.on('end', function () {
@@ -289,10 +292,12 @@ var server = http.createServer(function (req, res) {
             var testTaskNo = payload.testTaskNo || '';
             var subTestTaskId = payload.subTestTaskId || '';
             var sourceIds = Array.isArray(payload.sourceIds) ? payload.sourceIds : [];
+            var operationUser = payload.operationUser || '';
 
             var _ts = new Date().toISOString();
-            console.log('[%s] 收到删除测试案例请求 testTaskNo=%s subTestTaskId=%s 共 %d 条 sourceIds=%s',
-                _ts, testTaskNo || '(未提供)', subTestTaskId || '(未提供)', sourceIds.length, JSON.stringify(sourceIds));
+            console.log('[%s] 收到删除测试案例请求(%s %s) testTaskNo=%s subTestTaskId=%s operationUser=%s 共 %d 条 sourceIds=%s',
+                _ts, req.method, req.url, testTaskNo || '(未提供)', subTestTaskId || '(未提供)',
+                operationUser || '(未提供)', sourceIds.length, JSON.stringify(sourceIds));
             console.log('  UA=%s remote=%s:%s', req.headers['user-agent'] || '(无)', req.socket.remoteAddress, req.socket.remotePort);
 
             // 逐条返回删除结果：type:'1' 成功 / type:'2' 失败 / type:'3' sourceId 不存在
@@ -351,7 +356,7 @@ var server = http.createServer(function (req, res) {
                 'Content-Type': 'application/json; charset=utf-8',
                 'Content-Length': _respBuf.length,
                 'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Methods': 'POST, DELETE, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type'
             });
             console.log('  ↩ 返回字节流(%d bytes): %s', _respBuf.length, _respStr);
@@ -374,8 +379,9 @@ server.listen(8081, function () {
     console.log('Mock server running at http://localhost:8081');
     console.log('Endpoints:');
     console.log('  POST /test-task/task-tree       - 任务树');
-    console.log('  POST /test-task/test-case       - 测试案例');
-    console.log('  POST /test-task/push-testcase   - 推送测试案例');
-    console.log('  POST /test-task/delete-testcase - 删除测试案例');
+    console.log('  POST   /test-task/test-case            - 测试案例');
+    console.log('  POST   /test-task/push-testcase        - 推送测试案例');
+    console.log('  DELETE /api/v1/delete-testAgent-case   - 删除测试案例（新契约）');
+    console.log('  POST   /test-task/delete-testcase      - 删除测试案例（旧契约，兼容保留）');
     console.log('Total records: ' + TOTAL + ', default pageSize: 200');
 });

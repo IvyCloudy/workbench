@@ -44,6 +44,7 @@ function closeXsPrompt(confirmed) {
     var mode = S._xsPromptMode;
     var val = input ? input.value : '';
     S._xsPromptCb = null;
+    S._xsPromptCancelCb = null;
     S._xsPromptMode = null;
     // 清理标题/消息/类型样式
     var msgEl = document.getElementById('xsPromptMessage');
@@ -55,11 +56,9 @@ function closeXsPrompt(confirmed) {
     // 类型 class 加在 overlay 上，方便用后代选择器统一覆盖 header / 主按钮 等
     modal.classList.remove('xs-prompt-type-warning', 'xs-prompt-type-danger');
     if (typeof cb === 'function') {
-        if (mode === 'confirm_any') {
-            // 无论确认或取消都把布尔结果传回（用于"文件删除"等需要回传明确决策的远程确认）
-            cb(!!confirmed);
-        } else if (mode === 'confirm') {
+        if (mode === 'confirm') {
             if (confirmed) cb();
+            else { var ccb = S._xsPromptCancelCb; if (typeof ccb === 'function') ccb(); }
         } else {
             cb(confirmed ? val : null);
         }
@@ -149,38 +148,24 @@ function xsPrompt(optsOrTitle, defaultValue, onOk) {
     setTimeout(function () { input.focus(); input.select(); }, 0);
 }
 
-// xsConfirm(optsOrTitle, onOk())
+// xsConfirm(optsOrTitle, onOk(), onCancel?)
 //   optsOrTitle 支持字符串（旧）或 { title, message, type, okText, cancelText }
-function xsConfirm(optsOrTitle, onOk) {
+//   onOk: 用户点「确定」时执行；onCancel（可选）: 用户点「取消/关闭」时执行
+function xsConfirm(optsOrTitle, onOk, onCancel) {
     var opts = _normalizeXsPromptArgs(optsOrTitle, undefined, onOk);
     var cb = opts._legacyOnOk || onOk;
     var modal = document.getElementById('xsPromptModal');
     var input = document.getElementById('xsPromptInput');
-    if (!modal) { if (window.confirm(opts.title)) cb(); return; }
+    if (!modal) { if (window.confirm(opts.title)) { if (cb) cb(); } else if (onCancel) { onCancel(); } return; }
     _applyXsPromptConfig(modal, opts);
     if (input) input.style.display = 'none';
     S._xsPromptMode = 'confirm';
     S._xsPromptCb = cb;
+    S._xsPromptCancelCb = (typeof onCancel === 'function') ? onCancel : null;
     modal.classList.add('show');
     var ok = document.getElementById('xsPromptOk');
     if (ok) setTimeout(function () { ok.focus(); }, 0);
 }
 
-/**
- * 与 xsConfirm 类似，但无论确认或取消都把布尔结果通过 onResult(boolean) 回传。
- * 用于"文件删除"等场景：确认结果需要回传给扩展端（而不是只在确认时执行回调）。
- */
-function xsConfirmWithCancel(optsOrTitle, onResult) {
-    var opts = _normalizeXsPromptArgs(optsOrTitle, undefined, undefined);
-    var modal = document.getElementById('xsPromptModal');
-    if (!modal) { onResult(!!window.confirm(opts.title)); return; }
-    _applyXsPromptConfig(modal, opts);
-    var input = document.getElementById('xsPromptInput');
-    if (input) input.style.display = 'none';
-    S._xsPromptMode = 'confirm_any';
-    S._xsPromptCb = onResult;
-    modal.classList.add('show');
-    var ok = document.getElementById('xsPromptOk');
-    if (ok) setTimeout(function () { ok.focus(); }, 0);
-}
+
 

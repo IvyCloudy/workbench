@@ -1186,24 +1186,6 @@ window.addEventListener('message', function (e) {
         showToast('推送失败: ' + (m.message || ''), 'error');
     } else if (m.type === 'showModal') {
         showXsInfoModal(m.modalType || 'info', m.title || '', m.message || '');
-    } else if (m.type === 'requestConfirm') {
-        // 扩展端请求在已打开的案例文件中弹确认框（如删除案例文件前二次确认），
-        // 复用 xsConfirm 的 warning 样式，结果通过 confirmResult 回传。
-        var _reqId = m.requestId;
-        if (typeof xsConfirmWithCancel === 'function' && _reqId) {
-            xsConfirmWithCancel({
-                title: m.title || '请确认',
-                message: m.message || '',
-                type: m.confirmType || 'warning',
-                okText: m.okText || '确定',
-                cancelText: m.cancelText || '取消',
-            }, function (confirmed) {
-                if (S.vscode) S.vscode.postMessage({ type: 'confirmResult', requestId: _reqId, confirmed: !!confirmed });
-            });
-        } else if (S.vscode) {
-            // 兜底：无弹窗能力时直接取消，避免扩展端 waitUntil 永久挂起
-            S.vscode.postMessage({ type: 'confirmResult', requestId: _reqId, confirmed: false });
-        }
     } else if (m.type === 'clearAllHighlights') {
         // 「clearAllHighlights 消息」全清策略：详见 HighlightModel.resetAllHighlights 说明
         HighlightModel.resetAllHighlights(S);

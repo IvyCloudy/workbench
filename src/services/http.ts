@@ -413,14 +413,18 @@ export async function pushTestCase(
 /**
  * 删除测试案例（线上）。
  *
+ * 后端契约：DELETE ${apiBaseUrl}/api/v1/delete-testAgent-case
+ *   Body: { testTaskNo, subTestTaskId, sourceIds, operationUser }
+ *
  * @param taskInfo  必填，从文件路径解析得到的任务信息
  *                  { testTaskNo, subTestTaskId }
  * @param sourceIds 必填，待删除案例的 testcase_id 列表（对应后端入参 sourceIds: List<string>）
  *
- * 入参与后端契约（POST /test-task/delete-testcase）一一对应：
- *   - testTaskNo   → testTaskNo
- *   - subTestTaskId→ subTestTaskId
- *   - sourceIds   → sourceIds（每个元素即案例的 testcase_id 字段值）
+ * 入参映射：
+ *   - testTaskNo    → testTaskNo
+ *   - subTestTaskId → subTestTaskId
+ *   - sourceIds     → sourceIds（每个元素即案例的 testcase_id 字段值）
+ *   - operationUser → "姓名/工号"，由配置 userName / userId 拼接（后端要求该格式）
  *
  * 出参与推送接口（pushTestCase）保持一致：
  *   - 外层：returnCode / errorMsg / body
@@ -437,23 +441,29 @@ export async function deleteTestCase(
     taskInfo: { testTaskNo: string; subTestTaskId: string },
     sourceIds: string[],
 ): Promise<ApiResponse> {
-    const url = `${await getApiBaseUrl(context)}/test-task/delete-testcase`;
+    const url = `${await getApiBaseUrl(context)}/api/v1/delete-testAgent-case`;
+    const appConfig = await readConfig(context);
+    // operationUser：后端要求「姓名/工号」格式（如 "张三/801234"）
+    const operationUser = (appConfig.userName || appConfig.userId)
+        ? `${appConfig.userName || ''}/${appConfig.userId || ''}`
+        : '';
     const body = {
         testTaskNo: taskInfo.testTaskNo,
         subTestTaskId: taskInfo.subTestTaskId,
         sourceIds: Array.isArray(sourceIds) ? sourceIds : [],
+        operationUser,
     };
 
     const headers = await buildHeaders(context);
     const safeHeaders = maskSensitiveHeaders(headers);
     console.log('[删除案例][请求] ───────────────────────────────');
-    console.log('[删除案例][请求] POST', url);
+    console.log('[删除案例][请求] DELETE', url);
     console.log('[删除案例][请求] headers:', JSON.stringify(safeHeaders, null, 2));
     console.log('[删除案例][请求] body  :', JSON.stringify(body, null, 2));
 
     const _apiStart = Date.now();
     try {
-        const response = await makeRequest<ApiResponse>('POST', url, headers, JSON.stringify(body));
+        const response = await makeRequest<ApiResponse>('DELETE', url, headers, JSON.stringify(body));
         console.log('[删除案例][响应] status=', response.status,
             'returnCode=', (response.data as any)?.returnCode,
             'errorMsg=', (response.data as any)?.errorMsg || '');

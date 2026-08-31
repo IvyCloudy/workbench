@@ -58,8 +58,27 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // 全局未捕获异常上报（兜底）
     process.on('unhandledRejection', (reason: any) => {
-        try { TelemetryService.sendTelemetryErrorEvent('extension.unhandledRejection', telemetryErrProps(reason)); } catch (_) { /* ignore */ }
+        try {
+            TelemetryService.sendTelemetryErrorEvent('extension.unhandledRejection', telemetryErrProps(reason));
+        } catch (_) { /* ignore */ }
     });
+
+    // 关闭 VSCode 原生"删除确认"弹窗（files.confirmDelete）。
+    // 案例文件删除必须走插件自己的确认 + TMS 同步拦截（onWillDeleteFiles），
+    // 而原生 Delete 的 "Move to Trash / Cancel" 框在 onWillDeleteFiles 之前弹出、且无法被插件拦截/压制，
+    // 故在此全局关闭原生确认框。关闭后点系统 Delete 不再弹原生框，直接触发
+    // onWillDeleteFiles —— 普通文件我们不会拦截（正常删除），案例文件则走插件确认弹窗。
+    try {
+        const confirmDelete = vscode.workspace.getConfiguration('files').get<boolean>('confirmDelete');
+        if (confirmDelete === true) {
+            await vscode.workspace
+                .getConfiguration('files')
+                .update('confirmDelete', false, vscode.ConfigurationTarget.Global);
+            console.log('[Extension] 已关闭 files.confirmDelete，案例文件删除将走插件确认拦截');
+        }
+    } catch (err: any) {
+        console.warn('[Extension] 关闭 files.confirmDelete 失败（已忽略）:', err?.message || err);
+    }
 
     // 初始化各存储文件 + 清理孤儿记录
     await initializeStorages(context);

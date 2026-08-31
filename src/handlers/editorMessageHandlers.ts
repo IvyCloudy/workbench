@@ -26,7 +26,6 @@ import { applyDiffHighlight, type EditorSession } from '../services/diffHighligh
 import { getMarks, setMarks, clearMarks } from '../utils/markStore';
 import { getHeaderLabels, onHeaderLabelsChange } from '../utils/headerLabels';
 import { showSaveResult, showPushErrorModal, showDeleteResult, type PushFailure } from '../utils/message';
-import { resolveDeleteConfirm } from './workspaceListeners';
 import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { TelemetryService } from '../utils/telemetry';
@@ -76,7 +75,6 @@ function buildHandlers(): Record<string, Handler> {
         setMarkRects: handleSetMarkRects,
         clearAllMarks: handleClearAllMarks,
         deleteRows: handleDeleteRows,
-        confirmResult: handleConfirmResult,
     };
 }
 
@@ -415,16 +413,5 @@ async function handleDispatchError(err: any, msg: any, ctx: EditorMsgCtx): Promi
         }
     } else {
         vscode.window.showErrorMessage(`[${ctx.typeName}] ${errMsg}`);
-    }
-}
-
-/**
- * webview 内"文件删除确认"结果回传（requestConfirm 的回调）。
- * 由 BaseEditorProvider 对应 panel 的 onDidReceiveMessage 路由而来，
- * 调用 workspaceListeners.resolveDeleteConfirm 解除 onWillDeleteFiles 的 waitUntil。
- */
-async function handleConfirmResult(msg: any, _ctx: EditorMsgCtx): Promise<void> {
-    if (msg && typeof msg.requestId === 'string') {
-        resolveDeleteConfirm(msg.requestId, !!msg.confirmed);
     }
 }

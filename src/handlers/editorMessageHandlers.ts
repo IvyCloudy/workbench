@@ -281,7 +281,9 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
         }
         const resp = await confirmDeleteTestCase(ctx.extensionContext, t.taskInfo, tsIds);
         if (resp.returnCode !== 'SUC0000') {
-            // 预检失败不阻断删除：提示后端 errorMsg，并降级为简单确认继续
+            // 预检失败不阻断删除：提示后端 errorMsg，并降级为简单确认继续。
+            // 注意：前端 requestDeleteConfirm 在 ok=false 时会忽略 errorMessage 直接走简单确认，
+            // 因此 errorMsg 的透出完全由 showApiError（toast）负责，此处无需再回传 errorMessage。
             showApiError(
                 ctx.webviewPanel,
                 '删除前校验未通过，已跳过确认步骤',
@@ -291,7 +293,6 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
             );
             ctx.webviewPanel.webview.postMessage({
                 type: 'confirmDeleteRowsResult', ok: false, items: [],
-                errorMessage: resp.errorMsg || `确认接口返回 ${resp.returnCode}`,
             });
             return;
         }

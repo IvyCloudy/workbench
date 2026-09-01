@@ -36,11 +36,18 @@ const MISSING_RATIO = _ratioOf('MOCK_MISSING_RATIO', 0.1);
 // 例如：
 //   MOCK_DELETE_FAIL_RATIO=1 node mock-server.js        # 删除接口每次都失败
 //   MOCK_CONFIRM_FAIL_RATIO=0.5 node mock-server.js     # 确认接口 50% 概率失败
+//
+// 与下方「body 内逐条失败」(DELETE_BODY_FAIL_RATIO) 是两个不同维度：
+//   · 整体失败注入  → 控制 returnCode，用于验证前端 errorMsg 弹窗
+//   · body 内逐条失败 → 控制 body[] 中每条 type='1'成功 / '2'失败，用于验证前端
+//                      「部分失败行标红保留、可重试」的展示（接口本身 returnCode 仍为 SUC0000）
 // ============================================================================
 const DELETE_FAIL_RATIO = _ratioOf('MOCK_DELETE_FAIL_RATIO', 0);
 const CONFIRM_FAIL_RATIO = _ratioOf('MOCK_CONFIRM_FAIL_RATIO', 0);
 const FAIL_CODE = process.env.MOCK_FAIL_CODE || 'SYS5001';
 const FAIL_MSG = process.env.MOCK_FAIL_MSG || '系统繁忙，请稍后重试';
+// body 内逐条失败比例（删除接口）：用于控制 body[] 中 type='2' 失败的占比，默认 0.5
+const DELETE_BODY_FAIL_RATIO = _ratioOf('MOCK_DELETE_BODY_FAIL_RATIO', 0.5);
 
 /** 判断本次请求是否应整体失败（前缀强制优先于概率） */
 function shouldFailOverall(ids, ratio) {
@@ -324,7 +331,7 @@ var server = http.createServer(function (req, res) {
                 };
             });
             if (failCount > 0) {
-                console.log('  模拟失败: %d / %d 条 (FAIL_RATIO=%s)', failCount, data.length, FAIL_RATIO);
+                console.log('  模拟失败: %d / %d 条 (DELETE_BODY_FAIL_RATIO=%s)', failCount, data.length, FAIL_RATIO);
             }
 
             res.writeHead(200, {
@@ -363,8 +370,10 @@ var server = http.createServer(function (req, res) {
 
             // 逐条返回删除结果：type:'1' 成功 / type:'2' 失败 / type:'3' sourceId 不存在
             // 模拟分布：第 3 条（索引 i%3===2）视为 sourceId 不存在 → type:'3'
-            //           其余按 FAIL_RATIO 概率返回 type:'1' / type:'2'
-            var FAIL_RATIO = 0.5;
+            //           其余按 DELETE_BODY_FAIL_RATIO 概率返回 type:'1' / type:'2'
+            //           （注意：此比例仅控制 body 内 type 分布，接口整体 returnCode 仍为 SUC0000；
+            //             若要验证「整体失败弹窗」，改用 MOCK_DELETE_FAIL_RATIO 开关）
+            var FAIL_RATIO = DELETE_BODY_FAIL_RATIO;
             var failCount = 0;
             var missingCount = 0;
             var resultBody = sourceIds.map(function (id, i) {
@@ -401,7 +410,7 @@ var server = http.createServer(function (req, res) {
                 console.log('  模拟结果: 失败 %d / 不存在 %d / 共 %d 条', failCount, missingCount, sourceIds.length);
             }
             if (failCount > 0) {
-                console.log('  模拟失败: %d / %d 条 (FAIL_RATIO=%s)', failCount, sourceIds.length, FAIL_RATIO);
+                console.log('  模拟失败: %d / %d 条 (DELETE_BODY_FAIL_RATIO=%s)', failCount, sourceIds.length, FAIL_RATIO);
             }
 
             // 接口级整体失败注入：返回非 SUC0000，便于验证前端 errorMsg 弹窗
@@ -599,5 +608,8 @@ server.listen(8081, function () {
         + ' | 可用 MOCK_DELETE_FAIL_RATIO / MOCK_CONFIRM_FAIL_RATIO 覆盖（默认 0 不注入）');
     console.log('  失败注入返回码: returnCode=' + FAIL_CODE + ', errorMsg="' + FAIL_MSG + '"'
         + ' | 可用 MOCK_FAIL_CODE / MOCK_FAIL_MSG 覆盖；sourceId 以 FAIL_ 开头强制失败');
+    console.log('  body 内逐条失败比例(DELETE_BODY_FAIL_RATIO，不影响 returnCode): '
+        + (DELETE_BODY_FAIL_RATIO * 100).toFixed(0) + '%'
+        + ' | 可用 MOCK_DELETE_BODY_FAIL_RATIO 覆盖（默认 50%）；用于验证前端部分失败行展示');
     console.log('Total records: ' + TOTAL + ', default pageSize: 200');
 });

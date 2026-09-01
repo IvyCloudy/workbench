@@ -6,8 +6,12 @@
  *  职责：
  *    根据测试要点信息（pointId / pointPath / pointName），复用「查看关联案例」
  *    的匹配引擎（pointCaseLinker），把该要点在其绑定案例文件中命中的所有案例
- *    从磁盘删除，并同步维护 push-snapshot / deletedRowsStore / highlightStore
- *    等追踪存储，避免出现"幽灵行"。
+ *    从磁盘删除，并同步维护 push-snapshot / highlightStore 等追踪存储，
+ *    避免出现"幽灵行"。
+ *
+ *  线上同步说明（已确认）：通过要点删除案例时，线上案例已由上游先行删除，
+ *  删除流程**仅处理本地案例**，不调用任何线上删除接口，也不将删除行标记
+ *  为"待同步到线上"（避免 sync 流程误把已删除的线上案例再次发起同步）。
  *
  *  入参说明：
  *    pointFilePath —— 测试要点文件的绝对路径，通用参数，支持 md / xmind
@@ -59,7 +63,6 @@ import {
 } from './pointCaseLinker';
 import { getCaseOfPoint } from './pointCaseBindingStore';
 import { savePushSnapshot } from './pushSnapshotStore';
-import { markDeletedRows } from './deletedRowsStore';
 import { clearHighlight } from './highlightStore';
 import { withFileLock } from './asyncLock';
 import { createLogger } from './logger';
@@ -477,17 +480,7 @@ async function deleteCasesFromCaseFileMulti(
         logger.warn('savePushSnapshot 失败（不影响删除主流程）', err?.message);
     }
 
-    //   ② deletedRowsStore：把删除行记为「待同步到线上」
-    //      简化策略：把所有有 tsId 的删除行都记入（markDeletedRows 幂等，
-    //      不存在于线上的行由后续 sync 流程自然筛除）
-    try {
-        const ids = deletedCases.map(c => c.testcaseId).filter(Boolean);
-        if (ids.length > 0) await markDeletedRows(casePath, ids);
-    } catch (err: any) {
-        logger.warn('markDeletedRows 失败（不影响删除主流程）', err?.message);
-    }
-
-    //   ③ 清高亮：删除行的高亮索引已失效，简单起见清整个文件的高亮
+    //   ② 清高亮：删除行的高亮索引已失效，简单起见清整个文件的高亮
     //      （与 clearHighlight 语义一致：高亮是"最近一次编辑/推送"的临时态）
     try {
         await clearHighlight(casePath);
@@ -495,7 +488,7 @@ async function deleteCasesFromCaseFileMulti(
         logger.warn('clearHighlight 失败（不影响删除主流程）', err?.message);
     }
 
-    //   ④ 失效 linker 缓存（下次匹配拿磁盘最新记录）
+    //   ③ 失效 linker 缓存（下次匹配拿磁盘最新记录）
     try {
         clearLinkerCache();
     } catch { /* ignore */ }

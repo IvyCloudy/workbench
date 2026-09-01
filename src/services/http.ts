@@ -498,6 +498,94 @@ export async function deleteTestCase(
 }
 
 /**
+ * 删除确认（线上预检）——在真正调用删除接口之前，先问一次后端：
+ * 这些案例里哪些会连带删除「执行 / 缺陷」关联关系，需要用户二次确认。
+ *
+ * 后端契约：POST ${apiBaseUrl}/api/v1/delete-testAgent-case-confirm
+ *   Body: { testTaskNo, subTestTaskId, sourceIds, operationUser }  ← 与删除案例接口完全一致
+ *
+ * @param taskInfo  必填，{ testTaskNo, subTestTaskId }
+ * @param sourceIds 必填，待确认案例的 testcase_id 列表
+ *
+ * 出参 body[]：{ sourceId, type, data: { sourceId, testcaseNo, testCaseName, hasExec, hasBug } }
+ *   type: 1 允许删除（无执行/缺陷关联）
+ *         2 需要确认后删除（data.hasExec / data.hasBug 至少一个为 true）
+ *         3 案例不存在
+ *
+ * 失败语义：本接口仅用于「提示增强」，因此**任何异常都不应阻断删除主流程**。
+ *   调用方应在 catch 中降级为「不展示关联表格、按原有简单确认继续」。
+ */
+export interface ConfirmDeleteCaseItem {
+    sourceId: string;
+    /** 1 允许删除 / 2 需要确认后删除 / 3 案例不存在 */
+    type: number;
+    data?: {
+        sourceId?: string;
+        testcaseNo?: string;
+        testCaseName?: string;
+        /** 是否存在执行关联（type=2 时至少一个为 true） */
+        hasExec?: boolean;
+        /** 是否存在缺陷关联（type=2 时至少一个为 true） */
+        hasBug?: boolean;
+    };
+}
+
+export async function confirmDeleteTestCase(
+    context: vscode.ExtensionContext,
+    taskInfo: { testTaskNo: string; subTestTaskId: string },
+    sourceIds: string[],
+): Promise<ApiResponse> {
+    const url = `${await getApiBaseUrl(context)}/api/v1/delete-testAgent-case-confirm`;
+    const appConfig = await readConfig(context);
+    const operationUser = (appConfig.userName || appConfig.userId)
+        ? `${appConfig.userName || ''}/${appConfig.userId || ''}`
+        : '';
+    const body = {
+        testTaskNo: taskInfo.testTaskNo,
+        subTestTaskId: taskInfo.subTestTaskId,
+        sourceIds: Array.isArray(sourceIds) ? sourceIds : [],
+        operationUser,
+    };
+
+    const headers = await buildHeaders(context);
+    console.log('[删除确认][请求] POST', url, 'sourceIds=', JSON.stringify(body.sourceIds));
+
+    const _apiStart = Date.now();
+    try {
+        const response = await makeRequest<ApiResponse>('POST', url, headers, JSON.stringify(body));
+        console.log('[删除确认][响应] status=', response.status,
+            'returnCode=', (response.data as any)?.returnCode,
+            'errorMsg=', (response.data as any)?.errorMsg || '');
+        console.log('[删除确认][响应] body  :', JSON.stringify(response.data, null, 2));
+        maybeReportAuthFailure(response.status, 'confirmDeleteTestCase');
+        const _rc = (response.data as any)?.returnCode || '';
+        const _costMs = String(Date.now() - _apiStart);
+        if (_rc === 'SUC0000') {
+            TelemetryService.sendTelemetryEvent('api.confirmDeleteTestCase.ok', {
+                httpStatus: String(response.status),
+                totalRows: String(sourceIds.length),
+                costMs: _costMs,
+            });
+        } else {
+            TelemetryService.sendTelemetryErrorEvent('api.confirmDeleteTestCase.fail', {
+                httpStatus: String(response.status),
+                returnCode: _rc,
+                totalRows: String(sourceIds.length),
+                costMs: _costMs,
+            });
+        }
+        return response.data;
+    } catch (err: any) {
+        TelemetryService.sendTelemetryErrorEvent('api.confirmDeleteTestCase.exception', {
+            totalRows: String(sourceIds.length),
+            errorMessage: String(err?.message || String(err)).slice(0, 500),
+            stackHead: stackHead(err),
+        });
+        throw err;
+    }
+}
+
+/**
  * 当响应状态码为 401/403 时，上报一次鉴权失效事件。
  * 用于运营侧观察：登录态过期 / token 失效 / 权限被收回 的整体趋势。
  */

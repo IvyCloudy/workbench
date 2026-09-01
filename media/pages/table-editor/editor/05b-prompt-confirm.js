@@ -46,9 +46,11 @@ function closeXsPrompt(confirmed) {
     S._xsPromptCb = null;
     S._xsPromptCancelCb = null;
     S._xsPromptMode = null;
-    // 清理标题/消息/类型样式
+    // 清理标题/消息/类型样式（含富文本分支与自定义宽度，避免污染后续弹窗）
     var msgEl = document.getElementById('xsPromptMessage');
-    if (msgEl) { msgEl.style.display = 'none'; msgEl.textContent = ''; }
+    if (msgEl) { msgEl.style.display = 'none'; msgEl.textContent = ''; msgEl.innerHTML = ''; }
+    var dlg = modal ? modal.querySelector('.xs-modal-dialog') : null;
+    if (dlg) dlg.style.width = '';
     var header = document.getElementById('xsPromptHeader');
     if (header) {
         header.classList.remove('xs-prompt-type-warning', 'xs-prompt-type-danger');
@@ -76,6 +78,11 @@ function _normalizeXsPromptArgs(titleOrOpts, legacyDefaultValue, legacyOnOk) {
         return {
             title: titleOrOpts.title || '确认',
             message: titleOrOpts.message || '',
+            // html：可选的富文本内容（如"需确认案例"表格）。存在时优先于 message 渲染，
+            // 由调用方自行保证内容已转义（见 escapeHtml），避免 innerHTML 注入风险。
+            html: titleOrOpts.html || '',
+            // width：弹窗宽度（如 '620px'），用于承载表格等宽内容；缺省沿用 HTML 里的 380px
+            width: titleOrOpts.width || '',
             type: titleOrOpts.type || 'info', // 'info' | 'warning' | 'danger'
             okText: titleOrOpts.okText || '确定',
             cancelText: titleOrOpts.cancelText || '取消',
@@ -87,6 +94,8 @@ function _normalizeXsPromptArgs(titleOrOpts, legacyDefaultValue, legacyOnOk) {
     return {
         title: typeof titleOrOpts === 'string' ? titleOrOpts : '请输入',
         message: '',
+        html: '',
+        width: '',
         type: 'info',
         okText: '确定',
         cancelText: '取消',
@@ -117,12 +126,23 @@ function _applyXsPromptConfig(modal, opts) {
     modal.classList.remove('xs-prompt-type-warning', 'xs-prompt-type-danger');
     if (opts.type === 'warning') modal.classList.add('xs-prompt-type-warning');
     else if (opts.type === 'danger') modal.classList.add('xs-prompt-type-danger');
+    // 宽度：由调用方按需加宽（承载表格等宽内容），缺省时交还 HTML 默认宽度
+    var dialog = modal ? modal.querySelector('.xs-modal-dialog') : null;
+    if (dialog) {
+        if (opts.width) dialog.style.width = opts.width;
+        else dialog.style.width = '';
+    }
     if (msgEl) {
-        if (opts.message) {
+        if (opts.html) {
+            // 富文本分支（表格等）：调用方负责转义，此处仅做渲染
+            msgEl.innerHTML = opts.html;
+            msgEl.style.display = '';
+        } else if (opts.message) {
             msgEl.textContent = opts.message;
             msgEl.style.display = '';
         } else {
             msgEl.textContent = '';
+            msgEl.innerHTML = '';
             msgEl.style.display = 'none';
         }
     }

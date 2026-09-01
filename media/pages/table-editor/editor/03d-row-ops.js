@@ -154,6 +154,115 @@ function _collectPendingDelete(rowsToDelete) {
 }
 
 /**
+ * 删除前的「线上预检」：把待删除的 testcase_id 发给扩展端调删除确认接口，
+ * 扩展端回传 confirmDeleteRowsResult 后由 _showDeleteConfirmDialog 渲染确认弹窗。
+ *
+ * 契约：
+ *   发：{ type:'confirmDeleteRows', data:{ tsIds } }
+ *   收：{ type:'confirmDeleteRowsResult', ok, items:[{sourceId,testcaseNo,testCaseName,hasExec,hasBug}], errorMessage? }
+ *
+ * 健壮性：预检是为了「增强提示」，绝不能阻断删除。
+ *   - 无 vscode 通道 / 回包超时（3s）/ 接口失败（ok=false）→ 全部降级为
+ *     「不展示关联表格」，直接回调 onProceed 走原有简单确认删除流程。
+ *
+ * @param tsIds      待删除案例的 testcase_id 列表
+ * @param onProceed  预检结束（无论成败）后继续执行的删除动作
+ */
+var CONFIRM_TIMEOUT_MS = 3000;
+function requestDeleteConfirm(tsIds, onProceed) {
+    var ids = (Array.isArray(tsIds) ? tsIds : []).map(String).filter(Boolean);
+    var done = false;
+    var finish = function (result) {
+        if (done) return;
+        done = true;
+        if (S._deleteConfirmTimer) { clearTimeout(S._deleteConfirmTimer); S._deleteConfirmTimer = null; }
+        S._deleteConfirmCb = null;
+        if (result && result.ok && Array.isArray(result.items) && result.items.length > 0) {
+            // 存在「需要确认」的案例 → 渲染带关联表格的确认弹窗
+            _showDeleteConfirmDialog(result.items, onProceed);
+        } else {
+            // 无需额外确认 / 预检失败 → 降级为原有简单确认
+            _showPlainDeleteConfirm(onProceed);
+        }
+    };
+    if (ids.length === 0 || typeof S.vscode === 'undefined' || !S.vscode) {
+        _showPlainDeleteConfirm(onProceed);
+        return;
+    }
+    S._deleteConfirmCb = finish;
+    S._deleteConfirmTimer = setTimeout(function () {
+        if (done) return;
+        console.log('[requestDeleteConfirm] 预检超时，降级为简单确认');
+        finish({ ok: false, items: [] });
+    }, CONFIRM_TIMEOUT_MS);
+    try {
+        S.vscode.postMessage({ type: 'confirmDeleteRows', data: { tsIds: ids } });
+    } catch (_) {
+        finish({ ok: false, items: [] });
+    }
+}
+
+/** 渲染「无关联信息」时的简单确认弹窗（预检失败 / 全部允许删除时的降级形态） */
+function _showPlainDeleteConfirm(onProceed) {
+    if (typeof xsConfirm === 'function') {
+        xsConfirm({
+            title: '删除案例',
+            message: '删除案例会同步删除 TMS 平台上的案例，此操作不可恢复。是否确定删除？',
+            type: 'warning',
+            okText: '确定删除',
+        }, onProceed);
+    } else {
+        onProceed();
+    }
+}
+
+/**
+ * 渲染「需确认删除案例」的关联表格确认弹窗。
+ *
+ * 布局（按需求）：
+ *   第 1 段：原有提示（谨慎操作 + 同步删除 TMS 平台案例）+ 新要求
+ *           （同步删除执行和缺陷关联关系 + 如需继续操作请忽略本提示说明）
+ *   第 2 段：表格（编号 / 名称 / 执行 / 缺陷），true→Y，false→N
+ *   第 3 段：删除不可恢复，是否确认删除（「不可恢复」统一放在结尾段，首段不重复）
+ */
+function _showDeleteConfirmDialog(items, onProceed) {
+    var rowsHtml = '';
+    for (var i = 0; i < items.length; i++) {
+        var it = items[i] || {};
+        var no = it.testcaseNo || it.sourceId || '';
+        var name = it.testCaseName || '';
+        var exec = it.hasExec ? 'Y' : 'N';
+        var bug = it.hasBug ? 'Y' : 'N';
+        rowsHtml += '<tr>'
+            + '<td class="xs-dc-td xs-dc-no">' + escapeHtml(no) + '</td>'
+            + '<td class="xs-dc-td xs-dc-name">' + escapeHtml(name) + '</td>'
+            + '<td class="xs-dc-td xs-dc-flag" data-flag="' + exec + '">' + exec + '</td>'
+            + '<td class="xs-dc-td xs-dc-flag" data-flag="' + bug + '">' + bug + '</td>'
+            + '</tr>';
+    }
+    var html = ''
+        + '<div class="xs-dc-lead">谨慎操作：删除案例会同步删除 TMS 平台上的案例，并同步删除其执行和缺陷关联关系。如需继续操作，请忽略本提示（Y：存在，N：不存在）：</div>'
+        + '<div class="xs-dc-table-wrap"><table class="xs-dc-table">'
+        +   '<thead><tr><th>编号</th><th>名称</th><th>执行</th><th>缺陷</th></tr></thead>'
+        +   '<tbody>' + rowsHtml + '</tbody>'
+        + '</table></div>'
+        + '<div class="xs-dc-tail">删除不可恢复，是否确认删除</div>';
+
+    if (typeof xsConfirm === 'function') {
+        xsConfirm({
+            title: '删除案例',
+            html: html,
+            width: '620px',
+            type: 'warning',
+            okText: '确定删除',
+            cancelText: '取消',
+        }, onProceed);
+    } else {
+        onProceed();
+    }
+}
+
+/**
  * 扩展端删除接口回包后调用：
  *  - syncedTsIds：接口删除成功的行 → 真正 splice + 落盘（从表格消失）
  *  - failedTsIds：接口删除失败的行 → 保留在表格内，以置灰+划线 + 失败原因标记（不丢数据）
@@ -304,16 +413,9 @@ function deleteRow(ri) {
             console.log('[deleteRow] 发送 deleteRows 消息 tsIds=', JSON.stringify([tsId]));
             S.vscode.postMessage({ type: 'deleteRows', data: { tsIds: [tsId], tsIdOrder: _tsIdOrder } });
         };
-        if (typeof xsConfirm === 'function') {
-            xsConfirm({
-                title: '删除案例',
-                message: '谨慎操作：删除该行会同步删除 TMS 平台上的对应案例，是否继续删除？',
-                type: 'warning',
-                okText: '继续删除',
-            }, _doDelete);
-        } else {
-            _doDelete();
-        }
+        // 删除前先做线上预检：有「执行/缺陷」关联的案例会以表格形式二次确认；
+        // 预检失败或无需确认时自动降级为简单确认，不阻断删除。
+        requestDeleteConfirm([tsId], _doDelete);
     } else {
         console.log('[deleteRow] 未发送 deleteRows 消息（无 vscode 对象）tsId=', tsId);
     }
@@ -393,16 +495,11 @@ function deleteSelectedRows() {
     };
 
     if (_needConfirm) {
-        if (typeof xsConfirm === 'function') {
-            xsConfirm({
-                title: '删除案例',
-                message: '谨慎操作：删除选中行会同步删除 TMS 平台上的对应案例，是否继续删除？',
-                type: 'warning',
-                okText: '继续删除',
-            }, _doDeleteSelected);
-        } else {
-            _doDeleteSelected();
-        }
+        // 预检只针对「已推送行」（本地未推送行不涉线上，无需预检）
+        var _pendingTsIds = pendingRows.map(function (r) {
+            return (tsIdIdx >= 0 && r[tsIdIdx] != null) ? String(r[tsIdIdx]) : '';
+        }).filter(Boolean);
+        requestDeleteConfirm(_pendingTsIds, _doDeleteSelected);
     } else {
         // 仅本地行，无 TMS 同步风险，直接执行
         _doDeleteSelected();

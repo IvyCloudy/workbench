@@ -512,6 +512,21 @@ tbody tr.xs-tr-frozen.selected td.xs-td{background:#dde7f3}
 .xs-prompt-type-warning .xs-prompt-title{color:#333}
 .xs-prompt-type-danger .xs-prompt-title{color:#333}
 .xs-prompt-message{font-size:13px;line-height:1.7;color:#333;padding:0 4px 8px;word-break:break-word;white-space:pre-wrap}
+/* ── 删除确认弹窗：需确认案例关联表格 ── */
+.xs-dc-lead{font-size:13px;line-height:1.7;color:#333;margin:0 0 8px}
+.xs-dc-tail{font-size:13px;line-height:1.7;color:#333;margin:10px 0 0}
+.xs-dc-table-wrap{max-height:240px;overflow:auto;border:1px solid #e3e3e3;border-radius:3px}
+.xs-dc-table{width:100%;border-collapse:collapse;font-size:12px}
+.xs-dc-table th{position:sticky;top:0;background:#fafafa;font-weight:600;color:#555;text-align:left;padding:6px 8px;border-bottom:1px solid #e3e3e3;white-space:nowrap}
+.xs-dc-table td{padding:6px 8px;border-bottom:1px solid #f0f0f0;color:#333;word-break:break-all}
+.xs-dc-table tbody tr:last-child td{border-bottom:none}
+.xs-dc-table tbody tr:nth-child(even){background:#fcfcfc}
+.xs-dc-no{width:34%;color:#666}
+.xs-dc-name{width:44%}
+.xs-dc-flag{width:11%;text-align:center;font-weight:600}
+/* Y 标记为警示色（存在关联），N 为次要色 */
+.xs-dc-flag:not(:empty){color:#c0392b}
+.xs-dc-table td.xs-dc-flag[data-flag="N"]{color:#999;font-weight:400}
 /* 背景与主按钮使用 ID+类 提高选择器权重，避免被通用 .xs-modal-header / .xs-btn-p 覆盖 */
 #xsPromptHeader.xs-prompt-type-warning{background:#fdf3e3;border-bottom:1px solid #f5e1c1}
 #xsPromptHeader.xs-prompt-type-danger{background:#fbe6e9;border-bottom:1px solid #f0c8cc}

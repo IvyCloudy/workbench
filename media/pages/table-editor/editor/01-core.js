@@ -997,6 +997,16 @@ window.addEventListener('message', function (e) {
         if (m.reason === 'reload' && typeof showToast === 'function') {
             showToast('已获取最新数据并重置筛选', 'success');
         }
+    } else if (m.type === 'confirmDeleteRowsResult') {
+        // 删除前的线上预检回包：存在「执行/缺陷」关联的案例走表格二次确认，
+        // 失败/无需确认时由 requestDeleteConfirm 内部降级为简单确认。
+        var _ok = !!m.ok;
+        var _items = Array.isArray(m.items) ? m.items : [];
+        console.log('[recv confirmDeleteRowsResult] ok=', _ok, 'items=', _items.length,
+            'errorMessage=', m.errorMessage || '');
+        if (typeof S._deleteConfirmCb === 'function') {
+            S._deleteConfirmCb({ ok: _ok, items: _items, errorMessage: m.errorMessage || '' });
+        }
     } else if (m.type === 'deleteRowsResult') {
         // 扩展端删除接口回包：成功行真正删除，失败行取消置灰保留（置灰+划线 + 失败原因）
         var _synced = Array.isArray(m.synced) ? m.synced : [];

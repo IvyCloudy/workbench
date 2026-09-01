@@ -38,9 +38,11 @@ import {
 import { detectFileType, createParser } from '../parsers';
 import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { TS_ID_COLUMN } from '../services/utils';
+import { resolveTaskInfoOrNull } from './pushCore.stages';
 import { TelemetryService } from '../utils/telemetry';
-import { showDeleteResult } from '../utils/message';
-import type { PushFailure } from '../utils/message';
+import { showDeleteResult, showDeleteConfirmModal, showApiError } from '../utils/message';
+import type { PushFailure, DeleteConfirmItem } from '../utils/message';
+import { confirmDeleteTestCase } from '../services/http';
 
 /** 案例编辑器 viewType（保持与 BaseEditorProvider 注册值一致） */
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
@@ -58,7 +60,7 @@ const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
  *      关闭弹窗或按 ESC 才返回 —— **无需任何超时兜底**，用户可以从容选择。
  * 代价：弹窗样式为 VSCode 原生风格，与编辑器内 xsConfirm 不完全一致。
  *
- * @returns true=用户点"继续删除"；false=取消 / 关弹窗 / ESC / token 已取消
+ * @returns true=用户点"确定删除"；false=取消 / 关弹窗 / ESC / token 已取消
  */
 async function confirmCaseFileDelete(
     filePath: string,
@@ -67,7 +69,7 @@ async function confirmCaseFileDelete(
 ): Promise<boolean> {
     const fileName = path.basename(filePath);
     const message =
-        `谨慎操作：删除「${fileName}」将同步删除 TMS 平台上的 ${caseCount} 条案例，此操作不可恢复。`;
+        `谨慎操作：删除文件「${fileName}」会同步删除 TMS 平台上的 ${caseCount} 条案例及其关联的执行与缺陷关系，此操作不可恢复。是否确定删除？`;
 
     // 用户点了进度条上的 Cancel（event.token 取消）→ 立即取消，不再弹 modal
     if (token && token.isCancellationRequested) {
@@ -78,10 +80,10 @@ async function confirmCaseFileDelete(
     const choice = await vscode.window.showWarningMessage(
         message,
         { modal: true },
-        '继续删除',
+        '确定删除',
     );
-    // 只有点「继续删除」返回 true；点「取消」/ 关闭 / ESC 均返回 undefined → false（安全侧）
-    const confirmed = choice === '继续删除';
+    // 只有点「确定删除」返回 true；点「取消」/ 关闭 / ESC 均返回 undefined → false（安全侧）
+    const confirmed = choice === '确定删除';
     console.log('[workspaceListeners] 删除确认结果:', fileName, 'confirmed=', confirmed);
     return confirmed;
 }
@@ -182,7 +184,7 @@ function updateWillDeleteResult(fp: string, patch: Partial<WillDeleteResult>): v
 /**
  * 注册所有工作区文件变化监听器
  */
-export function registerWorkspaceListeners(_context: vscode.ExtensionContext): vscode.Disposable[] {
+export function registerWorkspaceListeners(context: vscode.ExtensionContext): vscode.Disposable[] {
     return [
         // 监听文件重命名，同步更新记录
         vscode.workspace.onDidRenameFiles((event) => {
@@ -241,10 +243,10 @@ export function registerWorkspaceListeners(_context: vscode.ExtensionContext): v
 
                 // event.waitUntil 等待 confirm 走完（用户点完原生 modal 按钮才结算）。
                 // 确认弹窗是 VSCode 原生 modal（不依赖 webview/panel、无超时兜底），
-                // 用户点「继续删除」/「取消」/ 关闭弹窗后本 promise 立即结算，
+                // 用户点「确定删除」/「取消」/ 关闭弹窗后本 promise 立即结算，
                 // VSCode 随后才执行 unlink 并触发 onDidDeleteFiles。
                 tasks.push(
-                    handleCaseFileWillDelete(fp, event.token).catch((err: any) => {
+                    handleCaseFileWillDelete(fp, event.token, context).catch((err: any) => {
                         console.error('[workspaceListeners] handleCaseFileWillDelete 未捕获异常（已吞兜底）:', err?.message || err);
                         TelemetryService.sendTelemetryErrorEvent('caseFileDelete.intercept.error', {
                             errorMessage: String(err?.message || err).slice(0, 500),
@@ -314,7 +316,11 @@ export function registerWorkspaceListeners(_context: vscode.ExtensionContext): v
  *      因此**无需超时兜底**，用户可以从容选择；waitUntil 在用户点完按钮后立即结算，
  *      VSCode 随后执行 unlink 并触发 onDidDeleteFiles。
  */
-async function handleCaseFileWillDelete(filePath: string, token?: vscode.CancellationToken): Promise<void> {
+async function handleCaseFileWillDelete(
+    filePath: string,
+    token?: vscode.CancellationToken,
+    extContext?: vscode.ExtensionContext,
+): Promise<void> {
     const fileType = detectFileType(filePath);
     if (!fileType) return;
 
@@ -356,6 +362,17 @@ async function handleCaseFileWillDelete(filePath: string, token?: vscode.Cancell
     const tsIdx = headers.indexOf(TS_ID_COLUMN);
     if (tsIdx < 0 || rows.length === 0) {
         // 无 testcase_id 列或空文件：无需线上删除，让 VSCode 正常删除文件
+        // 埋点：文件删除删除案例「发起」事件（即便无 testcase_id 也上报，记录用户触发了文件级删除）
+        TelemetryService.sendTelemetryEvent('caseFileDelete.intercept.init', {
+            filePath: path.basename(filePath),
+            totalRows: String(rows.length),
+            hasTsId: 'false',
+            nonEmptyIds: '0',
+            artifactId: path.basename(filePath),
+            testTaskNo: '',
+            subTestTaskId: '',
+            testcaseIds: '',
+        });
         if (pending) { pending.needRestore = false; pending.isUserCancel = false; pending.reportable = false; pending.total = 0; pending.successCount = 0; }
         return;
     }
@@ -364,6 +381,31 @@ async function handleCaseFileWillDelete(filePath: string, token?: vscode.Cancell
     const rowTsIds: string[] = rows.map(r => (r[tsIdx] == null ? '' : String(r[tsIdx]).trim()));
     const nonEmptyIds = rowTsIds.filter(Boolean);
 
+    // 拉取测试任务信息（失败不影响主流程，缺失时留空）
+    let taskTestTaskNo = '';
+    let taskSubTestTaskId = '';
+    try {
+        const t = await resolveTaskInfoOrNull(filePath);
+        if (t.status === 'ok') {
+            taskTestTaskNo = t.taskInfo.testTaskNo || '';
+            taskSubTestTaskId = t.taskInfo.subTestTaskId || '';
+        }
+    } catch (_) { /* 任务信息缺失不阻断删除主流程与埋点 */ }
+
+    // 埋点：文件删除删除案例「发起」事件（记录用户触发了一次案例文件删除，
+    // 携带待删除的 testcase_id 列表与测试任务信息，与后续
+    // caseFileDelete.intercept.done / .error 形成"发起→结果"闭环）
+    TelemetryService.sendTelemetryEvent('caseFileDelete.intercept.init', {
+        filePath: path.basename(filePath),
+        totalRows: String(rows.length),
+        hasTsId: 'true',
+        nonEmptyIds: String(nonEmptyIds.length),
+        artifactId: path.basename(filePath),
+        testTaskNo: taskTestTaskNo,
+        subTestTaskId: taskSubTestTaskId,
+        testcaseIds: nonEmptyIds.join('|'),
+    });
+
     if (nonEmptyIds.length === 0) {
         // 全部本地未推送：无需调接口，让 VSCode 正常删除文件
         if (pending) { pending.needRestore = false; pending.isUserCancel = false; pending.reportable = true; pending.total = rows.length; pending.successCount = rows.length; }
@@ -371,8 +413,48 @@ async function handleCaseFileWillDelete(filePath: string, token?: vscode.Cancell
     }
 
     // 谨慎操作：删除案例文件会同步删除 TMS 平台上的全部案例，先向用户确认。
-    // 用户取消 → isUserCancel=true, needRestore=true（did 阶段重建回原状，不弹 modal）。
-    const userConfirmed = await confirmCaseFileDelete(filePath, nonEmptyIds.length, token);
+    //
+    // 删除前先做「线上预检」（删除确认接口）：若存在带执行/缺陷关联的案例（type=2），
+    // 用独立 webview 弹窗以表格形式展示这些案例；否则降级为 VSCode 原生 modal。
+    // 预检失败（未绑定任务 / 接口异常）不阻断删除，同样走原生 modal 降级。
+    let confirmItems: DeleteConfirmItem[] = [];
+    try {
+        const tInfo = await resolveTaskInfoOrNull(filePath);
+        if (tInfo.status === 'ok' && extContext) {
+            const resp = await confirmDeleteTestCase(extContext, tInfo.taskInfo, nonEmptyIds);
+            if (resp.returnCode === 'SUC0000' && Array.isArray(resp.body)) {
+                confirmItems = resp.body
+                    .filter((it: any) => Number(it?.type) === 2)
+                    .map((it: any) => ({
+                        sourceId: String(it?.sourceId ?? '').trim(),
+                        testcaseNo: String(it?.data?.testcaseNo ?? '').trim(),
+                        testCaseName: String(it?.data?.testCaseName ?? '').trim(),
+                        hasExec: !!it?.data?.hasExec,
+                        hasBug: !!it?.data?.hasBug,
+                    }))
+                    .filter((it: DeleteConfirmItem) => !!it.sourceId);
+            } else {
+                // 预检接口返回非成功码：提示后端 errorMsg，降级为原生 modal（不阻断删除）
+                showApiError(
+                    undefined,
+                    '删除前校验未通过，已跳过确认步骤',
+                    resp.returnCode || '',
+                    resp.errorMsg || '',
+                    'warning',
+                );
+            }
+        }
+    } catch (_ce) {
+        // 预检失败（网络/异常）：降级为原生 modal（不阻断删除）
+        confirmItems = [];
+    }
+
+    const userConfirmed = confirmItems.length > 0
+        ? await showDeleteConfirmModal(
+            { fileName: path.basename(filePath), caseCount: nonEmptyIds.length, items: confirmItems },
+            token,
+        )
+        : await confirmCaseFileDelete(filePath, nonEmptyIds.length, token);
     if (!userConfirmed) {
         console.log('[workspaceListeners] 用户取消案例文件删除，标记 isUserCancel=true 到 willDeleteResults:', path.basename(filePath));
         if (pending) { pending.needRestore = true; pending.isUserCancel = true; pending.reportable = false; pending.total = nonEmptyIds.length; pending.successCount = 0; }

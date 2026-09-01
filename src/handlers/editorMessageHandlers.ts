@@ -25,11 +25,13 @@ import { WebviewDataPusher } from '../services/webviewDataPusher';
 import { applyDiffHighlight, type EditorSession } from '../services/diffHighlight';
 import { getMarks, setMarks, clearMarks } from '../utils/markStore';
 import { getHeaderLabels, onHeaderLabelsChange } from '../utils/headerLabels';
-import { showSaveResult, showPushErrorModal, showDeleteResult, type PushFailure } from '../utils/message';
+import { showSaveResult, showPushErrorModal, showDeleteResult, showApiError, type PushFailure } from '../utils/message';
 import { syncDeletedRows } from '../utils/deletedRowsStore';
+import { confirmDeleteTestCase } from '../services/http';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { TelemetryService } from '../utils/telemetry';
 import { buildErrorProps } from '../services/utils';
+import { resolveTaskInfoOrNull } from '../handlers/pushCore.stages';
 import { TS_ID_COLUMN } from '../services/utils';
 import { detectFileType, createParser } from '../parsers';
 import type { PushStrategy, PushContext } from '../providers/BaseEditorProvider';
@@ -75,6 +77,7 @@ function buildHandlers(): Record<string, Handler> {
         setMarkRects: handleSetMarkRects,
         clearAllMarks: handleClearAllMarks,
         deleteRows: handleDeleteRows,
+        confirmDeleteRows: handleConfirmDeleteRows,
     };
 }
 
@@ -240,6 +243,81 @@ async function handleClearAllMarks(_msg: any, ctx: EditorMsgCtx): Promise<void> 
 }
 
 /**
+ * 删除案例前的「线上预检」：调用删除确认接口，把需要用户二次确认的案例
+ * （type=2，存在执行/缺陷关联）明细回传前端，用于在确认弹窗内以表格展示。
+ *
+ * 设计要点：
+ *   - 本接口仅用于**增强提示**，任何失败都不阻断删除：失败时回传 ok=false，
+ *     前端降级为「不展示关联表格、按原有简单确认继续」，保证删除链路可用。
+ *   - 只回传 type=2 的案例（需要确认的），type=1（允许删除）/ type=3（不存在）
+ *     无需用户额外确认，不进表格。
+ *
+ * 消息契约：
+ *   前端 → 扩展：{ type: 'confirmDeleteRows', data: { tsIds: string[] } }
+ *   扩展 → 前端：{ type: 'confirmDeleteRowsResult', ok: boolean,
+ *                  items: [{ sourceId, testcaseNo, testCaseName, hasExec, hasBug }],
+ *                  errorMessage?: string }
+ */
+async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
+    const filePath = ctx.getFilePath();
+    const tsIds: string[] = Array.isArray(msg?.data?.tsIds)
+        ? msg.data.tsIds.map((x: any) => String(x)).filter(Boolean)
+        : [];
+    if (tsIds.length === 0 || !ctx.extensionContext) {
+        ctx.webviewPanel.webview.postMessage({
+            type: 'confirmDeleteRowsResult', ok: false, items: [],
+            errorMessage: '无可确认的案例或未初始化',
+        });
+        return;
+    }
+    try {
+        const t = await resolveTaskInfoOrNull(filePath);
+        if (t.status !== 'ok') {
+            ctx.webviewPanel.webview.postMessage({
+                type: 'confirmDeleteRowsResult', ok: false, items: [],
+                errorMessage: t.status === 'unbound' ? '当前文件未绑定测试任务' : (t.errorMessage || '获取任务信息失败'),
+            });
+            return;
+        }
+        const resp = await confirmDeleteTestCase(ctx.extensionContext, t.taskInfo, tsIds);
+        if (resp.returnCode !== 'SUC0000') {
+            // 预检失败不阻断删除：提示后端 errorMsg，并降级为简单确认继续
+            showApiError(
+                ctx.webviewPanel,
+                '删除前校验未通过，已跳过确认步骤',
+                resp.returnCode || '',
+                resp.errorMsg || '',
+                'warning',
+            );
+            ctx.webviewPanel.webview.postMessage({
+                type: 'confirmDeleteRowsResult', ok: false, items: [],
+                errorMessage: resp.errorMsg || `确认接口返回 ${resp.returnCode}`,
+            });
+            return;
+        }
+        // 只取 type=2（需要确认后删除）的案例，映射为前端表格所需字段
+        const raw: any[] = Array.isArray(resp.body) ? resp.body : [];
+        const items = raw
+            .filter((it: any) => Number(it?.type) === 2)
+            .map((it: any) => ({
+                sourceId: String(it?.sourceId ?? '').trim(),
+                testcaseNo: String(it?.data?.testcaseNo ?? '').trim(),
+                testCaseName: String(it?.data?.testCaseName ?? '').trim(),
+                hasExec: !!it?.data?.hasExec,
+                hasBug: !!it?.data?.hasBug,
+            }))
+            .filter((it: any) => !!it.sourceId);
+        ctx.webviewPanel.webview.postMessage({ type: 'confirmDeleteRowsResult', ok: true, items });
+    } catch (err: any) {
+        // 预检失败不阻断删除：回传 ok=false，由前端降级处理
+        ctx.webviewPanel.webview.postMessage({
+            type: 'confirmDeleteRowsResult', ok: false, items: [],
+            errorMessage: String(err?.message || String(err)),
+        });
+    }
+}
+
+/**
  * 编辑器右键"删除该行 / 删除选中行"后，由前端把本次删除的 testcase_id 列表
  * 通过 postMessage 上报，本 handler 直接调用线上删除接口并弹窗反馈。
  *
@@ -262,6 +340,28 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
         // 没有可同步的已推送行（例如删除的是未推送行），无需调接口
         return;
     }
+    // 埋点：编辑器内删除案例「发起」事件（无论最终是否同步、是否成功都上报，
+    // 用于观测"用户在编辑器里触发了删除案例"这一动作本身，与后续
+    // editor.deleteRows.synced / .error 形成"发起→结果"闭环）。
+    // 携带本次删除的 testcase_id 列表与测试任务信息，便于线上按任务/案例维度归因。
+    let taskTestTaskNo = '';
+    let taskSubTestTaskId = '';
+    try {
+        const t = await resolveTaskInfoOrNull(filePath);
+        if (t.status === 'ok') {
+            taskTestTaskNo = t.taskInfo.testTaskNo || '';
+            taskSubTestTaskId = t.taskInfo.subTestTaskId || '';
+        }
+    } catch (_) { /* 任务信息缺失不阻断删除主流程与埋点 */ }
+    TelemetryService.sendTelemetryEvent('editor.deleteRows.init', {
+        fileFormat: ctx.session.type,
+        requestRows: String(tsIds.length),
+        filePath: path.basename(filePath || ''),
+        artifactId: path.basename(filePath || ''),
+        testTaskNo: taskTestTaskNo,
+        subTestTaskId: taskSubTestTaskId,
+        testcaseIds: tsIds.join('|'),
+    });
     try {
         // 优先使用前端提供的 tsIdOrder；缺失时才降级为读磁盘（历史前端版本兼容）
         let effectiveTsIdOrder: string[] = tsIdOrderFromWebview;

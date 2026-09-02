@@ -1,0 +1,342 @@
+路径,测试名称,描述,步骤描述,预期结果,优先级
+合并测试阶段/绑定和关联/关联/匹配引擎/类型1最强,parent_id 命中且归一化 path 相等时判 type=1（最强）,pointCaseLinker.matchCore：当 record 的 parent_id 命中某 point 且 normalizePointPath(path) 与该 point.pointPath 相等→ type=1，优先级最高。,"步骤1:
+要点列表含 pointId=LGN-001、pointPath=账户中心/登录
+步骤2:
+案例记录 parent_id=LGN-001、path=账户中心/登录
+步骤3:
+运行 linkPointsToCases","【业务功能检查】
+- 该案例归到 LGN-001，type=1
+- stats.matchedByType.type1 +1
+- 计入 matchedRecords",高
+合并测试阶段/绑定和关联/关联/匹配引擎/类型2路径兜底,仅 path 命中（无或不匹配 parent_id）时判 type=2,matchCore：当 parent_id 完全未命中且归一化 path 命中某 point.pointPath → type=2（路径兜底）。中文 CSV 因无 parent_id 只能走 type=2。,"步骤1:
+要点 pointPath=账户中心/登录
+步骤2:
+案例记录无 parent_id、path=账户中心/登录
+步骤3:
+运行匹配","【业务功能检查】
+- 该案例归到对应要点，type=2
+- type1=0、type2+1
+- 中文表头 CSV 命中符合此路径",高
+合并测试阶段/绑定和关联/关联/匹配引擎/类型3父id,仅 parent_id 命中但 path 不等或缺失时判 type=3,matchCore：parent_id 命中但归一化 path 与该 point 的 pointPath 不相等（或 path 缺失）→ type=3。,"步骤1:
+要点 pointId=LGN-001、pointPath=账户中心/登录
+步骤2:
+案例 parent_id=LGN-001、path=账户中心/注册（不等）
+步骤3:
+运行匹配","【业务功能检查】
+- 该案例归到 LGN-001，type=3
+- type3+1
+- 仍计入匹配（弱匹配）",高
+合并测试阶段/绑定和关联/关联/匹配引擎/父id多值,parent_id 为数组或逗号、分号分隔字符串时正确拆分,"normalizeParentIds：支持数组、逗号(,)、中文逗号(，)、分号(;)、全角分号(；)分隔；空串过滤、trim。","步骤1:
+案例 parent_id 分别为 [""LGN-001"",""LGN-002""]、""LGN-001,LGN-002""、""LGN-001；LGN-002""
+步骤2:
+分别运行匹配","【业务功能检查】
+- 三种写法均拆成两个候选父点
+- 命中数量与写法无关
+- 多余空白被忽略",中
+合并测试阶段/绑定和关联/关联/匹配引擎/尾号剥离,parent_id 末尾 -数字 在未命中时剥离兜底（LGN-001-1→LGN-001）,"stripSubIndex：原值查不到时尝试去掉末尾 ""-数字""，命中则记为 strippedParentIds（统计）。","步骤1:
+要点 pointId=LGN-001
+步骤2:
+案例 parent_id=LGN-001-1（原值不命中）
+步骤3:
+运行匹配","【业务功能检查】
+- 通过 -1 剥离命中 LGN-001
+- stats.strippedParentIds +1
+- 原值已命中时不误剥（避免 LGN-001 被误剥为 LGN）",中
+合并测试阶段/绑定和关联/关联/匹配引擎/path归一化,path 归一化统一反斜杠、全角斜杠、间隔点、首尾与连续斜杠,normalizePointPath：\、／、· 转 /；折叠空白；去掉斜杠两侧空白；合并连续 //；去首尾斜杠。,"步骤1:
+要点 pointPath=账户中心/登录
+步骤2:
+案例 path 分别用 账户中心\登录、账户中心／登录、账户中心·登录、/账户中心/登录/、账户中心//登录
+步骤3:
+运行匹配","【业务功能检查】
+- 所有变体均归一化为 账户中心/登录 并命中 type=1/2
+- 与要点侧使用同一套规则，避免  对 / 不一致",高
+合并测试阶段/绑定和关联/关联/匹配引擎/单点归属,同一案例只归到一个要点（多命中取最强 type）,"matchCore：同一 (pointKey,testcase_id) 去重；多命中时按 type 升序取第一个，避免一个 case 被多个 point 瓜分。","步骤1:
+两个要点 pointPath 相同（兄弟点）
+步骤2:
+案例 path 命中两者
+步骤3:
+运行匹配","【业务功能检查】
+- 该案例仅归到一个 point
+- 选中的为 type 最小（最强）者
+- 不产生重复归属",高
+合并测试阶段/绑定和关联/关联/匹配引擎/多命中告警1,parent_id 数组指向多个不同要点时记为 multiHit 告警,multiHit 判定1：hits 内部含 >1 个不同 pointId（脏数据）→ 该 testcase_id 进 multiHitCases。,"步骤1:
+要点 LGN-001、LGN-002 均存在
+步骤2:
+案例 parent_id=LGN-001,LGN-002
+步骤3:
+运行匹配","【业务功能检查】
+- testcase_id 进 stats.multiHitCases
+- 仍按单点归属落库（取最强）
+- 埋点 pointCaseLinker.multiHitCase",中
+合并测试阶段/绑定和关联/关联/匹配引擎/多命中告警2,案例 path 指向与 parent_id 完全不同的模块时记为 multiHit,multiHit 判定2：path 命中的 pointId 集合与 parent_id 命中集合完全不相交 → multiHit。,"步骤1:
+要点 A（path=模块A）、要点 B（path=模块B）
+步骤2:
+案例 parent_id 命中 A，但 path=模块B
+步骤3:
+运行匹配","【业务功能检查】
+- testcase_id 进 multiHitCases
+- 表明 path 与 parent_id 指向不同模块（数据可疑）",中
+合并测试阶段/绑定和关联/关联/匹配引擎/同point去重,同一要点内相同 testcase_id 去重（Q8）,matchCore：byPoint[pointKey] 内用 seen 集合按 testcase_id 去重，重复记录只计一次。,"步骤1:
+同一要点下两条记录 testcase_id 相同
+步骤2:
+运行匹配","【业务功能检查】
+- 该要点下该 testcase_id 只出现一次
+- matchedRecords 不重复计数",中
+合并测试阶段/绑定和关联/关联/匹配引擎/孤儿记录,parent_id 与 path 均不命中时记为孤儿（orphan）,matchCore：hits 为空 → orphanRecords+1，不进入 byPoint；中文 CSV 若 path 也不匹配则成孤儿。,"步骤1:
+要点 pointPath=账户中心/登录
+步骤2:
+案例 path=不存在的模块、无 parent_id
+步骤3:
+运行匹配","【业务功能检查】
+- stats.orphanRecords +1
+- byPoint 不含该案例
+- total=totalRecords-matched-orphan 关系成立",中
+合并测试阶段/绑定和关联/关联/匹配引擎/重复pointId,要点列表存在重复 pointId 时记入 duplicatePointIds,buildIndex：同一 pointId 出现多次 → dupSet，最终 stats.duplicatePointIds 返回（脏数据信号）。,"步骤1:
+要点列表含两个 pointId 相同的条目
+步骤2:
+运行匹配","【业务功能检查】
+- stats.duplicatePointIds 含该 pointId
+- 多归属的 point 仍被合并处理
+- 埋点 pointCaseLinker.duplicatePointId",中
+合并测试阶段/绑定和关联/关联/匹配引擎/默认字段名,默认按 parent_id、path、testcase_id、name 取值,linkPointsToCases 默认 LinkOptions：parentIdField=parent_id、pathField=path、caseIdField=testcase_id、caseNameField=name。,"步骤1:
+使用标准英文字段案例文件
+步骤2:
+运行匹配","【业务功能检查】
+- 四个字段均正确读取
+- 命中与命名符合约定",中
+合并测试阶段/绑定和关联/关联/匹配引擎/自定义字段,通过 LinkOptions 自定义字段名可正确匹配,linkPointsToCases 支持传入 parentIdField/pathField/caseIdField/caseNameField/preconditionFields/expectedFields 覆盖默认。,"步骤1:
+案例文件使用非默认字段名（如 父点编号/用例路径/用例编号/用例名称）
+步骤2:
+以 LinkOptions 注入映射
+步骤3:
+运行匹配","【业务功能检查】
+- 使用自定义字段名仍正确命中
+- byPoint 数据完整",中
+合并测试阶段/绑定和关联/关联/匹配引擎/空pointId路径兜底,要点 pointId 为空但带 pointPath 仍可凭路径参与匹配,buildIndex：pointId 为空时不入 byId，但只要 pointPath 合法就入 byPath，支持 type=2 兜底（避免空编号要点被整体跳过）。,"步骤1:
+要点列表含一个 pointId 为空、pointPath=账户中心/登录 的条目
+步骤2:
+案例无 parent_id、path=账户中心/登录
+步骤3:
+运行匹配","【业务功能检查】
+- 该要点凭 path 参与匹配
+- 案例归到该要点，type=2
+- 不因空编号被忽略",中
+合并测试阶段/绑定和关联/关联/匹配引擎/缓存失效,records 走 LRU + mtime 缓存避免重复解析,fileCache：以 filePath+mtimeMs+size 为键，命中则返回缓存 records；超出 CACHE_MAX(64) 淘汰最久未用。,"步骤1:
+连续对同一文件运行两次匹配
+步骤2:
+观察第二次是否走缓存","【业务功能检查】
+- 第二次直接命中缓存、不重复解析
+- 文件保存（mtime 变）后缓存失效重解析
+- 热调用近乎零成本",中
+合并测试阶段/绑定和关联/关联/要点解析/md表头,md 表格「| 序号 | 测试点 | ...」正确解析为 pointList,parseMdToPointListSilent：识别首行为「| 序号 | 测试点 | ...」的表，取前两列作为 pointId/pointName。,"步骤1:
+编写含「| 序号 | 测试点 | 预期 |」的 md
+步骤2:
+调用 parseMdToPointListSilent","【业务功能检查】
+- 解析出每个测试点为 {pointId, pointName, pointPath}
+- 表头识别稳定",高
+合并测试阶段/绑定和关联/关联/要点解析/功能条目前缀,「功能条目：xxx」行作为 pointPath 父级前缀,parseMdToPointListSilent：找「功能条目[:：]xxx」行作为 funcPrefix；无则退化为文件名（去后缀）。,"步骤1:
+md 含「功能条目：账户中心/登录模块」
+步骤2:
+表格测试点「登录鉴权」
+步骤3:
+解析","【业务功能检查】
+- pointPath = 账户中心/登录模块/登录鉴权（归一化后）
+- 缺功能条目行时取文件名兜底",高
+合并测试阶段/绑定和关联/关联/要点解析/空名称跳过,测试点名称为空时跳过该行,parseMdToPointListSilent：仅当 pname 为空才 continue；pointId 为空时用 pname 兜底。,"步骤1:
+表格某行测试点列为空
+步骤2:
+解析","【业务功能检查】
+- 空名称行被跳过，不进 pointList
+- 编号空但名称有的行保留",中
+合并测试阶段/绑定和关联/关联/要点解析/编号兜底,测试点编号为空时用名称兜底作为 pointId,parseMdToPointListSilent：pointId = pid || pname，保证未填编号的要点也能参与 path 匹配（type=2）。,"步骤1:
+表格序号列空、测试点列有值
+步骤2:
+解析","【业务功能检查】
+- pointId 取测试点名称
+- 该要点可凭 pointPath 参与匹配",中
+合并测试阶段/绑定和关联/关联/要点解析/表头弹性,md 表头列名弹性识别（编号、点号、id、pointId 等）,parseMdToPointListSilent：idIdx 匹配 /^(序号|编号|点号|id|pointId)$/i，nameIdx 匹配 /^(测试点|测试要点|要点|名称|name|pointName)$/i。,"步骤1:
+用「| 编号 | 要点 |」表头
+步骤2:
+用「| pointId | pointName |」表头
+步骤3:
+分别解析","【业务功能检查】
+- 不同团队叫法均被正确识别
+- 列序无关",中
+合并测试阶段/绑定和关联/关联/要点解析/转义竖线,md 单元格内转义竖线 \| 不被当作分列,splitMdRow：将 \| 暂存占位符，切完列再还原为 |。,"步骤1:
+单元格含「A\|B」内容
+步骤2:
+解析该行","【业务功能检查】
+- A|B 作为同一单元格内容
+- 不错误多分一列",中
+合并测试阶段/绑定和关联/关联/要点解析/路径写法兼容,功能条目缺或多斜杠、用反斜杠写法均归一化一致,funcPrefix 与最终 pointPath 均经 normalizePointPath，与案例侧同构。,"步骤1:
+功能条目用 账户中心\登录模块、账户中心/登录模块/、账户中心 ／ 登录模块
+步骤2:
+与同 path 案例匹配","【业务功能检查】
+- 三种写法均归一化为 账户中心/登录模块/<点>
+- 与案例 path 一致命中 type=1/2",中
+合并测试阶段/绑定和关联/关联/要点解析/xmind节点,xmind 带五角星图标的节点解析为测试点,parseXmindToPointListSilent：以五角星图标节点为测试点（引自 parseXmindToPointList）。,"步骤1:
+构造 xmind：功能条目（小旗子）+ 测试点（五角星）
+步骤2:
+调用解析","【业务功能检查】
+- 五角星节点解析为 pointList
+- 中间功能条目节点作为父级路径",高
+合并测试阶段/绑定和关联/关联/要点解析/xmind结构错误,xmind 中间节点缺图标时返回结构错误清单,解析结果 invalidNodes 非空 → getLinkedCasesByMdFile 直接短路返回 errorMsg，并随 envelope 携带 xmindInvalidNodes 清单（含 sheetTitle、ancestryPath）。,"步骤1:
+构造 xmind：存在无图标的中间节点
+步骤2:
+调用 getLinkedCasesByMdFile","【业务功能检查】
+- 返回 errorMsg 非空、total=0、data={}
+- envelope.xmindInvalidNodes 列出缺图标节点路径
+- 提示为节点标记图标或移到测试点下",中
+合并测试阶段/绑定和关联/关联/要点解析/xmind脏数据告警,xmind 多 label 等脏数据产生告警但不阻断解析,parseXmindToPointListSilent：warnings 非空（如多 label）→ envelope.xmindWarnings 携带，仍正常返回 pointList。,"步骤1:
+构造 xmind 含多 label 节点
+步骤2:
+调用解析","【业务功能检查】
+- pointList 正常返回
+- envelope.xmindWarnings 列出脏数据说明
+- 不阻断匹配",中
+合并测试阶段/绑定和关联/关联/中文CSV兼容/表头探测,中文表头 CSV（名称、路径、预期结果）被探测并映射到引擎字段,detectCsvHeaderOptions：只读首行(≤8KB)，命中中文关键字段时把 LinkOptions 字段名指向中文键（名称→caseNameField 等），数组字段包成数组返回。,"步骤1:
+准备中文表头 CSV（名称,路径,前置条件,预期结果,...）
+步骤2:
+调用 linkAndAggregateCases
+步骤3:
+核对是否命中","【业务功能检查】
+- 首行中文表头被识别
+- LinkOptions 注入中文键映射
+- 案例按中文列正确取值",高
+合并测试阶段/绑定和关联/关联/中文CSV兼容/仅类型2,中文 CSV 无 parent_id 时只能命中 type=2（路径兜底）,detectCsvHeaderOptions 对 parent_id 仅列中文别名兜底；中文模板通常无 parent_id，因此只能走 path 兜底，这是数据模型天花板（非缺陷）。,"步骤1:
+准备无父点编号列的中文 CSV
+步骤2:
+与要点按 path 匹配","【业务功能检查】
+- 命中均为 type=2
+- type1/type3 为 0
+- 行为符合「中文 CSV 天花板」说明",中
+合并测试阶段/绑定和关联/关联/中文CSV兼容/无中文短路,表头无中文时保持默认英文字段名,detectCsvHeaderOptions：首行完全没有中文字符 → 直接返回 undefined，保持 parent_id/path/testcase_id/name 默认。,"步骤1:
+准备英文表头 CSV
+步骤2:
+调用匹配","【业务功能检查】
+- 不注入中文映射
+- 按英文字段名正常匹配",中
+合并测试阶段/绑定和关联/关联/中文CSV兼容/非csv不探测,非 .csv 文件（yaml 或 json）不做中文表头探测,detectCsvHeaderOptions：非 /.csv$/i 直接返回 undefined；yaml/json 由用户按约定使用英文字段。,"步骤1:
+准备英文/中文混合的 yaml 案例
+步骤2:
+调用匹配","【业务功能检查】
+- 不触发中文探测逻辑
+- 按 yaml 约定字段匹配",中
+合并测试阶段/绑定和关联/关联/中文CSV兼容/预期成品,中文 CSV 的「预期结果」列作为成品文本按行输出,buildCaseDetail 退化分支：无 steps 时，expectedFields（预期结果）按行原样输出（每行 <p> 包裹），不再按 ui_expected/api_expected/db_expected 拆分。,"步骤1:
+中文 CSV「预期结果」列含【UI检查】等成品标签
+步骤2:
+匹配后查看 caseDetail","【业务功能检查】
+- caseDetail 的【预期结果】直接包含原成品文本
+- 每行 <p> 包裹
+- 不重复拆分标签",中
+合并测试阶段/绑定和关联/关联/诊断命令/取激活tab,诊断命令取当前激活 tab 的测试要点文件,handleLinkerDiagnostic：优先 activeTextEditor.document.uri（file 协议）；为空时从 tabGroups.activeTab.input.uri 兜底（覆盖 xmind 自定义编辑器）；最后遍历所有 tab 找最近的 .md/.xmind。,"步骤1:
+打开 要点.md 并激活
+步骤2:
+命令面板执行「关联匹配诊断」
+步骤3:
+观察输出","【业务功能检查】
+- 命令取到当前 要点.md
+- Output Channel 输出 [TC-Linker] 诊断信息
+- 埋点 linkerDiagnostic.done",高
+合并测试阶段/绑定和关联/关联/诊断命令/xmind兜底,xmind 由自定义编辑器打开时从 tabGroups 兜底取路径,handleLinkerDiagnostic：xmind 自定义编辑器下 activeTextEditor 为空，走 tabGroups 兜底且过滤 scheme=file。,"步骤1:
+用自定义编辑器打开 要点.xmind 并激活
+步骤2:
+执行诊断命令","【业务功能检查】
+- 仍正确取到 xmind 路径
+- 不被 output/terminal 虚拟 tab 干扰",高
+合并测试阶段/绑定和关联/关联/诊断命令/非要点拦截,当前激活文件非 .md 或 .xmind 时警告并退出,handleLinkerDiagnostic：activeExt 非 .md/.xmind → 警告「当前激活文件不是测试要点」并不输出诊断。,"步骤1:
+激活一个 .csv 文件
+步骤2:
+执行诊断命令","【业务功能检查】
+- 弹 warning 提示非测试要点
+- 不执行匹配
+- 埋点/提示正常",中
+合并测试阶段/绑定和关联/关联/诊断命令/目录校验,要点文件不在「测试任务<任务>测试大纲」下时警告,OUTLINE_RE 校验路径；不匹配 → 警告「当前激活的测试要点文件不在 测试任务/<任务名>/测试大纲/ 下」。,"步骤1:
+在测试任务外放置一个 .md 并激活
+步骤2:
+执行诊断命令","【业务功能检查】
+- 弹 warning 指出目录不符
+- 不执行匹配",中
+合并测试阶段/绑定和关联/关联/诊断命令/未打开文件,未打开任何测试要点时提示先打开文件,handleLinkerDiagnostic：多层兜底均取不到 mdPath → 警告「请先在编辑器中打开一个测试要点 .md / .xmind 文件」。,"步骤1:
+关闭所有编辑器后执行诊断命令
+步骤2:
+观察提示","【业务功能检查】
+- 提示先打开测试要点
+- 不报错崩溃",中
+合并测试阶段/绑定和关联/关联/诊断命令/未绑定提示,要点已解析但未被任何案例绑定时提示去绑定,getLinkedCasesByMdFile：getCaseOfPoint 返回 null → errorMsg「当前测试要点尚未绑定测试案例，请选择文件右键绑定后再试」。,"步骤1:
+打开已解析出测试点的 要点.md（未绑定）
+步骤2:
+执行诊断命令","【业务功能检查】
+- errorMsg 提示去绑定
+- total=0、data={}",高
+合并测试阶段/绑定和关联/关联/诊断命令/案例缺失,绑定的案例文件已在磁盘缺失时返回错误,getLinkedCasesByMdFile：校验 casePath 存在(isFile)失败 → errorMsg「绑定的测试案例文件已缺失」。,"步骤1:
+绑定要点与案例后删除案例
+步骤2:
+执行诊断命令","【业务功能检查】
+- errorMsg 指出案例缺失
+- 不进入匹配",中
+合并测试阶段/绑定和关联/关联/诊断命令/无测试点,md 未解析出任何测试点时返回错误,getLinkedCasesByMdFile：parseMdToPointListSilent 返回空 → errorMsg 提示检查表头格式。,"步骤1:
+编写无合规表格的 md
+步骤2:
+执行诊断命令","【业务功能检查】
+- errorMsg 提示未解析出测试点及表头要求
+- total=0、data={}",中
+合并测试阶段/绑定和关联/关联/诊断命令/输出规格,诊断输出包含 envelope 与 stats 两块 JSON（TC-Linker 前缀）,handleLinkerDiagnostic：成功时 appendLine「[TC-Linker] ===== 最终出参（约定格式） =====」+ JSON.stringify(envelope)，再输出「===== 统计 =====」+ stats JSON。,"步骤1:
+绑定且案例存在、含匹配
+步骤2:
+执行诊断命令
+步骤3:
+查看 Output Channel","【业务功能检查】
+- 输出含 envelope 完整 JSON（data 按 pointKey 分组）
+- 含 stats JSON（typeCount/orphan/stripped 等）
+- 前缀为 [TC-Linker]",高
+合并测试阶段/绑定和关联/关联/诊断命令/xmind错误清单,xmind 结构错误时诊断输出列出问题节点清单,appendXmindDiagnosticsToChannel：envelope.xmindInvalidNodes 非空 → 列出所有缺图标中间节点；达到硬上限(200)时提示可能折叠。,"步骤1:
+构造含缺图标节点的 xmind 并绑定
+步骤2:
+执行诊断命令","【业务功能检查】
+- Output 列出 xmind 结构错误节点路径
+- 提示为节点标记图标或下移
+- 同时仍 dump envelope JSON",中
+合并测试阶段/绑定和关联/关联/统计与异常/total计数,envelope.total 等于匹配命中记录数 matchedRecords,linkAndAggregateCases：total = r.stats.matchedRecords；透传 byPoint 数据。,"步骤1:
+准备 N 条命中、M 条孤儿的案例文件
+步骤2:
+执行聚合","【业务功能检查】
+- envelope.total = N
+- data 各 pointKey 下条目数合计 = N",高
+合并测试阶段/绑定和关联/关联/统计与异常/类型分布,stats.typeCount 正确反映 type1、type2、type3 分布,linkAndAggregateCases：stats.typeCount = { ...matchedByType }（type1/type2/type3）。,"步骤1:
+构造含 type1/type2/type3 混合命中的案例
+步骤2:
+查看 stats","【业务功能检查】
+- typeCount.type1/2/3 与匹配引擎统计一致
+- 三者之和等于 total",中
+合并测试阶段/绑定和关联/关联/统计与异常/孤儿与剥离,stats 含 totalOrphan 与 totalStripped,stats.totalOrphan = orphanRecords；stats.totalStripped = strippedParentIds。,"步骤1:
+构造含孤儿记录与父点尾号剥离的用例
+步骤2:
+查看 stats","【业务功能检查】
+- totalOrphan 等于孤儿数
+- totalStripped 等于尾号剥离次数",中
+合并测试阶段/绑定和关联/关联/统计与异常/空pointList,入参 pointList 为空时返回「未传入任何测试要点」,"linkAndAggregateCases 入参校验：!Array/length=0 → { total:0, errorMsg:""未传入任何测试要点"", data:{} }。","步骤1:
+传空 pointList
+步骤2:
+调用聚合","【业务功能检查】
+- 返回 errorMsg 提示未传入测试要点
+- 不进入匹配",中
+合并测试阶段/绑定和关联/关联/统计与异常/空filePath,入参 filePath 为空或非字符串时返回「未传入测试案例文件」,linkAndAggregateCases 入参校验：!filePath/非 string → errorMsg「未传入测试案例文件」。,"步骤1:
+传空 filePath
+步骤2:
+调用聚合","【业务功能检查】
+- 返回对应 errorMsg、total=0、data={}",中
+合并测试阶段/绑定和关联/关联/统计与异常/匹配异常,匹配过程抛错时 envelope 返回「匹配失败」错误,"linkAndAggregateCases：linkPointsToCases 抛错 → catch 返回 { total:0, errorMsg:""匹配失败: <msg>"", data:{} }。","步骤1:
+传入无法解析的损坏案例文件
+步骤2:
+调用聚合","【业务功能检查】
+- errorMsg 以「匹配失败」开头并含原始错误
+- 不向上抛未捕获异常",中
+合并测试阶段/绑定和关联/关联/统计与异常/一对一查询,getCaseOfPoint 与 getPointOfCase 在 1:1 下返回唯一对端,bindingStore 的 getCaseOfPoint 取 getBoundCasesOfPoint[0]；getPointOfCase 取 getBoundPointsOfCase[0]；未绑定返回 null。,"步骤1:
+绑定 要点X ↔ 案例A
+步骤2:
+分别调用两查询
+步骤3:
+对未绑定文件调用","【业务功能检查】
+- 返回唯一绝对路径
+- 未绑定时返回 null（而非空串）",中

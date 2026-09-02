@@ -1,0 +1,124 @@
+路径,测试名称,描述,步骤描述,预期结果,优先级
+合并测试阶段/新增测试案例文件/推送来源/命令创建判MA,命令创建的案例文件推送来源判定为 testAgentMA,fileIdentifier.getPushSource：isCreatedByCommand(filePath) 为真 → 返回 'testAgentMA'，无论 testcase_id 取值。,"步骤1:
+新增测试案例文件（命令创建）并填入非 TC 开头的 testcase_id
+步骤2:
+推送该文件并抓取 sourcePlatform 取值
+步骤3:
+核对平台来源","【业务功能检查】
+- sourcePlatform 为 testAgentMA
+- 推送走 testAgentMA 批次（案例映射分支）",高
+合并测试阶段/新增测试案例文件/推送来源/TC开头判Agent,非命令创建但 testcase_id 以 TC 开头判定为 testAgent,getPushSource：非命令创建时，若任一行 testcase_id 以 'TC' 开头 → testAgent。pushCore 同时用 /^TC[0-9a-f]{32}$/i 进一步区分，但 fileIdentifier 仅以 TC 前缀判定。,"步骤1:
+手动（非命令）创建案例文件，testcase_id 以 TC 开头
+步骤2:
+推送并核对来源","【业务功能检查】
+- getPushSource 返回 testAgent
+- 推送进入 testAgent 批次",中
+合并测试阶段/新增测试案例文件/推送来源/非TC非命令判MA,非命令创建且 testcase_id 不以 TC 开头判定为 testAgentMA,getPushSource 兜底分支：既非命令创建，也无 TC 前缀 → testAgentMA。,"步骤1:
+手动创建案例文件，testcase_id 为标准 UUID 或自定编码
+步骤2:
+推送并核对来源","【业务功能检查】
+- getPushSource 返回 testAgentMA
+- 推送进入 testAgentMA 批次",中
+合并测试阶段/新增测试案例文件/示例行过滤/中文占位过滤,推送时静默过滤「案例唯一标识，不可修改」示例行,pushCore 在推送前调用 filterTemplateExampleRows（基于 isSampleTsId 命中中文占位），样例行不进入后端推送数据。,"步骤1:
+新增 CSV 案例文件，保留模板示例行（testcase_id=案例唯一标识，不可修改）并额外添加一条真实案例
+步骤2:
+推送该文件
+步骤3:
+核对实际推送的行","【业务功能检查】
+- 示例行被静默过滤，不发送到后端
+- 仅真实案例被推送
+- 若有其它真实行，正常推送不中断",高
+合并测试阶段/新增测试案例文件/示例行过滤/短占位过滤,推送时静默过滤「案例唯一标识」短占位示例行,isSampleTsId 同时命中 TEMPLATE_EXAMPLE_TS_ID_SHORT='案例唯一标识'。,"步骤1:
+将模板示例行的 testcase_id 改为「案例唯一标识」
+步骤2:
+推送并核对","【业务功能检查】
+- 该短占位行同样被过滤
+- 不会作为业务数据上报",中
+合并测试阶段/新增测试案例文件/示例行过滤/全样例提示,选中的全部为示例行时提示「为样例数据」并列出具体行号,pushCore：过滤后无剩余业务行时终止推送，并提示样例失败明细，弹窗中「第 N 行」可点击跳转到主表对应行。,"步骤1:
+新增案例文件后仅保留模板示例行，不添加任何真实案例
+步骤2:
+尝试推送","【业务功能检查】
+- 不调用后端接口
+- 提示「为样例数据」并列出样例行号
+- 弹窗行号可点击跳转",高
+合并测试阶段/新增测试案例文件/示例行过滤/英文占位阻断,testcase_id 为英文占位 TESTCASE_ID 时阻断推送并弹窗,isPlaceholderTsId 命中 TEMPLATE_EXAMPLE_TS_ID_EN='TESTCASE_ID'（大小写不敏感），走「阻断+弹窗」路径，由调用方单独处理（非静默过滤）。,"步骤1:
+将某行的 testcase_id 改为 TESTCASE_ID（或 testcase_id 大写）
+步骤2:
+推送该文件","【业务功能检查】
+- 推送被阻断，不进入后端
+- 弹出提示并列出该行，支持行号跳转
+- 与中文占位「静默过滤」策略区分",中
+合并测试阶段/新增测试案例文件/字段映射/CSV_testcase_id必填,中文 CSV 推送时 testcase_id 缺失拦截并报错含行号,mapChineseRowToCaseItem：sourceId 为空 → 抛 missingTestcaseId 错误（含 rowIndex 1-based 行号）。,"步骤1:
+新增 CSV 案例文件，将某行 testcase_id 置空
+步骤2:
+推送并查看错误提示","【业务功能检查】
+- 推送被拦截并提示「案例 [xxx] 缺少 testcase_id」
+- 错误提示包含具体行号，便于定位
+- 后端不被调用",高
+合并测试阶段/新增测试案例文件/字段映射/CSV_步骤描述必填,中文 CSV 推送时步骤描述缺失拦截,mapChineseRowToCaseItem：description 解析后为空数组 → 抛 missingStepDesc。,"步骤1:
+新增 CSV 案例文件，填写 testcase_id 但将步骤描述清空
+步骤2:
+推送并查看错误","【业务功能检查】
+- 拦截提示「缺少『步骤描述』内容」
+- 含行号定位
+- 后端不被调用",中
+合并测试阶段/新增测试案例文件/字段映射/CSV_预期结果必填,中文 CSV 推送时预期结果缺失拦截,mapChineseRowToCaseItem：expected 全为空 → 抛 missingExpected。预期结果需含【UI检查】/【接口调用】/【数据检查】标签内容。,"步骤1:
+新增 CSV 案例文件，填 testcase_id 与步骤描述，但预期结果留空
+步骤2:
+推送并查看错误","【业务功能检查】
+- 拦截提示「缺少『预期结果』」
+- 含行号定位
+- 填了【UI检查】等标签后可通过校验",中
+合并测试阶段/新增测试案例文件/字段映射/CSV_执行方式映射,中文 CSV 执行方式：空或手工→手工，其它→自动化,mapChineseRowToCaseItem：execMethod 空或'手工' → '手工'，其它 → '自动化'。,"步骤1:
+新增 CSV，分别设置执行方式为「」（空）、「手工」、「自动化」三行
+步骤2:
+推送（或映射校验）并核对 testType 字段","【业务功能检查】
+- 空与「手工」映射为「手工」
+- 「自动化」映射为「自动化」
+- 映射结果符合接口要求",中
+合并测试阶段/新增测试案例文件/字段映射/CSV_案例类型兜底,中文 CSV 案例类型为空时兜底为「功能点类」,"mapChineseRowToCaseItem：type = fieldOrDefault(row, '案例类型', '功能点类')。","步骤1:
+新增 CSV，案例类型列留空
+步骤2:
+映射后核对 type 字段","【业务功能检查】
+- 案例类型空时默认「功能点类」
+- 填写具体类型时保留原值",低
+合并测试阶段/新增测试案例文件/字段映射/CSV_优先级兜底,中文 CSV 优先级为空时兜底为「低」,"mapChineseRowToCaseItem：priority = fieldOrDefault(row, '优先级', '低')。","步骤1:
+新增 CSV，优先级列留空
+步骤2:
+映射后核对 priority 字段","【业务功能检查】
+- 优先级空时默认「低」
+- 填写高/中时保留原值",低
+合并测试阶段/新增测试案例文件/字段映射/CSV_路径标准化,中文 CSV 路径经标准化：反斜杠全角斜杠间隔点统一转换为正斜杠并补全首尾斜杠,pushDataMapper.normalizePath：空→''；反斜杠＼、全角／、间隔点· 统一转/；去掉开头/；确保结尾有/；标准化后仍无效则抛 invalidPath。,"步骤1:
+新增 CSV，路径列分别填「功能条目\测试要点」、「功能条目／测试要点」、「功能条目·测试要点」、「/功能条目/测试要点」、「功能条目/测试要点」
+步骤2:
+映射后核对 testCasePath","【业务功能检查】
+- 上述各写法均被标准化为「功能条目/测试要点/」
+- 开头多余/被去除
+- 结尾缺少/被补齐
+- 空或纯空白路径抛 invalidPath 错误",高
+合并测试阶段/新增测试案例文件/字段映射/YAML_steps必填,YAML 结构化推送时 steps 必填,mapRowToCaseItem（非中文表头分支）：steps 为空的数组 → 抛 missingStepDesc。,"步骤1:
+新增 YAML 案例，留空 steps
+步骤2:
+推送并查看错误","【业务功能检查】
+- 拦截提示「缺少『步骤』（steps）」
+- 含行号定位
+- 后端不被调用",中
+合并测试阶段/新增测试案例文件/字段映射/YAML_operation必填,YAML 每个 step 的 operation（操作步骤）必填,mapRowToCaseItem：每个 step 的 operation 为空 → 抛 missingOperation（含 stepIdx 0-based 与 rowIndex）。,"步骤1:
+新增 YAML，steps 含一个 operation 为空的 step
+步骤2:
+推送并查看错误","【业务功能检查】
+- 拦截提示「第 N 个步骤缺少 operation（操作步骤）」
+- 错误含步骤序号与行号
+- 填 operation 后可推送",中
+合并测试阶段/新增测试案例文件/字段映射/YAML_预期至少其一,YAML 每个 step 的 ui_expected、api_expected、db_expected 至少填其一,mapRowToCaseItem：expected 全为空 → 抛 missingExpected（提示每个 step 的 ui/api/db 至少填其一）。,"步骤1:
+新增 YAML，step 的 ui/api/db 全部留空
+步骤2:
+推送并查看错误","【业务功能检查】
+- 拦截提示「缺少『预期结果』（每个步骤的 ui_expected / api_expected / db_expected 至少填其一）」
+- 任一预期段有内容即通过",中
+合并测试阶段/新增测试案例文件/字段映射/YAML_type固定,YAML 结构化推送 type 固定为「功能点类」,mapRowToCaseItem：type 直接取固定值 '功能点类'（不读取 YAML 的 type 字段）。,"步骤1:
+新增 YAML，无论是否填写 type 字段
+步骤2:
+映射后核对 type","【业务功能检查】
+- 接口 type 恒为「功能点类」
+- 与 CSV 分支「案例类型空→功能点类」行为对齐",低

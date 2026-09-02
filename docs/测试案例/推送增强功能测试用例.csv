@@ -1,0 +1,198 @@
+路径,测试名称,描述,步骤描述,预期结果,优先级
+合并测试阶段/推送增强/跳过维度/含样例行显示跳过维度且三数相加对齐,弹窗概要栏在 skipped>0 时显示「跳过 N」且总计=成功+失败+跳过,showPushResult 透传 skipped；05a-push-result.js 当 skipped>0 时概要栏追加「跳过 N」第四维度，total 恒等于 successCount + failures.length + skipped，避免「总计 13 / 成功 12 / 失败 0」与底部矛盾。,"步骤1:
+准备一个文件：12 行合法案例 + 1 行样例占位（testcase_id=「案例唯一标识，不可修改」）
+步骤2:
+选中全部 13 行推送
+步骤3:
+查看结果弹窗概要栏与底部文案","【业务功能检查】
+- 概要栏显示：总计 13 / 成功 12 / 失败 0 / 跳过 1（四数相加对齐）
+- 底部文案含「（已跳过 1 行样例数据）」
+- 弹窗不会被误判为「全部成功」或「有失败」",高
+合并测试阶段/推送增强/跳过维度/全样例行终止且不调后端,全部选中行都是样例时终止推送、skipped=行数、不调用后端,filterTemplateExampleRows：全部选中行都是样例 → 终止并返回样例失败明细，skipped=过滤掉的行数，不进入后端调用；pushCore 在 total 全为样例时直接以 onComplete 汇总（skipped 维度）。,"步骤1:
+准备一个仅含样例占位行的文件（如 3 行 testcase_id 均为「案例唯一标识，不可修改」）
+步骤2:
+推送该文件
+步骤3:
+观察是否发起后端请求与弹窗内容","【业务功能检查】
+- 弹窗显示样例数据提示，skipped=3
+- 后端推送接口未被调用（可用诊断日志/网络面板确认）
+- 文件 testCaseNo 不变",高
+合并测试阶段/推送增强/跳过维度/无样例行不显示跳过维度,正常文件无样例行时 skipped=0，弹窗不显示「跳过」维度,skipped 默认 0；05a-push-result.js 仅当 skipped>0 才渲染「跳过 N」；message.ts 独立模态框 skipHint 在 skipped=0 时为空串。,"步骤1:
+准备一个无样例占位的合法文件（如 5 行全部有效）
+步骤2:
+推送并查看结果弹窗","【业务功能检查】
+- 概要栏仅显示 总计/成功/失败 三维度，不出现「跳过」
+- total = success + fail 严格相等
+- 底部文案无「已跳过」字样",中
+合并测试阶段/推送增强/跳过维度/接口body循环引用兜底不崩溃,失败文案对循环引用 body 降级为 String 而不升级为崩溃,pushCore 兜底文案增强：JSON.stringify(body) 包 try/catch，body 含循环引用时不再把「接口失败」升级为「扩展端崩溃」，失败即降级到 String(body) 并附 returnCode/形态。,"步骤1:
+构造一个后端返回含循环引用结构的失败响应（或模拟 body 不可序列化）
+步骤2:
+触发推送失败汇总
+步骤3:
+查看失败 reason 文案与扩展是否崩溃","【业务功能检查】
+- 扩展端不因 body 序列化失败而崩溃（不抛未捕获异常）
+- 失败 reason 仍给出可读信息（降级 String 或含 returnCode）
+- 推送流程正常进入 onComplete 展示失败",中
+合并测试阶段/推送增强/跳过维度/诊断日志failedTsIds截断前20附N,批量失败超过 20 个时诊断日志 failedTsIds 截断到前 20 并附 +N,pushHandler/b42b274：诊断日志中 failedTsIds 截断到前 20 个并附「+N」提示，避免批量失败时打印超长行影响可读性。,"步骤1:
+准备一个 50 行全部后端校验失败的文件
+步骤2:
+开启推送链路诊断日志并推送
+步骤3:
+查看「TestCase 推送诊断」频道 failedTsIds 输出","【业务功能检查】
+- failedTsIds 只列出前 20 个 tsId
+- 末尾附「+30」之类提示标明被截断数量
+- 不出现一行超长全部 tsId 导致日志难以阅读",低
+合并测试阶段/推送增强/YAML前置拦截/语法错误中止推送并弹Warning,推送含语法错误的 .yaml 时前置校验拦截并弹 Warning（含快捷入口）,pushHandler.ts：推送 .yaml/.yml 前先跑 validateYamlContent + 发布诊断；存在 error 级问题立即中止推送并 showWarningMessage（按钮「YAML 修复全部」「查看问题面板」），遥测 explorerPush.aborted{reason:yamlSyntaxError}；同时 showPushErrorModal 弹错误详情（首条错误行号+摘要）。,"步骤1:
+准备一个语法错误的 .yaml 案例文件（如 steps 缩进错乱/非法字符导致解析失败）
+步骤2:
+推送该文件
+步骤3:
+观察是否中止及弹窗内容与遥测","【业务功能检查】
+- 推送被中止，后端接口未被调用
+- 弹 Warning 提示「存在 YAML 语法错误（首条：第 N 行）」，含「YAML 修复全部」「查看问题面板」按钮
+- 遥测记录 explorerPush.aborted{reason:yamlSyntaxError}
+- 错误弹窗给出首条错误行号与摘要",高
+合并测试阶段/推送增强/YAML前置拦截/多行错误摘要换行展示,错误弹窗多行摘要按 pre-line 正确换行（不挤成一行）,"services/utils.ts：通用错误弹窗内容 <p> 增加 white-space:pre-line + text-align:left，使「首条错误（第 N 行，共 M 处错误）：
+摘要」这类多行文本正确换行、左对齐展示。","步骤1:
+准备一个含多处语法错误的 .yaml 文件
+步骤2:
+触发推送前置拦截弹窗
+步骤3:
+查看错误弹窗中错误摘要的排版","【业务功能检查】
+- 错误摘要按 
+ 换行逐行展示，不被压成一行
+- 文本左对齐、行高可读
+- 多行样式在「YAML 语法错误」与「YAML 校验器异常」两类错误弹窗均生效",中
+合并测试阶段/推送增强/YAML前置拦截/校验器异常兜底中止,validateYamlContent 自身抛异常时弹「YAML 校验器异常」并中止,pushHandler.ts：validateYamlContent 调用若抛异常 → 弹「YAML 校验器异常，已终止推送」Warning 并中止，遥测 explorerPush.aborted{reason:yamlValidatorCrash}，不把异常泄露为崩溃。,"步骤1:
+构造使 YAML 校验器自身崩溃的场景（或 mock 校验器抛错）
+步骤2:
+推送该 .yaml 文件
+步骤3:
+观察弹窗与遥测","【业务功能检查】
+- 推送中止，不调用后端
+- 弹窗文案为「YAML 校验器异常」并提示重试
+- 遥测记录 explorerPush.aborted{reason:yamlValidatorCrash}
+- 扩展端不出现未捕获崩溃",中
+合并测试阶段/推送增强/YAML前置拦截/合法YAML放行,语法正确的 .yaml 文件不被拦截、正常进入推送,仅当 validateYamlContent 返回 error 级问题才拦截；合法 .yaml 通过前置校验，继续走解析→映射→推送流程。,"步骤1:
+准备一个语法正确的 .yaml 案例文件
+步骤2:
+推送该文件","【业务功能检查】
+- 不弹 YAML 语法错误 Warning
+- 文件正常进入推送流程（按后续结果弹窗判断成功/失败）
+- 校验器未误伤合法文件",中
+合并测试阶段/推送增强/装饰URI精确刷新/绑定保存仅刷新受影响URI,绑定弹窗保存后仅对源∪新对端∪旧对端 URI 精确刷新装饰,BindDialogProvider 保存绑定后，受影响 URI = 源文件 ∪ 新对端 ∪ 旧对端（去重），调用 refreshDecorations(affectedUris)；BindTaskProvider.refresh(uris) 在 uris 非空时只对给定 URI fire，避免全量重绘引起的 webview 闪烁。,"步骤1:
+打开多文件工作区，文件 A 未绑定、文件 B 已绑定到 C
+步骤2:
+对 A 发起绑定到 B 并保存
+步骤3:
+观察各文件装饰图标与重绘范围","【业务功能检查】
+- 仅 A、B、C（旧对端）的装饰图标刷新
+- 其他无关文件的装饰不重绘（无全局闪烁）
+- A 显示为「已绑」、B 保持已绑、C 因解除旧绑定显示为「未绑」",高
+合并测试阶段/推送增强/装饰URI精确刷新/空或未传退化为全量刷新,refresh(uris) 空数组/undefined 触发全量刷新，避免 fire([]) 旧 Bug,BindTaskProvider.refresh(uris?)：uris 非空 → 仅精确刷新这些 URI；uris 为空/undefined → 退化为全量刷新（fire(undefined)）。修复历史上 fire([]) 被视作「无变更」不刷新的 Bug。,"步骤1:
+在绑定装饰场景下，调用 refresh([]) 与 refresh(undefined) 各一次
+步骤2:
+对比两种调用下装饰刷新范围","【业务功能检查】
+- refresh([]) 与 refresh(undefined) 均触发全量刷新（所有可见文件装饰重绘）
+- 不再出现「空数组被当作无变更而不刷新」的失效
+- 精确刷新与全量刷新两条路径均可正确生效",中
+合并测试阶段/推送增强/装饰URI精确刷新/保存异常兜底全量刷新,绑定保存过程中抛异常时兜底全量刷新避免 UI/存储失同步,BindDialogProvider 保存若抛异常，catch 中调用 refreshDecorations()（无参=全量刷新），确保装饰图标与底层存储重新对齐，不因精确刷新路径中断而失同步。,"步骤1:
+构造绑定保存过程抛异常的场景
+步骤2:
+触发保存
+步骤3:
+观察装饰刷新行为","【业务功能检查】
+- 保存失败后仍有一次全量刷新发生
+- 装饰图标与存储状态重新一致（不残留旧状态）
+- 异常被捕获并遥测 bindDialog.save.error，不崩溃",中
+合并测试阶段/推送增强/失败分类/分类枚举覆盖client与backend两类,失败分类能覆盖客户端预校验与后端文本两类来源,classifyFailure：预校验结构化信号直接映射（placeholder=占位值、emptyTestcaseId=空、sample=样例、mapError=字段映射错）；其余走 classifyBackendFailure 对后端自由中文文本按关键词归类为 network/auth/duplicate/fieldInvalid/notFound/serverError/bizReject，都不命中归 unknown。,"步骤1:
+准备若干失败原文：① testcase_id=占位值 ② 空 tsId ③ 「案例唯一标识，不可修改」样例 ④ 字段映射缺 operation ⑤ 「网络连接超时」⑥ 「token 未登录」⑦ 「sourceId 已存在」⑧ 「字段格式不合法」⑨ 「任务不存在」⑩ 「服务内部错误」⑪ 「不支持案例来源」
+步骤2:
+逐条调用 classifyFailure 得到 category","【业务功能检查】
+- ①~④ 分别得到 placeholder/emptyTestcaseId/sample/mapError（结构化信号优先）
+- ⑤~⑪ 分别得到 network/auth/duplicate/fieldInvalid/notFound/serverError/bizReject
+- 无法归类的后端文本得到 unknown（兜底不丢）",高
+合并测试阶段/推送增强/失败分类/归类优先级结构化信号先于文本,同时带结构化信号与后端文本时优先采用结构化信号,classifyFailure 先查 validatorKind（VALIDATOR_KIND_TO_CATEGORY），再查 mapErrorReason（MAP_ERROR_REASON_TO_CATEGORY），最后才用中文 reason 归类。保证客户端已明确信号不会被后端文案措辞重新归类。,"步骤1:
+构造一条既带 validatorKind=placeholder 又带 reason「网络连接超时」的失败项
+步骤2:
+调用 classifyFailure 观察 category","【业务功能检查】
+- 结果 category=placeholder（结构化信号优先，不受 reason 中「网络」干扰）
+- 仅当无结构化信号时才回退到 reason 关键词归类",中
+合并测试阶段/推送增强/失败分类/按category聚合产出错误类型分组,多条失败按 category 分桶聚合、count 降序、去重保留原文样本,"aggregateFailures：同 category 合并 count，保留最多 maxSamples 条不重复 reason 原文样本，返回按 count 降序；summarizeCategoryBreakdown 压成 ""cat:count"" 紧凑串供埋点。用户仍看到完整中文文本，统计只看稳定短码。","步骤1:
+准备失败集合：3 条 fieldInvalid（含 2 条相同 reason）、2 条 auth、1 条 network
+步骤2:
+调用 aggregateFailures 得到分组，并 summarizeCategoryBreakdown","【业务功能检查】
+- 分组为 fieldInvalid:3、auth:2、network:1（按 count 降序）
+- fieldInvalid 的 2 条相同 reason 只保留 1 条样本（去重）
+- 紧凑串形如 ""fieldInvalid:3,auth:2,network:1""",高
+合并测试阶段/推送增强/失败分类/接口级与行级字段分层,接口级公共参数错与行级 caseList 字段错分层聚合，避免整批失败淹没行级分布,aggregateByField：从失败抽接口字段码并带 level（FIELD_LEVEL）。interface 级=testTaskNo/subTestTaskId/artifactId/sourcePlatform/designer（一次错=整批失败）；case 级=sourceId/description/expected…（每行独立）。splitFieldStatsByLevel 拆成 interfaceStats/caseStats 两块，便于 UI 分 section 展示与埋点分维度。,"步骤1:
+准备失败集合：designer 无权限（整批失败，interface）+ 10 行 description 缺失（case）
+步骤2:
+调用 aggregateByField 后 splitFieldStatsByLevel","【业务功能检查】
+- interfaceStats 仅含 designer:1；caseStats 含 description:10
+- 分层后不会被 ""designer 一次错"" 在 count 维度淹没 description 真实分布
+- 埋点可分别输出 interfaceFailBreakdown 与 caseFailBreakdown 两个维度",高
+合并测试阶段/推送增强/失败分类/结果埋点按错误类型分组展示,推送结果随 .complete 事件上报分类与字段分层维度，用户仍见完整中文 reason,pushCore [汇总]：用 aggregateFailures / aggregateByField 计算 failCategoryBreakdown / failFieldBreakdown / interfaceFailBreakdown / caseFailBreakdown 等，随 TelemetryService .complete 事件上报；结果弹窗按 category 分组展示，每条仍显示原始中文 reason。,"步骤1:
+准备一个含多类失败（如 1 个 auth + 3 个 fieldInvalid）的推送结果
+步骤2:
+触发推送完成，检查埋点维度与弹窗分组","【业务功能检查】
+- 埋点含 failCategoryBreakdown=""fieldInvalid:3,auth:1"" 及分层 interface/case 维度
+- 弹窗按错误类型分组，用户可见完整中文失败原文
+- 统计短码与展示原文解耦，互不干扰",高
+合并测试阶段/推送增强/失败分类/文本归类规则间优先级,后端文本归类规则间有优先级：业务拒绝/不存在 早于 字段非法,classifyBackendFailure 按 BACKEND_CATEGORY_RULES 顺序命中：bizReject（不支持/不允许/拒绝）与 notFound（不存在/未找到/未匹配）均排在 fieldInvalid（无效/必填/不能为空/缺失）之前。避免「当前不支持案例来源」「任务下未匹配到有效测试要点」被误归 fieldInvalid。,"步骤1:
+准备后端失败原文：①「当前不支持案例来源(TMS)」②「任务下未匹配到有效测试要点」
+步骤2:
+调用 classifyBackendFailure 得到 category","【业务功能检查】
+- ① 归为 bizReject（业务拒绝，而非 fieldInvalid）
+- ② 归为 notFound（未匹配，而非 fieldInvalid）
+- 验证规则表顺序优先级生效，措辞变体也能稳定归类",中
+合并测试阶段/推送增强/失败分类/接口字段码别名抽取含新增字段,从失败文本准确抽取接口字段码，含 sourceId 优先级与新增 keyFlag/projectDes/planExecNum,"extractInterfaceField 按 INTERFACE_FIELD_ALIASES 顺序命中，且 sourceId 别名排在 sourcePlatform 之前（""案例来源Id""优先归 sourceId，避免被 sourcePlatform 抢先）；新增字段 keyFlag/projectDes/planExecNum 的别名可正确抽取，供 aggregateByField 按 interface/case 分层。","步骤1:
+准备失败原文：①「案例来源Id不能为空」②「关键案例不能为空」③「项目说明长度不能超过200个字符」④「计划执行次数不是数字」⑤「设计人无权限」
+步骤2:
+逐条调用 extractInterfaceField 得到字段码","【业务功能检查】
+- ① → sourceId（非 sourcePlatform，优先级生效）
+- ② → keyFlag、③ → projectDes、④ → planExecNum（新增字段码正确抽取）
+- ⑤ → designer（interface 级字段）
+- 字段码可支撑后续按接口级/行级分层",中
+合并测试阶段/推送增强/诊断日志/默认关闭零开销,推送诊断默认关闭时零开销且不影响正常推送,pushDiag 首行 isDiagEnabled()；配置 testcaseViewer.debug.push 默认 false 时直接 return，不进入 safeStringify（无 JSON.stringify / deep clone），不写 console，也不创建 OutputChannel。纯观测模块不改变任何业务流程。,"步骤1:
+确认未开启 testcaseViewer.debug.push（默认关闭）
+步骤2:
+执行一次正常推送
+步骤3:
+观察是否产生「TestCase 推送诊断」OutputChannel 或 console 噪声","【业务功能检查】
+- 不创建/不弹出「TestCase 推送诊断」OutputChannel
+- 不向 console 输出 [推送诊断] 任何内容
+- 正常推送流程完全不受影响、性能无额外开销",中
+合并测试阶段/推送增强/诊断日志/开启后双保险console与OutputChannel,开启 debug.push 后诊断同时写 console 与 OutputChannel 并自动弹出,"isDiagEnabled 返回 true 时，pushDiag 先 console.log('[推送诊断]', ...) 再 appendLine 到 getChannel() 创建的「TestCase 推送诊断」OutputChannel；showPushDiag 调用 channel.show(true) 自动弹出。","步骤1:
+在设置中开启 testcaseViewer.debug.push=true
+步骤2:
+执行一次推送
+步骤3:
+检查 Extension Host 控制台与 Output 面板","【业务功能检查】
+- Extension Host 控制台可见 [推送诊断] 前缀日志
+- Output 面板自动弹出「TestCase 推送诊断」频道并含日志
+- 关闭配置后再推送则恢复零开销（不输出）",中
+合并测试阶段/推送增强/诊断日志/推送链路分阶段打点,推送全链路分阶段打点，可定位问题发生在哪一步,"pushDiag 在链路各阶段打点：editorMessageHandlers 收请求→pushCore [入口]runPush→[预校验](含类别分布+明细)→[样例过滤]→[接口]分批/预映射/请求数据/返回(returnCode,errorMsg)/解析(成功+失败明细)→[step5]清洗→[step6]回写快照→[step7]合并→[汇总](失败明细按行号)→[异常]catch；showPushDiag 在多个终态节点自动弹出。","步骤1:
+开启 debug.push，准备一个含预校验失败+后端失败混合的文件
+步骤2:
+推送并在「TestCase 推送诊断」中查看日志时序","【业务功能检查】
+- 日志可见清晰阶段标签：[入口]/[预校验]/[样例过滤]/[接口]/[解析]/[step5]/[step6]/[step7]/[汇总]
+- 每个阶段含关键计数与类别分布，能定位失败发生在预校验还是后端返回
+- 终态（短路/异常/汇总）均触发 showPushDiag 自动弹出",高
+合并测试阶段/推送增强/诊断日志/循环引用兜底不崩溃,失败 body 含循环引用时诊断日志降级为 [Circular] 而非抛崩溃,"safeStringify 含 getCircularReplacer（WeakSet 标记已见对象），遇到循环引用返回 ""[Circular]""、函数返回 ""[Function]""，保证 pushDiag 打印含循环引用的请求/响应体时不崩溃（如 [接口] 请求数据 打印 validRows 等对象图）。","步骤1:
+构造一个含循环引用的对象（a.self=a）
+步骤2:
+经 pushDiag 打印该对象
+步骤3:
+观察是否崩溃或抛未捕获异常","【业务功能检查】
+- 不抛异常、不走崩溃路径
+- 循环结构被降级展示为 [Circular]（或 safeStringify 整体兜底为 String）
+- 诊断模块始终安全可用，不因数据形状而中断",中
+合并测试阶段/推送增强/缺口说明/mapper必填校验已覆盖,【已覆盖·无需重复】mapper 必填校验见「新增案例/字段映射」,testcase_id/步骤描述/预期结果/steps/operation 的必填校验已由「新增测试案例文件测试用例.csv」的「字段映射」章节覆盖（如 CSV_testcase_id必填、CSV_步骤描述必填、CSV_预期结果必填、YAML_steps必填、YAML_operation必填）。本文件不再重复。,"步骤1:
+查阅「新增测试案例文件测试用例.csv」字段映射章节","【业务功能检查】
+- mapper 必填校验用例已存在且覆盖五类字段
+- 本文件与其不重复、不冲突",低
+合并测试阶段/推送增强/缺口说明/拆批推送已覆盖,【已覆盖·无需重复】拆批推送见「批量推送/来源拆批」,testcase_id 按 TC+uuid.hex→testAgent、其余→testAgentMA 的来源拆两批推送，已由「批量推送案例功能测试用例.csv」的「来源拆批」章节覆盖。本文件不再重复。,"步骤1:
+查阅「批量推送案例功能测试用例.csv」来源拆批章节","【业务功能检查】
+- 拆批推送用例已存在
+- 本文件与其不重复",低

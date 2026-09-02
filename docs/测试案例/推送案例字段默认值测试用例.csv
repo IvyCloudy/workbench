@@ -1,0 +1,51 @@
+路径,测试名称,描述,步骤描述,预期结果,优先级
+合并测试阶段/推送案例字段默认值/CSV_关键案例与默认值,中文 CSV 推送携带关键案例字段且缺失默认「否」,"mapChineseRowToCaseItem：keyFlag = fieldOrDefault(row, '关键案例', '否')。填写「是」时映射为 keyFlag='是'；列缺失或单元格为空时兜底为 '否'，保证接口必填字段始终有值。","步骤1:
+新增中文 CSV，关键案例列一行填「是」、一行留空/不填
+步骤2:
+映射后核对 keyFlag 字段","【业务功能检查】
+- 填「是」的行 keyFlag='是'（原值保留）
+- 留空/缺失的行 keyFlag='否'（默认值兜底）
+- 两项均正常进入 caseList[] 推送",中
+合并测试阶段/推送案例字段默认值/CSV_项目说明与默认值,中文 CSV 推送携带项目说明字段且缺失默认空串,"mapChineseRowToCaseItem：projectDes = fieldOrDefault(row, '项目说明', '')。填写项目说明时原值保留；列缺失或为空时兜底为空字符串 ''。","步骤1:
+新增中文 CSV，项目说明列一行填「登录模块回归」、一行留空
+步骤2:
+映射后核对 projectDes 字段","【业务功能检查】
+- 填写的行 projectDes='登录模块回归'（原值保留）
+- 留空/缺失的行 projectDes=''（默认值兜底）
+- 两种结果均合法可推送",低
+合并测试阶段/推送案例字段默认值/CSV_计划执行次数与默认值,中文 CSV 推送计划执行次数：数字转 number、缺失默认 1、非数字保留原值,"mapChineseRowToCaseItem：planExecNum = fieldOrDefault(row, '计划执行次数', 1)。fallback 为 number：字符串「3」经 Number() 转为 number 3；单元格缺失/空→默认值 1；非数字字符串（如「abc」）Number() 为 NaN 则不强制转换、保留原字符串。","步骤1:
+新增中文 CSV，计划执行次数列一行填「3」、一行留空、一行填「abc」
+步骤2:
+映射后核对 planExecNum 的类型与值","【业务功能检查】
+- 填「3」的行 planExecNum=3（number 类型，已转数字）
+- 留空/缺失的行 planExecNum=1（默认值兜底，number）
+- 填「abc」的行 planExecNum='abc'（非数字不强制转，保留原字符串）",中
+合并测试阶段/推送案例字段默认值/YAML_keyFlag与默认值,YAML 结构化推送携带 key_flag 字段且缺失默认「否」,"mapRowToCaseItem（YAML 分支）：keyFlag = fieldOrDefault(row, 'key_flag', '否')。填写 key_flag 时原值保留；字段缺失或为空时兜底为 '否'。","步骤1:
+新增 YAML，一个案例填 key_flag: 是、一个案例省略 key_flag
+步骤2:
+映射后核对 keyFlag 字段","【业务功能检查】
+- 填 key_flag 的案例 keyFlag 取原值
+- 省略 key_flag 的案例 keyFlag='否'（默认值兜底）
+- 与 CSV 分支行为一致",中
+合并测试阶段/推送案例字段默认值/YAML_projectDes与默认值,YAML 结构化推送携带 project_des 字段且缺失默认空串,"mapRowToCaseItem（YAML 分支）：projectDes = fieldOrDefault(row, 'project_des', '')。填写 project_des 时原值保留；字段缺失或为空时兜底为 ''。","步骤1:
+新增 YAML，一个案例填 project_des、一个案例省略
+步骤2:
+映射后核对 projectDes 字段","【业务功能检查】
+- 填写的案例 projectDes 取原值
+- 省略的案例 projectDes=''（默认值兜底）
+- 两种结果均合法可推送",低
+合并测试阶段/推送案例字段默认值/YAML_planExecNum与默认值,YAML 结构化推送 plan_exec_num：数字转 number、缺失默认 1,"mapRowToCaseItem（YAML 分支）：planExecNum = fieldOrDefault(row, 'plan_exec_num', 1)。字符串数字「5」经 Number() 转为 number 5；字段缺失/空→默认值 1；非数字字符串保留原值不强制转。","步骤1:
+新增 YAML，一个案例填 plan_exec_num: 5、一个案例省略、一个案例填 plan_exec_num: abc
+步骤2:
+映射后核对 planExecNum 的类型与值","【业务功能检查】
+- 填 5 的案例 planExecNum=5（number）
+- 省略的案例 planExecNum=1（默认值兜底）
+- 填 abc 的案例 planExecNum='abc'（非数字保留原值）
+- 与 CSV 分支行为一致",中
+合并测试阶段/推送案例字段默认值/三字段同时缺失全走默认值,关键案例/项目说明/计划执行次数三个新增字段全部缺失时统一走默认值,中文 CSV 三列均留空（或 YAML 三个字段均省略）时，mapRowToCaseItem 三条分支均经 fieldOrDefault 兜底：keyFlag='否'、projectDes=''、planExecNum=1（number），推送 payload 仍结构完整、不缺字段。,"步骤1:
+新增中文 CSV，关键案例/项目说明/计划执行次数三列全留空（或 YAML 三字段全省略）
+步骤2:
+映射后核对整条 caseList 项","【业务功能检查】
+- keyFlag='否'、projectDes=''、planExecNum=1 三者均取到默认值
+- 该 caseList 项仍含 keyFlag/projectDes/planExecNum 三个 key，不因缺失而丢字段
+- 推送不因这三个字段为空而失败",中

@@ -1,0 +1,228 @@
+路径,测试名称,描述,步骤描述,预期结果,优先级
+合并测试阶段/推送时testcase_id校验/合法格式/标准UUID放行,标准 UUID 格式通过校验并路由到 testAgentMA,TESTCASE_ID_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(TC|MA)[0-9a-f]{32})$/i；标准 UUID（8-4-4-4-12 十六进制带连字符）命中第一分支，FORMAT_VALIDATOR 放行。resolveRowSource 中 TC_SOURCE_PATTERN=/^TC[0-9a-f]{32}$/i 不命中 → 归 testAgentMA 批次。,"步骤1:
+新建案例文件（命令创建或手动均可），将某行 testcase_id 设为标准 UUID，如 123e4567-e89b-12d3-a456-426614174000
+步骤2:
+推送该文件并观察是否进入接口调用、归属哪个平台批次","【业务功能检查】
+- 该行通过 testcase_id 格式校验，不被拦截
+- 推送进入 testAgentMA 批次（非 testAgent，因其不是 TC 前缀）
+- 接口收到该案例数据，最终推送结果按行号正常呈现",高
+合并测试阶段/推送时testcase_id校验/合法格式/TC加32hex放行并路由Agent,TC 前缀加 32 位 hex 通过校验并路由到 testAgent,testcase_id 形如 TC + 32 位小写/大写 hex（TC_SOURCE_PATTERN 命中）→ resolveRowSource 返回 testAgent；同时 TESTCASE_ID_PATTERN 的 (TC|MA)[0-9a-f]{32} 分支也命中，FORMAT_VALIDATOR 放行。,"步骤1:
+将某行 testcase_id 设为 TC + 32 位 hex，如 TC1234567890abcdef1234567890abcdef12
+步骤2:
+推送并核对来源平台批次","【业务功能检查】
+- 该行通过格式校验不被拦截
+- 来源判定为 testAgent，进入 testAgent 批次独立调用接口
+- 大小写不敏感：TC 与 tc 前缀均按同一规则处理",高
+合并测试阶段/推送时testcase_id校验/合法格式/MA加32hex放行并路由AgentMA,MA 前缀加 32 位 hex 通过校验并路由到 testAgentMA,testcase_id 形如 MA + 32 位 hex（由 genUuid / genUuidV4 自动生成，与扩展端一致）；TESTCASE_ID_PATTERN 的 (TC|MA)[0-9a-f]{32} 分支命中 → 放行，且因非 TC 前缀 → resolveRowSource 归 testAgentMA。,"步骤1:
+使用插件自动生成 testcase_id（命令创建案例文件时自动填充 MA+32hex），如 MAa1b2c3d4e5f60718293a4b5c6d7e8f90
+步骤2:
+推送并核对来源平台批次","【业务功能检查】
+- 自动生成的 MA+32hex 通过格式校验
+- 来源判定为 testAgentMA，进入 testAgentMA 批次
+- 与标准 UUID 同属 testAgentMA，不混进 testAgent",高
+合并测试阶段/推送时testcase_id校验/非法格式/裸32hex无前缀拦截,仅 32 位 hex 无 TC或MA 前缀视为非法格式,TESTCASE_ID_PATTERN 要求：要么带连字符的标准 UUID，要么 (TC|MA)+32hex。裸 32 位 hex（如 a1b2c3d4e5f60718293a4b5c6d7e8f90，既无数下划线也无 TC/MA 前缀）两分支均不命中 → FORMAT_VALIDATOR 判 invalidFormat 阻断。,"步骤1:
+将某行 testcase_id 设为纯 32 位 hex（无前缀无连字符），如 a1b2c3d4e5f60718293a4b5c6d7e8f90
+步骤2:
+推送并查看失败明细","【业务功能检查】
+- 该行被判定为非法格式（invalidFormat）拦截，不进入接口
+- 推送结果弹窗列出该行行号并提示格式不正确
+- 其余合法行不受影响照常推送",高
+合并测试阶段/推送时testcase_id校验/非法格式/含非hex字符拦截,testcase_id 含空格或非 hex 字符视为非法,TESTCASE_ID_PATTERN 仅接受 [0-9a-f]（大小写不敏感）与连字符、TC/MA 前缀；含空格、下划线、中文或其它字符（如 TC_xyz、MA 1234-中文）均不匹配 → invalidFormat 阻断。,"步骤1:
+将某行 testcase_id 设为含非法字符的值，如 TC_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz 或带空格的 MA 1234 5678...
+步骤2:
+推送并核查拦截结果","【业务功能检查】
+- 含非 hex/非预期字符的 testcase_id 被拦截为非法格式
+- 弹窗失败明细标注该行格式不正确
+- 不触发任何后端接口调用（预校验阶段即剔除）",中
+合并测试阶段/推送时testcase_id校验/非法格式/错误前缀或长度不对拦截,TC或MA 前缀错误或非 32 位长度视为非法,TESTCASE_ID_PATTERN 严格匹配：前缀仅限 TC 或 MA，且其后必须恰好 32 位 hex。TA+32hex（错误前缀）、TC+31hex（少一位）、MA+33hex（多一位）均不匹配 → invalidFormat 阻断。,"步骤1:
+准备三行分别设为 TA1234...（错误前缀 TA）、TC1234...（仅 31 位 hex）、MA1234...（33 位 hex）
+步骤2:
+批量推送并查看每行结果","【业务功能检查】
+- 三种错误形态均被判定为非法格式拦截
+- 错误前缀（TA）不被当成 TC 误放行
+- 长度偏差（31/33 位）不被当成 32 位 hex 误放行
+- 弹窗按行号分别列出失败",中
+合并测试阶段/推送时testcase_id校验/占位符/英文TESTCASE_ID阻断,testcase_id 为英文大写占位 TESTCASE_ID 时阻断并弹窗,PLACEHOLDER_VALIDATOR：tsId.toUpperCase() === 'TESTCASE_ID'（大小写不敏感）即命中 kind='placeholder'，阻断推送并进入失败明细；与中文样例占位不同，它走「阻断+弹窗列出可跳转」路径而非静默过滤。,"步骤1:
+将某行 testcase_id 改为 TESTCASE_ID（或 testcase_id 全大写 / Testcase_Id 等大小写变体）
+步骤2:
+推送并查看弹窗","【业务功能检查】
+- 该行被判定为占位值阻断，不进入后端接口
+- 弹窗列出该行并标注为占位，支持「第 N 行」点击跳转到主表对应行
+- 大小写不敏感：TESTCASE_ID / testcase_id / Testcase_Id 均被识别为占位",高
+合并测试阶段/推送时testcase_id校验/空值/testcase_id为空阻断,testcase_id 为空字符串时阻断推送,EMPTY_VALIDATOR：tsId === '' 命中 kind='empty'，阻断推送。此外中文 CSV 映射路径 mapChineseRowToCaseItem 在 sourceId 为空时抛 missingTestcaseId（含 1-based 行号），两条路径都保证空 testcase_id 不被推送。,"步骤1:
+将某行 testcase_id 单元格清空（空字符串）
+步骤2:
+推送并查看错误提示","【业务功能检查】
+- 空 testcase_id 行被拦截不进入接口
+- 提示包含具体行号，便于定位（如「案例 [xxx] 缺少 testcase_id」或等价空值提示）
+- 其余有 testcase_id 的行正常推送",高
+合并测试阶段/推送时testcase_id校验/样例/中文长占位静默过滤,testcase_id 为「案例唯一标识，不可修改」时静默过滤不推送,filterTemplateExampleRows 基于 isSampleTsId 命中 TEMPLATE_EXAMPLE_TS_ID='案例唯一标识，不可修改'，将该行从推送数据静默剔除（不计入 failures、不调用接口）；其余真实行照常推送。,"步骤1:
+新建案例文件保留模板示例行（testcase_id=案例唯一标识，不可修改）并额外添加一条真实案例
+步骤2:
+推送并核对结果","【业务功能检查】
+- 示例行被静默过滤，不进入后端推送
+- 提示「跳过 N 行样例数据」或等价信息（skipped 维度）
+- 真实行正常推送成功，total = 成功数 + 跳过数",高
+合并测试阶段/推送时testcase_id校验/样例/中文短占位静默过滤,testcase_id 为「案例唯一标识」短占位时同样静默过滤,isSampleTsId 同时命中 TEMPLATE_EXAMPLE_TS_ID_SHORT='案例唯一标识'（列名字段的中文注释文案可能残留在数据行），与长占位同属静默过滤策略。,"步骤1:
+将某行 testcase_id 改为「案例唯一标识」（不含「，不可修改」）
+步骤2:
+推送并核对","【业务功能检查】
+- 短占位行同样被静默过滤不推送
+- 不会作为业务数据上报后端
+- 与长占位行为一致",中
+合并测试阶段/推送时testcase_id校验/样例/全样例终止不调接口,选中的全部为样例数据时终止推送并提示行号可跳转,过滤后无任何业务行（全部为样例占位）→ 终止推送并返回样例失败明细；不调用后端接口，弹窗以「为样例数据」汇总并列出具体行号，行号可点击跳转到主表。,"步骤1:
+新建案例文件后仅保留模板示例行，不添加任何真实案例
+步骤2:
+推送","【业务功能检查】
+- 推送被终止，不调用后端接口
+- 提示「为样例数据」并列出所有样例行号
+- 弹窗行号可点击跳转到对应主表行",高
+合并测试阶段/推送时testcase_id校验/预校验/先于接口调用,全部 testcase_id 非法时绝不调用后端推送接口,stepPreValidate / runValidators（占位/空/格式三类）均在调用推送接口（pushTestCase）之前完成；契约保证：整份文件全是非法格式时 pushTestCase 不被调用，直接以失败明细汇总。,"步骤1:
+准备一个文件，所有行 testcase_id 均为非法（如统一填 TC_EXPECTED_OBJECT_001）
+步骤2:
+推送并监控是否产生后端接口请求","【业务功能检查】
+- 推送流程在预校验阶段即拦截全部行，不发起任何后端接口调用
+- 弹窗以失败明细（非法格式/占位/空）汇总，标注对应行号
+- 无「成功」行，successCount=0",高
+合并测试阶段/推送时testcase_id校验/预校验/混合剔除合法行照常,混合文件中非法行被剔除、合法行照常推送,runValidators 对每行单独判定：命中占位/空/格式非法的行从 payload 剔除并记入 failuresByKind，剩余合规行进入接口调用；全部命中则短路不调接口。,"步骤1:
+一个文件含 1 行占位 + 1 行非法格式（裸 hex）+ 2 行合法（1 个标准 UUID、1 个 MA+32hex）
+步骤2:
+批量推送","【业务功能检查】
+- 占位行与非法格式行被拦截，不进入后端
+- 2 行合法行成功推送
+- 弹窗失败明细列出被剔除的两行行号，成功明细列出 2 行
+- 行号与失败/成功映射无错位",高
+合并测试阶段/推送时testcase_id校验/合法格式/testagent掩码uuid放行并路由Agent,TC 前缀 testagent 掩码 uuid 通过校验并路由到 testAgent,utils/testcaseId.isTestAgentUuid：对 TC 后的 32 位串，掩码位（3/7/10/14/17/21/24/28/31）分别替换为 testagent 字母（t e s t a g e n t），第 32 位仍为 hex。标准样例 TC00t000e00s000t00a000g00e000n00t0。FORMAT_VALIDATOR 经 isTestcaseIdValid 兼容该形态，resolveRowSource 同样判 testAgent。,"步骤1:
+将某行 testcase_id 设为 TC 前缀的 testagent 掩码 uuid（如 TC00t000e00s000t00a000g00e000n00t0）
+步骤2:
+推送并核对来源平台批次与是否拦截","【业务功能检查】
+- 该行通过 testcase_id 格式校验，不被判定为非法格式
+- 来源判定为 testAgent，进入 testAgent 批次独立调用接口
+- 位数错位（如把第 31 位 t 改为 hex，或总位数非 32）则不命中，按非法格式拦截",高
+合并测试阶段/推送时testcase_id校验/合法格式/testflow掩码uuid放行并路由Agent,TC 前缀 testflow 掩码 uuid 通过校验并路由到 testAgent,utils/testcaseId.isTestFlowUuid：对 TC 后的 32 位串，掩码位（3/7/10/14/17/21/24/28）分别替换为 testflow 字母（t e s t f l o w），第 28 位 w 之后仍有 4 位 hex（29-32）。标准样例 TC00t000e00s000t00f000l00o000w0000。FORMAT_VALIDATOR 经 isTestcaseIdValid 兼容该形态，resolveRowSource 判 testAgent。,"步骤1:
+将某行 testcase_id 设为 TC 前缀的 testflow 掩码 uuid（如 TC00t000e00s000t00f000l00o000w0000）
+步骤2:
+推送并核对来源平台批次","【业务功能检查】
+- 该行通过 testcase_id 格式校验，不被判定为非法格式
+- 来源判定为 testAgent（TC 前缀），进入 testAgent 批次
+- 掩码位出现非预期字母（如第 7 位的 e 被改为 x）则判非法格式拦截",高
+合并测试阶段/推送时testcase_id校验/合法格式/掩码位非预期字符拦截,testagent/testflow 掩码位被篡改视为非法格式,isTestAgentUuid / isTestFlowUuid 严格校验掩码位字母与剩余位 hex：掩码位出现非预期字母或位数错位，均不命中，回退到 TESTCASE_ID_PATTERN 也不匹配（含非 hex 字母）→ invalidFormat 阻断。,"步骤1:
+准备两行，一行为把 testagent 第 31 位 t 改成 0（TC00t000e00s000t00a000g00e000n0000），一行为把 testflow 第 17 位 f 改成 a（TC00t000e00s000t00a000l00o000w0000）
+步骤2:
+推送并查看失败明细","【业务功能检查】
+- 两行均被判定为非法格式拦截，不进入接口
+- 弹窗按行号列出失败，提示格式不正确
+- 其余合法行不受影响照常推送",中
+合并测试阶段/推送时testcase_id校验/合法格式/小写前缀tc与ma放行,testcase_id 前缀为小写 tc / ma 时大小写不敏感放行,TESTCASE_ID_PATTERN 带 i 标志（/^...$/i），TC_SOURCE_PATTERN 同样带 i；因此 tc1234567890abcdef1234567890abcdef12 与 maa1b2c3d4e5f60718293a4b5c6d7e8f90 均命中 (TC|MA)[0-9a-f]{32} → 放行，并分别路由 testAgent / testAgentMA。注意掩码 uuid 的 TC 前缀严格大写（isMaskedUuid 不取 i），小写 tc 掩码形态不走掩码分支。,"步骤1:
+将某行 testcase_id 设为小写 tc 前缀 + 32 hex，如 tc1234567890abcdef1234567890abcdef12
+步骤2:
+另一行设为小写 ma 前缀 + 32 hex，如 maa1b2c3d4e5f60718293a4b5c6d7e8f90
+步骤3:
+推送并核对两行的来源平台批次与是否拦截","【业务功能检查】
+- 小写 tc 行被放行并路由到 testAgent
+- 小写 ma 行被放行并路由到 testAgentMA
+- 两行均通过格式校验，不被判定为非法格式",中
+合并测试阶段/推送时testcase_id校验/合法格式/hex大写字母放行,testcase_id 的 32 位 hex 部分使用大写字母时放行,TESTCASE_ID_PATTERN 的 [0-9a-f] 带 i 标志，因此 A-F 大写 hex 同样匹配；形如 TC1234567890ABCDEF1234567890ABCDEF12（全大写 hex）命中 (TC|MA)[0-9a-f]{32} → 放行。标准 UUID 同理支持大写。,"步骤1:
+将某行 testcase_id 设为 TC + 32 位大写 hex，如 TC1234567890ABCDEF1234567890ABCDEF12
+步骤2:
+推送并核对是否放行与路由","【业务功能检查】
+- 该行通过格式校验不被拦截
+- 大小写 hex 与标准小写 hex 被等价对待，路由到 testAgent
+- 不涉及十六进制大小写转换报错",中
+合并测试阶段/推送时testcase_id校验/非法格式/MA前缀testagent掩码拦截,MA 前缀 + testagent 掩码字母视为非法格式,"掩码 uuid 严格要求前缀为 TC（isMaskedUuid 中 v.slice(0,2) !== 'TC' 即返回 false）；MA00t000e00s000t00a000g00e000n00t0 不命中掩码分支，回退 STANDARD_TESTCASE_ID 也因 body 含非 hex 字母（t e s t a g e n）不匹配 → invalidFormat 阻断。同样 MA 前缀 + testflow 掩码字母也拦截。","步骤1:
+将某行 testcase_id 设为 MA 前缀的 testagent 掩码串，如 MA00t000e00s000t00a000g00e000n00t0
+步骤2:
+推送并查看失败明细","【业务功能检查】
+- 该行被判定为非法格式拦截，不进入接口
+- MA 前缀的掩码形态不被误放行为合法
+- 弹窗按行号列出失败，提示格式不正确",中
+合并测试阶段/推送时testcase_id校验/非法格式/掩码位大写字母拦截,testagent / testflow 掩码位使用大写字母视为非法,isMaskedUuid 对掩码位与 hex 位均做大小写严格校验（不取 i 标志）；掩码位 t/e/s/t/a/g/e/n/t 必须小写，写成大写（如 TC00T000E00S000T00A000G00E000N00T0）则不命中任何掩码分支，且回退 STANDARD_TESTCASE_ID 因含非 hex 字母不匹配 → invalidFormat 阻断。,"步骤1:
+将某行 testcase_id 设为掩码位全大写的 testagent 串，如 TC00T000E00S000T00A000G00E000N00T0
+步骤2:
+推送并查看失败明细","【业务功能检查】
+- 该行被判定为非法格式拦截
+- 掩码字母大小写被严格区分，大写不蒙混过关
+- 弹窗按行号列出失败",中
+合并测试阶段/推送时testcase_id校验/非法格式/掩码末位非hex拦截,testagent 第 32 位（末位 hex）非 hex 视为非法,testagent 掩码串末位（第 32 位，1-based）应为 hex；若该位被替换成非 hex 字符（如 TC00t000e00s000t00a000g00e000n00tX，末位 X），isMaskedUuid 逐位校验发现非掩码位非 hex → false，回退 STANDARD_TESTCASE_ID 也不匹配 → invalidFormat 阻断。,"步骤1:
+将某行 testcase_id 设为 testagent 掩码串但末位改为非 hex（如 X），如 TC00t000e00s000t00a000g00e000n00tX
+步骤2:
+推送并查看失败明细","【业务功能检查】
+- 该行被判定为非法格式拦截
+- 末位 hex 位的非法字符未被忽略
+- 弹窗按行号列出失败",中
+合并测试阶段/推送时testcase_id校验/非法格式/前后空格trim后仍非法,testcase_id 含前后空格时按 trim 后判定（trim 后非法仍拦截）,isMaskedUuid 与 STANDARD_TESTCASE_ID 均对输入先 trim 再校验（trim 不取 i）；若原始值带前后空格但 trim 后内容非法（如'  a1b2c3d4e5f60718293a4b5c6d7e8f90  ' trim 后为裸 32 hex），则仍被判定为非法格式拦截。注意：若 trim 后为合法值则放行，空格本身不影响。,"步骤1:
+将某行 testcase_id 设为带前后空格的裸 32 hex，如' a1b2c3d4e5f60718293a4b5c6d7e8f90 '（含首尾空格）
+步骤2:
+推送并查看是否拦截","【业务功能检查】
+- trim 后内容为裸 32 hex，仍被判定为非法格式拦截
+- 空格未被当作合法字符，前后空白不绕过校验
+- 弹窗按行号列出失败",中
+合并测试阶段/推送时testcase_id校验/合法格式/标准UUID大写字母放行,标准 UUID 使用大写字母时按大小写不敏感放行,STANDARD_TESTCASE_ID 的 [0-9a-f] 带 i 标志，因此大写 UUID（如 123E4567-E89B-12D3-A456-426614174000）同样命中第一分支 → 放行并路由 testAgentMA。,"步骤1:
+将某行 testcase_id 设为全大写标准 UUID，如 123E4567-E89B-12D3-A456-426614174000
+步骤2:
+推送并核对是否放行与路由","【业务功能检查】
+- 该行通过格式校验不被拦截
+- 大小写 UUID 被等价对待，路由到 testAgentMA
+- 不触发大小写相关转换错误",低
+合并测试阶段/推送时testcase_id校验/预校验/计数维度汇总,totals=成功+跳过+失败 三维度计数正确,runValidators 后推送结果汇总为 successCount / skipped（样例静默过滤）/ failuresByKind（占位/空/格式）三维度；约定 total = 成功数 + 跳过数 + 失败数，弹窗分别呈现，不允许行号错位或计数漏算。,"步骤1:
+准备一个文件：1 行中文样例占位（跳过）+ 1 行 TESTCASE_ID 英文占位（失败）+ 1 行裸 32 hex（失败）+ 2 行合法（1 个标准 UUID、1 个 TC+32hex）
+步骤2:
+批量推送并核对弹窗汇总","【业务功能检查】
+- 成功 2 行（标准 UUID、TC+32hex）
+- 跳过 1 行（中文样例占位）
+- 失败 2 行（英文占位、裸 hex），分别按 kind 列出
+- successCount + skipped + failures 总数对齐文件行数，无错位漏算",中
+合并测试阶段/界面图标显示/掩码标识/testagent掩码显示TA图标,testcase_id 为 testagent 掩码 uuid 时 testcase_id 列显示绿色「TA」小图标,编辑器在渲染 testcase_id 列单元格时调用 _detectTcMaskKind，对命中 _TC_AGENT_RE（TC 前缀 + testagent 掩码，如 TC00t000e00s000t00a000g00e000n00t0）的值返回 'mask'，并在内容前插入 xs-tc-badge xs-tc-badge-mask 徽标（内含 TA 字母，绿色椭圆）。,"步骤1:
+在案例文件中将某行 testcase_id 设为 testagent 掩码串，如 TC00t000e00s000t00a000g00e000n00t0
+步骤2:
+打开/刷新表格编辑器，定位该 testcase_id 列单元格","【界面检查】
+- 该单元格 testcase_id 列左侧显示绿色「TA」小图标（椭圆徽标）
+- 图标与后面的 testcase_id 文本之间留有间距，不遮挡/不占用数据本身
+- 鼠标悬浮图标显示 tooltip：'TC 掩码标识（testagent/testflow）：<原值>'",高
+合并测试阶段/界面图标显示/掩码标识/testflow掩码显示TA图标,testcase_id 为 testflow 掩码 uuid 时 testcase_id 列同样显示绿色「TA」小图标,_detectTcMaskKind 对命中 _TC_FLOW_RE（TC 前缀 + testflow 掩码，如 TC00t000e00s000t00f000l00o000w0000）的值同样返回 'mask'，与 testagent 共用同一 TA 标识徽标，不区分两种掩码。,"步骤1:
+将某行 testcase_id 设为 testflow 掩码串，如 TC00t000e00s000t00f000l00o000w0000
+步骤2:
+刷新编辑器查看 testcase_id 列","【界面检查】
+- 该单元格左侧同样显示绿色「TA」小图标
+- 图标形态与 testagent 掩码完全一致（共用标识，不额外区分 TF）
+- 悬浮 tooltip 显示完整 testcase_id 原值",高
+合并测试阶段/界面图标显示/无图标/标准格式不显示图标,testcase_id 为标准 UUID / TC+32hex / MA+32hex 时不显示掩码图标,_detectTcMaskKind 仅在值为 TC 前缀且命中 testagent/testflow 掩码时返回 'mask'；标准 UUID、TC+32hex、MA+32hex 均不匹配两正则，返回 ''，单元格仅渲染纯文本，不插入 xs-tc-badge。,"步骤1:
+准备三行分别设为标准 UUID、TC+32hex、MA+32hex
+步骤2:
+刷新编辑器查看 testcase_id 列","【界面检查】
+- 三行 testcase_id 单元格均只显示纯文本，左侧无 TA 图标
+- 不产生任何掩码徽标元素（DOM 中无 xs-tc-badge）
+- 与掩码行的图标呈现形成清晰区分",中
+合并测试阶段/界面图标显示/无图标/空值与占位不显示图标,testcase_id 为空、占位（TESTCASE_ID / 案例唯一标识）时不显示掩码图标,空字符串经 trim 后为空，_detectTcMaskKind 直接返回 ''；英文占位 TESTCASE_ID、中文占位「案例唯一标识，不可修改」均不匹配掩码正则，不插入图标，保持纯文本或占位样式。,"步骤1:
+准备三行 testcase_id 分别为空、TESTCASE_ID、案例唯一标识，不可修改
+步骤2:
+刷新编辑器查看 testcase_id 列","【界面检查】
+- 三行 testcase_id 单元格均无 TA 掩码图标
+- 空值/占位行走各自既有呈现（如空值提示、占位样式），不受图标逻辑影响",中
+合并测试阶段/界面图标显示/掩码标识/掩码位篡改不显示图标,testagent/testflow 掩码位被篡改时不显示图标（与非法格式一致）,_detectTcMaskKind 严格正则匹配；掩码位字母错误（如第 31 位 t 改 0：TC00t000e00s000t00a000g00e000n0000）或位数错位均不命中两正则，返回 ''，单元格不显示 TA 图标，仅纯文本呈现（与推送拦截的非法格式判定一致）。,"步骤1:
+将某行 testcase_id 设为掩码位被篡改的串，如 TC00t000e00s000t00a000g00e000n0000
+步骤2:
+刷新编辑器查看 testcase_id 列","【界面检查】
+- 该单元格不显示 TA 掩码图标
+- 仅以纯文本呈现该非法值，无误导性图标
+- 与合法掩码行的图标显示形成对比，避免用户误判为合规",中
+合并测试阶段/界面图标显示/掩码标识/大小写严格不显示图标,掩码串前缀 TC 小写或掩码字母大写时不显示图标,_TC_AGENT_RE / _TC_FLOW_RE 均为严格大小写（不带 i）；小写 tc 前缀（tc00t000e00s000t00a000g00e000n00t0）或掩码位大写（TC00T000E00S000T00A000G00E000N00T0）均不匹配，_detectTcMaskKind 返回 ''，不插入图标。,"步骤1:
+准备两行分别设为小写 tc 前缀掩码串、掩码位大写串
+步骤2:
+刷新编辑器查看 testcase_id 列","【界面检查】
+- 两行均不显示 TA 掩码图标
+- 图标显示与推送校验的大小写严格策略保持一致（小写 tc 掩码不被误认为合规掩码）",中
+合并测试阶段/界面图标显示/掩码标识/混合文件图标定位准确,同一文件内掩码行与合法行混排时图标仅出现在掩码行,编辑器按单元格逐格判定 _detectTcMaskKind：仅 testagent/testflow 掩码行显示 TA 图标，其余标准 UUID / TC+hex / MA+hex / 空值 / 占位行均不显示，图标不因渲染错位误挂到其它行或列。,"步骤1:
+一个文件含 1 行 testagent 掩码 + 1 行 testflow 掩码 + 1 行标准 UUID + 1 行 TC+32hex + 1 行空值
+步骤2:
+刷新编辑器逐行核对 testcase_id 列","【界面检查】
+- 仅前 2 行（两种掩码）显示 TA 图标
+- 标准 UUID / TC+hex / 空值行均无图标
+- 图标位置精确绑定在各自 testcase_id 单元格内，不串列、不串行",中
+合并测试阶段/界面图标显示/掩码标识/编辑后实时刷新图标,修改 testcase_id 单元格值后图标随内容实时更新,单元格原地编辑保存后触发 patchCell / 重新渲染，_detectTcMaskKind 依据新值重新判定：把标准 UUID 改为 testagent 掩码串时立即出现 TA 图标；把掩码串改为非法值时图标立即消失，无需整表重渲染。,"步骤1:
+将某标准 UUID 行的 testcase_id 编辑为 testagent 掩码串并保存
+步骤2:
+再将同一单元格改回裸 32 hex 并保存","【界面检查】
+- 步骤1 保存后该单元格立即出现 TA 掩码图标
+- 步骤2 保存后图标立即消失，仅留纯文本
+- 图标状态与单元格当前值实时一致，无残留/无延迟",中

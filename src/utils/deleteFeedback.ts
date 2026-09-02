@@ -13,12 +13,10 @@
  * ============================================================================
  */
 import * as vscode from 'vscode';
-import {
-    showApiError,
-    showDeleteConfirmModal,
-    showDeleteResult,
-} from './message';
-import type { DeleteConfirmItem, MsgType, PushFailure } from './message';
+import { showDeleteResult } from './message';
+import { showApiError, showDeleteConfirmModal } from './messageExtras';
+import type { MsgType, PushFailure } from './message';
+import type { DeleteConfirmItem } from './messageExtras';
 
 export type { DeleteConfirmItem, PushFailure };
 

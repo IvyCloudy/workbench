@@ -51,6 +51,107 @@ const MODAL_HEADER_BG: Record<MsgType, string> = {
     info:    'linear-gradient(180deg,#e8f0fe,#f3f8ff)',
 };
 
+/** HTML 转义，避免案例名称等字段破坏结构 / 注入脚本 */
+function escapeHtml_(s: unknown): string {
+    return String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/**
+ * 独立 webview 弹窗的公共样式（xs-modal-* 体系，与 table-editor.css 一致）。
+ * 通用模态框与删除确认弹窗共用，避免两套 CSS 各自维护、改一处漏一处。
+ *
+ * @param headerBg    头部渐变背景（按消息类型取色）
+ * @param color       主题色（图标 / 主按钮）
+ * @param dialogExtra 对话框尺寸差异（宽度 / 最大高度等）
+ */
+function baseModalCss_(headerBg: string, color: string, dialogExtra: string): string {
+    return `    :root{--bg:#fff;--bd:#e0e0e0}
+    *{margin:0;padding:0;box-sizing:border-box}
+    html,body{height:100%;overflow:hidden}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;font-size:13px;color:#333}
+    .xs-modal-overlay{display:flex;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);align-items:center;justify-content:center;z-index:2000}
+    .xs-modal-dialog{background:var(--bg);border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.2);${dialogExtra}display:flex;flex-direction:column;overflow:hidden}
+    .xs-modal-header{display:flex;align-items:center;padding:12px 16px;background:${headerBg};border-bottom:1px solid var(--bd);gap:10px;flex-shrink:0}
+    .xs-pr-icon{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;font-size:14px;font-weight:bold;color:#fff;background:${color};flex-shrink:0}
+    .xs-modal-title{font-size:14px;font-weight:600;flex:1;color:#333}
+    .xs-modal-close{cursor:pointer;font-size:16px;color:#666;padding:4px 10px;border-radius:3px;line-height:1;border:none;background:transparent}
+    .xs-modal-close:hover{background:#e0e0e0;color:#333}
+    .xs-modal-footer{display:flex;align-items:center;justify-content:flex-end;padding:10px 16px;border-top:1px solid var(--bd);gap:8px;flex-shrink:0}
+    .xs-btn{padding:6px 20px;border-radius:3px;font-size:13px;cursor:pointer;border:1px solid #ccc;background:#fff;color:#333;outline:none}
+    .xs-btn:hover{background:#f0f0f0}
+    .xs-btn-p{background:${color};color:#fff;border-color:${color}}
+    .xs-btn-p:hover{opacity:.9}`;
+}
+
+/** 失败明细列表（推送结果 / 删除结果共用） */
+function formatFailures_(failures: PushFailure[]): string {
+    return (failures || []).map(f => `• ${f.tsId}: ${f.reason}`).join('\n');
+}
+
+/**
+ * 「结果类」弹窗在无 panel 时的流程级错误分支（推送 / 删除共用）。
+ *
+ * @param verb    动作名，如 '推送' / '删除'
+ * @param allText 「共 N 条」的补充，如 '全部未推送' / '全部未删除'
+ */
+function showResultErrorModal_(params: {
+    verb: string;
+    title: string;
+    fileName: string;
+    error: string;
+    total: number;
+    allText: string;
+}): void {
+    showModal('default', 'error', params.title,
+        `${params.verb}失败：${params.fileName}\n\n${params.error}`
+        + (params.total > 0 ? `\n\n共 ${params.total} 条，${params.allText}。` : ''));
+}
+
+/**
+ * 「结果类」弹窗在无 panel 时的兜底展示（推送 / 删除共用）。
+ *
+ * 两者的四分支（无结果 / 全部成功 / 全部失败 / 部分成功）判定与弹窗类型完全一致，
+ * 仅文案不同，故在此统一判定；文案由调用方按业务语义提供。
+ */
+function showResultModalFallback_(params: {
+    title: string;
+    successCount: number;
+    failures: PushFailure[];
+    texts: {
+        /** 0 成功 0 失败 */
+        noResult: string;
+        /** 全部成功 */
+        allSuccess: string;
+        /** 全部失败（已含失败明细） */
+        allFail: string;
+        /** 部分成功（已含失败明细） */
+        partial: string;
+    };
+}): void {
+    const failCount = params.failures.length;
+    let modalType: MsgType;
+    let message: string;
+    if (failCount === 0 && params.successCount === 0) {
+        modalType = 'warning';
+        message = params.texts.noResult;
+    } else if (failCount === 0) {
+        modalType = 'success';
+        message = params.texts.allSuccess;
+    } else if (params.successCount === 0) {
+        modalType = 'error';
+        message = params.texts.allFail;
+    } else {
+        modalType = 'warning';
+        message = params.texts.partial;
+    }
+    showModal('default', modalType, params.title, message);
+}
+
 /**
  * 构建独立 webview 模态框 HTML。
  * 样式与现有 table-editor.css 的 xs-modal-* 体系一致。
@@ -63,7 +164,7 @@ function buildStandaloneModalHtml(
     const color = MODAL_COLOR[modalType];
     const headerBg = MODAL_HEADER_BG[modalType];
     const icon = MODAL_ICON[modalType];
-    const safeMsg = message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const safeMsg = escapeHtml_(message);
 
     return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -72,23 +173,8 @@ function buildStandaloneModalHtml(
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${title}</title>
 <style>
-    :root{--bg:#fff;--bd:#e0e0e0}
-    *{margin:0;padding:0;box-sizing:border-box}
-    html,body{height:100%;overflow:hidden}
-    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;font-size:13px;color:#333}
-    .xs-modal-overlay{display:flex;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);align-items:center;justify-content:center;z-index:2000}
-    .xs-modal-dialog{background:var(--bg);border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.2);width:420px;max-width:90vw;display:flex;flex-direction:column;overflow:hidden}
-    .xs-modal-header{display:flex;align-items:center;padding:12px 16px;background:${headerBg};border-bottom:1px solid var(--bd);gap:10px;flex-shrink:0}
-    .xs-pr-icon{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;font-size:14px;font-weight:bold;color:#fff;background:${color};flex-shrink:0}
-    .xs-modal-title{font-size:14px;font-weight:600;flex:1;color:#333}
-    .xs-modal-close{cursor:pointer;font-size:16px;color:#666;padding:4px 10px;border-radius:3px;line-height:1;border:none;background:transparent}
-    .xs-modal-close:hover{background:#e0e0e0;color:#333}
+${baseModalCss_(headerBg, color, 'width:420px;max-width:90vw;')}
     .xs-modal-body{flex:1;padding:20px 16px;min-height:60px;font-size:13px;color:#444;line-height:1.7;white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word}
-    .xs-modal-footer{display:flex;align-items:center;justify-content:flex-end;padding:10px 16px;border-top:1px solid var(--bd);gap:8px;flex-shrink:0}
-    .xs-btn{padding:6px 20px;border-radius:3px;font-size:13px;cursor:pointer;border:1px solid #ccc;background:#fff;color:#333;outline:none}
-    .xs-btn:hover{background:#f0f0f0}
-    .xs-btn-p{background:${color};color:#fff;border-color:${color}}
-    .xs-btn-p:hover{opacity:.9}
 </style>
 </head>
 <body>
@@ -268,16 +354,6 @@ export interface DeleteConfirmItem {
     hasBug: boolean;
 }
 
-/** HTML 转义，避免案例名称等字段破坏结构 / 注入脚本 */
-function escapeHtml_(s: unknown): string {
-    return String(s ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-
 /**
  * 构建「删除案例确认」独立 webview 弹窗 HTML。
  *
@@ -316,22 +392,8 @@ function buildDeleteConfirmHtml(
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>删除案例</title>
 <style>
-    *{margin:0;padding:0;box-sizing:border-box}
-    html,body{height:100%;overflow:hidden}
-    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;font-size:13px;color:#333}
-    .xs-modal-overlay{display:flex;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);align-items:center;justify-content:center;z-index:2000}
-    .xs-modal-dialog{background:#fff;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.2);width:620px;max-width:92vw;max-height:88vh;display:flex;flex-direction:column;overflow:hidden}
-    .xs-modal-header{display:flex;align-items:center;padding:12px 16px;background:${headerBg};border-bottom:1px solid #e0e0e0;gap:10px;flex-shrink:0}
-    .xs-pr-icon{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;font-size:14px;font-weight:bold;color:#fff;background:${color};flex-shrink:0}
-    .xs-modal-title{font-size:14px;font-weight:600;flex:1;color:#333}
-    .xs-modal-close{cursor:pointer;font-size:16px;color:#666;padding:4px 10px;border-radius:3px;line-height:1;border:none;background:transparent}
-    .xs-modal-close:hover{background:#e0e0e0;color:#333}
+${baseModalCss_(headerBg, color, 'width:620px;max-width:92vw;max-height:88vh;')}
     .xs-modal-body{flex:1;padding:16px;min-height:60px;overflow:auto}
-    .xs-modal-footer{display:flex;align-items:center;justify-content:flex-end;padding:10px 16px;border-top:1px solid #e0e0e0;gap:8px;flex-shrink:0}
-    .xs-btn{padding:6px 20px;border-radius:3px;font-size:13px;cursor:pointer;border:1px solid #ccc;background:#fff;color:#333;outline:none}
-    .xs-btn:hover{background:#f0f0f0}
-    .xs-btn-p{background:${color};color:#fff;border-color:${color}}
-    .xs-btn-p:hover{opacity:.9}
     .xs-dc-lead{font-size:13px;line-height:1.7;color:#333;margin:0 0 8px}
     .xs-dc-tail{font-size:13px;line-height:1.7;color:#333;margin:10px 0 0}
     .xs-dc-table-wrap{max-height:300px;overflow:auto;border:1px solid #e3e3e3;border-radius:3px}
@@ -470,25 +532,25 @@ export function showPushResult(
     } else {
         // 独立模态框：如果有 error（流程级错误），直接展示错误，不走 successCount/failures 逻辑
         if (error) {
-            showModal('default', 'error', '推送结果',
-                `推送失败：${fileName}\n\n${error}` + (total > 0 ? `\n\n共 ${total} 条，全部未推送。` : ''));
+            showResultErrorModal_({
+                verb: '推送', title: '推送结果', fileName, error, total, allText: '全部未推送',
+            });
             return;
         }
         const failCount = failures.length;
         const skipHint = skipped > 0 ? `（其中 ${skipped} 行样例数据已跳过）` : '';
-        if (failCount === 0 && successCount === 0) {
-            showModal('default', 'warning', '推送结果', `推送未产生结果：${fileName}\n请检查文件后重试。`);
-        } else if (failCount === 0) {
-            showModal('default', 'success', '推送结果', `推送成功：${fileName}\n共 ${successCount} 条全部成功${skipHint}。`);
-        } else if (successCount === 0) {
-            showModal('default', 'error', '推送结果',
-                `推送失败：${fileName}\n共 ${failCount} 条全部失败${skipHint}。\n\n` +
-                failures.map(f => `• ${f.tsId}: ${f.reason}`).join('\n'));
-        } else {
-            showModal('default', 'warning', '推送结果',
-                `推送部分成功：${fileName}\n成功 ${successCount} / 失败 ${failCount} / 共 ${total} 条${skipHint}。\n\n` +
-                `失败明细：\n` + failures.map(f => `• ${f.tsId}: ${f.reason}`).join('\n'));
-        }
+        showResultModalFallback_({
+            title: '推送结果',
+            successCount,
+            failures,
+            texts: {
+                noResult: `推送未产生结果：${fileName}\n请检查文件后重试。`,
+                allSuccess: `推送成功：${fileName}\n共 ${successCount} 条全部成功${skipHint}。`,
+                allFail: `推送失败：${fileName}\n共 ${failCount} 条全部失败${skipHint}。\n\n` + formatFailures_(failures),
+                partial: `推送部分成功：${fileName}\n成功 ${successCount} / 失败 ${failCount} / 共 ${total} 条${skipHint}。\n\n`
+                    + `失败明细：\n` + formatFailures_(failures),
+            },
+        });
     }
 }
 
@@ -529,26 +591,26 @@ export function showDeleteResult(
         return;
     }
     if (error) {
-        showModal('default', 'error', '删除结果',
-            `删除失败：${fileName}\n\n${error}` + (total > 0 ? `\n\n共 ${total} 条，全部未删除。` : ''));
+        showResultErrorModal_({
+            verb: '删除', title: '删除结果', fileName, error, total, allText: '全部未删除',
+        });
         return;
     }
     const failCount = failures.length;
     // 无面板兜底文案：标注"其中 N 条线上本不存在"
     const _missingHint = _deletedSourceMissing > 0 ? `（其中 ${_deletedSourceMissing} 条线上本不存在，已同步清理）` : '';
-    if (failCount === 0 && successCount === 0) {
-        showModal('default', 'warning', '删除结果', `删除未产生结果：${fileName}\n请检查文件后重试。`);
-    } else if (failCount === 0) {
-        showModal('default', 'success', '删除结果', `删除成功：${fileName}\n共 ${successCount} 条全部删除成功。${_missingHint}`);
-    } else if (successCount === 0) {
-        showModal('default', 'error', '删除结果',
-            `删除失败：${fileName}\n共 ${failCount} 条全部失败。\n\n` +
-            failures.map(f => `• ${f.tsId}: ${f.reason}`).join('\n'));
-    } else {
-        showModal('default', 'warning', '删除结果',
-            `删除部分成功：${fileName}\n成功 ${successCount} / 失败 ${failCount} / 共 ${total} 条。${_missingHint}\n\n` +
-            `失败明细：\n` + failures.map(f => `• ${f.tsId}: ${f.reason}`).join('\n'));
-    }
+    showResultModalFallback_({
+        title: '删除结果',
+        successCount,
+        failures,
+        texts: {
+            noResult: `删除未产生结果：${fileName}\n请检查文件后重试。`,
+            allSuccess: `删除成功：${fileName}\n共 ${successCount} 条全部删除成功。${_missingHint}`,
+            allFail: `删除失败：${fileName}\n共 ${failCount} 条全部失败。\n\n` + formatFailures_(failures),
+            partial: `删除部分成功：${fileName}\n成功 ${successCount} / 失败 ${failCount} / 共 ${total} 条。${_missingHint}\n\n`
+                + `失败明细：\n` + formatFailures_(failures),
+        },
+    });
 }
 
 // ============================================

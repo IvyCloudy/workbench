@@ -40,8 +40,12 @@ import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { TS_ID_COLUMN } from '../services/utils';
 import { resolveTaskInfoOrNull } from './pushCore.stages';
 import { TelemetryService } from '../utils/telemetry';
-import { showDeleteResult, showDeleteConfirmModal, showApiError } from '../utils/message';
-import type { PushFailure, DeleteConfirmItem } from '../utils/message';
+import {
+    notifyPrecheckFailure,
+    confirmCaseFileDeleteWithDetails,
+    reportDeleteResult,
+} from '../utils/deleteFeedback';
+import type { PushFailure, DeleteConfirmItem } from '../utils/deleteFeedback';
 import { confirmDeleteTestCase } from '../services/http';
 
 /** 案例编辑器 viewType（保持与 BaseEditorProvider 注册值一致） */
@@ -435,13 +439,12 @@ async function handleCaseFileWillDelete(
                     .filter((it: DeleteConfirmItem) => !!it.sourceId);
             } else {
                 // 预检接口返回非成功码：提示后端 errorMsg，降级为原生 modal（不阻断删除）
-                showApiError(
-                    undefined,
-                    '删除前校验未通过，已跳过确认步骤',
-                    resp.returnCode || '',
-                    resp.errorMsg || '',
-                    'warning',
-                );
+                notifyPrecheckFailure({
+                    scenePrefix: '删除前校验未通过，已跳过确认步骤',
+                    returnCode: resp.returnCode || '',
+                    errorMsg: resp.errorMsg || '',
+                    msgType: 'warning',
+                });
             }
         }
     } catch (_ce) {
@@ -450,7 +453,7 @@ async function handleCaseFileWillDelete(
     }
 
     const userConfirmed = confirmItems.length > 0
-        ? await showDeleteConfirmModal(
+        ? await confirmCaseFileDeleteWithDetails(
             { fileName: path.basename(filePath), caseCount: nonEmptyIds.length, items: confirmItems },
             token,
         )
@@ -747,7 +750,16 @@ async function showDeleteResultModal(r: WillDeleteResult): Promise<void> {
                 await BaseEditorProvider.waitReady(r.filePath, 3000);
             } catch (_) { /* ignore：超时也尝试 post，前端已就绪的场景下仍能收到 */ }
         }
-        showDeleteResult(panel, r.fileName, r.successCount, r.failures, r.total, r.error, r.deletedSuccess, r.deletedSourceMissing);
+        reportDeleteResult({
+            panel,
+            fileName: r.fileName,
+            successCount: r.successCount,
+            failures: r.failures,
+            total: r.total,
+            error: r.error,
+            deletedSuccess: r.deletedSuccess,
+            deletedSourceMissing: r.deletedSourceMissing,
+        });
     } catch (err: any) {
         console.warn('[workspaceListeners] 弹出删除结果失败:', err?.message || err);
         // 兜底：直接原生通知

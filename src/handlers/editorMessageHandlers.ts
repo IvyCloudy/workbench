@@ -25,7 +25,9 @@ import { WebviewDataPusher } from '../services/webviewDataPusher';
 import { applyDiffHighlight, type EditorSession } from '../services/diffHighlight';
 import { getMarks, setMarks, clearMarks } from '../utils/markStore';
 import { getHeaderLabels, onHeaderLabelsChange } from '../utils/headerLabels';
-import { showSaveResult, showPushErrorModal, showDeleteResult, showApiError, type PushFailure } from '../utils/message';
+import { showSaveResult, showPushErrorModal } from '../utils/message';
+import { notifyPrecheckFailure, reportDeleteResult } from '../utils/deleteFeedback';
+import type { PushFailure } from '../utils/message';
 import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { confirmDeleteTestCase } from '../services/http';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
@@ -283,14 +285,14 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
         if (resp.returnCode !== 'SUC0000') {
             // 预检失败不阻断删除：提示后端 errorMsg，并降级为简单确认继续。
             // 注意：前端 requestDeleteConfirm 在 ok=false 时会忽略 errorMessage 直接走简单确认，
-            // 因此 errorMsg 的透出完全由 showApiError（toast）负责，此处无需再回传 errorMessage。
-            showApiError(
-                ctx.webviewPanel,
-                '删除前校验未通过，已跳过确认步骤',
-                resp.returnCode || '',
-                resp.errorMsg || '',
-                'warning',
-            );
+            // 因此 errorMsg 的透出完全由 notifyPrecheckFailure（toast）负责，此处无需再回传 errorMessage。
+            notifyPrecheckFailure({
+                panel: ctx.webviewPanel,
+                scenePrefix: '删除前校验未通过，已跳过确认步骤',
+                returnCode: resp.returnCode || '',
+                errorMsg: resp.errorMsg || '',
+                msgType: 'warning',
+            });
             ctx.webviewPanel.webview.postMessage({
                 type: 'confirmDeleteRowsResult', ok: false, items: [],
             });
@@ -437,16 +439,16 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
                     return String(a.tsId).localeCompare(String(b.tsId));
                 });
             const panel = BaseEditorProvider.getPanel(filePath);
-            showDeleteResult(
+            reportDeleteResult({
                 panel,
-                path.basename(filePath || ''),
-                result.synced.length,
+                fileName: path.basename(filePath || ''),
+                successCount: result.synced.length,
                 failures,
-                tsIds.length,
-                undefined,
-                result.deletedSuccess.length,
-                result.deletedSourceMissing.length,
-            );
+                total: tsIds.length,
+                error: undefined,
+                deletedSuccess: result.deletedSuccess.length,
+                deletedSourceMissing: result.deletedSourceMissing.length,
+            });
         } catch (_e) { /* ignore */ }
 
         TelemetryService.sendTelemetryEvent('editor.deleteRows.synced', {

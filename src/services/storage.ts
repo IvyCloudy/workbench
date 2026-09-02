@@ -31,7 +31,8 @@ const DEFAULT_CONFIG: AppConfig = {
     userName: '',
     sm2PublicKey: '',
     telemetryUrl: '',
-    telemetryToken: ''
+    telemetryToken: '',
+    requestTimeoutMs: 10000
 };
 
 const DEFAULT_QUERY_PARAMS: QueryParams = {

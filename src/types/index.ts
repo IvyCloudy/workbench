@@ -124,6 +124,8 @@ export interface AppConfig {
     telemetryUrl?: string;
     /** 埋点网关鉴权 Token，对应网关 X-Telemetry-Token */
     telemetryToken?: string;
+    /** 接口请求超时时间（毫秒）。留空则各接口使用自身默认值：推送 120s，其余 10s */
+    requestTimeoutMs?: number;
 }
 
 // ============================================

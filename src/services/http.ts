@@ -10,7 +10,7 @@
  *    4. 统一翻译网络错误码（ECONNREFUSED 等）为可读中文提示
  *  设计要点：
  *    - 推送链路为关键链路：pushTestCase 会打印完整请求/响应日志（敏感头脱敏）
- *    - 所有 POST 请求超时统一为 DEFAULT_TIMEOUT(10s)
+ *    - 请求超时可通过 AppConfig.requestTimeoutMs（app-config.json）配置；未配置时：推送默认 120s（PUSH_DEFAULT_TIMEOUT），其余接口默认 10s（DEFAULT_TIMEOUT）
  *    - localhost 一律改写为 127.0.0.1，规避部分系统 IPv6 解析问题
  * ============================================================================
  */
@@ -38,6 +38,24 @@ export interface HttpResponse<T = any> {
 // ============================================
 
 const DEFAULT_TIMEOUT = 10000;
+/** 推送接口默认超时（批量推送耗时较长，默认放宽到 120s） */
+const PUSH_DEFAULT_TIMEOUT = 120000;
+
+/**
+ * 解析接口超时时间：优先级为
+ *   1. app-config.json 的 requestTimeoutMs（如登录后下发）
+ *   2. 调用方传入的 fallback（推送默认 120s，其余默认 10s）
+ * 任一来源为非正数 / 非数字时自动跳过，最终保证返回有效正数。
+ */
+function resolveTimeout(cfg: AppConfig | undefined, fallback: number): number {
+    // 1) app-config.json
+    const cfgVal = cfg?.requestTimeoutMs;
+    if (typeof cfgVal === 'number' && cfgVal > 0 && !Number.isNaN(cfgVal)) {
+        return cfgVal;
+    }
+    // 2) 默认值
+    return fallback;
+}
 
 async function getApiBaseUrl(context: vscode.ExtensionContext): Promise<string> {
     const cfg = await readConfig(context);
@@ -99,7 +117,8 @@ function curlRequest(
     method: string,
     url: string,
     headers: Record<string, string>,
-    body?: string
+    body?: string,
+    timeoutMs: number = DEFAULT_TIMEOUT
 ): Promise<CurlResult> {
     return new Promise((resolve, reject) => {
         const args: string[] = ['-sS', '-X', method, '-o', '-', '-w', '\n__CURL_HTTP_CODE__%{http_code}'];
@@ -112,7 +131,7 @@ function curlRequest(
         }
         args.push(url);
 
-        execFile('curl', args, { timeout: DEFAULT_TIMEOUT, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
+        execFile('curl', args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
             if (err) {
                 reject(new Error(`curl 兜底请求失败: ${(err as any).message || err}${stderr ? ' | ' + stderr : ''}`));
                 return;
@@ -141,7 +160,8 @@ function makeRequest<T = any>(
     method: string,
     url: string,
     headers: Record<string, string>,
-    body?: string
+    body?: string,
+    timeoutMs: number = DEFAULT_TIMEOUT
 ): Promise<HttpResponse<T>> {
     return new Promise((resolve, reject) => {
         const urlObj = new URL(url);
@@ -188,7 +208,7 @@ function makeRequest<T = any>(
                     console.warn('[makeRequest][fallback] Node http body 为空但服务端声明 content-length=%d，改用 curl 重试 url=%s',
                         declaredLen, url);
                     try {
-                        const curlResp = await curlRequest(method, url, finalHeaders, body);
+                        const curlResp = await curlRequest(method, url, finalHeaders, body, timeoutMs);
                         if (urlObj.pathname && urlObj.pathname.indexOf('/delete-testcase') >= 0) {
                             console.log('[makeRequest][delete-testcase][curl兜底] status=%d bytes=%d raw=%s',
                                 curlResp.status,
@@ -242,7 +262,7 @@ function makeRequest<T = any>(
             req.destroy();
             reject(new Error('请求超时，请检查后端服务是否可用'));
         });
-        req.setTimeout(DEFAULT_TIMEOUT);
+        req.setTimeout(timeoutMs);
 
         if (bodyBuffer) req.write(bodyBuffer);
         req.end();
@@ -252,11 +272,12 @@ function makeRequest<T = any>(
 async function post<T = any>(
     context: vscode.ExtensionContext,
     url: string,
-    data?: any
+    data?: any,
+    timeoutMs: number = DEFAULT_TIMEOUT
 ): Promise<HttpResponse<T>> {
     const headers = await buildHeaders(context);
     const body = data ? JSON.stringify(data) : undefined;
-    return makeRequest<T>('POST', url, headers, body);
+    return makeRequest<T>('POST', url, headers, body, timeoutMs);
 }
 
 // ============================================
@@ -268,9 +289,10 @@ async function post<T = any>(
  */
 export async function fetchTaskTree(context: vscode.ExtensionContext): Promise<any[]> {
     const url = `${await getApiBaseUrl(context)}/test-task/task-tree`;
+    const appConfig = await readConfig(context);
     TelemetryService.sendTelemetryEvent('api.fetchTaskTree.start', {});
     const _start = Date.now();
-    const response = await post<ApiResponse<any[]>>(context, url, {});
+    const response = await post<ApiResponse<any[]>>(context, url, {}, resolveTimeout(appConfig, DEFAULT_TIMEOUT));
     const _costMs = String(Date.now() - _start);
     maybeReportAuthFailure(response.status, 'fetchTaskTree');
     if (response.data.returnCode === 'SUC0000') {
@@ -305,7 +327,7 @@ export async function queryTestCases(
     if (opts.type) body.type = opts.type;
 
     const _start = Date.now();
-    const response = await post<ApiResponse>(context, url, body);
+    const response = await post<ApiResponse>(context, url, body, resolveTimeout(await readConfig(context), DEFAULT_TIMEOUT));
     maybeReportAuthFailure(response.status, 'queryTestCases');
     TelemetryService.sendTelemetryEvent('api.queryTestCases.done', {
         returnCode: response.data.returnCode || '',
@@ -325,7 +347,7 @@ export async function batchImportData(
     const url = `${await getApiBaseUrl(context)}/test-task/batch-import`;
     const body = { headers: opts.headers, rows: opts.selectedRows };
     const _start = Date.now();
-    const response = await post<ApiResponse>(context, url, body);
+    const response = await post<ApiResponse>(context, url, body, resolveTimeout(await readConfig(context), DEFAULT_TIMEOUT));
     maybeReportAuthFailure(response.status, 'batchImport');
     TelemetryService.sendTelemetryEvent('api.batchImport.done', {
         returnCode: response.data.returnCode || '',
@@ -374,8 +396,9 @@ export async function pushTestCase(
     console.log(`[推送][请求] 数据行数=${data.length}, body 字节=${Buffer.byteLength(bodyStr, 'utf8')}`);
 
     const _apiStart = Date.now();
+    const appConfig = await readConfig(context);
     try {
-        const response = await makeRequest<ApiResponse>('POST', url, headers, bodyStr);
+        const response = await makeRequest<ApiResponse>('POST', url, headers, bodyStr, resolveTimeout(appConfig, PUSH_DEFAULT_TIMEOUT));
         console.log('[推送][响应] status=', response.status,
             'returnCode=', (response.data as any)?.returnCode,
             'errorMsg=', (response.data as any)?.errorMsg || '');
@@ -463,7 +486,7 @@ export async function deleteTestCase(
 
     const _apiStart = Date.now();
     try {
-        const response = await makeRequest<ApiResponse>('DELETE', url, headers, JSON.stringify(body));
+        const response = await makeRequest<ApiResponse>('DELETE', url, headers, JSON.stringify(body), resolveTimeout(appConfig, DEFAULT_TIMEOUT));
         console.log('[删除案例][响应] status=', response.status,
             'returnCode=', (response.data as any)?.returnCode,
             'errorMsg=', (response.data as any)?.errorMsg || '');
@@ -552,7 +575,7 @@ export async function confirmDeleteTestCase(
 
     const _apiStart = Date.now();
     try {
-        const response = await makeRequest<ApiResponse>('POST', url, headers, JSON.stringify(body));
+        const response = await makeRequest<ApiResponse>('POST', url, headers, JSON.stringify(body), resolveTimeout(appConfig, DEFAULT_TIMEOUT));
         console.log('[删除确认][响应] status=', response.status,
             'returnCode=', (response.data as any)?.returnCode,
             'errorMsg=', (response.data as any)?.errorMsg || '');

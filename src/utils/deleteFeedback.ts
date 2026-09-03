@@ -13,7 +13,7 @@
  * ============================================================================
  */
 import * as vscode from 'vscode';
-import { showDeleteResult } from './message';
+import { showDeleteResult } from './messageExtras';
 import { showApiError, showDeleteConfirmModal } from './messageExtras';
 import type { MsgType, PushFailure } from './message';
 import type { DeleteConfirmItem } from './messageExtras';

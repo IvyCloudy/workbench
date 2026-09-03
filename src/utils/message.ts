@@ -262,65 +262,6 @@ export function showPushResult(
 }
 
 // ============================================
-// 4b. 删除结果弹窗 (showDeleteResult)
-// ============================================
-
-/**
- * 删除结果弹窗（成功 / 部分成功 / 全部失败）。
- *
- * 与 showPushResult 同款签名，但消息类型为 'deleteResult'，
- * 前端 05f-delete-result.js 会渲染专属删除文案（"删除成功/删除失败/删除部分成功"），
- * 且不会污染推送高亮状态。
- *
- * - panel 可用 → postMessage({ type:'deleteResult', fileName, successCount, failures, total, error })
- * - panel 不可用 → 独立 webview 模态框展示结果摘要（复用 showModal）
- */
-export function showDeleteResult(
-    panel: vscode.WebviewPanel | undefined,
-    fileName: string,
-    successCount: number,
-    failures: PushFailure[],
-    total: number,
-    error?: string,
-    /** type=1 线上删除成功数（与 successCount 中"真实存在并删除"的部分对应） */
-    deletedSuccess?: number,
-    /** type=3 sourceId 不存在仍算删除成功的数（汇总口径上需与 type=1 区分） */
-    deletedSourceMissing?: number,
-): void {
-    const _deletedSuccess = typeof deletedSuccess === 'number' ? deletedSuccess : successCount;
-    const _deletedSourceMissing = typeof deletedSourceMissing === 'number' ? deletedSourceMissing : 0;
-    if (panel) {
-        panel.webview.postMessage({
-            type: 'deleteResult', fileName, successCount, failures, total, error,
-            deletedSuccess: _deletedSuccess,
-            deletedSourceMissing: _deletedSourceMissing,
-        });
-        return;
-    }
-    if (error) {
-        showResultErrorModal_({
-            verb: '删除', title: '删除结果', fileName, error, total, allText: '全部未删除',
-        });
-        return;
-    }
-    const failCount = failures.length;
-    // 无面板兜底文案：标注"其中 N 条线上本不存在"
-    const _missingHint = _deletedSourceMissing > 0 ? `（其中 ${_deletedSourceMissing} 条线上本不存在，已同步清理）` : '';
-    showResultModalFallback_({
-        title: '删除结果',
-        successCount,
-        failures,
-        texts: {
-            noResult: `删除未产生结果：${fileName}\n请检查文件后重试。`,
-            allSuccess: `删除成功：${fileName}\n共 ${successCount} 条全部删除成功。${_missingHint}`,
-            allFail: `删除失败：${fileName}\n共 ${failCount} 条全部失败。\n\n` + formatFailures_(failures),
-            partial: `删除部分成功：${fileName}\n成功 ${successCount} / 失败 ${failCount} / 共 ${total} 条。${_missingHint}\n\n`
-                + `失败明细：\n` + formatFailures_(failures),
-        },
-    });
-}
-
-// ============================================
 // 5. 保存结果提示 (showSaveResult)
 // ============================================
 

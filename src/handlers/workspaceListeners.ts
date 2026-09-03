@@ -419,15 +419,56 @@ async function handleCaseFileWillDelete(
 
     // 谨慎操作：删除案例文件会同步删除 TMS 平台上的全部案例，先向用户确认。
     //
-    // 删除前先做「线上预检」（删除确认接口）：若存在带执行/缺陷关联的案例（type=2），
-    // 用独立 webview 弹窗以表格形式展示这些案例；否则降级为 VSCode 原生 modal。
-    // 预检失败处理：
-    //   · 未绑定任务 / 网络异常 → 降级为 VSCode 原生 modal（不阻断删除）
-    //   · 接口返回非成功码（returnCode != SUC0000）→ 直接报错并中止删除（见下方 else 分支）
+    // 删除前的两道校验（任一不通过即**阻断删除**，与编辑器内删除行为一致）：
+    //   1. 测试任务绑定校验：文件必须已绑定测试任务，否则无法定位要删除哪些线上案例。
+    //      （走到此处时 nonEmptyIds.length > 0，即文件内存在 testcase_id，可能线上已有数据；
+    //        若全为本地未推送行，已在上方 nonEmptyIds.length === 0 分支提前放行。）
+    //   2. 线上预检（删除确认接口）：存在带执行/缺陷关联的案例（type=2）时，
+    //      用独立 webview 弹窗以表格形式展示；否则走无表格的简单确认。
+    // 预检异常（网络 / 返回非成功码）同样阻断删除，由 did 阶段弹插件封装的模态框。
     let confirmItems: DeleteConfirmItem[] = [];
     try {
         const tInfo = await resolveTaskInfoOrNull(filePath);
-        if (tInfo.status === 'ok' && extContext) {
+        // 校验 1：未绑定测试任务 / 任务信息获取失败 → 阻断删除
+        if (tInfo.status !== 'ok') {
+            const _errTxt = tInfo.status === 'unbound'
+                ? '当前文件未绑定测试任务，无法定位线上案例，请先绑定测试任务后再删除。'
+                : (tInfo.errorMessage || '获取测试任务信息失败');
+            if (pending) {
+                pending.needRestore = true;
+                pending.restoreTableData = tableData;
+                pending.restoreSourceData = sourceData;
+                pending.total = nonEmptyIds.length;
+                pending.successCount = 0;
+                pending.deletedSuccess = 0;
+                pending.deletedSourceMissing = 0;
+                pending.syncedTsIds = [];
+                pending.failures = [];
+                pending.error = _errTxt;
+                pending.reportable = false;
+                pending.precheckScenePrefix = '删除前校验未通过';
+            }
+            return;
+        }
+        if (!extContext) {
+            // 扩展上下文缺失，无法调用线上接口：同样阻断，避免"本地删了线上还在"
+            if (pending) {
+                pending.needRestore = true;
+                pending.restoreTableData = tableData;
+                pending.restoreSourceData = sourceData;
+                pending.total = nonEmptyIds.length;
+                pending.successCount = 0;
+                pending.deletedSuccess = 0;
+                pending.deletedSourceMissing = 0;
+                pending.syncedTsIds = [];
+                pending.failures = [];
+                pending.error = '扩展上下文未初始化，无法调用线上删除接口';
+                pending.reportable = false;
+                pending.precheckScenePrefix = '删除前校验未通过';
+            }
+            return;
+        }
+        {
             const resp = await confirmDeleteTestCase(extContext, tInfo.taskInfo, nonEmptyIds);
             if (resp.returnCode === 'SUC0000' && Array.isArray(resp.body)) {
                 confirmItems = resp.body

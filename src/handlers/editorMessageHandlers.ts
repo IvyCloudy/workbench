@@ -278,7 +278,10 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
             // 任务信息获取失败（未绑定 / 解析异常）：**阻断删除**并用插件封装的模态框告知用户，
             // 与下方「接口返回非成功码」「网络异常」分支行为保持一致 —— 避免前端
             // 在无校验结论的情况下继续走简单确认弹窗，导致"两个弹窗同框"的体验问题。
-            const _errTxt = t.status === 'unbound' ? '当前文件未绑定测试任务' : (t.errorMessage || '获取任务信息失败');
+            // 文案与「案例文件删除」路径（workspaceListeners.handleCaseFileWillDelete）保持一致
+            const _errTxt = t.status === 'unbound'
+                ? '当前文件未绑定测试任务，无法定位线上案例，请先绑定测试任务后再删除。'
+                : (t.errorMessage || '获取任务信息失败');
             showModal(
                 ctx.webviewPanel,
                 'warning',

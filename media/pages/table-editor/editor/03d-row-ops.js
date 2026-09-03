@@ -159,16 +159,37 @@ function _collectPendingDelete(rowsToDelete) {
  *
  * 契约：
  *   发：{ type:'confirmDeleteRows', data:{ tsIds } }
- *   收：{ type:'confirmDeleteRowsResult', ok, items:[{sourceId,testcaseNo,testCaseName,hasExec,hasBug}], errorMessage? }
+ *   收：{ type:'confirmDeleteRowsResult', ok, items:[{sourceId,testcaseNo,testCaseName,hasExec,hasBug}],
+ *         errorMessage?, blocked? }
  *
- * 健壮性：预检是为了「增强提示」，绝不能阻断删除。
- *   - 无 vscode 通道 / 回包超时（3s）/ 接口失败（ok=false）→ 全部降级为
- *     「不展示关联表格」，直接回调 onProceed 走原有简单确认删除流程。
+ * 健壮性与阻断策略：
+ *   - 预检「无结论」的场景（无 vscode 通道 / 回包超时 8s）→ 降级为「不展示关联表格」，
+ *     继续走原有简单确认删除流程，绝不阻断。
+ *   - 预检「明确失败」的场景（接口返回非成功码 / 网络异常 / 任务未绑定，回包 blocked:true）
+ *     → **阻断删除**：扩展端已用插件封装的模态框告知用户，此处不再回调 onProceed，
+ *       并清理本次标记的 pending（置灰+划线）态，避免行永远停在"删除中"状态。
  *
  * @param tsIds      待删除案例的 testcase_id 列表
- * @param onProceed  预检结束（无论成败）后继续执行的删除动作
+ * @param onProceed  预检通过 / 无结论降级后继续执行的删除动作
  */
-var CONFIRM_TIMEOUT_MS = 3000;
+var CONFIRM_TIMEOUT_MS = 8000;
+
+/**
+ * 回滚指定 tsId 的 pending 删除态（置灰+划线 → 恢复正常行）。
+ *
+ * 适用场景（避免行永远卡在"删除中"的 pending 态直到 F5 刷新）：
+ *   1. 预检明确失败被扩展端阻断（blocked:true）
+ *   2. 用户在确认弹窗点「取消」/ 关闭弹窗
+ *
+ * @param ids 本次预检涉及的 testcase_id 列表
+ */
+function _rollbackPendingDelete(ids) {
+    if (!S._pendingDeleteTsIds || S._pendingDeleteTsIds.size === 0) return;
+    var list = Array.isArray(ids) ? ids : [];
+    for (var i = 0; i < list.length; i++) S._pendingDeleteTsIds.delete(String(list[i]));
+    if (typeof renderTable === 'function') renderTable();
+}
+
 function requestDeleteConfirm(tsIds, onProceed) {
     var ids = (Array.isArray(tsIds) ? tsIds : []).map(String).filter(Boolean);
     var done = false;
@@ -177,12 +198,18 @@ function requestDeleteConfirm(tsIds, onProceed) {
         done = true;
         if (S._deleteConfirmTimer) { clearTimeout(S._deleteConfirmTimer); S._deleteConfirmTimer = null; }
         S._deleteConfirmCb = null;
+        if (result && result.blocked) {
+            // 预检明确失败 → 阻断删除（扩展端已弹模态框），回滚 pending 态后直接结束
+            console.log('[requestDeleteConfirm] 预检失败已被扩展端阻断，取消本次删除');
+            _rollbackPendingDelete(ids);
+            return;
+        }
         if (result && result.ok && Array.isArray(result.items) && result.items.length > 0) {
             // 存在「需要确认」的案例 → 渲染带关联表格的确认弹窗
-            _showDeleteConfirmDialog(result.items, onProceed);
+            _showDeleteConfirmDialog(result.items, onProceed, ids);
         } else {
-            // 无需额外确认 / 预检失败 → 降级为原有简单确认
-            _showPlainDeleteConfirm(onProceed);
+            // 无需额外确认 / 预检无结论降级 → 走原有简单确认
+            _showPlainDeleteConfirm(onProceed, ids);
         }
     };
     if (ids.length === 0 || typeof S.vscode === 'undefined' || !S.vscode) {
@@ -202,15 +229,25 @@ function requestDeleteConfirm(tsIds, onProceed) {
     }
 }
 
-/** 渲染「无关联信息」时的简单确认弹窗（预检失败 / 全部允许删除时的降级形态） */
-function _showPlainDeleteConfirm(onProceed) {
+/**
+ * 渲染「无关联信息」时的简单确认弹窗（预检无结论降级 / 全部允许删除时的形态）。
+ *
+ * @param onProceed 用户点「确定删除」后执行
+ * @param tsIds     本次涉及的 testcase_id；用户点「取消」/关闭时据此回滚 pending 态
+ */
+function _showPlainDeleteConfirm(onProceed, tsIds) {
     if (typeof xsConfirm === 'function') {
         xsConfirm({
             title: '删除案例',
             message: '删除案例会同步删除 TMS 平台上的案例，此操作不可恢复。是否确定删除？',
             type: 'warning',
             okText: '确定删除',
-        }, onProceed);
+            // 显式传宽度 420px，避继承表格明细弹窗的 88vw 默认宽度
+            // （不传时弹窗会撑满屏幕，与"案例文件删除"的简单确认弹窗不一致）
+            width: '420px',
+        }, onProceed, function () {
+            _rollbackPendingDelete(tsIds);
+        });
     } else {
         onProceed();
     }
@@ -224,8 +261,12 @@ function _showPlainDeleteConfirm(onProceed) {
  *           （同步删除执行和缺陷关联关系 + 如需继续操作请忽略本提示说明）
  *   第 2 段：表格（编号 / 名称 / 执行 / 缺陷），true→Y，false→N
  *   第 3 段：删除不可恢复，是否确认删除（「不可恢复」统一放在结尾段，首段不重复）
+ *
+ * @param items   需二次确认的案例明细
+ * @param onProceed 用户点「确定删除」后执行
+ * @param tsIds   本次涉及的 testcase_id；用户点「取消」/关闭时据此回滚 pending 态
  */
-function _showDeleteConfirmDialog(items, onProceed) {
+function _showDeleteConfirmDialog(items, onProceed, tsIds) {
     var rowsHtml = '';
     for (var i = 0; i < items.length; i++) {
         var it = items[i] || {};
@@ -256,7 +297,9 @@ function _showDeleteConfirmDialog(items, onProceed) {
             type: 'warning',
             okText: '确定删除',
             cancelText: '取消',
-        }, onProceed);
+        }, onProceed, function () {
+            _rollbackPendingDelete(tsIds);
+        });
     } else {
         onProceed();
     }

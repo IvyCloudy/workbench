@@ -15,6 +15,7 @@
 import * as vscode from 'vscode';
 import { showDeleteResult } from './messageExtras';
 import { showApiError, showDeleteConfirmModal } from './messageExtras';
+import { showModal } from './message';
 import type { MsgType, PushFailure } from './message';
 import type { DeleteConfirmItem } from './messageExtras';
 
@@ -46,6 +47,34 @@ export function notifyPrecheckFailure(params: {
         params.errorMsg || '',
         params.msgType ?? 'error',
     );
+}
+
+/**
+ * 线上预检（删除确认接口）失败并**阻断删除**时的弹窗。
+ *
+ * 与 notifyPrecheckFailure 的区别：
+ *   - notifyPrecheckFailure 走 showToast（有 panel 时是页面内轻提示、2 秒自动消失），
+ *     用于「仅提示、不阻断删除」的降级场景。
+ *   - 本函数始终弹**独立 webview 模态框**（标题「提示」，带「确定」按钮），
+ *     用于「校验失败即中止删除」的场景，确保用户看到的是模态提示，且删除确实未执行。
+ *
+ * @param params.scenePrefix 场景前缀，如「删除前校验未通过」/「删除前校验异常」
+ * @param params.returnCode  接口返回码（网络/异常场景可为空）
+ * @param params.errorMsg    接口返回的业务错误信息或异常信息
+ * @param params.msgType     提示类型，默认 'warning'
+ */
+export function notifyPrecheckBlocked(params: {
+    scenePrefix: string;
+    returnCode?: string;
+    errorMsg: string;
+    msgType?: MsgType;
+}): void {
+    const _rc = String(params.returnCode || '').trim();
+    const _msg = String(params.errorMsg || '').trim();
+    const detail = _msg
+        ? _msg
+        : (_rc ? `返回码 ${_rc}，请稍后重试或联系管理员` : '操作失败，请稍后重试或联系管理员');
+    showModal('default', params.msgType ?? 'warning', '提示', `${params.scenePrefix}：${detail}`);
 }
 
 /**

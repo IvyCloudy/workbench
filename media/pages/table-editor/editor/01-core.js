@@ -998,14 +998,22 @@ window.addEventListener('message', function (e) {
             showToast('已获取最新数据并重置筛选', 'success');
         }
     } else if (m.type === 'confirmDeleteRowsResult') {
-        // 删除前的线上预检回包：存在「执行/缺陷」关联的案例走表格二次确认，
-        // 失败/无需确认时由 requestDeleteConfirm 内部降级为简单确认。
+        // 删除前的线上预检回包：存在「执行/缺陷」关联的案例走表格二次确认；
+        // 预检「无结论」时由 requestDeleteConfirm 内部降级为简单确认；
+        // 预检「明确失败」（blocked:true，扩展端已弹模态框告知）时前端直接取消删除，
+        // **不再**弹任何确认框，避免与扩展端的提示弹窗叠加成"两个弹窗同框"。
         var _ok = !!m.ok;
         var _items = Array.isArray(m.items) ? m.items : [];
+        var _blocked = !!m.blocked;
         console.log('[recv confirmDeleteRowsResult] ok=', _ok, 'items=', _items.length,
-            'errorMessage=', m.errorMessage || '');
+            'blocked=', _blocked, 'errorMessage=', m.errorMessage || '');
         if (typeof S._deleteConfirmCb === 'function') {
-            S._deleteConfirmCb({ ok: _ok, items: _items, errorMessage: m.errorMessage || '' });
+            S._deleteConfirmCb({
+                ok: _ok,
+                items: _items,
+                errorMessage: m.errorMessage || '',
+                blocked: _blocked,
+            });
         }
     } else if (m.type === 'deleteRowsResult') {
         // 扩展端删除接口回包：成功行真正删除，失败行取消置灰保留（置灰+划线 + 失败原因）
@@ -1369,10 +1377,20 @@ function showXsInfoModal(modalType, title, message) {
     var okBtn = document.getElementById('xsInfoOkBtn');
     if (okBtn) { okBtn.style.display = ''; okBtn.style.background = color; okBtn.style.borderColor = color; }
     var modal = document.getElementById('xsInfoModal');
-    if (modal) modal.classList.add('show');
+    if (modal) {
+        modal.classList.add('show');
+        // 兜底：直接设置内联 style 保证居中显示，避免 CSS 加载顺序/特异性
+        // 导致 .xs-modal-overlay.show 的 display:flex 失效、弹窗"贴左"的问题。
+        modal.style.display = 'flex';
+        modal.style.alignItems = 'center';
+        modal.style.justifyContent = 'center';
+    }
 }
 function closeXsInfoModal() {
     var modal = document.getElementById('xsInfoModal');
-    if (modal) modal.classList.remove('show');
+    if (modal) {
+        modal.classList.remove('show');
+        modal.style.display = 'none';
+    }
 }
 

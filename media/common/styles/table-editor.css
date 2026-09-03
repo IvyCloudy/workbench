@@ -500,6 +500,11 @@ tbody tr.xs-tr-frozen.selected td.xs-td{background:#dde7f3}
 .xs-modal-body{flex:1;overflow:auto;padding:8px 0;min-height:120px}
 .xs-modal-footer{display:flex;align-items:center;justify-content:flex-end;padding:8px 16px;border-top:1px solid var(--bd);gap:8px;flex-shrink:0}
 
+/* 通用信息模态框（由扩展端 showModal 消息驱动）：覆盖表格明细弹窗的 padding:0，
+   让纯文字内容有正常的左右内边距（明细弹窗由 .xs-detail-dialog-v2 单独控制 padding:0）。
+   padding 与「独立 webview 模态框」(message.ts buildStandaloneModalHtml) 保持一致：上下 20px、左右 16px。 */
+#xsInfoModal .xs-modal-body{padding:20px 16px;min-height:60px;line-height:1.7;font-size:13px;color:#444}
+
 /* ===== 通用 prompt/confirm 弹窗：标题靠左 + 类型化配色 ===== */
 /* 标题左对齐、加粗、加大字号，并通过 .xs-prompt-type-warning / danger 切换配色 */
 .xs-prompt-header{justify-content:flex-start;position:relative;padding:14px 16px}

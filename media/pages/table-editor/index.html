@@ -152,18 +152,22 @@
         <div class="xs-find-info" id="findInfo"></div>
     </div>
     <div class="xs-toast" id="toast"></div>
-    <!-- 通用模态框：由扩展端 showModal 消息触发，动态填充内容 -->
-    <div class="xs-modal-overlay" id="xsInfoModal">
-        <div class="xs-modal-dialog" style="width:420px;max-width:90vw">
-            <div class="xs-modal-header" id="xsInfoHeader">
-                <span class="xs-pr-icon" id="xsInfoIcon"></span>
-                <span class="xs-modal-title" id="xsInfoTitle"></span>
-                <button class="xs-modal-close" id="xsInfoClose" title="关闭">✕</button>
+    <!-- 通用模态框：由扩展端 showModal 消息触发，动态填充内容。
+         内联样式与「独立 webview 模态框」(src/utils/messageExtras.ts baseModalCss_ +
+         message.ts buildStandaloneModalHtml) 逐项对齐，保证编辑器内删除与案例文件删除
+         两条路径的弹窗视觉完全一致：
+           --bd #e0e0e0 / header 12px 16px / body 20px 16px / footer 10px 16px / btn 6px 20px 13px -->
+    <div class="xs-modal-overlay" id="xsInfoModal" style="--bd:#e0e0e0;display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:2000;align-items:center;justify-content:center">
+        <div class="xs-modal-dialog" style="width:420px;max-width:90vw;background:#fff;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.2);margin:auto;display:flex;flex-direction:column;overflow:hidden">
+            <div class="xs-modal-header" id="xsInfoHeader" style="display:flex;align-items:center;padding:12px 16px;background:#f5f5f5;border-bottom:1px solid var(--bd);flex-shrink:0;gap:10px">
+                <span class="xs-pr-icon" id="xsInfoIcon" style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;font-size:14px;font-weight:bold;color:#fff;flex-shrink:0"></span>
+                <span class="xs-modal-title" id="xsInfoTitle" style="font-size:14px;font-weight:600;flex:1;color:#333"></span>
+                <button class="xs-modal-close" id="xsInfoClose" title="关闭" style="cursor:pointer;font-size:16px;color:#666;padding:4px 10px;border-radius:3px;line-height:1;border:none;background:transparent">✕</button>
             </div>
-            <div class="xs-modal-body" id="xsInfoBody" style="white-space:pre-wrap;word-break:break-word"></div>
-            <div class="xs-modal-footer" id="xsInfoFooter">
+            <div class="xs-modal-body" id="xsInfoBody" style="flex:1;overflow:auto;padding:20px 16px;min-height:60px;line-height:1.7;font-size:13px;color:#444;white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word"></div>
+            <div class="xs-modal-footer" id="xsInfoFooter" style="display:flex;align-items:center;justify-content:flex-end;padding:10px 16px;border-top:1px solid var(--bd);gap:8px;flex-shrink:0">
                 <span id="xsInfoExtraBtns" style="flex:1;display:flex;gap:8px"></span>
-                <button class="xs-btn xs-btn-p" id="xsInfoOkBtn">确定</button>
+                <button class="xs-btn xs-btn-p" id="xsInfoOkBtn" style="padding:6px 20px;font-size:13px;border-radius:3px">确定</button>
             </div>
         </div>
     </div>

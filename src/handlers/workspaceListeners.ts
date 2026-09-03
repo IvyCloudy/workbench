@@ -40,11 +40,12 @@ import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { TS_ID_COLUMN } from '../services/utils';
 import { resolveTaskInfoOrNull } from './pushCore.stages';
 import { TelemetryService } from '../utils/telemetry';
+import { showModal } from '../utils/message';
 import {
-    notifyPrecheckFailure,
     confirmCaseFileDeleteWithDetails,
     reportDeleteResult,
 } from '../utils/deleteFeedback';
+import { showDeleteConfirmSimpleModal } from '../utils/messageExtras';
 import type { PushFailure, DeleteConfirmItem } from '../utils/deleteFeedback';
 import { confirmDeleteTestCase } from '../services/http';
 
@@ -52,17 +53,14 @@ import { confirmDeleteTestCase } from '../services/http';
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
 /**
- * 确认删除案例文件 —— 使用 **VSCode 原生 modal**。
+ * 确认删除案例文件 —— 使用**插件封装的独立 webview 模态框**（无关联表格的简单版）。
  *
- * 为什么不用 webview 内 xsConfirm（技术约束，非偏好）：
- *   1. webview 弹窗依赖已打开的 editor panel，而删除文件会销毁该 panel。
- *      不阻塞 waitUntil → panel 被销毁 → 弹窗根本显示不出来；
- *      阻塞 waitUntil → 必须设超时兜底，否则 Promise 永不结算。
- *   2. 超时兜底必然"等待不友好"：设短（3s）用户来不及点、弹窗被强制关闭；
- *      设长（30s）进度条一直转，用户感知为卡死。超时值无法两全。
- *   3. 原生 modal 由 VSCode 主线程管理，不依赖 webview/panel，且只有用户点按钮、
- *      关闭弹窗或按 ESC 才返回 —— **无需任何超时兜底**，用户可以从容选择。
- * 代价：弹窗样式为 VSCode 原生风格，与编辑器内 xsConfirm 不完全一致。
+ * 历史说明：早期曾用 vscode.window.showWarningMessage（VSCode 原生 modal）实现，
+ * 但样式与「案例编辑器内删除」弹窗不一致。现改用独立 webview 模态框：
+ *   - 独立 webview panel 由本函数自己创建，**不依赖案例编辑器 panel**，
+ *     即便文件没在编辑器里打开也能稳定显示。
+ *   - 用户点按钮/关弹窗/ESC/Cancel 进度条均可结算，无需超时兜底。
+ *   - 视觉与编辑器内删除、删除确认接口异常提示等所有插件弹窗保持一致。
  *
  * @returns true=用户点"确定删除"；false=取消 / 关弹窗 / ESC / token 已取消
  */
@@ -72,22 +70,15 @@ async function confirmCaseFileDelete(
     token?: vscode.CancellationToken,
 ): Promise<boolean> {
     const fileName = path.basename(filePath);
-    const message =
-        `谨慎操作：删除文件「${fileName}」会同步删除 TMS 平台上的 ${caseCount} 条案例及其关联的执行与缺陷关系，此操作不可恢复。是否确定删除？`;
-
     // 用户点了进度条上的 Cancel（event.token 取消）→ 立即取消，不再弹 modal
     if (token && token.isCancellationRequested) {
         console.log('[workspaceListeners] confirm 期间 token 已取消，立即取消删除:', fileName);
         return false;
     }
-
-    const choice = await vscode.window.showWarningMessage(
-        message,
-        { modal: true },
-        '确定删除',
+    const confirmed = await showDeleteConfirmSimpleModal(
+        { fileName, caseCount },
+        token,
     );
-    // 只有点「确定删除」返回 true；点「取消」/ 关闭 / ESC 均返回 undefined → false（安全侧）
-    const confirmed = choice === '确定删除';
     console.log('[workspaceListeners] 删除确认结果:', fileName, 'confirmed=', confirmed);
     return confirmed;
 }
@@ -137,6 +128,16 @@ interface WillDeleteResult {
     reportable: boolean;
     /** 整文件级错误（未绑定任务 / 接口整体失败） */
     error?: string;
+    /** 删除前校验失败的场景前缀（由 did 阶段在文件重建完成后弹插件封装的模态框）：
+     *   - "删除前校验未通过"：删除确认接口返回非 SUC0000
+     *   - "删除前校验异常"：删除确认接口网络/解析/5xx 异常
+     * 仅当 error 有值时设置。设了但 isUserCancel=true 时不弹（用户取消优先）。 */
+    precheckScenePrefix?: string;
+    /** 删除前校验失败时，删除确认接口的返回码（如 'SYS5001'）。
+     * 仅在 returnCode 非空时设置；did 阶段弹窗会在文案中单独显示「返回码：xxx」一行，
+     * 与编辑器内删除的弹窗格式保持一致。
+     * 网络/解析异常等无 returnCode 的场景不设置。 */
+    precheckReturnCode?: string;
     /** 用户取消删除（自定义 confirm 弹窗按取消 / 关闭 / 超时） */
     isUserCancel?: boolean;
 }
@@ -420,7 +421,9 @@ async function handleCaseFileWillDelete(
     //
     // 删除前先做「线上预检」（删除确认接口）：若存在带执行/缺陷关联的案例（type=2），
     // 用独立 webview 弹窗以表格形式展示这些案例；否则降级为 VSCode 原生 modal。
-    // 预检失败（未绑定任务 / 接口异常）不阻断删除，同样走原生 modal 降级。
+    // 预检失败处理：
+    //   · 未绑定任务 / 网络异常 → 降级为 VSCode 原生 modal（不阻断删除）
+    //   · 接口返回非成功码（returnCode != SUC0000）→ 直接报错并中止删除（见下方 else 分支）
     let confirmItems: DeleteConfirmItem[] = [];
     try {
         const tInfo = await resolveTaskInfoOrNull(filePath);
@@ -438,18 +441,54 @@ async function handleCaseFileWillDelete(
                     }))
                     .filter((it: DeleteConfirmItem) => !!it.sourceId);
             } else {
-                // 预检接口返回非成功码：提示后端 errorMsg，降级为原生 modal（不阻断删除）
-                notifyPrecheckFailure({
-                    scenePrefix: '删除前校验未通过，已跳过确认步骤',
-                    returnCode: resp.returnCode || '',
-                    errorMsg: resp.errorMsg || '',
-                    msgType: 'warning',
-                });
+                // 删除确认接口返回非成功码：标记 needRestore 中止物理删除并还原文件；
+                // reportable=false 避免 did 阶段再弹一个空的「删除结果」modal；
+                // 弹窗**不**在这里同步弹出 —— onWillDeleteFiles 阶段创建 webview panel
+                // 会被随后 did 阶段 file.unlink + restoreCaseFile + reopenCaseFile 流程
+                // 抢焦点/顶掉，实际表现为「用户看不到任何弹窗」。
+                // 改为由 did 阶段在文件重建完成后再用插件封装的 showModal('default', ...) 弹出。
+                // 弹窗文案会单独展示「返回码：xxx」与「错误信息：yyy」两行，
+                // 与编辑器内删除的弹窗格式（见 editorMessageHandlers.handleConfirmDeleteRows）保持一致。
+                if (pending) {
+                    pending.needRestore = true;
+                    pending.restoreTableData = tableData;
+                    pending.restoreSourceData = sourceData;
+                    pending.total = nonEmptyIds.length;
+                    pending.successCount = 0;
+                    pending.deletedSuccess = 0;
+                    pending.deletedSourceMissing = 0;
+                    pending.syncedTsIds = [];
+                    pending.failures = [];
+                    // 错误信息只保留后端 errorMsg（无则用占位文案），不与 returnCode 拼接
+                    pending.error = resp.errorMsg || '请稍后重试或联系管理员';
+                    // 返回码非空时单独保存，did 阶段弹窗按「返回码：xxx」格式展示
+                    if (resp.returnCode) pending.precheckReturnCode = String(resp.returnCode).trim();
+                    pending.reportable = false;
+                    pending.precheckScenePrefix = '删除前校验未通过';
+                }
+                return;
             }
         }
-    } catch (_ce) {
-        // 预检失败（网络/异常）：降级为原生 modal（不阻断删除）
-        confirmItems = [];
+    } catch (ce) {
+        // 预检失败（网络 / 解析 / 后端 5xx 异常）：标记 needRestore=true、reportable=false
+        // 中止物理删除并由 did 阶段重建文件；弹窗延后到 did 阶段文件重建完成后再弹，
+        // 避免在 onWillDeleteFiles 阶段同步创建 webview panel 被后续流程抢焦点/覆盖。
+        const _errMsg = ce instanceof Error ? ce.message : String(ce || '');
+        if (pending) {
+            pending.needRestore = true;
+            pending.restoreTableData = tableData;
+            pending.restoreSourceData = sourceData;
+            pending.total = nonEmptyIds.length;
+            pending.successCount = 0;
+            pending.deletedSuccess = 0;
+            pending.deletedSourceMissing = 0;
+            pending.syncedTsIds = [];
+            pending.failures = [];
+            pending.error = _errMsg || '删除确认接口调用失败';
+            pending.reportable = false;
+            pending.precheckScenePrefix = '删除前校验异常';
+        }
+        return;
     }
 
     const userConfirmed = confirmItems.length > 0
@@ -651,6 +690,21 @@ async function handleDidDeleteCaseFile(fp: string, willResult: WillDeleteResult)
             } catch (_) { /* ignore */ }
         }
 
+        // ★ 删除前校验失败/异常场景：在文件重建 + 重开完成后再用插件封装的
+        //   showModal('default', ...) 弹出独立 webview 模态框（与用户提供的样例一致）。
+        //   不在 onWillDeleteFiles 阶段同步弹的原因：那时创建 webview panel
+        //   会被随后 file.unlink + restoreCaseFile + reopenCaseFile 抢焦点/覆盖。
+        if (willResult.precheckScenePrefix && willResult.error && !willResult.isUserCancel) {
+            // 文案格式与「编辑器内删除」弹窗（editorMessageHandlers.handleConfirmDeleteRows）保持一致：
+            //   - 有 returnCode → "返回码：xxx\n错误信息：yyy"（参考用户样例截图）
+            //   - 无 returnCode（网络/解析异常）→ "错误信息：yyy"（与编辑器内 catch 分支同款）
+            const _rcPart = willResult.precheckReturnCode
+                ? `返回码：${willResult.precheckReturnCode}\n错误信息：${willResult.error}`
+                : `错误信息：${willResult.error}`;
+            showModal('default', 'warning', '提示',
+                `${willResult.precheckScenePrefix}，已取消删除操作。\n\n${_rcPart}`);
+        }
+
         if (willResult.reportable) {
             await showDeleteResultModal(willResult);
         }
@@ -664,10 +718,10 @@ async function handleDidDeleteCaseFile(fp: string, willResult: WillDeleteResult)
         });
         if (willResult.isUserCancel) {
             // 用户取消后重建失败：文件已真正被删，给用户留个线索
+            // 用插件封装的独立 webview 模态框（文件已不存在，无面板可承载内嵌 modal）
             try {
-                vscode.window.showErrorMessage(
-                    `取消失败：原文件已被删除且重建失败 —— ${path.basename(fp)}。请前往垃圾箱恢复。`,
-                );
+                showModal('default', 'error', '取消失败',
+                    `取消失败：原文件已被删除且重建失败 —— ${path.basename(fp)}。\n\n请前往垃圾箱恢复。`);
             } catch (_) { /* ignore */ }
         }
     }
@@ -707,23 +761,27 @@ async function restoreCaseFile(filePath: string, result: WillDeleteResult): Prom
 
 /**
  * 弹出"删除结果"反馈：
+ *   - 全部成功（文件已被物理删除，无承载页面）：用插件封装的**独立 webview 模态框**
+ *     （showModal('default', ...)），与其余插件弹窗样式一致。
  *   - 部分/全部失败（needRestore=true，文件已被 restoreCaseFile 重建）：
  *     重新以案例编辑器打开该文件 → 等待 webview ready → postMessage 到 panel 内 modal
  *     （与"编辑器内右键删除案例行"、"推送案例结果"完全一致的弹窗形态）
- *   - 全部成功（文件已被物理删除）：
- *     没有可承载 modal 的"当前案例页面"，改用 VSCode 原生 information 通知，
- *     避免打开一个独立的新 webview 窗口。
  */
 async function showDeleteResultModal(r: WillDeleteResult): Promise<void> {
     try {
         const failCount = r.failures.length;
 
-        // 场景 A：全部成功 —— 文件已被删除，用 VSCode 原生通知
+        // 场景 A：全部成功 / 整文件级失败 —— 文件已被删除，无承载页面，用独立 webview 模态框
         if (failCount === 0 && !r.needRestore) {
             if (r.error) {
-                vscode.window.showErrorMessage(`删除失败：${r.fileName} —— ${r.error}`);
+                showModal('default', 'error', '删除失败',
+                    `删除失败：${r.fileName}\n\n${r.error}`);
             } else if (r.successCount > 0) {
-                vscode.window.showInformationMessage(`删除成功：${r.fileName}（共 ${r.successCount} 条）`);
+                const _hint = r.deletedSourceMissing > 0
+                    ? `\n（其中 ${r.deletedSourceMissing} 条线上本不存在，已同步清理）`
+                    : '';
+                showModal('default', 'success', '删除成功',
+                    `删除成功：${r.fileName}\n共 ${r.successCount} 条全部删除成功。${_hint}`);
             }
             return;
         }
@@ -762,9 +820,10 @@ async function showDeleteResultModal(r: WillDeleteResult): Promise<void> {
         });
     } catch (err: any) {
         console.warn('[workspaceListeners] 弹出删除结果失败:', err?.message || err);
-        // 兜底：直接原生通知
+        // 兜底：用插件封装的独立 webview 模态框告知（与其余插件弹窗样式一致）
         try {
-            vscode.window.showErrorMessage(`删除结果反馈异常：${r.fileName}`);
+            showModal('default', 'error', '删除结果',
+                `删除结果反馈异常：${r.fileName}\n\n${err?.message || err || '未知错误'}`);
         } catch (_) { /* ignore */ }
     }
 }

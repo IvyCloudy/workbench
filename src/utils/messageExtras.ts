@@ -287,6 +287,114 @@ export function showDeleteConfirmModal(
 }
 
 /**
+ * 构建「删除案例确认」**无关联表格**版独立 webview 弹窗 HTML。
+ *
+ * 与 buildDeleteConfirmHtml 的区别：
+ *   - 无 type=2 关联明细（删除确认接口未返回需二次确认的案例）时用本函数；
+ *   - 文案用首段直接说明"会同步删除 N 条案例"（不带"Y/N 说明"），保持简洁。
+ *
+ * 样式与 baseModalCss_ 完全一致（warning 配色 / 420px 宽 / 12px 16px header / 20px 16px body / 10px 16px footer），
+ * 与「案例编辑器内删除」弹窗视觉完全统一。
+ */
+function buildDeleteConfirmSimpleHtml(fileName: string, caseCount: number): string {
+    const color = MODAL_COLOR_WARNING;
+    const headerBg = MODAL_HEADER_BG_WARNING;
+    const lead = `谨慎操作：删除文件「${escapeHtml_(fileName)}」会同步删除 TMS 平台上的 ${caseCount} 条案例及其关联的执行与缺陷关系，此操作不可恢复。是否确定删除？`;
+
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>删除案例</title>
+<style>
+${baseModalCss_(headerBg, color, 'width:420px;max-width:90vw;')}
+    .xs-modal-body{flex:1;padding:20px 16px;min-height:60px;font-size:13px;color:#444;line-height:1.7;white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word}
+</style>
+</head>
+<body>
+<div class="xs-modal-overlay" id="overlay">
+    <div class="xs-modal-dialog">
+        <div class="xs-modal-header">
+            <span class="xs-pr-icon">!</span>
+            <span class="xs-modal-title">删除案例</span>
+            <button class="xs-modal-close" id="closeBtn" title="关闭">✕</button>
+        </div>
+        <div class="xs-modal-body">${lead}</div>
+        <div class="xs-modal-footer">
+            <button class="xs-btn" id="cancelBtn">取消</button>
+            <button class="xs-btn xs-btn-p" id="okBtn">确定删除</button>
+        </div>
+    </div>
+</div>
+<script>
+    (function(){
+        var vscode = acquireVsCodeApi();
+        var settled = false;
+        function done(v){ if(settled) return; settled = true; vscode.postMessage({type:'deleteConfirmResult', confirmed:v}); }
+        document.getElementById('okBtn').onclick = function(){ done(true); };
+        document.getElementById('cancelBtn').onclick = function(){ done(false); };
+        document.getElementById('closeBtn').onclick = function(){ done(false); };
+        document.getElementById('overlay').addEventListener('click',function(e){ if(e.target===this) done(false); });
+        document.addEventListener('keydown',function(e){
+            if(e.key==='Escape'){ e.preventDefault(); done(false); }
+            else if(e.key==='Enter'){ e.preventDefault(); done(true); }
+        });
+        document.getElementById('okBtn').focus();
+    })();
+</script>
+</body>
+</html>`;
+}
+
+/**
+ * 展示「删除案例确认」**无关联表格**版弹窗，阻塞等待用户选择。
+ *
+ * 与 showDeleteConfirmModal 的区别：
+ *   - 本函数不渲染 type=2 关联表格，用于「删除确认接口未返回需二次确认的案例」的场景。
+ *   - 文案更简洁（首段直接说明会同步删除 N 条案例，不可恢复），不需要 Y/N 表格说明。
+ *
+ * 视觉/行为与 showDeleteConfirmModal 一致：warning 配色、独立 webview 模态框、
+ * 用户点「确定删除」/「取消」/「✕」/遮罩/ESC/Cancel 进度条均可结算。
+ *
+ * 替代了之前使用 vscode.window.showWarningMessage（VSCode 原生 modal）的方案，
+ * 现在案例文件删除的弹窗样式与「案例编辑器内删除」完全一致。
+ *
+ * @returns true=用户确认删除；false=取消 / 关闭 / token 取消
+ */
+export function showDeleteConfirmSimpleModal(
+    opts: { fileName: string; caseCount: number },
+    token?: vscode.CancellationToken,
+): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+        const panel = vscode.window.createWebviewPanel(
+            'deleteConfirmSimpleModal',
+            '删除案例',
+            { viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
+            { enableScripts: true, retainContextWhenHidden: false },
+        );
+        panel.webview.html = buildDeleteConfirmSimpleHtml(opts.fileName, opts.caseCount);
+
+        let settled = false;
+        const finish = (v: boolean) => {
+            if (settled) return;
+            settled = true;
+            try { panel.dispose(); } catch { /* ignore */ }
+            resolve(v);
+        };
+
+        panel.webview.onDidReceiveMessage(msg => {
+            if (msg?.type === 'deleteConfirmResult') finish(!!msg.confirmed);
+        });
+        panel.onDidDispose(() => finish(false));
+        if (token) {
+            token.onCancellationRequested(() => finish(false));
+            if (token.isCancellationRequested) finish(false);
+        }
+    });
+}
+
+/**
  * 统一展示「后端接口返回非成功返回码」的错误提示。
  *
  * 规则：

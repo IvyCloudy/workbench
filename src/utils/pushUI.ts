@@ -30,6 +30,22 @@ export interface SummaryUiOptions {
     showFailureDetails?: boolean;
 }
 
+/**
+ * 进度面板可选文案配置（createPushProgress 入参）。
+ * 用于让「推送」之外的场景（删除 / 导入 / 导出等）复用同一进度面板，
+ * 仅需替换各阶段标题文案即可；总结视图部分字段直接复用 SummaryUiOptions。
+ */
+export interface PushProgressOptions extends SummaryUiOptions {
+    /** 进度视图：VSCode 面板 tab 标题 & <title>（默认 "推送测试案例"） */
+    panelTitle?: string;
+    /** 进度视图主标题（推送中，默认 "正在推送测试案例..."） */
+    progressTitle?: string;
+    /** 进度视图主标题（已取消，默认 "已取消"） */
+    progressCancelTitle?: string;
+    /** 进度视图动作动词（副标题与取消说明使用，默认 "推送"） */
+    progressVerb?: string;
+}
+
 /** 批量推送单文件结果 */
 export interface PushFileResult {
     filePath: string;
@@ -343,8 +359,10 @@ let _activeMsgDisposable: vscode.Disposable | null = null;
  * - 用户点击文件名 → 回调 onOpenFile 打开文件 + 展示推送结果弹窗
  * - 用户点击「关闭」或按 Esc → 面板销毁，Promise resolve
  * - 面板复用：若已有非 disposed 面板，原地刷新内容，不创建新 Tab
+ * - options：可扩展各阶段标题（panelTitle / progressTitle / progressVerb 等），
+ *   便于「删除 / 导入」等场景复用同一进度面板，总结视图部分字段复用 SummaryUiOptions
  */
-export function createPushProgress(totalFiles: number): PushProgressPanel {
+export function createPushProgress(totalFiles: number, options?: PushProgressOptions): PushProgressPanel {
     const items: PushProgressItem[] = [];
     let _cancelled = false;
     let _done = false;
@@ -364,10 +382,13 @@ export function createPushProgress(totalFiles: number): PushProgressPanel {
         const pct = totalFiles > 0 ? Math.round((completed / totalFiles) * 100) : 0;
 
         const barColor = _cancelled ? '#f0a020' : '#0078d4';
-        const headerTitle = _cancelled ? '已取消' : '正在推送测试案例...';
+        const _progressTitle = options?.progressTitle || '正在推送测试案例...';
+        const _progressCancelTitle = options?.progressCancelTitle || '已取消';
+        const _verb = options?.progressVerb || '推送';
+        const headerTitle = _cancelled ? _progressCancelTitle : _progressTitle;
         const headerSub = _cancelled
-            ? '推送过程被取消'
-            : `本次共推送 ${totalFiles} 个文件 · 已完成 ${completed} / ${totalFiles}`;
+            ? `${_verb}过程被取消`
+            : `本次共${_verb} ${totalFiles} 个文件 · 已完成 ${completed} / ${totalFiles}`;
 
         const fileRows = items.map((item, i) => {
             const statusIcon = item.status === 'done' ? '✓'
@@ -402,7 +423,7 @@ export function createPushProgress(totalFiles: number): PushProgressPanel {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>推送测试案例</title>
+<title>${escapeHtml(options?.panelTitle || '推送测试案例')}</title>
 <style>
     ${sharedCss()}
     .header{flex-shrink:0;padding:16px 20px 12px;border-bottom:1px solid var(--bd);background:#fafbfc}
@@ -461,7 +482,7 @@ export function createPushProgress(totalFiles: number): PushProgressPanel {
         } else {
             modalPanel = vscode.window.createWebviewPanel(
                 'pushProgress',
-                '推送测试案例',
+                options?.panelTitle || '推送测试案例',
                 { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },
                 { enableScripts: true, retainContextWhenHidden: false },
             );
@@ -535,7 +556,7 @@ export function createPushProgress(totalFiles: number): PushProgressPanel {
             _onOpenFile = onOpenFile;
             // 即使取消也展示总结视图，让用户看到已完成的推送结果
             if (!isPanelDisposed(modalPanel)) {
-                modalPanel.webview.html = buildSummaryHtml(results);
+                modalPanel.webview.html = buildSummaryHtml(results, options);
             }
 
             return new Promise(resolve => {

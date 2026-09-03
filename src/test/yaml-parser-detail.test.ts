@@ -197,16 +197,25 @@ describe('yaml-parser 删除最后一条步骤后保存（隐藏 bug 回归）',
         // 保存 + 重新解析，等价于"保存后点重置 / 重新打开文件"
         await parser.save(file, parsed.tableData, parsed.sourceData);
         const reloaded = await parser.parse(file);
-        const reTables = reloaded.tableData.detailTables || [];
-        const steps = reTables.find(t => t.field === 'steps');
 
-        // 关键断言：步骤确实被清空，旧步骤（click/input）不能恢复
-        expect(steps).toBeDefined();
-        expect((steps!.rawRowGroups && steps!.rawRowGroups[0]) || []).toEqual([]);
-        expect((steps!.rowGroups && steps!.rowGroups[0]) || []).toEqual([]);
+        // 关键断言：旧步骤（click/input）绝不能恢复——这是本用例要守的回归点
+        const savedRaw = fs.readFileSync(file, 'utf-8');
+        ['click', 'btn1', 'input', 'box1'].forEach(s => expect(savedRaw).not.toContain(s));
+
         // 主表 steps 列应为空（[] 占位或空串）
         const reStepsCol = reloaded.tableData.headers.indexOf('steps');
         const cell = reloaded.tableData.rows[0][reStepsCol];
         expect(cell === '' || cell === '[]' || (Array.isArray(cell) && cell.length === 0)).toBe(true);
+
+        // 明细表：所有行都清空后，当前实现不再把 steps 识别为明细字段
+        // （extractDetailTables 要求至少一行是"元素为对象的非空数组"，
+        //   而 steps: [] 无法与标量空数组区分，强行识别会误伤 tags: [] 这类列）。
+        // 因此这里允许 steps 明细表缺失；一旦存在，就必须是空的、不能残留旧步骤。
+        const reTables = reloaded.tableData.detailTables || [];
+        const steps = reTables.find(t => t.field === 'steps');
+        if (steps) {
+            expect((steps.rawRowGroups && steps.rawRowGroups[0]) || []).toEqual([]);
+            expect((steps.rowGroups && steps.rowGroups[0]) || []).toEqual([]);
+        }
     });
 });

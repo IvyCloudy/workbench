@@ -272,8 +272,8 @@ function _showDeleteConfirmDialog(items, onProceed, tsIds) {
         var it = items[i] || {};
         var no = it.testCaseNo || it.sourceId || '';
         var name = it.testCaseName || '';
-        var exec = it.hasExec ? 'Y' : 'N';
-        var bug = it.hasBug ? 'Y' : 'N';
+        var exec = String(it.hasExec).toUpperCase() === 'Y' ? 'Y' : 'N';
+        var bug = String(it.hasBug).toUpperCase() === 'Y' ? 'Y' : 'N';
         rowsHtml += '<tr>'
             + '<td class="xs-dc-td xs-dc-no">' + escapeHtml(no) + '</td>'
             + '<td class="xs-dc-td xs-dc-name">' + escapeHtml(name) + '</td>'

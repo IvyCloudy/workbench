@@ -269,6 +269,87 @@ function makeRequest<T = any>(
     });
 }
 
+/**
+ * 发送 HTTP 请求（通用方法，纯发送）
+ *
+ * 支持 GET / POST / PUT / DELETE 四种方法：
+ *   - GET：data 作为 query string 拼接到 url（data 为对象时；非对象 / null 则忽略）
+ *   - POST / PUT / DELETE：data 序列化为 JSON 后作为请求体（data 为 null / undefined 则不带 body）
+ *
+ * 纯粹的请求发送方法：不含 localhost/127.0.0.1 改写、不含 curl 兜底等特殊处理。
+ *
+ * @returns 解析后的响应体（any）。若响应体不是合法 JSON，返回 { raw: <原始文本> }。
+ */
+export async function sendHttpRequest(
+    url: string,
+    method: string = 'GET',
+    headers: Record<string, string> = {},
+    data: any = null
+): Promise<any> {
+    try {
+        const m = (method || 'GET').toUpperCase();
+
+        let targetUrl = url;
+        let body: string | undefined;
+
+        if (m === 'GET') {
+            if (data != null && typeof data === 'object') {
+                const qs = Object.entries(data)
+                    .filter(([, v]) => v !== undefined && v !== null)
+                    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+                    .join('&');
+                if (qs) {
+                    targetUrl += (targetUrl.includes('?') ? '&' : '?') + qs;
+                }
+            }
+        } else {
+            // POST / PUT / DELETE 等带 body 的方法
+            if (data !== null && data !== undefined) {
+                body = typeof data === 'string' ? data : JSON.stringify(data);
+            }
+        }
+
+        const urlObj = new URL(targetUrl);
+        const bodyBuffer = body ? Buffer.from(body, 'utf8') : undefined;
+        const options: http.RequestOptions = {
+            hostname: urlObj.hostname,
+            port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
+            path: urlObj.pathname + urlObj.search,
+            method: m,
+            headers: headers,
+        };
+
+        return await new Promise<any>((resolve, reject) => {
+            const req = (urlObj.protocol === 'https:' ? https : http).request(options, (res) => {
+                res.setEncoding('utf8');
+                let dataStr = '';
+                res.on('data', (chunk) => { dataStr += chunk; });
+                res.on('end', () => {
+                    if (!dataStr) { resolve({}); return; }
+                    try {
+                        resolve(JSON.parse(dataStr));
+                    } catch {
+                        resolve({ raw: dataStr });
+                    }
+                });
+            });
+
+            req.on('error', (err) => reject(err));
+            req.setTimeout(DEFAULT_TIMEOUT, () => {
+                req.destroy();
+                reject(new Error('请求超时'));
+            });
+
+            if (bodyBuffer) req.write(bodyBuffer);
+            req.end();
+        });
+    } catch (err: any) {
+        const msg = err?.message || String(err);
+        console.error('[sendHttpRequest] 请求异常:', msg, err);
+        throw new Error(`sendHttpRequest 请求失败: ${msg}`);
+    }
+}
+
 async function post<T = any>(
     context: vscode.ExtensionContext,
     url: string,
@@ -530,9 +611,9 @@ export async function deleteTestCase(
  * @param taskInfo  必填，{ testTaskNo, subTestTaskId }
  * @param sourceIds 必填，待确认案例的 testcase_id 列表
  *
- * 出参 body[]：{ sourceId, type, data: { sourceId, testcaseNo, testCaseName, hasExec, hasBug } }
+ * 出参 body[]：{ sourceId, type, data: { sourceId, testCaseNo, testCaseName, hasExec, hasBug } }
  *   type: 1 允许删除（无执行/缺陷关联）
- *         2 需要确认后删除（data.hasExec / data.hasBug 至少一个为 true）
+ *         2 需要确认后删除（data.hasExec / data.hasBug 至少一个为 'Y'）
  *         3 案例不存在
  *
  * 失败语义：本接口仅用于「提示增强」，因此**任何异常都不应阻断删除主流程**。
@@ -544,12 +625,12 @@ export interface ConfirmDeleteCaseItem {
     type: number;
     data?: {
         sourceId?: string;
-        testcaseNo?: string;
+        testCaseNo?: string;
         testCaseName?: string;
-        /** 是否存在执行关联（type=2 时至少一个为 true） */
-        hasExec?: boolean;
-        /** 是否存在缺陷关联（type=2 时至少一个为 true） */
-        hasBug?: boolean;
+        /** 是否存在执行关联：'Y' 存在 / 'N' 不存在 */
+        hasExec?: string;
+        /** 是否存在缺陷关联：'Y' 存在 / 'N' 不存在 */
+        hasBug?: string;
     };
 }
 

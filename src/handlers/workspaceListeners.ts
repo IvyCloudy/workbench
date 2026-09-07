@@ -485,8 +485,8 @@ export async function handleCaseFileWillDelete(
                         sourceId: String(it?.sourceId ?? '').trim(),
                         testCaseNo: String(it?.data?.testCaseNo ?? '').trim(),
                         testCaseName: String(it?.data?.testCaseName ?? '').trim(),
-                        hasExec: !!it?.data?.hasExec,
-                        hasBug: !!it?.data?.hasBug,
+                        hasExec: String(it?.data?.hasExec ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
+                        hasBug: String(it?.data?.hasBug ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
                     }))
                     .filter((it: DeleteConfirmItem) => !!it.sourceId);
             } else {

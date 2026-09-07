@@ -132,10 +132,10 @@ export interface DeleteConfirmItem {
     sourceId: string;
     testCaseNo: string;
     testCaseName: string;
-    /** 是否存在执行关联 */
-    hasExec: boolean;
-    /** 是否存在缺陷关联 */
-    hasBug: boolean;
+    /** 是否存在执行关联：'Y' 存在 / 'N' 不存在 */
+    hasExec: string;
+    /** 是否存在缺陷关联：'Y' 存在 / 'N' 不存在 */
+    hasBug: string;
 }
 
 /**
@@ -144,7 +144,7 @@ export interface DeleteConfirmItem {
  * 布局与表编辑器内删除确认保持一致：
  *   第 1 段：谨慎操作：删除「文件」将同步删除 TMS 平台上的 N 条案例，
  *            并同步删除其执行和缺陷关联关系。如需继续操作，请忽略本提示（Y：存在，N：不存在）：
- *   第 2 段：表格（编号 / 名称 / 执行 / 缺陷），true→Y，false→N
+ *   第 2 段：表格（编号 / 名称 / 执行 / 缺陷），Y=存在 / N=不存在
  *   第 3 段：删除不可恢复，是否确认删除
  */
 function buildDeleteConfirmHtml(
@@ -156,8 +156,8 @@ function buildDeleteConfirmHtml(
     const headerBg = MODAL_HEADER_BG_WARNING;
 
     const rowsHtml = items.map(it => {
-        const exec = it.hasExec ? 'Y' : 'N';
-        const bug = it.hasBug ? 'Y' : 'N';
+        const exec = String(it.hasExec).trim().toUpperCase() === 'Y' ? 'Y' : 'N';
+        const bug = String(it.hasBug).trim().toUpperCase() === 'Y' ? 'Y' : 'N';
         return `<tr>`
             + `<td class="xs-dc-td xs-dc-no">${escapeHtml_(it.testCaseNo || it.sourceId)}</td>`
             + `<td class="xs-dc-td xs-dc-name">${escapeHtml_(it.testCaseName)}</td>`

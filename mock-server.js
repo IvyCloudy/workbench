@@ -457,7 +457,7 @@ var server = http.createServer(function (req, res) {
         // 入参：{ testTaskNo, subTestTaskId, sourceIds, operationUser }
         // 出参：body[] 每项 { sourceId, type, data: { sourceId, testcaseNo, testCaseName, hasExec, hasBug } }
         //   type: 1 允许删除 / 2 需要确认后删除 / 3 案例不存在
-        //   type=2 时 hasExec 或 hasBug 至少一个为 true（可同时为 true，也可二选一）
+        //   type=2 时 hasExec 或 hasBug 至少一个为 'Y'（可同时为 'Y'，也可二选一）
         var body2 = '';
         req.on('data', function (chunk) { body2 += chunk; });
         req.on('end', function () {
@@ -505,7 +505,7 @@ var server = http.createServer(function (req, res) {
                     return {
                         sourceId: sid,
                         type: 3,
-                        data: { sourceId: sid, testcaseNo: '', testCaseName: '', hasExec: false, hasBug: false }
+                        data: { sourceId: sid, testcaseNo: '', testCaseName: '', hasExec: 'N', hasBug: 'N' }
                     };
                 }
                 if (type === 2) {
@@ -524,8 +524,8 @@ var server = http.createServer(function (req, res) {
                             sourceId: sid,
                             testCaseNo: 'TC' + stamp + (1000 + i),
                             testCaseName: '模拟案例-' + sid,
-                            hasExec: cHasExec,
-                            hasBug: cHasBug
+                            hasExec: cHasExec ? 'Y' : 'N',
+                            hasBug: cHasBug ? 'Y' : 'N'
                         }
                     };
                 }
@@ -538,8 +538,8 @@ var server = http.createServer(function (req, res) {
                         sourceId: sid,
                         testCaseNo: 'TC' + stamp + (1000 + i),
                         testCaseName: '模拟案例-' + sid,
-                        hasExec: false,
-                        hasBug: false
+                        hasExec: 'N',
+                        hasBug: 'N'
                     }
                 };
             });
@@ -553,7 +553,7 @@ var server = http.createServer(function (req, res) {
                 var d = it.data || {};
                 if (it.type === 2) {
                     console.log('    [%d] sourceId=%s type=2 执行关联=%s 缺陷关联=%s 编号=%s 名称=%s',
-                        i + 1, it.sourceId, d.hasExec ? 'Y' : 'N', d.hasBug ? 'Y' : 'N',
+                        i + 1, it.sourceId, d.hasExec, d.hasBug,
                         d.testCaseNo || '-', d.testCaseName || '-');
                 } else {
                     console.log('    [%d] sourceId=%s type=%d', i + 1, it.sourceId, it.type);

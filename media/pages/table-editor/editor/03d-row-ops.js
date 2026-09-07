@@ -159,7 +159,7 @@ function _collectPendingDelete(rowsToDelete) {
  *
  * 契约：
  *   发：{ type:'confirmDeleteRows', data:{ tsIds } }
- *   收：{ type:'confirmDeleteRowsResult', ok, items:[{sourceId,testcaseNo,testCaseName,hasExec,hasBug}],
+ *   收：{ type:'confirmDeleteRowsResult', ok, items:[{sourceId,testCaseNo,testCaseName,hasExec,hasBug}],
  *         errorMessage?, blocked? }
  *
  * 健壮性与阻断策略：
@@ -270,7 +270,7 @@ function _showDeleteConfirmDialog(items, onProceed, tsIds) {
     var rowsHtml = '';
     for (var i = 0; i < items.length; i++) {
         var it = items[i] || {};
-        var no = it.testcaseNo || it.sourceId || '';
+        var no = it.testCaseNo || it.sourceId || '';
         var name = it.testCaseName || '';
         var exec = it.hasExec ? 'Y' : 'N';
         var bug = it.hasBug ? 'Y' : 'N';

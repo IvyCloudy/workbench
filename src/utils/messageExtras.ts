@@ -130,7 +130,7 @@ export function showResultModalFallback_(params: {
 /** 需要用户确认的案例条目（来自删除确认接口 type=2） */
 export interface DeleteConfirmItem {
     sourceId: string;
-    testcaseNo: string;
+    testCaseNo: string;
     testCaseName: string;
     /** 是否存在执行关联 */
     hasExec: boolean;
@@ -159,7 +159,7 @@ function buildDeleteConfirmHtml(
         const exec = it.hasExec ? 'Y' : 'N';
         const bug = it.hasBug ? 'Y' : 'N';
         return `<tr>`
-            + `<td class="xs-dc-td xs-dc-no">${escapeHtml_(it.testcaseNo || it.sourceId)}</td>`
+            + `<td class="xs-dc-td xs-dc-no">${escapeHtml_(it.testCaseNo || it.sourceId)}</td>`
             + `<td class="xs-dc-td xs-dc-name">${escapeHtml_(it.testCaseName)}</td>`
             + `<td class="xs-dc-td xs-dc-flag" data-flag="${exec}">${exec}</td>`
             + `<td class="xs-dc-td xs-dc-flag" data-flag="${bug}">${bug}</td>`

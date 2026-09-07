@@ -187,6 +187,14 @@ function updateWillDeleteResult(fp: string, patch: Partial<WillDeleteResult>): v
 }
 
 /**
+ * 只读读取 willDeleteResults 条目（不消费、不清除兜底定时器）。
+ * 仅供单元测试断言「onWillDeleteFiles 阶段写入的最终意图」使用，生产逻辑请走 consumeWillDeleteResult。
+ */
+export function peekWillDeleteResult(fp: string): WillDeleteResult | undefined {
+    return willDeleteResults.get(fp);
+}
+
+/**
  * 注册所有工作区文件变化监听器
  */
 export function registerWorkspaceListeners(context: vscode.ExtensionContext): vscode.Disposable[] {
@@ -321,7 +329,7 @@ export function registerWorkspaceListeners(context: vscode.ExtensionContext): vs
  *      因此**无需超时兜底**，用户可以从容选择；waitUntil 在用户点完按钮后立即结算，
  *      VSCode 随后执行 unlink 并触发 onDidDeleteFiles。
  */
-async function handleCaseFileWillDelete(
+export async function handleCaseFileWillDelete(
     filePath: string,
     token?: vscode.CancellationToken,
     extContext?: vscode.ExtensionContext,
@@ -475,7 +483,7 @@ async function handleCaseFileWillDelete(
                     .filter((it: any) => Number(it?.type) === 2)
                     .map((it: any) => ({
                         sourceId: String(it?.sourceId ?? '').trim(),
-                        testcaseNo: String(it?.data?.testcaseNo ?? '').trim(),
+                        testCaseNo: String(it?.data?.testCaseNo ?? '').trim(),
                         testCaseName: String(it?.data?.testCaseName ?? '').trim(),
                         hasExec: !!it?.data?.hasExec,
                         hasBug: !!it?.data?.hasBug,

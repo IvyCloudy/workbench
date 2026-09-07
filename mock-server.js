@@ -473,6 +473,7 @@ var server = http.createServer(function (req, res) {
             console.log('[%s] 收到删除确认请求(%s %s) testTaskNo=%s subTestTaskId=%s operationUser=%s 共 %d 条 sourceIds=%s',
                 ts2, req.method, req.url, cTestTaskNo || '(未提供)', cSubTestTaskId || '(未提供)',
                 cOperationUser || '(未提供)', cSourceIds.length, JSON.stringify(cSourceIds));
+            console.log('  UA=%s remote=%s:%s', req.headers['user-agent'] || '(无)', req.socket.remoteAddress, req.socket.remotePort);
 
             var allowCount = 0;
             var confirmCount = 0;
@@ -521,7 +522,7 @@ var server = http.createServer(function (req, res) {
                         type: 2,
                         data: {
                             sourceId: sid,
-                            testcaseNo: 'TC' + stamp + (1000 + i),
+                            testCaseNo: 'TC' + stamp + (1000 + i),
                             testCaseName: '模拟案例-' + sid,
                             hasExec: cHasExec,
                             hasBug: cHasBug
@@ -535,7 +536,7 @@ var server = http.createServer(function (req, res) {
                     type: 1,
                     data: {
                         sourceId: sid,
-                        testcaseNo: 'TC' + stamp + (1000 + i),
+                        testCaseNo: 'TC' + stamp + (1000 + i),
                         testCaseName: '模拟案例-' + sid,
                         hasExec: false,
                         hasBug: false
@@ -544,6 +545,20 @@ var server = http.createServer(function (req, res) {
             });
             console.log('  模拟确认结果: 允许删除 %d / 需确认 %d / 不存在 %d / 共 %d 条',
                 allowCount, confirmCount, missingCount2, cSourceIds.length);
+            // 逐条明细：一眼看清每条 sourceId 对应的 type（1 允许删除 / 2 需确认 / 3 不存在），
+            // 避免只能从下方压缩的 JSON 里人肉解析。type=2 额外打印执行/缺陷关联，
+            // 因为这两项决定是否弹出「带关联表格」的二次确认框。
+            console.log('  逐条明细 (type: 1=允许删除 / 2=需确认 / 3=不存在):');
+            resultBody2.forEach(function (it, i) {
+                var d = it.data || {};
+                if (it.type === 2) {
+                    console.log('    [%d] sourceId=%s type=2 执行关联=%s 缺陷关联=%s 编号=%s 名称=%s',
+                        i + 1, it.sourceId, d.hasExec ? 'Y' : 'N', d.hasBug ? 'Y' : 'N',
+                        d.testCaseNo || '-', d.testCaseName || '-');
+                } else {
+                    console.log('    [%d] sourceId=%s type=%d', i + 1, it.sourceId, it.type);
+                }
+            });
 
             // 接口级整体失败注入：返回非 SUC0000，便于验证前端 errorMsg 弹窗
             if (shouldFailOverall(cSourceIds, CONFIRM_FAIL_RATIO)) {

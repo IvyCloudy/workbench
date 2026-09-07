@@ -328,7 +328,7 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
             .filter((it: any) => Number(it?.type) === 2)
             .map((it: any) => ({
                 sourceId: String(it?.sourceId ?? '').trim(),
-                testcaseNo: String(it?.data?.testcaseNo ?? '').trim(),
+                testCaseNo: String(it?.data?.testCaseNo ?? '').trim(),
                 testCaseName: String(it?.data?.testCaseName ?? '').trim(),
                 hasExec: !!it?.data?.hasExec,
                 hasBug: !!it?.data?.hasBug,

@@ -132,6 +132,8 @@ export interface DeleteConfirmItem {
     sourceId: string;
     testCaseNo: string;
     testCaseName: string;
+    /** 阶段名称 */
+    testPhaseName: string;
     /** 是否存在执行关联：'Y' 存在 / 'N' 不存在 */
     hasExec: string;
     /** 是否存在缺陷关联：'Y' 存在 / 'N' 不存在 */
@@ -159,8 +161,9 @@ function buildDeleteConfirmHtml(
         const exec = String(it.hasExec).trim().toUpperCase() === 'Y' ? 'Y' : 'N';
         const bug = String(it.hasBug).trim().toUpperCase() === 'Y' ? 'Y' : 'N';
         return `<tr>`
-            + `<td class="xs-dc-td xs-dc-no">${escapeHtml_(it.testCaseNo || it.sourceId)}</td>`
+            + `<td class="xs-dc-td xs-dc-no">${escapeHtml_(it.testCaseNo)}</td>`
             + `<td class="xs-dc-td xs-dc-name">${escapeHtml_(it.testCaseName)}</td>`
+            + `<td class="xs-dc-td xs-dc-phase">${escapeHtml_(it.testPhaseName)}</td>`
             + `<td class="xs-dc-td xs-dc-flag" data-flag="${exec}">${exec}</td>`
             + `<td class="xs-dc-td xs-dc-flag" data-flag="${bug}">${bug}</td>`
             + `</tr>`;
@@ -176,7 +179,7 @@ function buildDeleteConfirmHtml(
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>删除案例</title>
 <style>
-${baseModalCss_(headerBg, color, 'width:620px;max-width:92vw;max-height:88vh;')}
+${baseModalCss_(headerBg, color, 'width:820px;max-width:94vw;max-height:88vh;')}
     .xs-modal-body{flex:1;padding:16px;min-height:60px;overflow:auto}
     .xs-dc-lead{font-size:13px;line-height:1.7;color:#333;margin:0 0 8px}
     .xs-dc-tail{font-size:13px;line-height:1.7;color:#333;margin:10px 0 0}
@@ -186,9 +189,10 @@ ${baseModalCss_(headerBg, color, 'width:620px;max-width:92vw;max-height:88vh;')}
     .xs-dc-table td{padding:6px 8px;border-bottom:1px solid #f0f0f0;color:#333;word-break:break-all}
     .xs-dc-table tbody tr:last-child td{border-bottom:none}
     .xs-dc-table tbody tr:nth-child(even){background:#fcfcfc}
-    .xs-dc-no{width:34%;color:#666}
-    .xs-dc-name{width:44%}
-    .xs-dc-table td.xs-dc-flag{width:11%;text-align:center;font-weight:600;color:#c0392b}
+    .xs-dc-no{width:30%;color:#666}
+    .xs-dc-name{width:34%}
+    .xs-dc-phase{width:15%;color:#666}
+    .xs-dc-table td.xs-dc-flag{width:10%;text-align:center;font-weight:600;color:#c0392b}
     .xs-dc-table td.xs-dc-flag[data-flag="N"]{color:#999;font-weight:400}
 </style>
 </head>
@@ -204,7 +208,7 @@ ${baseModalCss_(headerBg, color, 'width:620px;max-width:92vw;max-height:88vh;')}
             <div class="xs-dc-lead">${lead}</div>
             <div class="xs-dc-table-wrap">
                 <table class="xs-dc-table">
-                    <thead><tr><th>编号</th><th>名称</th><th>执行</th><th>缺陷</th></tr></thead>
+                    <thead><tr><th>编号</th><th>名称</th><th>阶段</th><th>执行</th><th>缺陷</th></tr></thead>
                     <tbody>${rowsHtml}</tbody>
                 </table>
             </div>
@@ -308,7 +312,7 @@ function buildDeleteConfirmSimpleHtml(fileName: string, caseCount: number): stri
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>删除案例</title>
 <style>
-${baseModalCss_(headerBg, color, 'width:420px;max-width:90vw;')}
+${baseModalCss_(headerBg, color, 'width:480px;max-width:90vw;')}
     .xs-modal-body{flex:1;padding:20px 16px;min-height:60px;font-size:13px;color:#444;line-height:1.7;white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word}
 </style>
 </head>

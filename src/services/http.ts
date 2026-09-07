@@ -611,9 +611,9 @@ export async function deleteTestCase(
  * @param taskInfo  必填，{ testTaskNo, subTestTaskId }
  * @param sourceIds 必填，待确认案例的 testcase_id 列表
  *
- * 出参 body[]：{ sourceId, type, data: { sourceId, testCaseNo, testCaseName, hasExec, hasBug } }
+ * 出参 body[]：{ sourceId, type, data: Array<{ sourceId, testCaseNo, testCaseName, hasExec, hasBug }> }
  *   type: 1 允许删除（无执行/缺陷关联）
- *         2 需要确认后删除（data.hasExec / data.hasBug 至少一个为 'Y'）
+ *         2 需要确认后删除（data 中每条 hasExec / hasBug 至少一个为 'Y'；一个 sourceId 可对应多条）
  *         3 案例不存在
  *
  * 失败语义：本接口仅用于「提示增强」，因此**任何异常都不应阻断删除主流程**。
@@ -623,15 +623,17 @@ export interface ConfirmDeleteCaseItem {
     sourceId: string;
     /** 1 允许删除 / 2 需要确认后删除 / 3 案例不存在 */
     type: number;
-    data?: {
+    data?: Array<{
         sourceId?: string;
         testCaseNo?: string;
         testCaseName?: string;
+        /** 阶段名称 */
+        testPhaseName?: string;
         /** 是否存在执行关联：'Y' 存在 / 'N' 不存在 */
         hasExec?: string;
         /** 是否存在缺陷关联：'Y' 存在 / 'N' 不存在 */
         hasBug?: string;
-    };
+    }>;
 }
 
 export async function confirmDeleteTestCase(

@@ -257,7 +257,7 @@ async function handleClearAllMarks(_msg: any, ctx: EditorMsgCtx): Promise<void> 
  * 消息契约：
  *   前端 → 扩展：{ type: 'confirmDeleteRows', data: { tsIds: string[] } }
  *   扩展 → 前端：{ type: 'confirmDeleteRowsResult', ok: boolean,
- *                  items: [{ sourceId, testcaseNo, testCaseName, hasExec, hasBug }],
+ *                  items: [{ sourceId, testCaseNo, testCaseName, testPhaseName, hasExec, hasBug }],
  *                  errorMessage?: string }
  */
 async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
@@ -326,13 +326,18 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
         const raw: any[] = Array.isArray(resp.body) ? resp.body : [];
         const items = raw
             .filter((it: any) => Number(it?.type) === 2)
-            .map((it: any) => ({
-                sourceId: String(it?.sourceId ?? '').trim(),
-                testCaseNo: String(it?.data?.testCaseNo ?? '').trim(),
-                testCaseName: String(it?.data?.testCaseName ?? '').trim(),
-                hasExec: String(it?.data?.hasExec ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
-                hasBug: String(it?.data?.hasBug ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
-            }))
+            .flatMap((it: any) => {
+                const sid = String(it?.sourceId ?? '').trim();
+                const list = Array.isArray(it?.data) ? it.data : [];
+                return list.map((d: any) => ({
+                    sourceId: String(d?.sourceId ?? sid).trim(),
+                    testCaseNo: String(d?.testCaseNo ?? '').trim(),
+                    testCaseName: String(d?.testCaseName ?? '').trim(),
+                    testPhaseName: String(d?.testPhaseName ?? '').trim(),
+                    hasExec: String(d?.hasExec ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
+                    hasBug: String(d?.hasBug ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
+                }));
+            })
             .filter((it: any) => !!it.sourceId);
         ctx.webviewPanel.webview.postMessage({ type: 'confirmDeleteRowsResult', ok: true, items });
     } catch (err: any) {

@@ -526,9 +526,10 @@ tbody tr.xs-tr-frozen.selected td.xs-td{background:#dde7f3}
 .xs-dc-table td{padding:6px 8px;border-bottom:1px solid #f0f0f0;color:#333;word-break:break-all}
 .xs-dc-table tbody tr:last-child td{border-bottom:none}
 .xs-dc-table tbody tr:nth-child(even){background:#fcfcfc}
-.xs-dc-no{width:34%;color:#666}
-.xs-dc-name{width:44%}
-.xs-dc-flag{width:11%;text-align:center;font-weight:600}
+.xs-dc-no{width:26%;color:#666}
+.xs-dc-name{width:34%}
+.xs-dc-phase{width:20%;color:#666}
+.xs-dc-flag{width:10%;text-align:center;font-weight:600}
 /* Y 标记为警示色（存在关联），N 为次要色 */
 .xs-dc-flag:not(:empty){color:#c0392b}
 .xs-dc-table td.xs-dc-flag[data-flag="N"]{color:#999;font-weight:400}

@@ -159,7 +159,7 @@ function _collectPendingDelete(rowsToDelete) {
  *
  * 契约：
  *   发：{ type:'confirmDeleteRows', data:{ tsIds } }
- *   收：{ type:'confirmDeleteRowsResult', ok, items:[{sourceId,testCaseNo,testCaseName,hasExec,hasBug}],
+ *   收：{ type:'confirmDeleteRowsResult', ok, items:[{sourceId,testCaseNo,testCaseName,testPhaseName,hasExec,hasBug}],
  *         errorMessage?, blocked? }
  *
  * 健壮性与阻断策略：
@@ -270,13 +270,15 @@ function _showDeleteConfirmDialog(items, onProceed, tsIds) {
     var rowsHtml = '';
     for (var i = 0; i < items.length; i++) {
         var it = items[i] || {};
-        var no = it.testCaseNo || it.sourceId || '';
+        var no = it.testCaseNo || '';
         var name = it.testCaseName || '';
+        var phase = it.testPhaseName || '';
         var exec = String(it.hasExec).toUpperCase() === 'Y' ? 'Y' : 'N';
         var bug = String(it.hasBug).toUpperCase() === 'Y' ? 'Y' : 'N';
         rowsHtml += '<tr>'
             + '<td class="xs-dc-td xs-dc-no">' + escapeHtml(no) + '</td>'
             + '<td class="xs-dc-td xs-dc-name">' + escapeHtml(name) + '</td>'
+            + '<td class="xs-dc-td xs-dc-phase">' + escapeHtml(phase) + '</td>'
             + '<td class="xs-dc-td xs-dc-flag" data-flag="' + exec + '">' + exec + '</td>'
             + '<td class="xs-dc-td xs-dc-flag" data-flag="' + bug + '">' + bug + '</td>'
             + '</tr>';
@@ -284,7 +286,7 @@ function _showDeleteConfirmDialog(items, onProceed, tsIds) {
     var html = ''
         + '<div class="xs-dc-lead">谨慎操作：删除案例会同步删除 TMS 平台上的案例，并同步删除其执行和缺陷关联关系。如需继续操作，请忽略本提示（Y：存在，N：不存在）：</div>'
         + '<div class="xs-dc-table-wrap"><table class="xs-dc-table">'
-        +   '<thead><tr><th>编号</th><th>名称</th><th>执行</th><th>缺陷</th></tr></thead>'
+        +   '<thead><tr><th>编号</th><th>名称</th><th>阶段</th><th>执行</th><th>缺陷</th></tr></thead>'
         +   '<tbody>' + rowsHtml + '</tbody>'
         + '</table></div>'
         + '<div class="xs-dc-tail">删除不可恢复，是否确认删除</div>';
@@ -293,7 +295,7 @@ function _showDeleteConfirmDialog(items, onProceed, tsIds) {
         xsConfirm({
             title: '删除案例',
             html: html,
-            width: '620px',
+            width: '820px',
             type: 'warning',
             okText: '确定删除',
             cancelText: '取消',

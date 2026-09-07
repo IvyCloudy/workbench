@@ -481,13 +481,18 @@ export async function handleCaseFileWillDelete(
             if (resp.returnCode === 'SUC0000' && Array.isArray(resp.body)) {
                 confirmItems = resp.body
                     .filter((it: any) => Number(it?.type) === 2)
-                    .map((it: any) => ({
-                        sourceId: String(it?.sourceId ?? '').trim(),
-                        testCaseNo: String(it?.data?.testCaseNo ?? '').trim(),
-                        testCaseName: String(it?.data?.testCaseName ?? '').trim(),
-                        hasExec: String(it?.data?.hasExec ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
-                        hasBug: String(it?.data?.hasBug ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
-                    }))
+                    .flatMap((it: any) => {
+                        const sid = String(it?.sourceId ?? '').trim();
+                        const list = Array.isArray(it?.data) ? it.data : [];
+                        return list.map((d: any) => ({
+                            sourceId: String(d?.sourceId ?? sid).trim(),
+                            testCaseNo: String(d?.testCaseNo ?? '').trim(),
+                            testCaseName: String(d?.testCaseName ?? '').trim(),
+                            testPhaseName: String(d?.testPhaseName ?? '').trim(),
+                            hasExec: String(d?.hasExec ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
+                            hasBug: String(d?.hasBug ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
+                        }));
+                    })
                     .filter((it: DeleteConfirmItem) => !!it.sourceId);
             } else {
                 // 删除确认接口返回非成功码：标记 needRestore 中止物理删除并还原文件；

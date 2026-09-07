@@ -455,9 +455,9 @@ var server = http.createServer(function (req, res) {
         //   新契约：POST /api/v1/delete-testAgent-case-confirm
         //   旧契约：POST /test-task/delete-testcase-confirm（兼容保留）
         // 入参：{ testTaskNo, subTestTaskId, sourceIds, operationUser }
-        // 出参：body[] 每项 { sourceId, type, data: { sourceId, testcaseNo, testCaseName, hasExec, hasBug } }
+        // 出参：body[] 每项 { sourceId, type, data: Array<{ sourceId, testCaseNo, testCaseName, hasExec, hasBug }> }
         //   type: 1 允许删除 / 2 需要确认后删除 / 3 案例不存在
-        //   type=2 时 hasExec 或 hasBug 至少一个为 'Y'（可同时为 'Y'，也可二选一）
+        //   type=2 时 data 为数组：一个 sourceId 可对应多条需确认的案例，每条 hasExec/hasBug 至少一个为 'Y'
         var body2 = '';
         req.on('data', function (chunk) { body2 += chunk; });
         req.on('end', function () {
@@ -479,6 +479,10 @@ var server = http.createServer(function (req, res) {
             var confirmCount = 0;
             var missingCount2 = 0;
             var stamp = String(Date.now());
+            var phaseNames = ['需求分析阶段', '用例设计阶段', '测试执行阶段', '回归测试阶段', '验收测试阶段', '系统测试阶段'];
+            var pickPhase = function (seed) {
+                return phaseNames[Math.floor(stableHash01(seed) * phaseNames.length)];
+            };
             // 有效比例：missing 与 confirm 之和不超过 1，超出时收敛 confirm（保证 missing 优先）
             var mRatio = MISSING_RATIO;
             var cRatio = Math.min(CONFIRM_RATIO, Math.max(0, 1 - mRatio));
@@ -505,28 +509,35 @@ var server = http.createServer(function (req, res) {
                     return {
                         sourceId: sid,
                         type: 3,
-                        data: { sourceId: sid, testcaseNo: '', testCaseName: '', hasExec: 'N', hasBug: 'N' }
+                        data: []
                     };
                 }
                 if (type === 2) {
                     confirmCount++;
-                    // type=2 时 hasExec / hasBug 至少一个为 true：
-                    //   按稳定伪随机分「仅执行 / 仅缺陷 / 两者都有」三种组合
-                    var combo = Math.floor(stableHash01(sid + '#combo') * 3); // 0 / 1 / 2
-                    var cHasExec = (combo === 0 || combo === 2);
-                    var cHasBug = (combo === 1 || combo === 2);
-                    // 兜底：极端分布下保证至少一个为 true
-                    if (!cHasExec && !cHasBug) cHasExec = true;
+                    // type=2：一个 sourceId 可对应多条需确认的案例，data 为数组（1~3 条）
+                    var caseCnt = 1 + Math.floor(stableHash01(sid + '#cnt') * 3); // 1 / 2 / 3
+                    var dataArr = [];
+                    for (var c = 0; c < caseCnt; c++) {
+                        // 每条 hasExec / hasBug 至少一个为 'Y'：
+                        //   按稳定伪随机分「仅执行 / 仅缺陷 / 两者都有」三种组合
+                        var combo = Math.floor(stableHash01(sid + '#combo' + c) * 3); // 0 / 1 / 2
+                        var cHasExec = (combo === 0 || combo === 2);
+                        var cHasBug = (combo === 1 || combo === 2);
+                        // 兜底：极端分布下保证至少一个为 true
+                        if (!cHasExec && !cHasBug) cHasExec = true;
+                        dataArr.push({
+                            sourceId: sid,
+                            testCaseNo: 'TC' + stamp + (1000 + i) + '-' + (c + 1),
+                            testCaseName: '模拟案例-' + sid + '-' + (c + 1),
+                            testPhaseName: pickPhase(sid + '#phase' + c),
+                            hasExec: cHasExec ? 'Y' : 'N',
+                            hasBug: cHasBug ? 'Y' : 'N'
+                        });
+                    }
                     return {
                         sourceId: sid,
                         type: 2,
-                        data: {
-                            sourceId: sid,
-                            testCaseNo: 'TC' + stamp + (1000 + i),
-                            testCaseName: '模拟案例-' + sid,
-                            hasExec: cHasExec ? 'Y' : 'N',
-                            hasBug: cHasBug ? 'Y' : 'N'
-                        }
+                        data: dataArr
                     };
                 }
                 // ③ type=1 → 允许直接删除（无执行/缺陷关联）
@@ -534,13 +545,14 @@ var server = http.createServer(function (req, res) {
                 return {
                     sourceId: sid,
                     type: 1,
-                    data: {
+                    data: [{
                         sourceId: sid,
                         testCaseNo: 'TC' + stamp + (1000 + i),
                         testCaseName: '模拟案例-' + sid,
+                        testPhaseName: pickPhase(sid + '#phase'),
                         hasExec: 'N',
                         hasBug: 'N'
-                    }
+                    }]
                 };
             });
             console.log('  模拟确认结果: 允许删除 %d / 需确认 %d / 不存在 %d / 共 %d 条',
@@ -550,11 +562,13 @@ var server = http.createServer(function (req, res) {
             // 因为这两项决定是否弹出「带关联表格」的二次确认框。
             console.log('  逐条明细 (type: 1=允许删除 / 2=需确认 / 3=不存在):');
             resultBody2.forEach(function (it, i) {
-                var d = it.data || {};
+                var dlist = Array.isArray(it.data) ? it.data : [];
                 if (it.type === 2) {
-                    console.log('    [%d] sourceId=%s type=2 执行关联=%s 缺陷关联=%s 编号=%s 名称=%s',
-                        i + 1, it.sourceId, d.hasExec, d.hasBug,
-                        d.testCaseNo || '-', d.testCaseName || '-');
+                    dlist.forEach(function (d, j) {
+                        console.log('    [%d-%d] sourceId=%s type=2 执行关联=%s 缺陷关联=%s 编号=%s 名称=%s',
+                            i + 1, j + 1, it.sourceId, d.hasExec, d.hasBug,
+                            d.testCaseNo || '-', d.testCaseName || '-');
+                    });
                 } else {
                     console.log('    [%d] sourceId=%s type=%d', i + 1, it.sourceId, it.type);
                 }

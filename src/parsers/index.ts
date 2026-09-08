@@ -52,7 +52,8 @@ export function detectFileType(filePath: string): FileType | null {
 
 /**
  * 确保表格包含 testcase_id 列：
- *   - 不存在则插入到 headers 最前面，并为每行补 uuid
+ *   - 不存在则插入到 headers 最前面，并为每行补 uuid（testcase_id 固定置顶，
+ *     其余字段保持文件中的原有相对顺序不变）
  *   - 已存在但部分行为空，逐行补 uuid
  *
  * 同时把 testcase_id 字段回写到 sourceData（YAML/JSON 用于 save 重建嵌套结构时也能保留 testcase_id）。
@@ -71,6 +72,7 @@ export function ensureTrackingColumns(
 
     let tsIdx = tableData.headers.indexOf(TS_ID_COLUMN);
     if (tsIdx < 0) {
+        // testcase_id 固定置顶（最前），其余字段保持文件中的原有相对顺序不变。
         tableData.headers.unshift(TS_ID_COLUMN);
         tableData.rows.forEach(row => {
             row.unshift(genUuid());

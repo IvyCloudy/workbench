@@ -502,12 +502,12 @@ export class JsonFileParser implements FileParser {
         for (const item of data) {
             if (typeof item === 'object' && item !== null) collect(item);
         }
-        return Array.from(allPaths).sort((a, b) => {
-            const aDepth = a.split('.').length;
-            const bDepth = b.split('.').length;
-            if (aDepth !== bDepth) return aDepth - bDepth;
-            return a.localeCompare(b);
-        });
+        // 仅按路径深度分组（浅层列在前），同深度内保持文件中「首次出现」的原始顺序，
+        // 不再按 localeCompare 字母排序 —— 否则像 {name,address,age,sex} 会被排成
+        // address,age,name,sex，导致「添加 testcase_id 后其它字段顺序被打乱」。
+        // 自 ES2019 起 Array.prototype.sort 稳定，同深度时插入顺序（=文件原始顺序）得以保留。
+        const depthOf = (p: string) => p.split('.').length;
+        return Array.from(allPaths).sort((a, b) => depthOf(a) - depthOf(b));
     }
 
     private getNestedValue(obj: any, path: string): string {

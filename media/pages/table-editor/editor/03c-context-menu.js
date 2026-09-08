@@ -151,8 +151,18 @@ function showContextMenu(e) {
         }
         items.push({ divider: true });
         items.push({ label: '删除该行', action: function () { deleteRow(S._ctxRow); }, disabled: S._ctxRow < 0 });
+        // 删除选中行：整行选择 S.sel 优先；无整行选择但存在跨多行单元格矩形选区时，
+        // 也支持一次性删除该矩形覆盖的所有行（与「删除该行 / 删除该列」的整行/整列删除对称）。
+        var _delRowCount = 0;
         if (S.sel.size > 0) {
-            items.push({ label: '删除选中行 (' + S.sel.size + ')', action: deleteSelectedRows });
+            _delRowCount = S.sel.size;
+        } else if (typeof getSelRectRows === 'function') {
+            // 单行矩形与「删除该行」重复，仅在跨多行时展示该聚合项
+            var _srr = getSelRectRows();
+            if (_srr.length > 1) _delRowCount = _srr.length;
+        }
+        if (_delRowCount > 0) {
+            items.push({ label: '删除选中行 (' + _delRowCount + ')', action: deleteSelectedRows });
         }
         if (S.colSel.size > 0) {
             // 冻结列（testcase_id）与 detail 列（steps 等）不参与清空 / 批量填充：

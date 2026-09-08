@@ -467,9 +467,20 @@ function deleteRow(ri) {
 }
 
 function deleteSelectedRows() {
-    if (S.sel.size === 0) return;
+    // 待删除行集合：优先整行选择 S.sel；若无整行选择但存在跨多行的单元格矩形选区，
+    // 则将该矩形覆盖的所有行一并删除（支持「选中多行单元格 → 右键删除选中行」场景）。
+    // 与 push / copy / clear / 批量填充 等操作一致，矩形选区在过滤模式下仅作用于可见行。
+    var targetRows;
+    if (S.sel && S.sel.size > 0) {
+        targetRows = Array.from(S.sel);
+    } else if (typeof getSelRectRows === 'function') {
+        targetRows = getSelRectRows();
+    } else {
+        targetRows = [];
+    }
+    if (targetRows.length === 0) return;
     pushHistory();
-    var sorted = Array.from(S.sel).sort(function (a, b) { return b - a; });
+    var sorted = targetRows.slice().sort(function (a, b) { return b - a; });
     var headers = (S.data && S.data.headers) || [];
     var tsIdIdx = headers.indexOf('testcase_id');
 

@@ -142,9 +142,25 @@ async function handleSave(msg: any, ctx: EditorMsgCtx): Promise<void> {
         return;
     }
     ctx.log(`💾 save begin rows=${_inRows} cols=${_inHeaders}`);
+
+    // 取真实的「原始顶层形态」用于 save 还原：
+    //   - 正常情况使用会话缓存的 originalSourceData（由 reparseAndDiff 在 init/外部变更时填充）；
+    //   - 若该值为空（极端竞态下 webview 早于 init 完成即触发保存），落盘时 json-parser 会因
+    //     缺失原始形态、对「单条记录」默认回退为单对象（见 json-parser.save 的 out 决策），
+    //     从而把原本是数组的文件写成字典。这里兜底重新解析磁盘文件以恢复正确的数组/单对象形态。
+    let originalSourceData = ctx.session.originalSourceData;
+    if (!originalSourceData || typeof originalSourceData !== 'object') {
+        try {
+            const reparsed = await ctx.session.parser.parse(filePath);
+            originalSourceData = reparsed.sourceData;
+            ctx.session.originalSourceData = originalSourceData;
+            ctx.log('🔧 save 兜底：originalSourceData 为空，已重新解析磁盘文件恢复原始形态');
+        } catch (_) { /* 解析失败则沿用既有空值，交给 json-parser 既有逻辑处理 */ }
+    }
+
     // 写盘前先打时间戳，覆盖 watcher 在 await 期间就回包的极端竞态
     ctx.onSelfSave();
-    await ctx.session.parser.save(filePath, msg.data, ctx.session.originalSourceData);
+    await ctx.session.parser.save(filePath, msg.data, originalSourceData);
     const _saveDur = Date.now() - _saveStart;
     // 写盘后再次刷新时间戳：fsWatcher / onDidSaveTextDocument 的通知通常发生在
     // writeFile 返回之后，从这一刻开始算 SELF_SAVE_GUARD_MS 才能可靠拦截自反弹。

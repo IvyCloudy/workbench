@@ -24,27 +24,38 @@ export class JsonFileParser implements FileParser {
             const content = await fs.promises.readFile(filePath, 'utf-8');
             const data = JSON.parse(content);
 
-            const sourceData = Array.isArray(data) ? data : (data && typeof data === 'object') ? [data] : [];
+            const isTopArray = Array.isArray(data);
+            const isTopObject = !isTopArray && !!data && typeof data === 'object' && !Array.isArray(data);
 
-            if (!Array.isArray(data) || data.length === 0) {
+            // sourceData 形态约定（save 阶段据此还原顶层形态，见 save 的 out 决策）：
+            //   - 顶层数组   → 保持数组（多条）
+            //   - 顶层单对象 → 保持单对象（单条），不包成 [x]，避免保存时被误判为数组
+            //   - 其它（标量 / null / 空）→ 空数组
+            const sourceData = isTopArray ? data : (isTopObject ? data : []);
+
+            // 用于展平的"集合"：顶层单对象视作 1 行集合，使主表能正常渲染 1 行可编辑数据；
+            // 顶层数组直接用自身；其它（标量/空）则为空集合。
+            const collection = isTopArray ? data : (isTopObject ? [data] : []);
+
+            if (collection.length === 0) {
                 return { tableData: { headers: [], rows: [] }, sourceData };
             }
 
-            const detailTables = this.extractDetailTables(data);
+            const detailTables = this.extractDetailTables(collection);
             // 使用"主表设计"：如果存在明细字段，主表使用顶层 key 作为列，避免路径展开与明细列冲突。
             // 否则保留原有路径展开逻辑。
             let headers: string[];
             let rows: any[][];
             const isFlatTopLevel = detailTables.length > 0;
             if (isFlatTopLevel) {
-                headers = this.collectTopLevelKeys(data);
-                rows = data.map(item => {
+                headers = this.collectTopLevelKeys(collection);
+                rows = collection.map(item => {
                     if (typeof item !== 'object' || item === null) return headers.map(() => '');
                     return headers.map(h => this.formatCellValue((item as any)[h]));
                 });
             } else {
-                headers = this.collectAllPaths(data);
-                rows = data.map(item => {
+                headers = this.collectAllPaths(collection);
+                rows = collection.map(item => {
                     if (typeof item !== 'object' || item === null) {
                         return headers.map(() => '');
                     }
@@ -56,10 +67,10 @@ export class JsonFileParser implements FileParser {
             // 与原始顶层字段不对应，统一保持现状（不做识别，避免误判）。
             let columnTypes: { [field: string]: 'scalar' | 'string[]' | 'number[]' | 'detail' } | undefined;
             if (isFlatTopLevel) {
-                columnTypes = this.detectColumnTypes(headers, data, detailTables);
+                columnTypes = this.detectColumnTypes(headers, collection, detailTables);
                 // 还原标量数组列为真实数组（与 yaml-parser 行为一致），让 webview 走 chip + 多项编辑弹窗。
                 for (let ri = 0; ri < rows.length; ri++) {
-                    const orig = ri < data.length ? data[ri] : undefined;
+                    const orig = ri < collection.length ? collection[ri] : undefined;
                     if (!orig || typeof orig !== 'object') continue;
                     headers.forEach((h, ci) => {
                         const t = columnTypes![h];
@@ -102,10 +113,14 @@ export class JsonFileParser implements FileParser {
 
         // 行身份解析：用 testcase_id 把当前 row 与 originalData 中的真实记录对齐，
         // 避免"右键插入行/排序/中间删除"导致的索引错位（新插入行 fallback 到相邻原始行的对象数组数据）。
+        // 兼容 originalData 为「数组（多条）」或「单对象（单条）」两种顶层形态：统一归一为 origList 处理。
         const tsIdColIdx = headers.indexOf('testcase_id');
+        const origList: any[] = Array.isArray(originalData)
+            ? originalData
+            : (originalData && typeof originalData === 'object' ? [originalData] : []);
         const origByTsId = new Map<string, any>();
-        if (Array.isArray(originalData) && tsIdColIdx >= 0) {
-            for (const rec of originalData) {
+        if (tsIdColIdx >= 0) {
+            for (const rec of origList) {
                 if (rec && typeof rec === 'object') {
                     const tid = (rec as any)['testcase_id'];
                     if (tid !== undefined && tid !== null && tid !== '') {
@@ -122,10 +137,9 @@ export class JsonFileParser implements FileParser {
             if (tsIdVal !== undefined && tsIdVal !== null && tsIdVal !== '' && origByTsId.size > 0) {
                 origRecord = origByTsId.get(String(tsIdVal));
             }
-            // 兜底：testcase_id 不可用时退回 rowIdx 索引（保留对老文件兼容）
-            if (!origRecord && origByTsId.size === 0
-                && Array.isArray(originalData) && rowIdx < originalData.length) {
-                origRecord = originalData[rowIdx];
+            // 兜底：testcase_id 不可用时退回 rowIdx 索引（兼容数组 / 单对象两种原始形态）
+            if (!origRecord && origList.length > 0 && rowIdx < origList.length) {
+                origRecord = origList[rowIdx];
             }
             if (useFlatTopLevel) {
                 // 顶层 key 模式：逐列处理，detail 列走 reconstructDetail，其余列尝试 JSON.parse 还原

@@ -19,7 +19,7 @@
  */
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { getNonce, isInQualifiedDir, buildErrorHtml, FILE_PATTERNS, TS_ID_COLUMN, escapeHtml, formatLogTime } from '../services/utils';
+import { getNonce, isInQualifiedDir, buildErrorHtml, FILE_PATTERNS, TS_ID_COLUMN, escapeHtml, formatLogTime, isInTempFolder } from '../services/utils';
 import { getCurrentTaskInfo, type CurrentTask } from '../utils/commands';
 import { showPushErrorModal, showPushResult, showPushDone, showModal } from '../utils/message';
 import { clearHighlight } from '../utils/highlightStore';
@@ -418,10 +418,27 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         webviewPanel.webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
 
         if (!resolved.qualified || !resolved.type) {
+            // 「临时文件」文件夹内的文件：不识别为案例，直接使用默认（文本）编辑器打开，
+            // 不进入案例编辑器、也不自动添加 testcase_id 字段。
+            // 注意：必须用 showTextDocument 而非 openWith(uri,'default') —— 本扩展对
+            // **/测试任务/*/测试案例/** 下的 json/yaml/csv 注册了 priority=default 的 custom editor，
+            // 若用 openWith('default') 会再次路由回本 custom editor，造成 dispose↔resolve 死循环。
+            if (isInTempFolder(document.uri.fsPath)) {
+                TelemetryService.sendTelemetryEvent('editor.opened.tempFolder', { targetFile: fileName });
+                log('⚠ 位于「临时文件」文件夹，改用文本编辑器打开');
+                try { webviewPanel.dispose(); } catch (_) { /* ignore */ }
+                try {
+                    const doc = await vscode.workspace.openTextDocument(document.uri);
+                    await vscode.window.showTextDocument(doc);
+                } catch (e: any) {
+                    log('打开文本编辑器失败: ' + (e?.message || e));
+                }
+                return;
+            }
             TelemetryService.sendTelemetryEvent('editor.opened.unqualified', { targetFile: fileName });
             log('⚠ unqualified, render error page');
             webviewPanel.webview.html = buildErrorHtml(
-                this.getErrorMessage(resolved.type),
+                this.getErrorMessage(resolved.type, document.uri.fsPath),
                 '不支持的文件',
                 [
                     { label: '用文本编辑器打开', action: 'openTextEditor', primary: true }
@@ -431,7 +448,10 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 if (m?.type === 'openTextEditor') {
                     TelemetryService.sendTelemetryEvent('editor.unqualified.openText', { targetFile: fileName });
                     try { webviewPanel.dispose(); } catch (_) { /* ignore */ }
-                    await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
+                    try {
+                        const doc = await vscode.workspace.openTextDocument(document.uri);
+                        await vscode.window.showTextDocument(doc);
+                    } catch (_) { /* ignore */ }
                 }
             });
             webviewPanel.onDidDispose(() => log('🗑 disposed (error page)'));
@@ -736,8 +756,8 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
 
     /** 识别文件并返回是否合格及类型；不要在子类内保存状态 */
     protected abstract resolveFile(uri: vscode.Uri): { qualified: boolean; type: FileType | null };
-    /** 错误信息：未识别类型时 type 为 null */
-    protected abstract getErrorMessage(type: FileType | null): string;
+    /** 错误信息：未识别类型时 type 为 null；filePath 可选，用于给出更精准的排除原因（如临时文件夹） */
+    protected abstract getErrorMessage(type: FileType | null, filePath?: string): string;
     /** 类型友好名（用于日志/错误提示） */
     protected abstract formatTypeName(type: FileType): string;
     protected abstract pushStrategy: PushStrategy;

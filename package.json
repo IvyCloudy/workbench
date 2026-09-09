@@ -194,7 +194,7 @@
       "explorer/context": [
         {
           "submenu": "testcaseViewer.newCase",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例(?:[\\\\/]|$)/i || resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i",
+          "when": "!(resourcePath =~ /[\\\\/]临时文件(?:[\\\\/]|$)/) && (resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例(?:[\\\\/]|$)/i || resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i)",
           "group": "2_workspace@1"
         },
         {
@@ -204,7 +204,7 @@
         },
         {
           "command": "testcaseViewer.pushTestCaseFromExplorer",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例(?:[\\\\/]|$)/i || resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i",
+          "when": "!(resourcePath =~ /[\\\\/]临时文件(?:[\\\\/]|$)/) && (resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例(?:[\\\\/]|$)/i || resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i)",
           "group": "2_workspace@3"
         },
         {
@@ -214,7 +214,7 @@
         },
         {
           "command": "testcaseViewer.bindTestPoints",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i",
+          "when": "!(resourcePath =~ /[\\\\/]临时文件(?:[\\\\/]|$)/) && (resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例[\\\\/].+\\.(csv|yaml|yml|json)$/i)",
           "group": "2_workspace@5"
         }
       ],
@@ -237,7 +237,7 @@
         },
         {
           "command": "testcaseViewer.createNewTestCaseQuick",
-          "when": "resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例(?:[\\\\/]|$)/i"
+          "when": "!(resourcePath =~ /[\\\\/]临时文件(?:[\\\\/]|$)/) && (resourcePath =~ /测试任务[\\\\/][^\\\\/]+[\\\\/]测试案例(?:[\\\\/]|$)/i)"
         },
         {
           "command": "testcaseViewer.yaml.fixAll",

@@ -135,15 +135,40 @@ document.querySelectorAll('button[data-act]').forEach(b => {
 // ============================================
 
 /**
+ * 判断文件是否位于「临时文件」文件夹内，从而不应被识别为测试案例。
+ *
+ * 规则（强制）：路径中任一【目录段】（不含文件名本身）精确等于「临时文件」才判定命中。
+ * 典型场景：测试任务/<任务>/测试案例/临时文件/xxx.json
+ *
+ * 这些目录下的 .csv / .yaml / .yml / .json 一律不识别为案例，
+ * 因此不支持案例编辑器展示、单文件推送、批量推送文件夹，且右键菜单（推送案例 / 绑定测试要点等）隐藏。
+ */
+export function isInTempFolder(filePath: string): boolean {
+    if (!filePath) return false;
+    const parts = filePath.split(path.sep);
+    // 末位是文件名，目录段为 parts[0..len-2]
+    for (let i = 0; i < parts.length - 1; i++) {
+        if (parts[i] === '临时文件') return true;
+    }
+    return false;
+}
+
+/**
  * 检查文件是否在合格目录下：
  *   .../测试任务/<任务目录>/测试案例/[...]/<file>
  * 任务目录只要是文件夹即可，不强制要求 <编号>_<名称> 格式。
  * 文件可直接放在 测试案例/ 目录下，也可放在其子目录中。
+ *
+ * 注意：位于「临时文件」文件夹（目录段精确等于「临时文件」）内的文件一律返回 false，
+ *       不识别为测试案例（见 isInTempFolder 注释）。
  */
 export function isInQualifiedDir(filePath: string, filePattern: RegExp): boolean {
     if (!filePath || !filePattern.test(filePath)) {
         return false;
     }
+
+    // 临时文件夹内的文件不识别为测试案例（编辑器 / 推送 / 批量推送均据此排除）。
+    if (isInTempFolder(filePath)) return false;
 
     const parts = filePath.split(path.sep);
     const len = parts.length;

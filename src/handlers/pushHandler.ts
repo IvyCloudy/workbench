@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { FileTypeChecker } from '../providers/UnifiedEditorProvider';
+import { isInTempFolder } from '../services/utils';
 import { parseFileToRows } from '../parsers';
 import { showPushErrorModal, showModal, showPushResult } from '../utils/message';
 import { createPushProgress, PushFileResult } from '../utils/pushUI';
@@ -42,6 +43,8 @@ async function collectPushableFiles(dirOrFiles: vscode.Uri[]): Promise<{ uri: vs
             for (const entry of entries) {
                 if (entry.isFile() && PUSH_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
                     const fullPath = path.join(target.fsPath, entry.name);
+                    // 临时文件夹内的文件不识别为案例，批量推送时直接跳过（不作为失败项）。
+                    if (isInTempFolder(fullPath)) continue;
                     result.push({
                         uri: vscode.Uri.file(fullPath),
                         relativePath: workspaceRoot ? path.relative(workspaceRoot, fullPath) : entry.name,
@@ -54,6 +57,8 @@ async function collectPushableFiles(dirOrFiles: vscode.Uri[]): Promise<{ uri: vs
             }
         } else if (stats.isFile() && PUSH_EXTENSIONS.has(path.extname(target.fsPath).toLowerCase())) {
             const filePath = target.fsPath;
+            // 临时文件夹内的文件不识别为案例，批量推送时直接跳过（不作为失败项）。
+            if (isInTempFolder(filePath)) continue;
             result.push({
                 uri: target,
                 relativePath: workspaceRoot ? path.relative(workspaceRoot, filePath) : path.basename(filePath),

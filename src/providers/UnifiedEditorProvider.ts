@@ -13,6 +13,7 @@
 import * as vscode from 'vscode';
 import { BaseEditorProvider, PushViaHttpClient, PushStrategy, isInQualifiedDir, FILE_PATTERNS } from './BaseEditorProvider';
 import type { FileType } from '../parsers';
+import { isInTempFolder } from '../services/utils';
 
 // ============================================
 // 文件类型检查器
@@ -46,7 +47,11 @@ export class FileTypeChecker {
         }
     }
 
-    static getErrorMessage(type: FileType | null): string {
+    static getErrorMessage(type: FileType | null, filePath?: string): string {
+        // 临时文件夹内的文件：给出明确排除原因，避免与「目录不合规」混淆。
+        if (type && filePath && isInTempFolder(filePath)) {
+            return '该文件位于「临时文件夹」中，不识别为测试案例，不支持案例编辑器展示与推送。';
+        }
         if (!type) return '该文件不在允许的目录下';
         const typeName = FileTypeChecker.getTypeName(type);
         const ext = type === 'yaml' ? '*.yaml 或 *.yml' : `*.${type.toLowerCase()}`;
@@ -65,8 +70,8 @@ export class UnifiedEditorProvider extends BaseEditorProvider {
         return FileTypeChecker.getTypeName(type);
     }
 
-    protected getErrorMessage(type: FileType | null): string {
-        return FileTypeChecker.getErrorMessage(type);
+    protected getErrorMessage(type: FileType | null, filePath?: string): string {
+        return FileTypeChecker.getErrorMessage(type, filePath);
     }
 
     protected resolveFile(uri: vscode.Uri): { qualified: boolean; type: FileType | null } {

@@ -106,6 +106,42 @@ function isPointFile(fp: string): boolean {
 const WILL_DELETE_ENTRY_TTL_MS = 60_000;
 
 /**
+ * 删除前线上「确认接口」(confirmDeleteTestCase) 的最长等待时间（5 分钟）。
+ *
+ * 背景：案例数较多时确认接口响应可能很慢，而 VSCode 的 onWillDeleteFiles
+ * 的 event.waitUntil 存在内部超时——一旦该超时到期，VSCode 会强制放行物理删除，
+ * 导致"文件已被删、确认接口却还没返回"，后续逻辑基于未完成的确认结果，存在
+ * 误删风险。为此显式给确认接口加 5 分钟上限：
+ *   · 5 分钟内返回 → 正常按 returnCode 决定放行 / 阻断；
+ *   · 超过 5 分钟仍未返回 → 抛出 PrecheckTimeoutError，被下方 catch 捕获并
+ *     视为「预检异常」处理（needRestore=true，did 阶段重建原文件，阻断删除）。
+ */
+const PRECHECK_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** 确认接口超时专用错误，便于在 catch 分支中识别并上报专门的埋点事件 */
+class PrecheckTimeoutError extends Error {
+    constructor(timeoutMs: number) {
+        super(`删除确认接口超时（已超过 ${Math.round(timeoutMs / 1000)} 秒未返回）`);
+        this.name = 'PrecheckTimeoutError';
+    }
+}
+
+/** 给 promise 加最长等待时间；超时则 reject 由 buildErr 构造的错误 */
+async function withTimeout<T>(p: Promise<T>, ms: number, buildErr: () => Error): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+        return await Promise.race([
+            p,
+            new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(buildErr()), ms);
+            }),
+        ]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+/**
  * onWillDeleteFiles 阶段的处理结果缓存，供 onDidDeleteFiles 还原 + 弹窗使用。
  *   - needRestore=true：did 阶段需重建文件（用户取消=原内容；部分失败=仅失败行）
  *   - needRestore=false：文件可正常被删除
@@ -486,7 +522,11 @@ export async function handleCaseFileWillDelete(
             return;
         }
         {
-            const resp = await confirmDeleteTestCase(extContext, tInfo.taskInfo, nonEmptyIds);
+            const resp = await withTimeout(
+                confirmDeleteTestCase(extContext, tInfo.taskInfo, nonEmptyIds),
+                PRECHECK_TIMEOUT_MS,
+                () => new PrecheckTimeoutError(PRECHECK_TIMEOUT_MS),
+            );
             if (resp.returnCode === 'SUC0000' && Array.isArray(resp.body)) {
                 confirmItems = resp.body
                     .filter((it: any) => Number(it?.type) === 2)
@@ -532,6 +572,15 @@ export async function handleCaseFileWillDelete(
             }
         }
     } catch (ce) {
+        // 确认接口超时（超过 PRECHECK_TIMEOUT_MS）：单独上报埋点，便于监控慢接口；
+        // 后续仍按「预检异常」统一处理（needRestore=true，did 阶段重建文件、阻断删除）。
+        if (ce instanceof PrecheckTimeoutError) {
+            TelemetryService.sendTelemetryErrorEvent('caseFileDelete.precheck.timeout', {
+                filePath: path.basename(filePath),
+                timeoutMs: String(PRECHECK_TIMEOUT_MS),
+                caseCount: String(nonEmptyIds.length),
+            });
+        }
         // 预检失败（网络 / 解析 / 后端 5xx 异常）：标记 needRestore=true、reportable=false
         // 中止物理删除并由 did 阶段重建文件；弹窗延后到 did 阶段文件重建完成后再弹，
         // 避免在 onWillDeleteFiles 阶段同步创建 webview panel 被后续流程抢焦点/覆盖。

@@ -213,21 +213,28 @@ export async function ensureSnapshotFile(context: vscode.ExtensionContext): Prom
  * @param tableData   当前文件解析后的 { headers, rows, detailTables? }
  * @param pushedTsIds 本次推送成功的 testcase_id 集合（@deprecated 详见上文）
  */
-export async function savePushSnapshot(
+/**
+ * 由当前 tableData 纯内存构建指定文件的「行快照映射」，不触碰磁盘。
+ * 全量模式（pushedTsIds 缺省）直接覆盖；增量模式（传 pushedTsIds）以
+ * oldSnapshots 为基准只更新已推送行。
+ *
+ * 抽离为纯函数，供 savePushSnapshot（先 loadStore 再写）与
+ * savePushSnapshotPrepared（调用方已持有最新 tableData，跳过 loadStore 磁盘读）
+ * 共用，避免删除等场景下「已持有内存态却仍回读整个快照文件」的冗余 I/O。
+ */
+export function buildSnapshotsForFile(
     filePath: string,
     tableData: { headers: string[]; rows: any[][]; detailTables?: DetailTableData[] },
+    oldSnapshots: RowSnapshots,
     pushedTsIds?: Set<string>,
-): Promise<void> {
-    if (!filePath || !tableData) return;
-    const store = loadStore();
+): RowSnapshots {
+    if (!filePath || !tableData) return oldSnapshots;
     const headers = tableData.headers || [];
     const rows = tableData.rows || [];
     const tsIdIdx = headers.indexOf(TS_ID_COLUMN);
-    if (tsIdIdx < 0) return;
+    if (tsIdIdx < 0) return oldSnapshots;
 
-    // 如果指定了推送行集合，则以旧快照为基准，只更新已推送行的快照
-    // 未推送行保持旧基线，后续即便用户改回原值也能正确清空高亮
-    const oldSnapshots = store[filePath] || {};
+    // 全量模式：直接重建；增量模式：以旧快照为基准，只更新已推送行
     const snapshots: RowSnapshots = pushedTsIds ? { ...oldSnapshots } : {};
 
     // 收集所有 detail 字段对应的主表列下标：主表签名中这些列一律置空，
@@ -273,10 +280,35 @@ export async function savePushSnapshot(
     // 增量模式下，已删除行的快照保留不清理，等待显式同步后再清除
     // （参见 clearDeletedSnapshots / deletedRowsStore）
 
+    return snapshots;
+}
+
+/**
+ * 把「已构建好的行快照映射」合并进整个 store 并一次性落盘（单 writeFile）。
+ * 与 savePushSnapshot 的区别：不再 loadStore 读盘，调用方需已持有
+ * 最新、权威的 tableData 内存态（如删除场景，删除后 tableData 即为新基线）。
+ */
+export async function savePushSnapshotPrepared(
+    filePath: string,
+    snapshots: RowSnapshots,
+): Promise<void> {
+    if (!filePath) return;
+    const store = loadStore();
     store[filePath] = snapshots;
     await saveStore(store);
     const updatedCount = Object.keys(snapshots).length;
-    console.log(`[SnapshotStore] 已保存推送快照: ${filePath} (${updatedCount} 行${pushedTsIds ? `，本次更新 ${pushedTsIds.size} 行` : ''})`);
+    console.log(`[SnapshotStore] 已保存推送快照(预构建): ${filePath} (${updatedCount} 行)`);
+}
+
+export async function savePushSnapshot(
+    filePath: string,
+    tableData: { headers: string[]; rows: any[][]; detailTables?: DetailTableData[] },
+    pushedTsIds?: Set<string>,
+): Promise<void> {
+    if (!filePath || !tableData) return;
+    const store = loadStore();
+    const snapshots = buildSnapshotsForFile(filePath, tableData, store[filePath] || {}, pushedTsIds);
+    await savePushSnapshotPrepared(filePath, snapshots);
 }
 
 /** 单行变更详情 */
@@ -672,3 +704,5 @@ export async function clearDeletedSnapshots(filePath: string, tsIds: string[]): 
     await saveStore(store);
     console.log(`[SnapshotStore] 已清除 ${removed.length} 行已删除快照: ${filePath}`);
 }
+
+

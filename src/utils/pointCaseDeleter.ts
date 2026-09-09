@@ -18,20 +18,21 @@
  *      及未来任意受 pointCaseBindingStore 支持的要点文件类型。绑定查询通过
  *      getCaseOfPoint(pointFilePath) 统一完成，方法内部不区分具体扩展名。
  *
- *  语义对齐（与 pointCaseLinker 的合约保持完全一致）：
- *    1. 匹配 type 与 linker 相同（type=1 parent_id+path / type=2 仅 path
- *       / type=3 仅 parent_id）
- *    2. pointName **不参与匹配**（仅承载分组/日志/回显），删除场景的入参
- *       约束为 pointId 与 pointPath 至少一个非空；仅传 pointName 抛错。
- *    3. **pointPath 语义与「查看关联案例」完全一致**：调用方传入的 pointPath
- *       必须是「完整路径」——即由「功能条目前缀 + '/' + pointName」组成的
- *       末段包含 pointName 的全路径。示例：
- *         · md：功能条目「账户中心/登录模块」+ 测试点「二次校验」
- *           → pointPath = "账户中心/登录模块/二次校验"
- *         · xmind：祖先 flag/star 链 → 测试点自身节点名作为末段
- *       deleter 内部**不会**再用 pointName 自动补齐或截断 pointPath；
- *       如需按父级前缀模糊删除，请自行在调用层做扩展，不要靠传"半截路径"。
- *    4. 匹配到 0 条：不写盘、不报错，返回 deletedCount: 0。
+ *  语义对齐（与后端「删除测试案例」结果契约保持一致）：
+ *    入参 DeleteCasesByPointInput 直接对应后端返回的单条结果项，字段为
+ *    { type, data, path, pcoTotal, pointTotal, caseTotal }。
+ *    删除触发与定位规则（详见 DeleteCasesByPointInput 注释）：
+ *    1. 仅 type ∈ {1, 3} 触发删除（2=失败 / 4=含CMBT不允许删除 不删）。
+ *    2. pcoTotal > 0  → path 为功能条目路径：删除案例文件中 path 包含该 path 的
+ *       所有案例（前缀匹配，覆盖其下全部测试点/案例）。
+ *    3. pointTotal > 1 → path 为测试点路径：删除案例文件中 path 包含该 path 的
+ *       所有案例（前缀匹配）。
+ *    4. pcoTotal = 0 且 pointTotal = 1 → path 为单个案例路径：删除案例文件中
+ *       path 等于该 path 的案例（精确匹配）。
+ *    5. 匹配到 0 条：不写盘、不报错，返回 deletedCount: 0。
+ *    6. 删除后案例文件剩余行数为 0（即全部案例被删）：直接删除该案例文件，
+ *      并清理其绑定关系（point-case-bindings.json）、推送快照、高亮与
+ *      linker 缓存，避免出现"空案例文件 / 幽灵绑定"；结果 caseFileDeleted=true。
  *
  *  设计要点：
  *    - 使用 withFileLock 对案例文件路径加锁，与 writeBackTestCaseNos 共用
@@ -59,11 +60,11 @@ import { detectFileType, createParser } from '../parsers';
 import {
     normalizePointPath,
     clearLinkerCache,
-    type PointItem,
 } from './pointCaseLinker';
 import { getCaseOfPoint } from './pointCaseBindingStore';
-import { savePushSnapshot } from './pushSnapshotStore';
+import { buildSnapshotsForFile, savePushSnapshotPrepared } from './pushSnapshotStore';
 import { clearHighlight } from './highlightStore';
+import { cleanupCaseFileTraces } from './caseFileCleanup';
 import { withFileLock } from './asyncLock';
 import { createLogger } from './logger';
 import { TS_ID_COLUMN } from '../services/utils';
@@ -95,20 +96,43 @@ function deleterErrProps(err: any, extras?: Record<string, string>): Record<stri
 // 类型
 // ============================================================================
 
-/** 删除入参：pointId 与 pointPath 至少一个非空；pointName 仅用于日志/分组 */
+/**
+ * 删除入参（对齐后端「删除测试案例」结果契约）。
+ *
+ * 后端对一次「通过测试要点删除测试案例」调用返回若干结果项，每项携带：
+ *   - type     删除结果类型（1-成功 / 2-失败 data 返回失败原因 /
+ *              3-删除失败 data 返回路径不存在 / 4-包含 CMBT 案例不允许删除）
+ *   - data     保存/删除结果（type=2/3 时承载失败原因 / 路径不存在说明）
+ *   - path     路径（功能条目路径 / 测试点路径 / 单个案例路径，取决于下方规则）
+ *   - pcoTotal 功能条目数
+ *   - pointTotal 测试要点数
+ *   - caseTotal  案例数
+ *
+ * 前端复用后端判定好的语义，直接按下列规则定位要删除的本地案例：
+ *   1. 仅当 type ∈ {1, 3} 时才真正触发删除（2/4 不删）。
+ *   2. pcoTotal > 0  → path 是「功能条目路径」，删除案例文件中 path 包含该 path 的
+ *      所有案例（前缀匹配，覆盖其下所有测试点/案例）。
+ *   3. pointTotal > 1 → path 是「测试点路径」，删除案例文件中 path 包含该 path 的
+ *      所有案例（前缀匹配，覆盖该测试点下所有案例）。
+ *   4. pcoTotal === 0 且 pointTotal === 1 → path 是「单个案例路径」，删除案例文件中
+ *      path 等于该 path 的案例（精确匹配）。
+ *
+ * 注：path 归一化（反斜杠→斜杠、首/尾斜杠 trim）在匹配时统一处理；
+ *     data 字段仅用于日志/回显与埋点，不参与匹配。
+ */
 export interface DeleteCasesByPointInput {
-    /** 测试要点 ID（可空，但不能与 pointPath 同时为空） */
-    pointId?: string;
-    /**
-     * 测试要点 path（可空，但不能与 pointId 同时为空）。
-     *
-     * **必须是完整路径**：由「功能条目前缀 + '/' + pointName」组成，
-     * 末段包含 pointName（与「查看关联案例」链路对 pointPath 的约定完全一致）。
-     * deleter 内部不会用 pointName 自动补齐或截断此值。
-     */
-    pointPath?: string;
-    /** 测试要点名称（可空）——仅用于日志/分组，不参与匹配 */
-    pointName?: string;
+    /** 删除结果类型：1-成功 / 2-失败 / 3-路径不存在 / 4-含CMBT不允许删除 */
+    type?: number;
+    /** 保存/删除结果描述（type=2/3 时承载失败原因；不参与匹配） */
+    data?: string;
+    /** 路径：功能条目路径 / 测试点路径 / 单个案例路径（视 pcoTotal/pointTotal 而定） */
+    path?: string;
+    /** 功能条目数 */
+    pcoTotal?: number;
+    /** 测试要点数 */
+    pointTotal?: number;
+    /** 案例数 */
+    caseTotal?: number;
 }
 
 /**
@@ -165,6 +189,8 @@ export interface DeleteCasesByPointResult {
     totalRecords: number;
     /** 删除后剩余行数 */
     remainingRecords: number;
+    /** 案例文件是否因本次删除被整体清空并删除（remainingRecords===0 时为真） */
+    caseFileDeleted: boolean;
     /** 端到端耗时(ms)——不上报埋点，仅返回给调用方 */
     costMs: number;
 }
@@ -185,6 +211,8 @@ export interface DeleteCasesByPointsResult {
     totalRecords: number;
     /** 删除后剩余行数 */
     remainingRecords: number;
+    /** 案例文件是否因本次删除被整体清空并删除 */
+    caseFileDeleted: boolean;
     /** 端到端耗时(ms)——仅返回给调用方 */
     costMs: number;
 }
@@ -200,7 +228,7 @@ const PATH_FIELD = 'path';
 // ============================================================================
 
 /**
- * 【公共方法·单点】根据单个测试要点信息删除其关联的所有测试案例。
+ * 【公共方法·单点】根据单个后端删除结果项删除其关联的测试案例。
  *
  * 等价于 deleteCasesByPoints(pointFilePath, { points: [point] })，保留老的
  * 调用方签名不变（向后兼容）。
@@ -208,13 +236,15 @@ const PATH_FIELD = 'path';
  * @param pointFilePath  测试要点文件绝对路径（通用参数，支持 md / xmind
  *                       及其他任何受 pointCaseBindingStore 支持的类型），
  *                       用于查绑定得到案例文件
- * @param point          { pointId?, pointPath?, pointName? }；pointId 与
- *                       pointPath 至少一个非空，仅传 pointName 会抛错
+ * @param point          DeleteCasesByPointInput（对齐后端结果项）：
+ *                       { type, data?, path, pcoTotal?, pointTotal?, caseTotal? }；
+ *                       仅 type ∈ {1, 3} 触发删除；按 pcoTotal / pointTotal / path
+ *                       决定「前缀匹配」或「精确匹配」删除（详见类型注释）
  * @param taskInfo       可选，测试任务上下文（testTaskNo / subTestTaskId /
  *                       artifactId），仅用于埋点，不参与匹配逻辑
  *
  * @throws
- *   - 入参非法（pointId 与 pointPath 均为空）
+ *   - 入参非法（type 不是 1/3/4，或触发删除的 type 却缺少 path）
  *   - pointFilePath 未绑定任何案例文件
  *   - 案例文件不存在 / 类型不支持
  *   - 文件解析或保存失败
@@ -229,19 +259,20 @@ export async function deleteCasesByPoint(
 }
 
 /**
- * 【公共方法·多点】根据多个测试要点信息，一次性删除其关联的所有测试案例。
+ * 【公共方法·多点】根据多个后端删除结果项，一次性删除其关联的测试案例。
  *
- * 多个要点之间是「并集」语义：命中其中任意要点的案例都会被删除；同一个案例
- * 即使同时命中多个要点，也只会被剔除一次（不会重复删除）。
+ * 多个结果项之间是「并集」语义：命中其中任意一个结果项的案例都会被删除；
+ * 同一个案例即使同时命中多个结果项，也只会被剔除一次（不会重复删除）。
+ * 入参每项均为 DeleteCasesByPointInput（对齐后端结果项），规则同上。
  *
  * @param pointFilePath  测试要点文件绝对路径（同 deleteCasesByPoint）
  * @param input          { points: DeleteCasesByPointInput[] }；points 至少 1 项，
- *                       每项自身仍需满足「pointId 与 pointPath 至少一个非空」
+ *                       每项 type 须为 1/3/4 之一（2/4 不触发删除，1/3 须带 path）
  * @param taskInfo       可选，测试任务上下文，仅用于埋点
  *
  * @throws
  *   - points 为空数组 / 非数组 → 抛错
- *   - 任一要点 pointId 与 pointPath 同时为空 → 抛错
+ *   - 任一要点 type 非法（非 1/3/4），或触发删除的 type 却缺少 path → 抛错
  *   - pointFilePath 未绑定任何案例文件
  *   - 案例文件不存在 / 类型不支持
  *   - 文件解析或保存失败
@@ -270,7 +301,7 @@ export async function deleteCasesByPoints(
         throw err;
     }
 
-    // 规范化并校验每个要点
+    // 规范化并校验每个结果项（对齐后端契约）
     const points: Required<DeleteCasesByPointInput>[] = [];
     for (const raw of input.points) {
         if (!raw || typeof raw !== 'object') {
@@ -278,17 +309,26 @@ export async function deleteCasesByPoints(
             emitErrorTelemetry(err, tInfo, { points: input.points }, '');
             throw err;
         }
-        const pid = (raw.pointId ?? '').toString().trim();
-        const ppath = (raw.pointPath ?? '').toString().trim();
-        if (!pid && !ppath) {
-            const err = new Error('deleteCasesByPoints: 单个 point 的 pointId 与 pointPath 至少一个非空');
+        const type = Number(raw.type);
+        if (![1, 2, 3, 4].includes(type)) {
+            const err = new Error(`deleteCasesByPoints: 单个 point 的 type 必须为 1/2/3/4（收到 ${type}）`);
+            emitErrorTelemetry(err, tInfo, { points: input.points }, '');
+            throw err;
+        }
+        // 仅 type∈{1,3} 触发删除，且必须带非空 path
+        const ppath = (raw.path ?? '').toString().trim();
+        if ((type === 1 || type === 3) && !ppath) {
+            const err = new Error(`deleteCasesByPoints: type=${type} 必须携带非空 path 才能定位待删案例`);
             emitErrorTelemetry(err, tInfo, { points: input.points }, '');
             throw err;
         }
         points.push({
-            pointId: pid,
-            pointPath: ppath,
-            pointName: (raw.pointName ?? '').toString(),
+            type,
+            data: (raw.data ?? '').toString(),
+            path: ppath,
+            pcoTotal: Number(raw.pcoTotal) || 0,
+            pointTotal: Number(raw.pointTotal) || 0,
+            caseTotal: Number(raw.caseTotal) || 0,
         });
     }
 
@@ -310,7 +350,11 @@ export async function deleteCasesByPoints(
         try {
             const result = await deleteCasesFromCaseFileMulti(casePath, points);
             // 回填真实耗时到逐要点明细（内部为 0，仅用于埋点展示）
-            for (const pp of result.perPoint) pp.costMs = result.costMs;
+            for (const pp of result.perPoint) {
+                pp.costMs = result.costMs;
+                // caseFileDeleted 是文件级语义，回填到逐要点明细便于单点 API 直接读取
+                pp.caseFileDeleted = result.caseFileDeleted;
+            }
             // ① 逐要点各上报一条 done（明细口径：deletedCount 为单要点命中数）
             for (let i = 0; i < points.length; i++) {
                 emitDoneTelemetry(result.perPoint[i], tInfo, points[i]);
@@ -338,7 +382,11 @@ async function deleteCasesFromCaseFile(
     point: Required<DeleteCasesByPointInput>,
 ): Promise<DeleteCasesByPointResult> {
     const agg = await deleteCasesFromCaseFileMulti(casePath, [point]);
-    return agg.perPoint[0];
+    // caseFileDeleted 是文件级语义，回填进单要点明细便于内部单点入口直接读取
+    const r = agg.perPoint[0];
+    r.caseFileDeleted = agg.caseFileDeleted;
+    r.costMs = agg.costMs;
+    return r;
 }
 
 /**
@@ -371,15 +419,30 @@ async function deleteCasesFromCaseFileMulti(
     const totalRecords = rows.length;
 
     // ---- 3.2) 在 tableData 上就地匹配（不依赖 linker 缓存，避免拿旧快照） ----
-    //   语义与 pointCaseLinker.matchCore 完全对齐：
-    //     type=1 parent_id 命中 且 path 归一化相等
-    //     type=2 仅 path 归一化相等（parent_id 未命中）
-    //     type=3 仅 parent_id 命中
+    //   新契约（对齐后端删除结果项）：
+    //     · 仅 type ∈ {1, 3} 触发删除；type=2/4 不删（type3 记录到 typeCount.type3）
+    //     · pcoTotal > 0      → path 是功能条目路径，删除「path 包含 path」的所有案例（前缀）
+    //     · pointTotal > 1    → path 是测试点路径，删除「path 包含 path」的所有案例（前缀）
+    //     · pcoTotal=0 且 pointTotal=1 → path 是单个案例路径，删除「path 等于 path」的案例（精确）
+    //   typeCount 分档（保持埋点字段名兼容）：
+    //     type1 = 精确匹配删除（单案例），type2 = 前缀匹配删除（功能条目/测试点），
+    //     type3 = 未触发删除（type=2/4）
     const tsIdIdx = headers.indexOf(TS_ID_COLUMN);
     const caseIdIdx = tsIdIdx >= 0 ? tsIdIdx : headers.indexOf(CASE_ID_FIELD);
     const nameIdx = headers.indexOf(CASE_NAME_FIELD);
     const parentIdIdx = headers.indexOf(PARENT_ID_FIELD);
     const pathIdx = headers.indexOf(PATH_FIELD);
+
+    // 预先解析每个要点：是否触发删除 + 匹配模式（exact / prefix）+ 归一化目标路径
+    const plan = points.map(pt => {
+        const trigger = (pt.type === 1 || pt.type === 3);
+        const prefix = trigger && ((pt.pcoTotal > 0) || (pt.pointTotal > 1));
+        return {
+            trigger,
+            mode: prefix ? ('prefix' as const) : ('exact' as const),
+            target: normalizePointPath(pt.path),
+        };
+    });
 
     /** 要删除的主行下标集合（有序、去重） */
     const deletedRowIdxSet = new Set<number>();
@@ -391,31 +454,40 @@ async function deleteCasesFromCaseFileMulti(
     /** 逐要点匹配的 type 分档 */
     const perPointTypeCount = points.map(() => ({ type1: 0, type2: 0, type3: 0 }));
 
+    // type=2/4 不触发删除：每个此类结果项计 1 次到 type3（不按行重复计数）
+    for (let p = 0; p < points.length; p++) {
+        if (!plan[p].trigger) {
+            typeCount.type3++;
+            perPointTypeCount[p].type3++;
+        }
+    }
+
     for (let i = 0; i < rows.length; i++) {
         // 优先从 sourceData 取原始字段（能命中嵌套结构里的 parent_id/path），
         // 若无 sourceData（csv 场景）再从 rows 按列下标取
         const rec = getRecordFromRow(sourceData, rows[i], i, headers, {
             parentIdIdx, pathIdx, caseIdIdx, nameIdx,
         });
+        const recPath = normalizePointPath(rec?.[PATH_FIELD]);
 
         // 逐要点判断，命中任意一个即标记删除；同一行只计入首次命中的要点明细
         for (let p = 0; p < points.length; p++) {
-            const pt = points[p];
-            const matchType = matchType_(
-                rec, pt.pointId, normalizePointPath(pt.pointPath),
-            );
-            if (matchType == null) continue;
+            const pl = plan[p];
+            if (!pl.trigger) continue;
+            const hit = pl.mode === 'prefix'
+                ? (pl.target !== '' && recPath.startsWith(pl.target))
+                : (recPath === pl.target);
+            if (!hit) continue;
 
             deletedRowIdxSet.add(i);
             perPointRowIdx[p].add(i);
-            if (matchType === 1) { typeCount.type1++; perPointTypeCount[p].type1++; }
-            else if (matchType === 2) { typeCount.type2++; perPointTypeCount[p].type2++; }
-            else { typeCount.type3++; perPointTypeCount[p].type3++; }
+            if (pl.mode === 'exact') { typeCount.type1++; perPointTypeCount[p].type1++; }
+            else { typeCount.type2++; perPointTypeCount[p].type2++; }
         }
     }
 
     // 构造逐要点结果（仅首次命中要点带走该案例，避免重复计入 deletedCases）
-    const perPoint: DeleteCasesByPointResult[] = points.map((pt, p) => {
+    const perPoint: DeleteCasesByPointResult[] = points.map((_pt, p) => {
         const cases: DeletedCaseItem[] = [];
         for (const idx of perPointRowIdx[p]) {
             const rec = getRecordFromRow(sourceData, rows[idx], idx, headers, {
@@ -435,6 +507,7 @@ async function deleteCasesFromCaseFileMulti(
             typeCount: perPointTypeCount[p],
             totalRecords,
             remainingRecords: totalRecords - cases.length,
+            caseFileDeleted: false,
             costMs: 0,
         };
     });
@@ -462,6 +535,7 @@ async function deleteCasesFromCaseFileMulti(
             typeCount,
             totalRecords,
             remainingRecords: totalRecords,
+            caseFileDeleted: false,
             costMs: Date.now() - t0,
         };
     }
@@ -469,18 +543,72 @@ async function deleteCasesFromCaseFileMulti(
     // ---- 3.4) 按主行索引同步剔除 rows / sourceData / detailTables ----
     applyRemoveByIndices(tableData, sourceData, deletedRowIdxSet);
 
-    // ---- 3.5) 落盘 ----
+    const remainingRecords = totalRecords - deletedCases.length;
+
+    // ---- 3.5) 若删除后案例文件已空（remainingRecords===0），则整体删除该文件 ----
+    //   并清理其绑定关系 + 所有相关追踪存储，避免出现"幽灵案例文件/绑定"。
+    if (remainingRecords === 0) {
+        let fileDeleted = false;
+        try {
+            await fs.promises.unlink(casePath);
+            fileDeleted = true;
+        } catch (err: any) {
+            // 文件已不存在 / 无权限等：记录但不阻断（继续清理绑定与缓存）
+            logger.warn('删除空的案例文件失败（不影响绑定清理）', err?.message);
+        }
+
+        // 统一清理该文件的全部追踪态存储 + 绑定关系（与文件系统删除路径共用同一逻辑）
+        try {
+            await cleanupCaseFileTraces(casePath);
+        } catch (err: any) {
+            logger.warn('cleanupCaseFileTraces 失败（不影响主流程）', err?.message);
+        }
+
+        // 失效 linker 缓存（下次匹配拿磁盘最新记录）
+        try { clearLinkerCache(); } catch { /* ignore */ }
+
+        logger.info('deleteCasesByPoints: 案例文件已清空并删除', {
+            casePath: path.basename(casePath),
+            pointCount: points.length,
+            deletedCount: deletedCases.length,
+            fileDeleted,
+        });
+
+        return {
+            filePath: casePath,
+            perPoint,
+            deletedCases,
+            deletedCount: deletedCases.length,
+            typeCount,
+            totalRecords,
+            remainingRecords: 0,
+            caseFileDeleted: fileDeleted,
+            costMs: Date.now() - t0,
+        };
+    }
+
+    // ---- 3.5) 落盘（案例文件 + 推送快照一次性写入，避免重复读盘） ----
+    //   删除后 tableData 即为新基线，直接用它一次性构建快照并落盘，
+    //   跳过 savePushSnapshot 内部的 loadStore 全量读盘（删除场景已持有内存态）。
+    let snapshotMap: Record<string, string> = {};
+    try {
+        snapshotMap = buildSnapshotsForFile(casePath, tableData, {}, undefined);
+    } catch (err: any) {
+        logger.warn('buildSnapshotsForFile 失败（不影响删除主流程）', err?.message);
+    }
+
+    // 案例文件落盘
     await parser.save(casePath, tableData, sourceData);
 
-    // ---- 3.6) 同步追踪存储 ----
-    //   ① push-snapshot 全量刷新（等价于用户认可当前磁盘为新基线）
+    // 推送快照落盘（已含内存态，仅一次 writeFile，不再回读整个快照文件）
     try {
-        await savePushSnapshot(casePath, tableData);
+        await savePushSnapshotPrepared(casePath, snapshotMap);
     } catch (err: any) {
         logger.warn('savePushSnapshot 失败（不影响删除主流程）', err?.message);
     }
 
-    //   ② 清高亮：删除行的高亮索引已失效，简单起见清整个文件的高亮
+    // ---- 3.6) 同步追踪存储 ----
+    //   ① 清高亮：删除行的高亮索引已失效，简单起见清整个文件的高亮
     //      （与 clearHighlight 语义一致：高亮是"最近一次编辑/推送"的临时态）
     try {
         await clearHighlight(casePath);
@@ -488,7 +616,7 @@ async function deleteCasesFromCaseFileMulti(
         logger.warn('clearHighlight 失败（不影响删除主流程）', err?.message);
     }
 
-    //   ③ 失效 linker 缓存（下次匹配拿磁盘最新记录）
+    //   ② 失效 linker 缓存（下次匹配拿磁盘最新记录）
     try {
         clearLinkerCache();
     } catch { /* ignore */ }
@@ -507,64 +635,32 @@ async function deleteCasesFromCaseFileMulti(
         deletedCount: deletedCases.length,
         typeCount,
         totalRecords,
-        remainingRecords: totalRecords - deletedCases.length,
+        remainingRecords,
+        caseFileDeleted: false,
         costMs: Date.now() - t0,
     };
 }
 
 // ============================================================================
-// 匹配语义（与 pointCaseLinker.matchCore 对齐的简化版：单点 + 单文件）
+// 匹配语义（对齐后端删除结果项契约）
 // ============================================================================
 
 /**
- * 判断单条 record 是否命中给定点，返回匹配 type；未命中返回 null。
+ * 单条案例是否命中给定「删除结果项」的 path 规则。
  *
- * 单点单文件场景无需 pointCaseLinker 的多点索引；直接按 rec 里的
- * parent_id / path 与 targetPid / targetPath 逐一比较：
- *   - 若 targetPid 提供：先尝试原值命中，再尝试尾号 -N 剥离 fallback
- *   - 命中 pid 后若 targetPath 提供且与 recPath 归一化相等 → type=1
- *     否则 → type=3
- *   - 若 targetPid 未命中但 targetPath 与 recPath 归一化相等 → type=2
+ * @param recPath    案例记录的 path（已归一化，见 matchType_ 调用方）
+ * @param targetPath 入参 path（已归一化）
+ * @param mode       'exact' 精确匹配（pcoTotal=0 且 pointTotal=1）
+ *                    'prefix' 前缀匹配（pcoTotal>0 或 pointTotal>1）
+ * @returns true 表示应删除该案例
+ *
+ * 归一化：反斜杠→斜杠、首尾斜杠 trim、连续斜杠折叠，由调用方先 normalizePointPath。
  */
-function matchType_(
-    rec: any,
-    targetPid: string,
-    nTargetPath: string,
-): 1 | 2 | 3 | null {
-    if (!rec || typeof rec !== 'object') return null;
-
-    const nRecPath = normalizePointPath(rec[PATH_FIELD]);
-    const recPids = normalizeParentIds_(rec[PARENT_ID_FIELD]);
-
-    // 1) parent_id 命中路径
-    let pidHit = false;
-    if (targetPid) {
-        for (const raw of recPids) {
-            if (raw === targetPid) { pidHit = true; break; }
-            // fallback：剥离末尾 -N
-            const stripped = raw.replace(/-\d+$/, '');
-            if (stripped && stripped === targetPid) { pidHit = true; break; }
-        }
-    }
-
-    if (pidHit) {
-        if (nTargetPath && nRecPath && nTargetPath === nRecPath) return 1;
-        return 3;
-    }
-
-    // 2) 仅 path 兜底命中
-    if (nTargetPath && nRecPath && nTargetPath === nRecPath) return 2;
-
-    return null;
-}
-
-/** normalizeParentIds 的本地简版（与 pointCaseLinker.normalizeParentIds 语义等价） */
-function normalizeParentIds_(v: any): string[] {
-    if (v == null) return [];
-    if (Array.isArray(v)) {
-        return v.map(x => (x == null ? '' : String(x).trim())).filter(Boolean);
-    }
-    return String(v).split(/[,;，；]/).map(s => s.trim()).filter(Boolean);
+function pathHit_(recPath: string, targetPath: string, mode: 'exact' | 'prefix'): boolean {
+    if (!targetPath) return false;
+    if (mode === 'exact') return recPath === targetPath;
+    // prefix：案例 path 以目标 path 开头（后面紧跟 '/' 或等于自身，避免 "a" 误命中 "abc"）
+    return recPath === targetPath || recPath.startsWith(targetPath + '/');
 }
 
 // ============================================================================
@@ -672,7 +768,7 @@ function applyRemoveByIndices(
 function emitDoneTelemetry(
     result: DeleteCasesByPointResult,
     tInfo: Required<DeleteCasesTaskInfo>,
-    p: { pointId: string; pointPath: string; pointName: string },
+    p: Required<DeleteCasesByPointInput>,
 ): void {
     try {
         TelemetryService.sendTelemetryEvent(EVT_DONE, {
@@ -680,15 +776,19 @@ function emitDoneTelemetry(
             testTaskNo: tInfo.testTaskNo,
             subTestTaskId: tInfo.subTestTaskId,
             artifactId: tInfo.artifactId || path.basename(result.filePath),
-            // 要点维度
-            pointId: p.pointId,
-            pointName: p.pointName,
-            pointPath: p.pointPath,          // 原文（未归一化）
+            // 结果项维度（对齐后端删除契约）
+            type: String(p.type),
+            data: p.data,
+            pointPath: p.path,               // 原文（未归一化）
+            pcoTotal: String(p.pcoTotal),
+            pointTotal: String(p.pointTotal),
+            caseTotal: String(p.caseTotal),
             // 案例维度
             fileExt: path.extname(result.filePath).toLowerCase(),
             deletedCount: String(result.deletedCount),
             totalRecords: String(result.totalRecords),
             remainingRecords: String(result.remainingRecords),
+            caseFileDeleted: String(result.caseFileDeleted ? 1 : 0),
             type1: String(result.typeCount.type1),
             type2: String(result.typeCount.type2),
             type3: String(result.typeCount.type3),
@@ -726,14 +826,17 @@ function emitAggregateDoneTelemetry(
             artifactId: tInfo.artifactId || path.basename(result.filePath),
             // 多要点维度（拼接）
             pointCount: String(points.length),
-            pointId: joinField(p => p.pointId),
-            pointName: joinField(p => p.pointName),
-            pointPath: joinField(p => p.pointPath),
+            type: joinField(p => String(p.type)),
+            pointPath: joinField(p => p.path),
+            pcoTotal: joinField(p => String(p.pcoTotal)),
+            pointTotal: joinField(p => String(p.pointTotal)),
+            caseTotal: joinField(p => String(p.caseTotal)),
             // 案例维度（全局去重口径）
             fileExt: path.extname(result.filePath).toLowerCase(),
             deletedCount: String(result.deletedCount),
             totalRecords: String(result.totalRecords),
             remainingRecords: String(result.remainingRecords),
+            caseFileDeleted: String(result.caseFileDeleted ? 1 : 0),
             type1: String(result.typeCount.type1),
             type2: String(result.typeCount.type2),
             type3: String(result.typeCount.type3),
@@ -793,7 +896,7 @@ function emitErrorTelemetry(
 export const __test_only__ = {
     deleteCasesFromCaseFile,
     deleteCasesFromCaseFileMulti,
-    matchType_,
+    pathHit_,
     applyRemoveByIndices,
     emitDoneTelemetry,
     emitErrorTelemetry,

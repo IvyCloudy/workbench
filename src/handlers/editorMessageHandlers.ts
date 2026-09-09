@@ -80,10 +80,22 @@ function buildHandlers(): Record<string, Handler> {
         clearAllMarks: handleClearAllMarks,
         deleteRows: handleDeleteRows,
         confirmDeleteRows: handleConfirmDeleteRows,
+        telemetry: handleTelemetry,
     };
 }
 
 const HANDLERS = buildHandlers();
+
+/**
+ * webview 埋点转发：前端通过 postMessage({ type:'telemetry', eventName, properties }) 上报，
+ * 这里转交 TelemetryService 走统一上报通道（与扩展端其它埋点一致）。
+ */
+async function handleTelemetry(msg: any, _ctx: EditorMsgCtx): Promise<void> {
+    const eventName = msg?.eventName;
+    if (!eventName || typeof eventName !== 'string') return;
+    const properties = (msg?.properties && typeof msg.properties === 'object') ? msg.properties : {};
+    TelemetryService.sendTelemetryEvent(eventName, properties);
+}
 
 /**
  * webview 消息统一入口。

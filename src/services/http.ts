@@ -10,7 +10,7 @@
  *    4. 统一翻译网络错误码（ECONNREFUSED 等）为可读中文提示
  *  设计要点：
  *    - 推送链路为关键链路：pushTestCase 会打印完整请求/响应日志（敏感头脱敏）
- *    - 请求超时可通过 AppConfig.requestTimeoutMs（app-config.json）配置；未配置时：推送默认 120s（PUSH_DEFAULT_TIMEOUT），其余接口默认 10s（DEFAULT_TIMEOUT）
+ *    - 请求超时可通过 AppConfig.requestTimeoutMs（app-config.json）配置；未配置时：推送默认 5 分钟（PUSH_DEFAULT_TIMEOUT），其余接口默认 10s（DEFAULT_TIMEOUT）
  *    - localhost 一律改写为 127.0.0.1，规避部分系统 IPv6 解析问题
  * ============================================================================
  */
@@ -38,13 +38,13 @@ export interface HttpResponse<T = any> {
 // ============================================
 
 const DEFAULT_TIMEOUT = 10000;
-/** 推送接口默认超时（批量推送耗时较长，默认放宽到 120s） */
-const PUSH_DEFAULT_TIMEOUT = 120000;
+/** 推送接口默认超时（批量推送耗时较长，默认放宽到 5 分钟） */
+const PUSH_DEFAULT_TIMEOUT = 300000;
 
 /**
  * 解析接口超时时间：优先级为
  *   1. app-config.json 的 requestTimeoutMs（如登录后下发）
- *   2. 调用方传入的 fallback（推送默认 120s，其余默认 10s）
+ *   2. 调用方传入的 fallback（推送默认 5 分钟，其余默认 10s）
  * 任一来源为非正数 / 非数字时自动跳过，最终保证返回有效正数。
  */
 function resolveTimeout(cfg: AppConfig | undefined, fallback: number): number {
@@ -476,10 +476,14 @@ export async function pushTestCase(
     console.log('[推送][请求] body  :', JSON.stringify(body, null, 2));
     console.log(`[推送][请求] 数据行数=${data.length}, body 字节=${Buffer.byteLength(bodyStr, 'utf8')}`);
 
-    const _apiStart = Date.now();
-    const appConfig = await readConfig(context);
-    try {
-        const response = await makeRequest<ApiResponse>('POST', url, headers, bodyStr, resolveTimeout(appConfig, PUSH_DEFAULT_TIMEOUT));
+        const _apiStart = Date.now();
+        const appConfig = await readConfig(context);
+        // 推送超时下限为 5 分钟（PUSH_DEFAULT_TIMEOUT）：
+        // 不被 app-config 的通用 requestTimeoutMs（默认 10s）覆盖；
+        // 仅当用户显式配置更大的超时（>5 分钟）时才采用配置值。
+        const pushTimeout = Math.max(PUSH_DEFAULT_TIMEOUT, appConfig?.requestTimeoutMs || 0);
+        try {
+            const response = await makeRequest<ApiResponse>('POST', url, headers, bodyStr, pushTimeout);
         console.log('[推送][响应] status=', response.status,
             'returnCode=', (response.data as any)?.returnCode,
             'errorMsg=', (response.data as any)?.errorMsg || '');

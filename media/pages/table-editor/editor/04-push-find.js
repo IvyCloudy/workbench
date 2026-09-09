@@ -23,7 +23,7 @@
 function pushChanges() {
     // 防重复点击：后端还未返回 pushDone/pushResult/pushError 之前，不允许再次 post
     if (S._pushing) {
-        if (typeof showToast === 'function') showToast('推送中，请稍候…', 'info');
+        if (typeof showToast === 'function') showToast('推送中，请耐心等待…', 'info');
         return;
     }
     var picked = (typeof getPushTargetRows === 'function')
@@ -67,16 +67,29 @@ function pushChanges() {
     // 置忙：锁定推送按钮与 UI，正常路径会在 pushDone/pushResult/pushError 清除。
     S._pushing = true;
     if (typeof updatePushBtn === 'function') updatePushBtn();
-    // 兑底：若后端 60s 内未回复任何消息，自动解锁，避免按钮永久置灰
+    // 兑底：若后端 5 分钟内未回复任何消息，自动解锁，避免按钮永久置灰
     if (S._pushTimeoutTimer) { try { clearTimeout(S._pushTimeoutTimer); } catch (_) {} }
     S._pushTimeoutTimer = setTimeout(function () {
         S._pushTimeoutTimer = null;
         if (S._pushing) {
             S._pushing = false;
             if (typeof updatePushBtn === 'function') updatePushBtn();
-            if (typeof showToast === 'function') showToast('推送超时未响应，已解除按钮锁定', 'error');
+            if (typeof showToast === 'function') showToast('推送超过 5 分钟未响应，已解除按钮锁定', 'error');
+            // 埋点：前端兜底超时（后端 5 分钟内无任何回包）触发，便于排查后端卡死 / 超时
+            if (S.vscode) S.vscode.postMessage({
+                type: 'telemetry',
+                eventName: 'editor.push.frontendTimeout',
+                properties: {
+                    source: 'toolbar',
+                    fileName: (S.filePath || '').split(/[/\\]/).pop() || '',
+                    fileFormat: S.dataType || '',
+                    totalRows: String((S._lastPushBatchRowIndices || []).length),
+                    timeoutMs: '300000'
+                }
+            });
         }
-    }, 60000);
+    }, 300000);
+    if (typeof showToast === 'function') showToast('推送中，请耐心等待…', 'info');
     S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap, pushIndexToRow: pushIndexToRow });
 }
 

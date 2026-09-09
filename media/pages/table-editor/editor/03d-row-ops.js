@@ -725,7 +725,7 @@ function copySelectedRows() {
 function pushFromContextMenu() {
     // 防重复点击（与 pushChanges 行为一致）
     if (S._pushing) {
-        if (typeof showToast === 'function') showToast('推送中，请稍候…', 'info');
+        if (typeof showToast === 'function') showToast('推送中，请耐心等待…', 'info');
         return;
     }
     var headers = S.data.headers || [];
@@ -778,9 +778,22 @@ function pushFromContextMenu() {
         if (S._pushing) {
             S._pushing = false;
             if (typeof updatePushBtn === 'function') updatePushBtn();
-            if (typeof showToast === 'function') showToast('推送超时未响应，已解除按钮锁定', 'error');
+            if (typeof showToast === 'function') showToast('推送超过 5 分钟未响应，已解除按钮锁定', 'error');
+            // 埋点：前端兜底超时（后端 5 分钟内无任何回包）触发，便于排查后端卡死 / 超时
+            if (S.vscode) S.vscode.postMessage({
+                type: 'telemetry',
+                eventName: 'editor.push.frontendTimeout',
+                properties: {
+                    source: 'contextMenu',
+                    fileName: (S.filePath || '').split(/[/\\]/).pop() || '',
+                    fileFormat: S.dataType || '',
+                    totalRows: String((S._lastPushBatchRowIndices || []).length),
+                    timeoutMs: '300000'
+                }
+            });
         }
-    }, 60000);
+    }, 300000);
+    if (typeof showToast === 'function') showToast('推送中，请耐心等待…', 'info');
     S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap, pushIndexToRow: pushIndexToRow });
 }
 

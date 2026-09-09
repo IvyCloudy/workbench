@@ -352,7 +352,7 @@ function updatePushBtn() {
     btn.disabled = !hasTarget || pushing;
     if (pushing) {
         btn.classList.add('is-loading');
-        btn.setAttribute('title', '推送中…');
+        btn.setAttribute('title', '推送中，请耐心等待…');
     } else {
         btn.classList.remove('is-loading');
         btn.removeAttribute('title');

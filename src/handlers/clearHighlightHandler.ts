@@ -10,11 +10,7 @@ import * as path from 'path';
 import { TelemetryService } from '../utils/telemetry';
 import { getActiveFileUri } from '../utils/extensionHelpers';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
-import { clearHighlight } from '../utils/highlightStore';
-import { removeFailureFile } from '../utils/pushFailureStore';
-import { removeSnapshotFile } from '../utils/pushSnapshotStore';
-import { removeDeletedRowsFile } from '../utils/deletedRowsStore';
-import { removeMarkFile } from '../utils/markStore';
+import { cleanupCaseFileTraces } from '../utils/caseFileCleanup';
 
 /**
  * 清理指定文件的所有高亮及缓存
@@ -33,13 +29,9 @@ export async function handleClearHighlight(uri?: vscode.Uri): Promise<void> {
     const baseName = path.basename(fp);
 
     try {
-        await Promise.all([
-            clearHighlight(fp),
-            removeFailureFile(fp),
-            removeSnapshotFile(fp),
-            removeDeletedRowsFile(fp),
-            removeMarkFile(fp),
-        ]);
+        // 统一清理全部追踪态存储（含高亮、失败标记、快照、删除行、标记、绑定）；
+        // 与「通过要点删除清空案例文件」「文件系统删除案例文件」共用同一清理清单。
+        await cleanupCaseFileTraces(fp);
 
         // 通知前端刷新，清除内存中的高亮状态
         const panel = BaseEditorProvider.getPanel(fp);

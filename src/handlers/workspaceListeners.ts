@@ -27,10 +27,7 @@ import * as path from 'path';
 import { isCreatedByCommand, markAsCreatedByCommand, unmarkAsCreatedByCommand } from '../utils/fileIdentifier';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { removeHighlightFile } from '../utils/highlightStore';
-import { removeFailureFile } from '../utils/pushFailureStore';
-import { removeSnapshotFile } from '../utils/pushSnapshotStore';
-import { removeDeletedRowsFile } from '../utils/deletedRowsStore';
-import { removeMarkFile } from '../utils/markStore';
+import { cleanupCaseFileTraces } from '../utils/caseFileCleanup';
 import {
     renamePathInBindings,
     removePathInBindings,
@@ -688,26 +685,8 @@ async function handleDidDeleteCaseFile(fp: string, willResult: WillDeleteResult)
             // 文件被真正删除：清理临时态缓存 + 同步 point↔case 绑定库（删除引用）。
             // 注意：案例文件走本分支时会被 onDidDeleteFiles 提前 continue，
             // 因此绑定库清理必须在这里补上，否则会残留失效的 point↔case 引用。
-            const cleanupTask = Promise.allSettled([
-                removeHighlightFile(fp),
-                removeFailureFile(fp),
-                removeSnapshotFile(fp),
-                removeDeletedRowsFile(fp),
-                removeMarkFile(fp),
-                removePathInBindings(fp)
-                    .then(changed => {
-                        if (changed) {
-                            TelemetryService.sendTelemetryEvent('pointCaseBindings.delete.synced', {
-                                ext: (path.extname(fp) || '').toLowerCase(),
-                            });
-                        }
-                    })
-                    .catch(err => {
-                        TelemetryService.sendTelemetryErrorEvent('pointCaseBindings.delete.error', {
-                            errorMessage: String(err?.message || err).slice(0, 500),
-                        });
-                    }),
-            ]);
+            // 统一走 cleanupCaseFileTraces（与「通过要点删除清空案例文件」共用同一清理清单）。
+            const cleanupTask = cleanupCaseFileTraces(fp);
             if (willResult.reportable) {
                 cleanupTask.then(() => showDeleteResultModal(willResult));
             }

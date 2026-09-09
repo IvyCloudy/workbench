@@ -97,6 +97,14 @@ function isCaseFile(fp: string): boolean {
     return detectFileType(fp) !== null;
 }
 
+/** 是否测试要点（point）文件（.md/.xmind 且位于「测试任务/xxx/测试大纲/」下） */
+function isPointFile(fp: string): boolean {
+    const norm = (fp || '').replace(/\\/g, '/');
+    if (!/\/测试任务\/[^/]+\/测试大纲\//.test(norm)) return false;
+    const ext = (norm.match(/\.[^./]+$/) || [''])[0].toLowerCase();
+    return ext === '.md' || ext === '.xmind';
+}
+
 /** willDeleteResults 条目兜底清理时长：万一 did 阶段没触发，也不至于永久驻留 */
 const WILL_DELETE_ENTRY_TTL_MS = 60_000;
 
@@ -292,7 +300,11 @@ export function registerWorkspaceListeners(context: vscode.ExtensionContext): vs
                 }
 
                 // 同步 point ↔ case 绑定库（删除引用）
-                if (isBindingRelevant(fp)) {
+                // 注：测试要点文件（.md/.xmind）不在此处清理绑定 —— 其「取消删除→重建」与
+                // 「真正删除」的绑定语义由专门的还原流程负责（与案例文件一致：案例文件也通过
+                // willDeleteResults 还原流程精确控制，不会落入此通用分支）。若在此无差别清理，
+                // 会导致用户取消删除要点文件时把已绑定的测试案例关系一并清掉。
+                if (isBindingRelevant(fp) && !isPointFile(fp)) {
                     removePathInBindings(fp)
                         .then(changed => {
                             if (changed) {

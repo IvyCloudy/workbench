@@ -500,7 +500,6 @@ export async function handleCaseFileWillDelete(
                             sourceId: String(d?.sourceId ?? sid).trim(),
                             testCaseNo: String(d?.testCaseNo ?? '').trim(),
                             testCaseName: String(d?.testCaseName ?? '').trim(),
-                            testPhaseName: String(d?.testPhaseName ?? '').trim(),
                             hasExec: String(d?.hasExec ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
                             hasBug: String(d?.hasBug ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
                         }));

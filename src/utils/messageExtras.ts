@@ -132,8 +132,6 @@ export interface DeleteConfirmItem {
     sourceId: string;
     testCaseNo: string;
     testCaseName: string;
-    /** 阶段名称 */
-    testPhaseName: string;
     /** 是否存在执行关联：'Y' 存在 / 'N' 不存在 */
     hasExec: string;
     /** 是否存在缺陷关联：'Y' 存在 / 'N' 不存在 */
@@ -163,7 +161,6 @@ function buildDeleteConfirmHtml(
         return `<tr>`
             + `<td class="xs-dc-td xs-dc-no">${escapeHtml_(it.testCaseNo)}</td>`
             + `<td class="xs-dc-td xs-dc-name">${escapeHtml_(it.testCaseName)}</td>`
-            + `<td class="xs-dc-td xs-dc-phase">${escapeHtml_(it.testPhaseName)}</td>`
             + `<td class="xs-dc-td xs-dc-flag" data-flag="${exec}">${exec}</td>`
             + `<td class="xs-dc-td xs-dc-flag" data-flag="${bug}">${bug}</td>`
             + `</tr>`;
@@ -208,7 +205,7 @@ ${baseModalCss_(headerBg, color, 'width:820px;max-width:94vw;max-height:88vh;')}
             <div class="xs-dc-lead">${lead}</div>
             <div class="xs-dc-table-wrap">
                 <table class="xs-dc-table">
-                    <thead><tr><th>编号</th><th>名称</th><th>阶段</th><th>执行</th><th>缺陷</th></tr></thead>
+                    <thead><tr><th>编号</th><th>名称</th><th>执行</th><th>缺陷</th></tr></thead>
                     <tbody>${rowsHtml}</tbody>
                 </table>
             </div>

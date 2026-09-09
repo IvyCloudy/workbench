@@ -479,10 +479,6 @@ var server = http.createServer(function (req, res) {
             var confirmCount = 0;
             var missingCount2 = 0;
             var stamp = String(Date.now());
-            var phaseNames = ['需求分析阶段', '用例设计阶段', '测试执行阶段', '回归测试阶段', '验收测试阶段', '系统测试阶段'];
-            var pickPhase = function (seed) {
-                return phaseNames[Math.floor(stableHash01(seed) * phaseNames.length)];
-            };
             // 有效比例：missing 与 confirm 之和不超过 1，超出时收敛 confirm（保证 missing 优先）
             var mRatio = MISSING_RATIO;
             var cRatio = Math.min(CONFIRM_RATIO, Math.max(0, 1 - mRatio));
@@ -514,30 +510,24 @@ var server = http.createServer(function (req, res) {
                 }
                 if (type === 2) {
                     confirmCount++;
-                    // type=2：一个 sourceId 可对应多条需确认的案例，data 为数组（1~3 条）
-                    var caseCnt = 1 + Math.floor(stableHash01(sid + '#cnt') * 3); // 1 / 2 / 3
-                    var dataArr = [];
-                    for (var c = 0; c < caseCnt; c++) {
-                        // 每条 hasExec / hasBug 至少一个为 'Y'：
-                        //   按稳定伪随机分「仅执行 / 仅缺陷 / 两者都有」三种组合
-                        var combo = Math.floor(stableHash01(sid + '#combo' + c) * 3); // 0 / 1 / 2
-                        var cHasExec = (combo === 0 || combo === 2);
-                        var cHasBug = (combo === 1 || combo === 2);
-                        // 兜底：极端分布下保证至少一个为 true
-                        if (!cHasExec && !cHasBug) cHasExec = true;
-                        dataArr.push({
-                            sourceId: sid,
-                            testCaseNo: 'TC' + stamp + (1000 + i) + '-' + (c + 1),
-                            testCaseName: '模拟案例-' + sid + '-' + (c + 1),
-                            testPhaseName: pickPhase(sid + '#phase' + c),
-                            hasExec: cHasExec ? 'Y' : 'N',
-                            hasBug: cHasBug ? 'Y' : 'N'
-                        });
-                    }
+                    // type=2：需确认后删除，data 为数组且只含一条案例
+                    // 每条 hasExec / hasBug 至少一个为 'Y'：
+                    //   按稳定伪随机分「仅执行 / 仅缺陷 / 两者都有」三种组合
+                    var combo = Math.floor(stableHash01(sid + '#combo') * 3); // 0 / 1 / 2
+                    var cHasExec = (combo === 0 || combo === 2);
+                    var cHasBug = (combo === 1 || combo === 2);
+                    // 兜底：极端分布下保证至少一个为 true
+                    if (!cHasExec && !cHasBug) cHasExec = true;
                     return {
                         sourceId: sid,
                         type: 2,
-                        data: dataArr
+                        data: [{
+                            sourceId: sid,
+                            testCaseNo: 'TC' + stamp + (1000 + i),
+                            testCaseName: '模拟案例-' + sid,
+                            hasExec: cHasExec ? 'Y' : 'N',
+                            hasBug: cHasBug ? 'Y' : 'N'
+                        }]
                     };
                 }
                 // ③ type=1 → 允许直接删除（无执行/缺陷关联）
@@ -549,7 +539,6 @@ var server = http.createServer(function (req, res) {
                         sourceId: sid,
                         testCaseNo: 'TC' + stamp + (1000 + i),
                         testCaseName: '模拟案例-' + sid,
-                        testPhaseName: pickPhase(sid + '#phase'),
                         hasExec: 'N',
                         hasBug: 'N'
                     }]

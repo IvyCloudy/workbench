@@ -631,8 +631,6 @@ export interface ConfirmDeleteCaseItem {
         sourceId?: string;
         testCaseNo?: string;
         testCaseName?: string;
-        /** 阶段名称 */
-        testPhaseName?: string;
         /** 是否存在执行关联：'Y' 存在 / 'N' 不存在 */
         hasExec?: string;
         /** 是否存在缺陷关联：'Y' 存在 / 'N' 不存在 */

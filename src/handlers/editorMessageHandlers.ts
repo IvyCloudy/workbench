@@ -285,7 +285,7 @@ async function handleClearAllMarks(_msg: any, ctx: EditorMsgCtx): Promise<void> 
  * 消息契约：
  *   前端 → 扩展：{ type: 'confirmDeleteRows', data: { tsIds: string[] } }
  *   扩展 → 前端：{ type: 'confirmDeleteRowsResult', ok: boolean,
- *                  items: [{ sourceId, testCaseNo, testCaseName, testPhaseName, hasExec, hasBug }],
+ *                  items: [{ sourceId, testCaseNo, testCaseName, hasExec, hasBug }],
  *                  errorMessage?: string }
  */
 async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
@@ -361,7 +361,6 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
                     sourceId: String(d?.sourceId ?? sid).trim(),
                     testCaseNo: String(d?.testCaseNo ?? '').trim(),
                     testCaseName: String(d?.testCaseName ?? '').trim(),
-                    testPhaseName: String(d?.testPhaseName ?? '').trim(),
                     hasExec: String(d?.hasExec ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
                     hasBug: String(d?.hasBug ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
                 }));

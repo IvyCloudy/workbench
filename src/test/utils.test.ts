@@ -5,6 +5,7 @@ import {
     escapeHtml,
     buildErrorHtml,
     isInQualifiedDir,
+    isInTempFolder,
     FILE_PATTERNS
 } from '../services/utils';
 
@@ -140,6 +141,47 @@ describe('services/utils', () => {
         it('允许纯中文任务目录名的子目录', () => {
             const uri = vscode.Uri.file('/workspace/测试任务/登录模块/测试案例/子目录/data.yaml');
             expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.YAML)).toBe(true);
+        });
+
+        it('「临时文件」文件夹内的文件不识别为案例', () => {
+            const uri = vscode.Uri.file('/workspace/测试任务/TT001/测试案例/临时文件/data.json');
+            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.JSON)).toBe(false);
+        });
+
+        it('名为「临时文件夹」的文件夹不触发排除（仅精确匹配「临时文件」）', () => {
+            const uri = vscode.Uri.file('/workspace/测试任务/TT001/测试案例/临时文件夹/cases.csv');
+            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.CSV)).toBe(true);
+        });
+
+        it('目录名后缀含「临时」（非精确）不触发排除', () => {
+            const uri = vscode.Uri.file('/workspace/测试任务/TT001/测试案例/草稿_临时/edge.yaml');
+            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.YAML)).toBe(true);
+        });
+
+        it('非临时目录中的同名文件不受影响', () => {
+            const uri = vscode.Uri.file('/workspace/测试任务/TT001/测试案例/正式数据/data.json');
+            expect(isInQualifiedDir(uri.fsPath, FILE_PATTERNS.JSON)).toBe(true);
+        });
+    });
+
+    describe('isInTempFolder', () => {
+        it('目录段精确等于「临时文件」判定为临时文件夹', () => {
+            expect(isInTempFolder('/a/测试案例/临时文件/x.json')).toBe(true);
+            expect(isInTempFolder('/a/测试任务/T/测试案例/临时文件/data.json')).toBe(true);
+        });
+
+        it('「临时文件夹」「草稿_临时」等近似名称不误判', () => {
+            expect(isInTempFolder('/a/测试案例/临时文件夹/x.json')).toBe(false);
+            expect(isInTempFolder('/a/测试案例/草稿_临时/x.yaml')).toBe(false);
+        });
+
+        it('仅文件名含「临时文件」不误判', () => {
+            expect(isInTempFolder('/a/测试案例/临时文件.json')).toBe(false);
+        });
+
+        it('普通目录与空路径返回 false', () => {
+            expect(isInTempFolder('/a/测试案例/正式数据/x.json')).toBe(false);
+            expect(isInTempFolder('')).toBe(false);
         });
     });
 

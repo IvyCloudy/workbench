@@ -23,6 +23,8 @@
  */
 
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { isCreatedByCommand, markAsCreatedByCommand, unmarkAsCreatedByCommand } from '../utils/fileIdentifier';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
@@ -70,6 +72,9 @@ async function confirmCaseFileDelete(
     // 用户点了进度条上的 Cancel（event.token 取消）→ 立即取消，不再弹 modal
     if (token && token.isCancellationRequested) {
         console.log('[workspaceListeners] confirm 期间 token 已取消，立即取消删除:', fileName);
+        // 标记：用户在「删除确认弹窗显示之前」就被取消（进度条 Cancel / waitUntil 超时），
+        // 其从未看到任何确认弹窗 —— did 阶段据此补一个反馈，避免"静默取消"让用户误以为删除已发生。
+        updateWillDeleteResult(filePath, { cancelledBeforeConfirm: true });
         return false;
     }
     const confirmed = await showDeleteConfirmSimpleModal(
@@ -165,6 +170,9 @@ interface WillDeleteResult {
     failures: PushFailure[];
     /** 删除前文件是否处于"已打开案例编辑器"状态（用于 will 阶段判定 needRestore 后是否自动重开） */
     wasOpen: boolean;
+    /** 删除前同步备份的文件绝对路径（位于 os.tmpdir，用于 VSCode 内部 waitUntil 超时
+     *  强制物理删除后仍能可靠恢复；成功删除场景在 did 阶段清理该备份） */
+    backupPath?: string;
     /** 是否弹出"删除结果"modal（无 testcase_id 或无案例行的文件不弹）；用户取消不弹 */
     reportable: boolean;
     /** 整文件级错误（未绑定任务 / 接口整体失败） */
@@ -181,6 +189,14 @@ interface WillDeleteResult {
     precheckReturnCode?: string;
     /** 用户取消删除（自定义 confirm 弹窗按取消 / 关闭 / 超时） */
     isUserCancel?: boolean;
+    /** 确认弹窗显示前就被 token 取消（进度条 Cancel / waitUntil 超时），用户从未看到确认弹窗 */
+    cancelledBeforeConfirm?: boolean;
+    /** 最终意图是否已由 handler 正常回填（用于识别"被 VSCode 内部 waitUntil 超时强制中断"的占位条目） */
+    intentSet: boolean;
+    /** will 阶段 handler 是否已结束（false 期间兜底 TTL 只重排队、不清理条目与备份） */
+    handlerDone: boolean;
+    /** 是否因 onWillDeleteFiles 阶段被 VSCode 内部 waitUntil 超时强制中断而未能完成预检 */
+    interrupted?: boolean;
 }
 
 /** filePath → WillDeleteResult（仅案例文件在处理后写入） */
@@ -189,15 +205,34 @@ const willDeleteResults = new Map<string, WillDeleteResult>();
 /** filePath → 兜底清理定时器句柄，避免条目泄漏 */
 const willDeleteEvictTimers = new Map<string, NodeJS.Timeout>();
 
-/** 写入 willDeleteResults 时同步注册兜底清理定时器，如果 did 阶段没触发，避免永久驻留 */
-function setWillDeleteResult(fp: string, result: WillDeleteResult): void {
-    willDeleteResults.set(fp, result);
-    // 复位已有定时器
+/**
+ * 注册（或复位）条目的兜底清理定时器。
+ *
+ * ★ 关键约束：handler 仍在执行期间**绝不能清理条目与删前备份**。
+ *   - willDeleteResults 条目是 did 阶段判断"是否重建文件"的唯一依据；
+ *   - backupPath 备份是文件原始内容的唯一副本。
+ *   若确认接口响应很慢（或用户迟迟未操作确认弹窗）导致 handler 耗时超过
+ *   WILL_DELETE_ENTRY_TTL_MS，提前清理会让 did 阶段 consume 到 undefined
+ *   → 既拿不到重建依据、备份也已被删 → 文件被 VSCode 物理删除后再也无法恢复
+ *   （用户取消 / 预检阻断场景下即表现为"文件莫名丢失"）。
+ *   因此：handler 未结束时只重新排队等待，绝不清理。
+ */
+function scheduleWillDeleteEvict(fp: string): void {
     const prev = willDeleteEvictTimers.get(fp);
     if (prev) { try { clearTimeout(prev); } catch (_) { /* ignore */ } }
     const timer = setTimeout(() => {
-        if (willDeleteResults.has(fp)) {
+        const evicted = willDeleteResults.get(fp);
+        if (evicted) {
+            if (!evicted.handlerDone) {
+                // handler 仍在执行（确认接口慢 / 等待用户确认）→ 重新排队，保留条目与备份
+                scheduleWillDeleteEvict(fp);
+                return;
+            }
             willDeleteResults.delete(fp);
+            // 同步清理删前备份，避免 did 阶段始终未触发时备份文件泄漏在 os.tmpdir
+            if (evicted.backupPath) {
+                fs.promises.unlink(evicted.backupPath).catch(() => { /* ignore */ });
+            }
             TelemetryService.sendTelemetryEvent('caseFileDelete.willResult.evictTimeout', {
                 filePath: path.basename(fp),
             });
@@ -205,6 +240,22 @@ function setWillDeleteResult(fp: string, result: WillDeleteResult): void {
         willDeleteEvictTimers.delete(fp);
     }, WILL_DELETE_ENTRY_TTL_MS);
     willDeleteEvictTimers.set(fp, timer);
+}
+
+/** 写入 willDeleteResults 时同步注册兜底清理定时器，如果 did 阶段没触发，避免永久驻留 */
+function setWillDeleteResult(fp: string, result: WillDeleteResult): void {
+    willDeleteResults.set(fp, result);
+    scheduleWillDeleteEvict(fp);
+}
+
+/**
+ * 标记 will 阶段 handler 已结束（无论成功/失败/抛错）。
+ * 只有标记为已完成，兜底 TTL 才会真正清理条目与备份（见 scheduleWillDeleteEvict）。
+ * 注意：刻意不使用 updateWillDeleteResult，避免把"handler 结束"误记为"最终意图已回填"。
+ */
+function markWillHandlerDone(fp: string): void {
+    const r = willDeleteResults.get(fp);
+    if (r) r.handlerDone = true;
 }
 
 /** did 阶段消费条目时同步取消兜底清理定时器 */
@@ -225,6 +276,9 @@ function updateWillDeleteResult(fp: string, patch: Partial<WillDeleteResult>): v
     const r = willDeleteResults.get(fp);
     if (!r) return;
     Object.assign(r, patch);
+    // 回填即代表"最终意图已确定"，除非调用方显式指定 intentSet
+    // （例如删前备份路径回填 —— 它发生在流程中段，并非最终意图）。
+    if (patch.intentSet === undefined) r.intentSet = true;
 }
 
 /**
@@ -299,14 +353,18 @@ export function registerWorkspaceListeners(context: vscode.ExtensionContext): vs
                 // 确认弹窗是 VSCode 原生 modal（不依赖 webview/panel、无超时兜底），
                 // 用户点「确定删除」/「取消」/ 关闭弹窗后本 promise 立即结算，
                 // VSCode 随后才执行 unlink 并触发 onDidDeleteFiles。
+                // handler 结束后（无论成功/失败）标记完成，兜底 TTL 才允许清理条目与备份。
+                // 不放在 handler 内部 finally 是为了覆盖"handler 尚未开始执行就被中断"的场景。
                 tasks.push(
-                    handleCaseFileWillDelete(fp, event.token, context).catch((err: any) => {
-                        console.error('[workspaceListeners] handleCaseFileWillDelete 未捕获异常（已吞兜底）:', err?.message || err);
-                        TelemetryService.sendTelemetryErrorEvent('caseFileDelete.intercept.error', {
-                            errorMessage: String(err?.message || err).slice(0, 500),
-                            filePath: path.basename(fp),
-                        });
-                    }),
+                    handleCaseFileWillDelete(fp, event.token, context)
+                        .catch((err: any) => {
+                            console.error('[workspaceListeners] handleCaseFileWillDelete 未捕获异常（已吞兜底）:', err?.message || err);
+                            TelemetryService.sendTelemetryErrorEvent('caseFileDelete.intercept.error', {
+                                errorMessage: String(err?.message || err).slice(0, 500),
+                                filePath: path.basename(fp),
+                            });
+                        })
+                        .finally(() => markWillHandlerDone(fp)),
                 );
             }
             if (tasks.length > 0) {
@@ -399,6 +457,10 @@ export async function handleCaseFileWillDelete(
         failures: [],
         reportable: false,
         isUserCancel: undefined,
+        cancelledBeforeConfirm: false,
+        intentSet: false, // 占位：最终意图由后续 updateWillDeleteResult 回填
+        handlerDone: false, // handler 正在执行，兜底 TTL 期间不得清理条目/备份
+        interrupted: false,
         // 删除前文件若已以案例编辑器打开，则重建后自动重新打开（见需求 1）
         wasOpen: !!BaseEditorProvider.getPanel(filePath),
     });
@@ -409,6 +471,29 @@ export async function handleCaseFileWillDelete(
     const sourceData = parsed.sourceData;
     const headers: string[] = tableData?.headers || [];
     const rows: any[][] = tableData?.rows || [];
+
+    // ★ 删前同步备份：VSCode 的 onWillDeleteFiles.waitUntil 有不可控的内部超时，
+    //   一旦超时 VSCode 会强制物理删除文件，而我们的确认接口可能还在等待返回。
+    //   为此在删除发生前先把原文件 copy 到 os.tmpdir，后续：
+    //     · 成功删除（needRestore=false）→ did 阶段清理备份；
+    //     · 取消 / 预检失败 / 接口超时（needRestore=true）→ 用备份 copy 回原路径恢复，
+    //       比 parser.save 重建更可靠（保留原始字节与格式，避免重建引入的格式漂移）。
+    try {
+        const backupPath = path.join(
+            os.tmpdir(),
+            `caseDelBak-${Date.now()}-${process.pid}-${path.basename(filePath)}`,
+        );
+        fs.copyFileSync(filePath, backupPath);
+        // 备份回填发生在流程中段，**不是**最终意图 —— 显式保持 intentSet=false，
+        // 确保"预检未完成即被中断"的场景仍能被 did 阶段正确识别。
+        updateWillDeleteResult(filePath, { backupPath, intentSet: false });
+    } catch (bkErr: any) {
+        // 备份失败不阻断删除主流程；后续还原会降级为 parser.save 重建（与旧逻辑一致）
+        TelemetryService.sendTelemetryErrorEvent('caseFileDelete.backup.failed', {
+            filePath: path.basename(filePath),
+            errorMessage: String(bkErr?.message || bkErr).slice(0, 500),
+        });
+    }
 
     // 回填重建所需备份
     const pending = willDeleteResults.get(filePath);
@@ -614,6 +699,21 @@ export async function handleCaseFileWillDelete(
         return;
     }
 
+    // ★ 竞态守卫：确认接口响应较长时，VSCode 内部 waitUntil 超时会先强制放行物理删除，
+    // 此时 onDidDeleteFiles 已消费 willDeleteResults 条目并把文件重建回来；
+    // 而本 will handler 仍在继续（token 若未被取消，用户甚至可能在随后弹出的确认框里点"确定"）。
+    // 若不加守卫，会走到 syncDeletedRows 真实调用线上删除接口，造成
+    // 「线上案例已删除、本地文件却已被重建保留」的数据不一致。
+    // 因此：条目已被 did 阶段消费（不在 map 中）即中止，不再触碰线上数据。
+    if (!willDeleteResults.has(filePath)) {
+        console.warn('[workspaceListeners] will 阶段检测到条目已被 did 消费（文件已重建），中止线上删除:', path.basename(filePath));
+        TelemetryService.sendTelemetryErrorEvent('caseFileDelete.willAbortedAfterDid', {
+            filePath: path.basename(filePath),
+            caseCount: String(nonEmptyIds.length),
+        });
+        return;
+    }
+
     // 调用同款删除入口（内部会读取任务上下文、调 deleteTestCase 接口、维护本地记录）
     let syncResult: { synced: string[]; failed: Array<{ tsId: string; reason: string }>; deletedSuccess: string[]; deletedSourceMissing: string[] };
     try {
@@ -735,6 +835,10 @@ async function handleDidDeleteCaseFile(fp: string, willResult: WillDeleteResult)
             // 注意：案例文件走本分支时会被 onDidDeleteFiles 提前 continue，
             // 因此绑定库清理必须在这里补上，否则会残留失效的 point↔case 引用。
             // 统一走 cleanupCaseFileTraces（与「通过要点删除清空案例文件」共用同一清理清单）。
+            // 同时清理删前备份（删除已成功，备份不再需要）。
+            if (willResult.backupPath) {
+                fs.promises.unlink(willResult.backupPath).catch(() => { /* ignore */ });
+            }
             const cleanupTask = cleanupCaseFileTraces(fp);
             if (willResult.reportable) {
                 cleanupTask.then(() => showDeleteResultModal(willResult));
@@ -744,14 +848,52 @@ async function handleDidDeleteCaseFile(fp: string, willResult: WillDeleteResult)
 
         // needRestore=true：把文件重建回来
         if (willResult.isUserCancel) {
-            // ★ 用户取消：重建回原状，但不弹任何 modal（取消≠错误）
+            // ★ 用户取消：重建回原状
             await restoreCaseFile(fp, willResult);
             console.log('[workspaceListeners] 用户取消 → 文件已重建回原状:', path.basename(fp));
             // 需求 1：若删除前文件处于"已打开"状态，重建后自动重新打开，避免"文件被关掉"
             if (willResult.wasOpen) {
                 await reopenCaseFile(fp);
             }
+            // 区分两种取消：
+            //   (a) 用户在「删除确认弹窗」里点取消/关闭 —— 已交互过，无需重复提示；
+            //   (b) 确认弹窗「尚未显示」就被 token 取消（进度条 Cancel / waitUntil 超时），
+            //       用户从未看到任何确认弹窗，此时应给一个明确反馈，避免"文件还在但毫无提示"的困惑。
+            if (willResult.cancelledBeforeConfirm) {
+                try {
+                    showModal('default', 'info', '提示',
+                        '已取消删除操作，文件已保留。\n\n如仍需删除，请重新执行删除操作。');
+                } catch (_) { /* ignore */ }
+            }
             // 不清理任何缓存（文件回到原状）
+            return;
+        }
+
+        // ★ 中断占位兜底：onWillDeleteFiles 阶段的 waitUntil 被 VSCode 内部超时强制放行，
+        // 导致 handleCaseFileWillDelete 在"预检完成前"就被中断，willDeleteResults 仍停留在
+        // 入口占位状态（needRestore=true，但 error/isUserCancel/precheckScenePrefix 全空、
+        // total=0、failures=[]）。此时文件已被强制物理删除、随后由下方 restoreCaseFile 重建回来，
+        // 但用户既没收到确认弹窗、也没收到任何结果反馈（静默重建）——这正是「文件重建了但没弹窗」的根因。
+        // 此处显式识别该场景，重建文件后补一个独立 webview 模态框告知用户「删除前校验未完成/被中断」，
+        // 与下方「删除前校验失败/异常」弹窗保持一致的样式与文案风格。
+        const isInterruptedPlaceholder =
+            !willResult.error &&
+            !willResult.precheckScenePrefix &&
+            willResult.total === 0 &&
+            willResult.failures.length === 0;
+        if (isInterruptedPlaceholder) {
+            await restoreCaseFile(fp, willResult);
+            console.warn('[workspaceListeners] 删除前校验被中断（waitUntil 超时强制放行）→ 文件已重建回原状:', path.basename(fp));
+            TelemetryService.sendTelemetryErrorEvent('caseFileDelete.precheck.interrupted', {
+                filePath: path.basename(fp),
+            });
+            try {
+                showModal('default', 'warning', '提示',
+                    '删除前校验未完成，已取消删除操作，文件已保留。\n\n如仍要删除，请稍后重试。');
+            } catch (_) { /* ignore */ }
+            if (willResult.wasOpen) {
+                await reopenCaseFile(fp);
+            }
             return;
         }
 
@@ -841,6 +983,18 @@ async function reopenCaseFile(filePath: string): Promise<void> {
  * 用于 onDidDeleteFiles 阶段：文件已被 VSCode 删除后还原为"仅失败行"版本。
  */
 async function restoreCaseFile(filePath: string, result: WillDeleteResult): Promise<void> {
+    // 优先用删前同步备份恢复（保留原始字节与格式，最可靠）；
+    // 备份缺失/拷贝失败时降级为 parser.save 重建（与旧逻辑一致）。
+    if (result.backupPath && fs.existsSync(result.backupPath)) {
+        await fs.promises.copyFile(result.backupPath, filePath);
+        try { await fs.promises.unlink(result.backupPath); } catch { /* ignore */ }
+        TelemetryService.sendTelemetryEvent('caseFileDelete.restore.done', {
+            failedRows: String(result.failures.length),
+            filePath: path.basename(filePath),
+            via: 'backup',
+        });
+        return;
+    }
     const fileType = detectFileType(filePath);
     if (!fileType) return;
     if (!result.restoreTableData) return; // 拦截异常场景，无法重建
@@ -849,6 +1003,7 @@ async function restoreCaseFile(filePath: string, result: WillDeleteResult): Prom
     TelemetryService.sendTelemetryEvent('caseFileDelete.restore.done', {
         failedRows: String(result.failures.length),
         filePath: path.basename(filePath),
+        via: 'parser',
     });
 }
 

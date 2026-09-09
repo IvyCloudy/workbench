@@ -40,6 +40,29 @@ export interface HttpResponse<T = any> {
 const DEFAULT_TIMEOUT = 10000;
 /** 推送接口默认超时（批量推送耗时较长，默认放宽到 5 分钟） */
 const PUSH_DEFAULT_TIMEOUT = 300000;
+/**
+ * 删除「确认」接口默认超时（预检，默认放宽到 60 秒）。
+ *
+ * 背景：该接口用于判断待删案例是否存在执行/缺陷关联，案例数较多时后端需要
+ * 逐条查询关联关系，耗时显著高于普通查询接口。若沿用 DEFAULT_TIMEOUT(10s)，
+ * 稍慢的响应就会被判为「删除前校验异常」而阻断删除，与 workspaceListeners 中
+ * PRECHECK_TIMEOUT_MS(5 分钟) 的设计意图（允许预检较久）自相矛盾。
+ * 与推送接口同款"下限保护"原则：不被更小的通用配置值覆盖。
+ */
+const CONFIRM_DELETE_DEFAULT_TIMEOUT = 60000;
+
+/**
+ * 删除「案例」接口默认超时（真实删除，默认放宽到 60 秒）。
+ *
+ * 背景：该接口按 sourceIds 批量删除线上案例，案例数较多时后端需逐条处理，
+ * 且可能需要一并清理关联的执行/缺陷关系，耗时显著高于普通查询接口。
+ *
+ * 沿用 DEFAULT_TIMEOUT(10s) 的额外风险在于：超时后客户端放弃等待，但**后端
+ * 可能已经完成了删除** —— 会造成"线上已删、本地却判定为失败并保留案例行"的
+ * 数据不一致；而确认接口超时只是安全阻断（不删任何东西），后果轻得多。
+ * 与推送接口同款"下限保护"原则：不被更小的通用配置值覆盖。
+ */
+const DELETE_CASE_DEFAULT_TIMEOUT = 60000;
 
 /**
  * 解析接口超时时间：优先级为
@@ -571,7 +594,11 @@ export async function deleteTestCase(
 
     const _apiStart = Date.now();
     try {
-        const response = await makeRequest<ApiResponse>('DELETE', url, headers, JSON.stringify(body), resolveTimeout(appConfig, DEFAULT_TIMEOUT));
+        // 真实删除接口按批量写语义放宽超时（下限保护，与 pushTestCase 同款策略）：
+        // 取 max(60s, app-config 配置值)，避免被较小的通用 requestTimeoutMs 覆盖，
+        // 从而降低"后端已删除但客户端判定超时失败"的不一致风险。
+        const deleteTimeout = Math.max(DELETE_CASE_DEFAULT_TIMEOUT, appConfig?.requestTimeoutMs || 0);
+        const response = await makeRequest<ApiResponse>('DELETE', url, headers, JSON.stringify(body), deleteTimeout);
         console.log('[删除案例][响应] status=', response.status,
             'returnCode=', (response.data as any)?.returnCode,
             'errorMsg=', (response.data as any)?.errorMsg || '');
@@ -660,7 +687,10 @@ export async function confirmDeleteTestCase(
 
     const _apiStart = Date.now();
     try {
-        const response = await makeRequest<ApiResponse>('POST', url, headers, JSON.stringify(body), resolveTimeout(appConfig, DEFAULT_TIMEOUT));
+        // 确认接口按批量查询语义放宽超时（下限保护，与 pushTestCase 同款策略）：
+        // 取 max(60s, app-config 配置值)，避免被较小的通用 requestTimeoutMs 覆盖。
+        const confirmTimeout = Math.max(CONFIRM_DELETE_DEFAULT_TIMEOUT, appConfig?.requestTimeoutMs || 0);
+        const response = await makeRequest<ApiResponse>('POST', url, headers, JSON.stringify(body), confirmTimeout);
         console.log('[删除确认][响应] status=', response.status,
             'returnCode=', (response.data as any)?.returnCode,
             'errorMsg=', (response.data as any)?.errorMsg || '');

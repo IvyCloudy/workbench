@@ -143,7 +143,7 @@ export function clearLinkerCache(): void {
 /**
  * path 归一化：
  *   - 去除首尾空白
- *   - 统一分隔符：\\, ／, · 均转为 /
+ *   - 统一分隔符：仅将反斜杠 \\ 转为 /（不再处理全角 ／、间隔点 ·，避免被误当分隔符）
  *   - 折叠连续空白
  *   - 去除首尾斜杠、连续斜杠
  */
@@ -152,7 +152,7 @@ export function normalizePointPath(p: any): string {
     const s = String(p).trim();
     if (!s) return '';
     return s
-        .replace(/[\\／·]+/g, '/')      // 统一分隔符
+        .replace(/\\+/g, '/')          // 反斜杠转正斜杠
         .replace(/\s+/g, ' ')            // 折叠空白
         .replace(/\s*\/\s*/g, '/')       // 去掉斜杠两侧空白
         .replace(/\/+/g, '/')            // 连续斜杠合并
@@ -671,7 +671,7 @@ function matchCore(
             testcase_id: testcaseId,
             caseName: String(rec[opts.caseNameField] ?? '').trim(),
             // casePath 落库同样走 normalizePointPath，保证与匹配（nPath）及 md 侧 pointPath
-            // 同构：案例 path 用 \、／、·、首尾/、连续// 等写法都被归一化为「/ 分隔、无首尾斜杠」，
+            // 同构：案例 path 仅将反斜杠 \ 归一化为「/ 分隔、无首尾斜杠」（全角 ／、间隔点 · 原样保留），
             // 既让 type=1/type=2 命中，也避免展示层出现「\ 对 /」的不一致。
             casePath: nPath,
             caseDetail: buildCaseDetail(rec, opts.preconditionFields, opts.expectedFields),

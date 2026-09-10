@@ -324,7 +324,7 @@ export interface LinkedCasesEnvelope {
  *
  * 规则：
  *   1. 找到形如「功能条目：xxx / yyy」的行，作为 pointPath 的「功能条目前缀」
- *      （会归一化：\ → /、全角 ／· → /、折叠连续/首尾斜杠、去两侧空格）；
+ *      （会归一化：\ → /、折叠连续/首尾斜杠、去两侧空格）；
  *      若找不到，则退化为文件名（去后缀）作为功能条目前缀。
  *   2. 找表格首行为「| 序号 | 测试点 | ... |」的表，取每行的前两列作为 pointId / pointName。
  *   3. 每行最终的 pointPath = 功能条目前缀 用 '/' 拼接 测试点名称，
@@ -343,7 +343,7 @@ export async function parseMdToPointListSilent(mdPath: string): Promise<PointIte
     // 功能条目前缀（pointPath 的父级部分）
     // 兼容 md 中功能条目路径的多种写法：
     //   - 反斜杠 \（Windows 风格）       账户中心\登录模块
-    //   - 全角斜杠 ／、间隔点 ·
+    //     （注：全角 ／、间隔点 · 不再当作分隔符，原样保留，避免误改写路径）
     //   - 尾部缺 / 或多余 /（账户中心/登录模块 与 账户中心/登录模块/ 等价）
     //   - 分隔符两侧多余空格
     // 统一交给 normalizePointPath 归一化为「/ 分隔、无首尾斜杠」的标准形式，

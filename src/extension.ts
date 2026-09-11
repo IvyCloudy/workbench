@@ -80,6 +80,38 @@ export async function activate(context: vscode.ExtensionContext) {
         console.warn('[Extension] 关闭 files.confirmDelete 失败（已忽略）:', err?.message || err);
     }
 
+    // 自动放宽 VSCode 的「文件操作参与者」硬超时 files.participants.timeout（内置默认 60000ms = 60 秒）。
+    //
+    // 为什么必须放宽：VSCode 主进程在 mainThreadFileSystemEventService 中对该值设置了硬超时定时器
+    // （setTimeout(() => cts.cancel(), timeout)），到点即取消 token，并通过 raceCancellation 放弃等待
+    // 扩展在 onWillDeleteFiles 中 event.waitUntil 提交的 promise —— **文件随即被强制物理删除**，
+    // 扩展的等待结果被直接丢弃（这正是「Running 'File Delete' participants... 超时」的来源）。
+    //
+    // 案例文件删除需等待线上「删除确认接口」（真实环境实测约 5 分钟）**加上**用户阅读并点击确认弹窗
+    // 的时间，远超默认 60 秒，会导致文件被强制删除后又被 did 阶段重建，删除始终无法完成。
+    //
+    // 取值 10 分钟，并与插件内另两个超时保持严格递减，确保前者不会被后者抢先触发：
+    //   files.participants.timeout(10min) > PRECHECK_TIMEOUT_MS(8min) > CONFIRM_DELETE_DEFAULT_TIMEOUT(6min)
+    //
+    // 仅在低于该值时提升，不覆盖用户已配置得更大的值；
+    // 注意绝不能设为 0 —— 0 表示禁用 participants，会使 onWillDeleteFiles 删除拦截完全失效。
+    try {
+        const PARTICIPANTS_TIMEOUT_MS = 10 * 60 * 1000;
+        const filesCfg = vscode.workspace.getConfiguration('files');
+        const curTimeout = filesCfg.get<number>('participants.timeout');
+        if (typeof curTimeout !== 'number' || curTimeout < PARTICIPANTS_TIMEOUT_MS) {
+            await filesCfg.update(
+                'participants.timeout',
+                PARTICIPANTS_TIMEOUT_MS,
+                vscode.ConfigurationTarget.Global,
+            );
+            console.log('[Extension] 已放宽 files.participants.timeout → %d ms（原值=%s），'
+                + '确保案例文件删除预检有足够等待时间', PARTICIPANTS_TIMEOUT_MS, String(curTimeout));
+        }
+    } catch (err: any) {
+        console.warn('[Extension] 放宽 files.participants.timeout 失败（已忽略）:', err?.message || err);
+    }
+
     // 初始化各存储文件 + 清理孤儿记录
     await initializeStorages(context);
 

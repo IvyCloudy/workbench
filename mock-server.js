@@ -49,6 +49,54 @@ const FAIL_MSG = process.env.MOCK_FAIL_MSG || '系统繁忙，请稍后重试';
 // body 内逐条失败比例（删除接口）：用于控制 body[] 中 type='2' 失败的占比，默认 0.5
 const DELETE_BODY_FAIL_RATIO = _ratioOf('MOCK_DELETE_BODY_FAIL_RATIO', 0.5);
 
+// ============================================================================
+// 「长响应」场景注入（mock 专用，用于验证「接口响应较慢」时的删除链路行为）
+//   MOCK_SLOW_MS         ：统一慢响应时长（毫秒），作用于所有接口
+//   MOCK_CONFIRM_SLOW_MS ：删除确认接口慢响应时长，优先级高于 MOCK_SLOW_MS
+//   MOCK_DELETE_SLOW_MS  ：删除案例接口慢响应时长，优先级高于 MOCK_SLOW_MS
+//   单次定向：请求 URL 带 ?__slow=<ms> 可覆盖以上配置（无需重启服务）
+//
+// 典型验证场景（配合插件侧的 waitUntil 超时 / 接口超时）：
+//   · 慢于 VSCode 内部 waitUntil 超时 → 验证「中断占位」分支：文件被强制删除后重建，
+//     并弹出「删除前校验未完成，已取消删除操作」提示（而不是静默无反馈）
+//   · 慢于插件接口超时（确认/删除接口现为 60s）但未触发 waitUntil 超时 → 验证超时后的
+//     错误提示与文件保留
+//   · 略慢（如 5~20 秒）→ 验证确认弹窗正常弹出、删除流程可正常走完
+// 例如：
+//   MOCK_CONFIRM_SLOW_MS=120000 node mock-server.js   # 确认接口固定慢 120 秒
+//   MOCK_SLOW_MS=15000 node mock-server.js            # 所有接口统一慢 15 秒
+// ============================================================================
+function _msOf(envName) {
+    var v = Number(process.env[envName]);
+    return (isNaN(v) || v < 0) ? 0 : Math.floor(v);
+}
+const SLOW_MS = _msOf('MOCK_SLOW_MS');
+const CONFIRM_SLOW_MS = _msOf('MOCK_CONFIRM_SLOW_MS');
+const DELETE_SLOW_MS = _msOf('MOCK_DELETE_SLOW_MS');
+
+/** 删除确认接口（新旧契约均覆盖） */
+function _isConfirmPath(req) {
+    return req.url === '/api/v1/delete-testAgent-case-confirm'
+        || req.url === '/test-task/delete-testcase-confirm';
+}
+/** 删除案例接口（新旧契约均覆盖） */
+function _isDeletePath(req) {
+    return req.url === '/api/v1/delete-testAgent-case'
+        || req.url === '/test-task/delete-testcase';
+}
+
+/**
+ * 解析本次请求应延迟的毫秒数（0 = 不延迟，立即处理）。
+ * 优先级：URL query ?__slow=<ms> > 分接口环境变量 > 统一环境变量
+ */
+function resolveSlowMsForReq(req) {
+    var m = /[?&]__slow=(\d+)/.exec(req.url || '');
+    if (m) return Number(m[1]);
+    if (_isConfirmPath(req) && CONFIRM_SLOW_MS > 0) return CONFIRM_SLOW_MS;
+    if (_isDeletePath(req) && DELETE_SLOW_MS > 0) return DELETE_SLOW_MS;
+    return SLOW_MS;
+}
+
 /** 判断本次请求是否应整体失败（前缀强制优先于概率） */
 function shouldFailOverall(ids, ratio) {
     if (Array.isArray(ids) && ids.some(function (id) { return /^FAIL_/i.test(String(id)); })) {
@@ -158,7 +206,8 @@ var TASK_TREE = [
     }
 ];
 
-var server = http.createServer(function (req, res) {
+// 原请求处理器（由下方 server 延迟门调用）
+function handleRequest(req, res) {
     if (req.method === 'POST' && req.url === '/test-task/task-tree') {
         res.writeHead(200, {
             'Content-Type': 'application/json',
@@ -604,6 +653,36 @@ var server = http.createServer(function (req, res) {
         res.writeHead(404);
         res.end();
     }
+}
+
+var server = http.createServer(function (req, res) {
+    // 「长响应」场景：按配置延迟后再交给真实处理器，模拟"请求已到达、响应迟迟不返回"。
+    // 延迟发生在读取 body 之前，最贴近真实后端处理耗时的表现。
+    var _slowMs = resolveSlowMsForReq(req);
+    // 剥离 __slow 调试参数（须在解析延迟之后）：下方路由用严格相等判断 req.url，
+    // 若保留 query 会导致该请求匹配不到任何路由而返回 404。
+    if (/[?&]__slow=\d+/.test(req.url || '')) {
+        req.url = String(req.url)
+            .replace(/([?&])__slow=\d+&?/, function (_m, sep) { return sep === '?' ? '?' : ''; })
+            .replace(/[?&]$/, '');
+    }
+    if (_slowMs > 0) {
+        console.log('[⏱ 长响应] %s %s —— 延迟 %d ms 后再处理', req.method, req.url, _slowMs);
+        setTimeout(function () {
+            // 客户端可能已超时断开，避免向已关闭的连接写入导致 mock 进程异常
+            if (res.writableEnded || res.destroyed || req.destroyed) {
+                console.log('[⏱ 长响应] %s %s —— 客户端已断开，跳过响应', req.method, req.url);
+                return;
+            }
+            try {
+                handleRequest(req, res);
+            } catch (e) {
+                console.error('[⏱ 长响应] 延迟后处理异常:', e && e.message);
+            }
+        }, _slowMs);
+        return;
+    }
+    handleRequest(req, res);
 });
 
 server.listen(8081, function () {
@@ -629,5 +708,10 @@ server.listen(8081, function () {
     console.log('  body 内逐条失败比例(DELETE_BODY_FAIL_RATIO，不影响 returnCode): '
         + (DELETE_BODY_FAIL_RATIO * 100).toFixed(0) + '%'
         + ' | 可用 MOCK_DELETE_BODY_FAIL_RATIO 覆盖（默认 50%）；用于验证前端部分失败行展示');
+    console.log('  长响应注入(毫秒, 0=关闭): 统一=' + SLOW_MS
+        + ', 确认接口=' + CONFIRM_SLOW_MS
+        + ', 删除接口=' + DELETE_SLOW_MS
+        + ' | 可用 MOCK_SLOW_MS / MOCK_CONFIRM_SLOW_MS / MOCK_DELETE_SLOW_MS 覆盖');
+    console.log('  长响应单次定向: 请求 URL 带 ?__slow=<ms>（优先级高于环境变量，无需重启）');
     console.log('Total records: ' + TOTAL + ', default pageSize: 200');
 });

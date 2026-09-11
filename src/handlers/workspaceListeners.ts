@@ -111,17 +111,22 @@ function isPointFile(fp: string): boolean {
 const WILL_DELETE_ENTRY_TTL_MS = 60_000;
 
 /**
- * 删除前线上「确认接口」(confirmDeleteTestCase) 的最长等待时间（5 分钟）。
+ * 删除前线上「确认接口」(confirmDeleteTestCase) 的最长等待时间（8 分钟）。
  *
- * 背景：案例数较多时确认接口响应可能很慢，而 VSCode 的 onWillDeleteFiles
- * 的 event.waitUntil 存在内部超时——一旦该超时到期，VSCode 会强制放行物理删除，
- * 导致"文件已被删、确认接口却还没返回"，后续逻辑基于未完成的确认结果，存在
- * 误删风险。为此显式给确认接口加 5 分钟上限：
- *   · 5 分钟内返回 → 正常按 returnCode 决定放行 / 阻断；
- *   · 超过 5 分钟仍未返回 → 抛出 PrecheckTimeoutError，被下方 catch 捕获并
- *     视为「预检异常」处理（needRestore=true，did 阶段重建原文件，阻断删除）。
+ * 背景：真实环境实测确认接口约 5 分钟才返回。本值是**外层兜底**，必须严格大于
+ * 底层 HTTP 超时 CONFIRM_DELETE_DEFAULT_TIMEOUT(6 分钟，见 services/http.ts)，
+ * 否则外层会先于 HTTP 触发，把「接口即将正常返回」误判为超时：
+ *   · 6 分钟内返回（HTTP 层判定）→ 正常按 returnCode 决定放行 / 阻断；
+ *   · 6 分钟 HTTP 超时 → 由 HTTP 层 reject 并携带具体错误，视为「预检异常」；
+ *   · 超过 8 分钟仍未返回（兜底）→ 抛出 PrecheckTimeoutError，同样按「预检异常」
+ *     处理（needRestore=true，did 阶段重建原文件，阻断删除）。
+ *
+ * 另注：VSCode 的 onWillDeleteFiles 的 event.waitUntil 存在**不可控的内部超时**，
+ * 且实测明显短于 5 分钟。一旦该超时到期，VSCode 会强制放行物理删除并取消 token，
+ * 使本值实际上难以生效——详见 handleDidDeleteCaseFile 中的「中断占位」兜底分支。
+ * 因此本值只解决"配置层误判"，无法消除 VSCode 强制放行导致的删除中断。
  */
-const PRECHECK_TIMEOUT_MS = 5 * 60 * 1000;
+const PRECHECK_TIMEOUT_MS = 8 * 60 * 1000;
 
 /** 确认接口超时专用错误，便于在 catch 分支中识别并上报专门的埋点事件 */
 class PrecheckTimeoutError extends Error {
@@ -524,16 +529,15 @@ export async function handleCaseFileWillDelete(
     const rowTsIds: string[] = rows.map(r => (r[tsIdx] == null ? '' : String(r[tsIdx]).trim()));
     const nonEmptyIds = rowTsIds.filter(Boolean);
 
-    // 拉取测试任务信息（失败不影响主流程，缺失时留空）
+    // 拉取测试任务信息（仅解析一次，后续埋点与确认接口校验复用，避免重复网络/IO）。
+    // 失败不影响主流程，缺失时留空。
+    const taskInfoResult = await resolveTaskInfoOrNull(filePath);
     let taskTestTaskNo = '';
     let taskSubTestTaskId = '';
-    try {
-        const t = await resolveTaskInfoOrNull(filePath);
-        if (t.status === 'ok') {
-            taskTestTaskNo = t.taskInfo.testTaskNo || '';
-            taskSubTestTaskId = t.taskInfo.subTestTaskId || '';
-        }
-    } catch (_) { /* 任务信息缺失不阻断删除主流程与埋点 */ }
+    if (taskInfoResult.status === 'ok') {
+        taskTestTaskNo = taskInfoResult.taskInfo.testTaskNo || '';
+        taskSubTestTaskId = taskInfoResult.taskInfo.subTestTaskId || '';
+    }
 
     // 埋点：文件删除删除案例「发起」事件（记录用户触发了一次案例文件删除，
     // 携带待删除的 testcase_id 列表与测试任务信息，与后续
@@ -566,7 +570,7 @@ export async function handleCaseFileWillDelete(
     // 预检异常（网络 / 返回非成功码）同样阻断删除，由 did 阶段弹插件封装的模态框。
     let confirmItems: DeleteConfirmItem[] = [];
     try {
-        const tInfo = await resolveTaskInfoOrNull(filePath);
+        const tInfo = taskInfoResult;
         // 校验 1：未绑定测试任务 / 任务信息获取失败 → 阻断删除
         if (tInfo.status !== 'ok') {
             const _errTxt = tInfo.status === 'unbound'

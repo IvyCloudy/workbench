@@ -2,11 +2,11 @@
  * linkerDiagnosticHandler · md 功能条目路径归一化兼容验证
  * ----------------------------------------------------------------------------
  * 规则：每行 pointPath = 功能条目前缀 用 '/' 拼接 测试点名称，再整体归一化。
- * 验证多种 功能条目 写法都能得到同一标准串（与案例侧 path 同构）：
- *         - 反斜杠 \（Windows 风格）
- *         - 全角斜杠 ／、间隔点 ·
+ * 验证多种 功能条目 写法，仅反斜杠 \ 会被转为 /；全角 ／、间隔点 · 原样保留：
+ *         - 反斜杠 \（Windows 风格）→ 归一为 /
  *         - 尾部缺 / 或多余 /
  *         - 分隔符两侧多余空格
+ *         - 全角 ／、间隔点 · 不转换（保留原字符）
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs';
@@ -17,18 +17,20 @@ import { parseMdToPointListSilent } from '../handlers/linkerDiagnosticHandler';
 const TMP_DIR = path.join(os.tmpdir(), 'tc-linker-md-path-' + Date.now());
 
 const PREFIX = '账户中心/登录模块';
+const FULLWIDTH_PREFIX = '账户中心／登录模块';
+const MIDDOT_PREFIX = '账户中心·登录模块';
 
-// 不同写法的 功能条目 行，期望都归一化为 PREFIX
-const CASES: { name: string; line: string }[] = [
-    { name: '标准正斜杠', line: '功能条目：账户中心/登录模块' },
-    { name: '尾部缺斜杠', line: '功能条目：账户中心/登录模块' },
-    { name: '尾部多余斜杠', line: '功能条目：账户中心/登录模块/' },
-    { name: '反斜杠', line: '功能条目：账户中心\\登录模块' },
-    { name: '尾部反斜杠', line: '功能条目：账户中心\\登录模块\\' },
-    { name: '全角斜杠', line: '功能条目：账户中心／登录模块' },
-    { name: '间隔点', line: '功能条目：账户中心·登录模块' },
-    { name: '分隔符两侧空格', line: '功能条目：账户中心 / 登录模块' },
-    { name: '中文冒号', line: '功能条目:账户中心/登录模块' },
+// 不同写法的 功能条目 行，及其期望归一化后的前缀（仅 \ 转 /，／ 与 · 原样保留）
+const CASES: { name: string; line: string; expectedPrefix: string }[] = [
+    { name: '标准正斜杠', line: '功能条目：账户中心/登录模块', expectedPrefix: PREFIX },
+    { name: '尾部缺斜杠', line: '功能条目：账户中心/登录模块', expectedPrefix: PREFIX },
+    { name: '尾部多余斜杠', line: '功能条目：账户中心/登录模块/', expectedPrefix: PREFIX },
+    { name: '反斜杠', line: '功能条目：账户中心\\登录模块', expectedPrefix: PREFIX },
+    { name: '尾部反斜杠', line: '功能条目：账户中心\\登录模块\\', expectedPrefix: PREFIX },
+    { name: '全角斜杠', line: '功能条目：账户中心／登录模块', expectedPrefix: FULLWIDTH_PREFIX },
+    { name: '间隔点', line: '功能条目：账户中心·登录模块', expectedPrefix: MIDDOT_PREFIX },
+    { name: '分隔符两侧空格', line: '功能条目：账户中心 / 登录模块', expectedPrefix: PREFIX },
+    { name: '中文冒号', line: '功能条目:账户中心/登录模块', expectedPrefix: PREFIX },
 ];
 
 // 表格中的测试点名称
@@ -58,16 +60,15 @@ describe('linkerDiagnosticHandler · md 功能条目路径归一化兼容', () =
     });
 
     for (const c of CASES) {
-        it(`「${c.name}」应归一化为 ${PREFIX}/<测试点名称>`, async () => {
+        it(`「${c.name}」应归一化为 ${c.expectedPrefix}/<测试点名称>`, async () => {
             const mdPath = path.join(TMP_DIR, `case_${c.name}.md`);
             fs.writeFileSync(mdPath, mdContent(c.line), 'utf-8');
 
             const pointList = await parseMdToPointListSilent(mdPath);
             expect(pointList.length).toBe(POINT_NAMES.length);
-            // 每个点的 pointPath = PREFIX/测试点名称
             pointList.forEach((p, i) => {
                 expect(p.pointName).toBe(POINT_NAMES[i]);
-                expect(p.pointPath).toBe(`${PREFIX}/${POINT_NAMES[i]}`);
+                expect(p.pointPath).toBe(`${c.expectedPrefix}/${POINT_NAMES[i]}`);
             });
         });
     }

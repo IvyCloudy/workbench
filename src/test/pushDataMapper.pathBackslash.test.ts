@@ -2,7 +2,7 @@
  * pushDataMapper · 推送案例路径分隔符兼容
  * ----------------------------------------------------------------------------
  * 验证：推送案例时，案例 path（YAML 分支）/ 路径（中文 CSV 分支）若以反斜杠 \ 分割，
- *   统一改为正斜杠 /（同时兼容全角 ／、间隔点 ·、首尾 \），与关联匹配侧规则一致。
+ *   统一改为正斜杠 /（仅反斜杠 \ 会转换；全角 ／、间隔点 · 原样保留），与关联匹配侧规则一致。
  */
 import { describe, it, expect } from 'vitest';
 import { mapRowToCaseItem } from '../utils/pushDataMapper';
@@ -36,7 +36,7 @@ describe('pushDataMapper · 推送案例路径反斜杠转正斜杠', () => {
         expect(item.testCasePath).toBe('账户中心/登录模块/账号登录/');
     });
 
-    it('混合写法：首尾 \\、全角 ／、间隔点 · → 统一归一化为 / 分隔', () => {
+    it('首尾 \\、全角 ／、间隔点 · → 仅反斜杠转 /，其余字符保留', () => {
         const row = {
             testcase_id: 'TC-003',
             name: '混合',
@@ -46,7 +46,7 @@ describe('pushDataMapper · 推送案例路径反斜杠转正斜杠', () => {
             steps: [{ operation: '操作', ui_expected: ['ok'] }],
         };
         const item = mapRowToCaseItem(row as any);
-        expect(item.testCasePath).toBe('账户中心/登录模块/账号登录/');
+        expect(item.testCasePath).toBe('账户中心／登录模块·账号登录/');
     });
 
     it('已是标准 / 写法 → 保持不变（仅补结尾 /）', () => {

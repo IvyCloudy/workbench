@@ -33,6 +33,8 @@ import { FileWatchService } from '../services/fileWatchService';
 import { dispatchEditorMessage, type EditorMsgCtx } from '../handlers/editorMessageHandlers';
 import { tryYamlResolveFallback } from '../handlers/yamlResolveFallback';
 
+const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
+
 // 重新导出工具，便于子类使用
 export { isInQualifiedDir, FILE_PATTERNS };
 // 重新导出 EditorSession，兼容原有从 BaseEditorProvider 引用该类型的调用方
@@ -426,13 +428,34 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             if (isInTempFolder(document.uri.fsPath)) {
                 TelemetryService.sendTelemetryEvent('editor.opened.tempFolder', { targetFile: fileName });
                 log('⚠ 位于「临时文件」文件夹，改用文本编辑器打开');
-                try { webviewPanel.dispose(); } catch (_) { /* ignore */ }
+                // ⚠️ 关键：不能在 resolveCustomEditor 里直接 dispose(webviewPanel)。
+                //   直接 dispose 会让 VS Code 认为 CustomEditor 打开失败，弹出
+                //   "Unable to open ... OverlayWebview has been disposed"。
+                //   正确做法：先塞透明占位 HTML 让 resolve 正常返回，再用文本编辑器打开文件，
+                //   最后异步关闭当前 CustomEditor tab。
+                try {
+                    webviewPanel.webview.html = '<html><body style="margin:0;padding:0;background:transparent;"></body></html>';
+                } catch (_) { /* ignore */ }
                 try {
                     const doc = await vscode.workspace.openTextDocument(document.uri);
                     await vscode.window.showTextDocument(doc);
                 } catch (e: any) {
                     log('打开文本编辑器失败: ' + (e?.message || e));
                 }
+                setTimeout(() => {
+                    void (async () => {
+                        for (const group of vscode.window.tabGroups.all) {
+                            for (const tab of group.tabs) {
+                                const input = tab.input as any;
+                                if (input && input.viewType === TESTCASE_EDITOR_VIEWTYPE
+                                    && input.uri instanceof vscode.Uri
+                                    && input.uri.toString() === document.uri.toString()) {
+                                    try { await vscode.window.tabGroups.close(tab, true); } catch (_) { /* ignore */ }
+                                }
+                            }
+                        }
+                    })();
+                }, 0);
                 return;
             }
             TelemetryService.sendTelemetryEvent('editor.opened.unqualified', { targetFile: fileName });

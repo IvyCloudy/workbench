@@ -163,16 +163,21 @@ function _collectPendingDelete(rowsToDelete) {
  *         errorMessage?, blocked? }
  *
  * 健壮性与阻断策略：
- *   - 预检「无结论」的场景（无 vscode 通道 / 回包超时 8s）→ 降级为「不展示关联表格」，
+ *   - 预检「无结论」的场景（无 vscode 通道）→ 降级为「不展示关联表格」，
  *     继续走原有简单确认删除流程，绝不阻断。
+ *   - 预检「等待超时」（CONFIRM_TIMEOUT_MS = 90s 内未收到扩展端回包）→
+ *     弹出「获取确认结果超时」提示，按钮为「重试」与「取消」：
+ *       · 重试：重新发起预检（requestDeleteConfirm 自我递归）；
+ *       · 取消：放弃本次删除并回滚 pending 态。
+ *     同时清空 S._deleteConfirmCb，避免迟到的回包在用户已决策后又弹表格弹窗。
  *   - 预检「明确失败」的场景（接口返回非成功码 / 网络异常 / 任务未绑定，回包 blocked:true）
  *     → **阻断删除**：扩展端已用插件封装的模态框告知用户，此处不再回调 onProceed，
  *       并清理本次标记的 pending（置灰+划线）态，避免行永远停在"删除中"状态。
  *
  * @param tsIds      待删除案例的 testcase_id 列表
- * @param onProceed  预检通过 / 无结论降级后继续执行的删除动作
+ * @param onProceed  预检通过 / 无通道降级后继续执行的删除动作
  */
-var CONFIRM_TIMEOUT_MS = 8000;
+var CONFIRM_TIMEOUT_MS = 90000;
 
 /**
  * 回滚指定 tsId 的 pending 删除态（置灰+划线 → 恢复正常行）。
@@ -219,14 +224,60 @@ function requestDeleteConfirm(tsIds, onProceed) {
     S._deleteConfirmCb = finish;
     S._deleteConfirmTimer = setTimeout(function () {
         if (done) return;
-        console.log('[requestDeleteConfirm] 预检超时，降级为简单确认');
-        finish({ ok: false, items: [] });
+        console.log('[requestDeleteConfirm] 预检 ' + (CONFIRM_TIMEOUT_MS / 1000)
+            + 's 超时，弹出「获取确认结果超时」提示（重试/取消）');
+        done = true;
+        if (S._deleteConfirmTimer) { clearTimeout(S._deleteConfirmTimer); S._deleteConfirmTimer = null; }
+        // 清空回包回调：避免扩展端迟到的 confirmDeleteRowsResult 又触发表格弹窗，
+        // 与已弹出的超时提示叠加成"双弹窗"。
+        S._deleteConfirmCb = null;
+        _showPrecheckTimeoutFallback(ids, onProceed);
     }, CONFIRM_TIMEOUT_MS);
     try {
         S.vscode.postMessage({ type: 'confirmDeleteRows', data: { tsIds: ids } });
     } catch (_) {
         finish({ ok: false, items: [] });
     }
+}
+
+/**
+ * 预检等待超时（CONFIRM_TIMEOUT_MS）后的降级提示弹窗。
+ *
+ * 场景：前端发出 confirmDeleteRows 后，在限定时间内未收到扩展端回包的
+ *       confirmDeleteRowsResult（通常为待删除案例较多或网络较慢）。
+ * 文案：告知用户未拿到删除案例确认结果，并建议减少请求数据或稍后重试。
+ * 按钮：
+ *   · 重试（okText）→ 重新发起预检 requestDeleteConfirm(ids, onProceed)
+ *   · 取消（cancelText）→ 放弃本次删除，回滚 pending 删除态
+ *
+ * @param ids       本次预检涉及的 testcase_id 列表
+ * @param onProceed 重试且预检通过后要执行的删除动作
+ */
+function _showPrecheckTimeoutFallback(ids, onProceed) {
+    if (typeof xsConfirm !== 'function') {
+        // 无弹窗能力兜底：直接放弃删除并回滚，避免行卡在"删除中"
+        _rollbackPendingDelete(ids);
+        return;
+    }
+    var _html = '<div class="xs-dc-lead">'
+        + '未能在限定时间内获取到删除案例的确认结果，本次删除已暂停。<br>'
+        + '可能原因：待删除案例数量较多，或当前网络较慢。<br>'
+        + '建议<b>减少本次删除的案例数量</b>后重试，或稍后重试。</div>';
+    xsConfirm({
+        title: '获取删除确认结果超时',
+        html: _html,
+        type: 'warning',
+        okText: '重试',
+        cancelText: '取消',
+        width: '460px',
+    }, function () {
+        // 重试：重新发起预检（内部会新建 done/timer，递归安全）
+        requestDeleteConfirm(ids, onProceed);
+    }, function () {
+        // 取消：放弃本次删除，回滚 pending 态
+        console.log('[requestDeleteConfirm] 用户取消超时重试，放弃删除');
+        _rollbackPendingDelete(ids);
+    });
 }
 
 /**
@@ -237,9 +288,12 @@ function requestDeleteConfirm(tsIds, onProceed) {
  */
 function _showPlainDeleteConfirm(onProceed, tsIds) {
     if (typeof xsConfirm === 'function') {
+        var _count = Array.isArray(tsIds) ? tsIds.length : 0;
+        var _html = '<div class="xs-dc-lead">谨慎操作：删除案例会同步删除 TMS 平台上的 '
+            + '<span class="xs-dc-count">' + _count + '</span> 条案例，此操作不可恢复。是否确定删除？</div>';
         xsConfirm({
             title: '删除案例',
-            message: '删除案例会同步删除 TMS 平台上的案例，此操作不可恢复。是否确定删除？',
+            html: _html,
             type: 'warning',
             okText: '确定删除',
             // 显式传宽度 420px，避继承表格明细弹窗的 88vw 默认宽度
@@ -281,8 +335,10 @@ function _showDeleteConfirmDialog(items, onProceed, tsIds) {
             + '<td class="xs-dc-td xs-dc-flag" data-flag="' + bug + '">' + bug + '</td>'
             + '</tr>';
     }
+    var _count = Array.isArray(tsIds) ? tsIds.length : 0;
     var html = ''
-        + '<div class="xs-dc-lead">谨慎操作：删除案例会同步删除 TMS 平台上的案例，并同步删除其执行和缺陷关联关系。如需继续操作，请忽略本提示（Y：存在，N：不存在）：</div>'
+        + '<div class="xs-dc-lead">谨慎操作：删除案例会同步删除 TMS 平台上的 '
+        + '<span class="xs-dc-count">' + _count + '</span> 条案例，并同步删除其执行和缺陷关联关系。如需继续操作，请忽略本提示（Y：存在，N：不存在）：</div>'
         + '<div class="xs-dc-table-wrap"><table class="xs-dc-table">'
         +   '<thead><tr><th>编号</th><th>名称</th><th>执行</th><th>缺陷</th></tr></thead>'
         +   '<tbody>' + rowsHtml + '</tbody>'
@@ -293,7 +349,7 @@ function _showDeleteConfirmDialog(items, onProceed, tsIds) {
         xsConfirm({
             title: '删除案例',
             html: html,
-            width: '820px',
+            width: '620px',
             type: 'warning',
             okText: '确定删除',
             cancelText: '取消',

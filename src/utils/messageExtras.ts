@@ -166,7 +166,8 @@ function buildDeleteConfirmHtml(
             + `</tr>`;
     }).join('');
 
-    const lead = `谨慎操作：删除文件「${escapeHtml_(fileName)}」会同步删除 TMS 平台上的 ${caseCount} 条案例，`
+    const lead = `谨慎操作：删除文件「${escapeHtml_(fileName)}」会同步删除 TMS 平台上的 `
+        + `<span class="xs-dc-count">${caseCount}</span> 条案例，`
         + `并同步删除其执行和缺陷关联关系。如需继续操作，请忽略本提示（Y：存在，N：不存在）：`;
 
     return `<!DOCTYPE html>
@@ -176,7 +177,7 @@ function buildDeleteConfirmHtml(
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>删除案例</title>
 <style>
-${baseModalCss_(headerBg, color, 'width:820px;max-width:94vw;max-height:88vh;')}
+${baseModalCss_(headerBg, color, 'width:620px;max-width:94vw;max-height:88vh;')}
     .xs-modal-body{flex:1;padding:16px;min-height:60px;overflow:auto}
     .xs-dc-lead{font-size:13px;line-height:1.7;color:#333;margin:0 0 8px}
     .xs-dc-tail{font-size:13px;line-height:1.7;color:#333;margin:10px 0 0}
@@ -186,11 +187,12 @@ ${baseModalCss_(headerBg, color, 'width:820px;max-width:94vw;max-height:88vh;')}
     .xs-dc-table td{padding:6px 8px;border-bottom:1px solid #f0f0f0;color:#333;word-break:break-all}
     .xs-dc-table tbody tr:last-child td{border-bottom:none}
     .xs-dc-table tbody tr:nth-child(even){background:#fcfcfc}
-    .xs-dc-no{width:30%;color:#666}
-    .xs-dc-name{width:34%}
-    .xs-dc-phase{width:15%;color:#666}
-    .xs-dc-table td.xs-dc-flag{width:10%;text-align:center;font-weight:600;color:#c0392b}
+    .xs-dc-no{width:34%;color:#666;white-space:nowrap}
+    .xs-dc-name{width:42%}
+    .xs-dc-phase{width:12%;color:#666}
+    .xs-dc-table td.xs-dc-flag{width:12%;text-align:center;font-weight:600;color:#c0392b}
     .xs-dc-table td.xs-dc-flag[data-flag="N"]{color:#999;font-weight:400}
+    .xs-dc-count{color:#d4380d;font-weight:700;font-size:15px;padding:0 2px}
 </style>
 </head>
 <body>
@@ -300,7 +302,8 @@ export function showDeleteConfirmModal(
 function buildDeleteConfirmSimpleHtml(fileName: string, caseCount: number): string {
     const color = MODAL_COLOR_WARNING;
     const headerBg = MODAL_HEADER_BG_WARNING;
-    const lead = `谨慎操作：删除文件「${escapeHtml_(fileName)}」会同步删除 TMS 平台上的 ${caseCount} 条案例及其关联的执行与缺陷关系，此操作不可恢复。是否确定删除？`;
+    const lead = `谨慎操作：删除文件「${escapeHtml_(fileName)}」会同步删除 TMS 平台上的 `
+        + `<span class="xs-dc-count">${caseCount}</span> 条案例及其关联的执行与缺陷关系，此操作不可恢复。是否确定删除？`;
 
     return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -311,6 +314,7 @@ function buildDeleteConfirmSimpleHtml(fileName: string, caseCount: number): stri
 <style>
 ${baseModalCss_(headerBg, color, 'width:480px;max-width:90vw;')}
     .xs-modal-body{flex:1;padding:20px 16px;min-height:60px;font-size:13px;color:#444;line-height:1.7;white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word}
+    .xs-dc-count{color:#d4380d;font-weight:700;font-size:15px;padding:0 2px}
 </style>
 </head>
 <body>

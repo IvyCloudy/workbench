@@ -519,6 +519,8 @@ tbody tr.xs-tr-frozen.selected td.xs-td{background:#dde7f3}
 .xs-prompt-message{font-size:13px;line-height:1.7;color:#333;padding:0 4px 8px;word-break:break-word;white-space:pre-wrap}
 /* ── 删除确认弹窗：需确认案例关联表格 ── */
 .xs-dc-lead{font-size:13px;line-height:1.7;color:#333;margin:0 0 8px}
+/* 删除确认弹窗中"x 条案例"的红色加粗提醒样式（文件级删除 + 编辑器内删除共用） */
+.xs-dc-count{color:#d4380d;font-weight:700;font-size:15px;padding:0 2px}
 .xs-dc-tail{font-size:13px;line-height:1.7;color:#333;margin:10px 0 0}
 .xs-dc-table-wrap{max-height:240px;overflow:auto;border:1px solid #e3e3e3;border-radius:3px}
 .xs-dc-table{width:100%;border-collapse:collapse;font-size:12px}
@@ -526,10 +528,10 @@ tbody tr.xs-tr-frozen.selected td.xs-td{background:#dde7f3}
 .xs-dc-table td{padding:6px 8px;border-bottom:1px solid #f0f0f0;color:#333;word-break:break-all}
 .xs-dc-table tbody tr:last-child td{border-bottom:none}
 .xs-dc-table tbody tr:nth-child(even){background:#fcfcfc}
-.xs-dc-no{width:26%;color:#666}
-.xs-dc-name{width:34%}
+.xs-dc-no{width:34%;color:#666;white-space:nowrap}
+.xs-dc-name{width:42%}
 
-.xs-dc-flag{width:10%;text-align:center;font-weight:600}
+.xs-dc-flag{width:12%;text-align:center;font-weight:600}
 /* Y 标记为警示色（存在关联），N 为次要色 */
 .xs-dc-flag:not(:empty){color:#c0392b}
 .xs-dc-table td.xs-dc-flag[data-flag="N"]{color:#999;font-weight:400}

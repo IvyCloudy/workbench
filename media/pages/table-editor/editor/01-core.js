@@ -1000,6 +1000,8 @@ window.addEventListener('message', function (e) {
     } else if (m.type === 'confirmDeleteRowsResult') {
         // 删除前的线上预检回包：存在「执行/缺陷」关联的案例走表格二次确认；
         // 预检「无结论」时由 requestDeleteConfirm 内部降级为简单确认；
+        // 预检「等待超时」时 requestDeleteConfirm 已清空 S._deleteConfirmCb 并弹出
+        //   「获取确认结果超时」提示（重试/取消），此处迟到的回包因 cb 为空而安全跳过；
         // 预检「明确失败」（blocked:true，扩展端已弹模态框告知）时前端直接取消删除，
         // **不再**弹任何确认框，避免与扩展端的提示弹窗叠加成"两个弹窗同框"。
         var _ok = !!m.ok;

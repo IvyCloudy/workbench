@@ -556,7 +556,7 @@ export async function stepInvokeBackend(
     ctx: PushContext,
     rows: RowLike[],
     taskInfo: { testTaskNo: string; subTestTaskId: string },
-): Promise<{ successMappings: PushSuccessMapping[]; failures: PushResponseFailure[] }> {
+): Promise<{ successMappings: PushSuccessMapping[]; failures: PushResponseFailure[]; backendError?: string }> {
     console.log(`[推送][${ctx.traceId}] 文件: ${ctx.opts.filePath}, ${rows.length} 行`);
     // 文件/文件夹的 fs 标识（inode / dev），来自 getFileIds；
     // 读取失败/路径不存在时 getFileIds 返回 { file_id: '', device_id: '' }，
@@ -641,9 +641,12 @@ export async function stepInvokeBackend(
             pushDiag(`[接口] 原始body明细:`, pushResult.body.map((b: any) => ({ type: b.type ?? '(缺失)', sourceId: b.sourceId, data: String(b.data || '').slice(0, 80) })));
         }
         if (pushResult.returnCode !== 'SUC0000') {
-            let errorMsg = pushResult.errorMsg;
-            if (!errorMsg) {
-                const rcText = pushResult.returnCode ? String(pushResult.returnCode) : '空';
+            // 后端返回失败（整文件级拒绝，如任务不匹配 / 权限 / 业务拦截）。
+            // 统一加「后端返回失败:」前缀，并通过 backendError 信号交由 runPush 走 onBackendError 钩子
+            // （与超时场景一致的整文件错误弹窗），不再把同一错误按行逐条塞进 allFailures（避免失败列表重复 N 条）。
+            const rcText = pushResult.returnCode ? String(pushResult.returnCode) : '空';
+            let detail = pushResult.errorMsg;
+            if (!detail) {
                 let bodyText: string;
                 if (Array.isArray(pushResult.body)) {
                     bodyText = `数组(len=${pushResult.body.length})`;
@@ -658,8 +661,9 @@ export async function stepInvokeBackend(
                 } else {
                     bodyText = `非数组(${String(pushResult.body)})`;
                 }
-                errorMsg = `推送失败（后端返回码=${rcText}，body=${bodyText}，无错误详情，请联系后端排查）`;
+                detail = `后端返回码=${rcText}，body=${bodyText}，无错误详情，请联系后端排查`;
             }
+            const errorMsg = `后端返回失败: ${detail}`;
             TelemetryService.sendTelemetryErrorEvent(`${ctx.telemetryPrefix}.failed`, {
                 ...baseTelemetryProps(ctx),
                 returnCode: pushResult.returnCode || '',
@@ -669,17 +673,8 @@ export async function stepInvokeBackend(
                 topFailField: failureFieldOf({ reason: errorMsg }) || '',
                 costMs: String(Date.now() - ctx.pushStart),
             });
-            for (let vi = 0; vi < validRows.length; vi++) {
-                const tsId = readTsId(validRows[vi]);
-                allFailures.push({
-                    tsId,
-                    reason: errorMsg,
-                    bodyIndex: validGlobalIdx[vi] ?? vi,
-                    category: classifyFailure({ reason: errorMsg }),
-                    field: failureFieldOf({ reason: errorMsg }),
-                });
-            }
-            continue;
+            // 中止本次推送（整文件拒绝），runPush 据此触发整文件错误弹窗。
+            return { successMappings: [], failures: [], backendError: errorMsg };
         }
         const parsed = parsePushResponse(pushResult.body, validRows);
         pushDiag(`[解析] 批次${batch.source}解析结果 | successMappings=${parsed.successMappings.length} failures=${parsed.failures.length}`);
@@ -802,7 +797,10 @@ export function handleUnexpectedError(
         costMs: String(Date.now() - ctx.pushStart),
     });
     try {
-        const uiMsg = `推送异常：${errorMessage}`;
+        // 推送接口超时（90 秒）已包装为专属话术（以"推送案例超时"开头），
+        // 直接展示，不再叠加"推送异常："前缀。
+        const isPushTimeout = /^推送案例超时/.test(errorMessage);
+        const uiMsg = isPushTimeout ? errorMessage : `推送异常：${errorMessage}`;
         if (ctx.hooks.onUnexpectedError) ctx.hooks.onUnexpectedError(uiMsg);
         else ctx.hooks.onBackendError(uiMsg);
     } catch (hookErr: any) {

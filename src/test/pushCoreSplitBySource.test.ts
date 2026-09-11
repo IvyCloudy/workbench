@@ -130,7 +130,7 @@ describe('pushCore 按来源拆批推送：TC+uuid.hex → testAgent，其余 �
         expect(failures[2].reason).toBe('boom-testAgentMA');
     });
 
-    it('任一批接口失败（returnCode 非 SUC0000）→ 失败行合并到 onComplete（不再 onBackendError 终止）', async () => {
+    it('任一批接口失败（returnCode 非 SUC0000）→ 整文件级拒绝，走 onBackendError（同超时场景），不再合并到 onComplete', async () => {
         pushTestCase.mockImplementation(async (_ctx: any, data: any[], _t: any, _a: any, source: string) => {
             if (source === 'testAgent') return { returnCode: 'FAIL', errorMsg: 'tc-batch-down', body: null };
             return {
@@ -139,15 +139,13 @@ describe('pushCore 按来源拆批推送：TC+uuid.hex → testAgent，其余 �
             };
         });
         const hooks = await run([{ [TS_ID_COLUMN]: TC_ID }, { [TS_ID_COLUMN]: MA_ID }]);
-        // 不再走 onBackendError 终止路径——统一合并到 onComplete 展示
-        expect(hooks.onBackendError).not.toHaveBeenCalled();
-        expect(hooks.onComplete).toHaveBeenCalledTimes(1);
-        const { failures, total, successCount } = hooks.onComplete.mock.calls[0][0];
-        expect(successCount).toBe(0);
-        expect(total).toBe(2); // 原始总行数
-        // TC 批失败（tc-batch-down）+ MA 批后端逐行失败（x），共 2 条
-        expect(failures.length).toBe(2);
-        // TC 行的 reason 来自接口错误信息
-        expect(failures.find((f: any) => f.tsId === TC_ID)?.reason).toBe('tc-batch-down');
+        // 整文件级拒绝：走 onBackendError（与超时场景一致的整文件错误弹窗），统一加「后端返回失败:」前缀
+        expect(hooks.onBackendError).toHaveBeenCalledTimes(1);
+        expect(hooks.onBackendError).toHaveBeenCalledWith('后端返回失败: tc-batch-down');
+        // 不再把同一错误按行合并进 onComplete 展示
+        expect(hooks.onComplete).not.toHaveBeenCalled();
+        // 首个失败批次即中止整次推送，后续批次（MA）不再请求
+        expect(pushTestCase).toHaveBeenCalledTimes(1);
+        expect(pushTestCase.mock.calls[0][4]).toBe('testAgent');
     });
 });

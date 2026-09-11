@@ -347,6 +347,13 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
 
         pushDiag(`[接口] 即将调用后端推送 | 实际推送行数=${rows.length} ${rows.length === 0 ? '⚠️ 无合法行，将不调用接口' : ''}`);
         const invoked = await stepInvokeBackend(ctx, rows, taskInfo);
+        // 后端返回失败（returnCode != SUC0000）→ 整文件级拒绝，走 onBackendError 钩子
+        // （与超时场景一致的整文件错误弹窗），不再进入 onComplete 的逐行失败列表。
+        if (invoked.backendError) {
+            ctx.hooks.onBackendError(invoked.backendError);
+            emitProgress(ctx.hooks, 'done', { rows: originalRowsCount });
+            return;
+        }
 
         pushDiag('[step5] sanitizeSampleLeaks 开始');
         const cleaned = sanitizeSampleLeaks(ctx, invoked.successMappings, invoked.failures);

@@ -192,7 +192,7 @@ async function pushSingleFile(
     const { rowIndexMap, pushIndexToRow } = buildRowIndexMappings(rows);
 
     // 收集结果
-    let finalResult: { successCount: number; failures: PushFailureItem[]; total: number; skipped?: number; preValidationFailCount?: number; traceId?: string; costMs?: number } | null = null;
+    let finalResult: { successCount: number; failures: PushFailureItem[]; total: number; skipped?: number; preValidationFailCount?: number; traceId?: string; costMs?: number; error?: string } | null = null;
     let pushError: string | null = null;
     let resolved = false;
 
@@ -241,15 +241,32 @@ async function pushSingleFile(
                     resolved = true;
                 },
                 onBackendError: (errorMsg) => {
-                    // 后端返回失败 → 文本归类（bizReject/serverError 等）
+                    // 后端返回失败（整文件拒绝，如任务不匹配/权限/业务拦截）→ 文本归类（bizReject/serverError 等）。
+                    // 同时写入 error 字段：与超时一致，使批量总结面板将该文件标记为错误（✕），
+                    // 用户点击时弹出干净的"后端返回失败"提示（而非混入行级失败列表）。
                     const reason = `后端返回失败: ${errorMsg}`;
-                    finalResult = { successCount: 0, failures: [{ tsId: '', reason, category: classifyFailure({ reason }), field: failureFieldOf({ reason }) }], total: rows.length, skipped: 0 };
+                    finalResult = {
+                        successCount: 0,
+                        failures: [{ tsId: '', reason, category: classifyFailure({ reason }), field: failureFieldOf({ reason }) }],
+                        total: rows.length,
+                        skipped: 0,
+                        error: errorMsg,
+                    };
                     resolved = true;
                 },
                 onUnexpectedError: (errorMsg) => {
-                    // 意外错误 → unknown 兜底（但带 reason 便于回流补充规则）
+                    // 意外错误（含推送接口超时 90 秒）→ 整文件失败。
+                    // 同时写入 error 字段：使批量总结面板将该文件标记为错误（✕），
+                    // 用户点击此文件时弹出干净的超时/错误提示（而非混入行级失败列表）。
+                    // 保留 failures 以兼容逐文件失败维度埋点（与预校验错误同时带 error+failCount 的口径一致）。
                     const reason = errorMsg;
-                    finalResult = { successCount: 0, failures: [{ tsId: '', reason, category: classifyFailure({ reason }), field: failureFieldOf({ reason }) }], total: rows.length, skipped: 0 };
+                    finalResult = {
+                        successCount: 0,
+                        failures: [{ tsId: '', reason, category: classifyFailure({ reason }), field: failureFieldOf({ reason }) }],
+                        total: rows.length,
+                        skipped: 0,
+                        error: errorMsg,
+                    };
                     resolved = true;
                 },
                 onWriteBackFailed: (errorMsg) => {
@@ -499,7 +516,8 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
                     showPushErrorModal(panel, baseName, errorMsg);
                 },
                 onBackendError: (errorMsg) => {
-                    showPushErrorModal(panel, baseName, `后端返回失败: ${errorMsg}`);
+                    // 前缀「后端返回失败:」已由 stepInvokeBackend 统一添加，这里直接透传。
+                    showPushErrorModal(panel, baseName, errorMsg);
                 },
                 onUnexpectedError: (errorMsg) => {
                     showPushErrorModal(panel, baseName, errorMsg);

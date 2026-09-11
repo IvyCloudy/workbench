@@ -158,6 +158,14 @@ function curlRequest(
 
         execFile('curl', args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
             if (err) {
+                // execFile 超时（超时 kill 进程）时 err 可能带 code=ETIMEDOUT / killed=true，
+                // 但 message 不一定含"超时"字样；显式识别，产出可被上层识别为"请求超时"的文案。
+                const isTimeout = (err as any).code === 'ETIMEDOUT' || (err as any).killed === true
+                    || /timed out|timeout/i.test((err as any).message || '');
+                if (isTimeout) {
+                    reject(new Error('请求超时（curl 兜底），请检查后端服务是否可用'));
+                    return;
+                }
                 reject(new Error(`curl 兜底请求失败: ${(err as any).message || err}${stderr ? ' | ' + stderr : ''}`));
                 return;
             }
@@ -503,9 +511,9 @@ export async function pushTestCase(
 
         const _apiStart = Date.now();
         const appConfig = await readConfig(context);
-        // 推送超时下限为 5 分钟（PUSH_DEFAULT_TIMEOUT）：
+        // 推送超时下限为 90 秒（PUSH_DEFAULT_TIMEOUT）：
         // 不被 app-config 的通用 requestTimeoutMs（默认 10s）覆盖；
-        // 仅当用户显式配置更大的超时（>5 分钟）时才采用配置值。
+        // 仅当用户显式配置更大的超时（>90 秒）时才采用配置值。
         const pushTimeout = Math.max(PUSH_DEFAULT_TIMEOUT, appConfig?.requestTimeoutMs || 0);
         try {
             const response = await makeRequest<ApiResponse>('POST', url, headers, bodyStr, pushTimeout);
@@ -539,6 +547,15 @@ export async function pushTestCase(
             errorMessage: String(err?.message || String(err)).slice(0, 500),
             stackHead: stackHead(err),
         });
+        // 推送接口超时（90 秒）专属话术：超时不代表后端任务已终止，
+        // 需引导用户稍后到 TMS 确认结果，并建议分批推送以降低单次请求耗时。
+        const msg = String(err?.message || String(err));
+        if (/超时|timeout|ETIMEDOUT/i.test(msg)) {
+            throw new Error(
+                '推送案例超时（90 秒）未拿到推送结果。推送任务未终止（可能仍在 TMS 后台执行），'
+                + '请稍后到 TMS 平台查看案例是否推送成功；如需重试，可在案例编辑器中分批推送。'
+            );
+        }
         throw err;
     }
 }

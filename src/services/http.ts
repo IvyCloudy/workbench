@@ -10,7 +10,7 @@
  *    4. 统一翻译网络错误码（ECONNREFUSED 等）为可读中文提示
  *  设计要点：
  *    - 推送链路为关键链路：pushTestCase 会打印完整请求/响应日志（敏感头脱敏）
- *    - 请求超时可通过 AppConfig.requestTimeoutMs（app-config.json）配置；未配置时：推送默认 5 分钟（PUSH_DEFAULT_TIMEOUT），其余接口默认 10s（DEFAULT_TIMEOUT）
+ *    - 请求超时可通过 AppConfig.requestTimeoutMs（app-config.json）配置；未配置时：所有业务接口统一默认 90 秒（DEFAULT_TIMEOUT / PUSH_DEFAULT_TIMEOUT / 删除相关常量）
  *    - localhost 一律改写为 127.0.0.1，规避部分系统 IPv6 解析问题
  * ============================================================================
  */
@@ -37,23 +37,24 @@ export interface HttpResponse<T = any> {
 // 配置
 // ============================================
 
-const DEFAULT_TIMEOUT = 10000;
-/** 推送接口默认超时（批量推送耗时较长，默认放宽到 5 分钟） */
-const PUSH_DEFAULT_TIMEOUT = 300000;
+/** 通用接口默认超时（查询 / 签名等），与删除链路统一为 90 秒 */
+const DEFAULT_TIMEOUT = 90 * 1000;
+/** 推送接口默认超时，与删除链路统一为 90 秒 */
+const PUSH_DEFAULT_TIMEOUT = 90 * 1000;
 /**
  * 删除「确认」接口默认超时（预检）。
  *
- * 背景：真实环境实测该接口约 5 分钟才返回（需按 sourceIds 逐条查询执行/缺陷
- * 关联关系），故默认放宽到 6 分钟并留出一分钟余量。若沿用较小值（10s / 60s），
- * 接口尚未返回客户端就已判定超时，删除流程会被无谓阻断。
+ * 背景：与编辑器内删除预检（CONFIRM_TIMEOUT_MS = 90s，见前端 03d-row-ops.js）
+ * 对齐，统一为 90 秒。超过该时长仍未返回即判定为接口超时，删除流程进入
+ * 「预检异常」分支（阻断删除、由 did 阶段重建文件）。
  *
  * 与推送接口同款"下限保护"原则：取 max(本值, app-config 的 requestTimeoutMs)，
  * 不被更小的通用配置值覆盖。
  */
-const CONFIRM_DELETE_DEFAULT_TIMEOUT = 6 * 60 * 1000;
+const CONFIRM_DELETE_DEFAULT_TIMEOUT = 90 * 1000;
 
 /**
- * 删除「案例」接口默认超时（真实删除，默认放宽到 60 秒）。
+ * 删除「案例」接口默认超时（真实删除，与确认接口、编辑器预检统一为 90 秒）。
  *
  * 背景：该接口按 sourceIds 批量删除线上案例，案例数较多时后端需逐条处理，
  * 且可能需要一并清理关联的执行/缺陷关系，耗时显著高于普通查询接口。
@@ -63,12 +64,12 @@ const CONFIRM_DELETE_DEFAULT_TIMEOUT = 6 * 60 * 1000;
  * 数据不一致；而确认接口超时只是安全阻断（不删任何东西），后果轻得多。
  * 与推送接口同款"下限保护"原则：不被更小的通用配置值覆盖。
  */
-const DELETE_CASE_DEFAULT_TIMEOUT = 60000;
+const DELETE_CASE_DEFAULT_TIMEOUT = 90 * 1000;
 
 /**
  * 解析接口超时时间：优先级为
  *   1. app-config.json 的 requestTimeoutMs（如登录后下发）
- *   2. 调用方传入的 fallback（推送默认 5 分钟，其余默认 10s）
+ *   2. 调用方传入的 fallback（推送 / 查询 / 删除等统一默认 90 秒）
  * 任一来源为非正数 / 非数字时自动跳过，最终保证返回有效正数。
  */
 function resolveTimeout(cfg: AppConfig | undefined, fallback: number): number {
@@ -596,7 +597,7 @@ export async function deleteTestCase(
     const _apiStart = Date.now();
     try {
         // 真实删除接口按批量写语义放宽超时（下限保护，与 pushTestCase 同款策略）：
-        // 取 max(60s, app-config 配置值)，避免被较小的通用 requestTimeoutMs 覆盖，
+        // 取 max(90s, app-config 配置值)，避免被较小的通用 requestTimeoutMs 覆盖，
         // 从而降低"后端已删除但客户端判定超时失败"的不一致风险。
         const deleteTimeout = Math.max(DELETE_CASE_DEFAULT_TIMEOUT, appConfig?.requestTimeoutMs || 0);
         const response = await makeRequest<ApiResponse>('DELETE', url, headers, JSON.stringify(body), deleteTimeout);
@@ -689,7 +690,7 @@ export async function confirmDeleteTestCase(
     const _apiStart = Date.now();
     try {
         // 确认接口按批量查询语义放宽超时（下限保护，与 pushTestCase 同款策略）：
-        // 取 max(60s, app-config 配置值)，避免被较小的通用 requestTimeoutMs 覆盖。
+        // 取 max(90s, app-config 配置值)，避免被较小的通用 requestTimeoutMs 覆盖。
         const confirmTimeout = Math.max(CONFIRM_DELETE_DEFAULT_TIMEOUT, appConfig?.requestTimeoutMs || 0);
         const response = await makeRequest<ApiResponse>('POST', url, headers, JSON.stringify(body), confirmTimeout);
         console.log('[删除确认][响应] status=', response.status,

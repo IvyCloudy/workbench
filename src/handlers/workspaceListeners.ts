@@ -111,22 +111,24 @@ function isPointFile(fp: string): boolean {
 const WILL_DELETE_ENTRY_TTL_MS = 60_000;
 
 /**
- * 删除前线上「确认接口」(confirmDeleteTestCase) 的最长等待时间（8 分钟）。
+ * 删除前线上「确认接口」(confirmDeleteTestCase) 的**外层兜底**等待时间（100 秒）。
  *
- * 背景：真实环境实测确认接口约 5 分钟才返回。本值是**外层兜底**，必须严格大于
- * 底层 HTTP 超时 CONFIRM_DELETE_DEFAULT_TIMEOUT(6 分钟，见 services/http.ts)，
- * 否则外层会先于 HTTP 触发，把「接口即将正常返回」误判为超时：
- *   · 6 分钟内返回（HTTP 层判定）→ 正常按 returnCode 决定放行 / 阻断；
- *   · 6 分钟 HTTP 超时 → 由 HTTP 层 reject 并携带具体错误，视为「预检异常」；
- *   · 超过 8 分钟仍未返回（兜底）→ 抛出 PrecheckTimeoutError，同样按「预检异常」
+ * 背景：底层 HTTP 超时 CONFIRM_DELETE_DEFAULT_TIMEOUT 已统一为 90 秒
+ * （见 services/http.ts，与编辑器内 CONFIRM_TIMEOUT_MS 对齐）。本值作为更外层
+ * 兜底，必须严格大于底层 HTTP 超时，否则外层会先于 HTTP 触发，把
+ * 「接口即将正常返回」误判为超时：
+ *   · 90 秒内返回（HTTP 层判定）→ 正常按 returnCode 决定放行 / 阻断；
+ *   · 90 秒 HTTP 超时 → 由 HTTP 层 reject 并携带具体错误，视为「预检异常」；
+ *   · 超过 100 秒仍未返回（兜底）→ 抛出 PrecheckTimeoutError，同样按「预检异常」
  *     处理（needRestore=true，did 阶段重建原文件，阻断删除）。
  *
- * 另注：VSCode 的 onWillDeleteFiles 的 event.waitUntil 存在**不可控的内部超时**，
- * 且实测明显短于 5 分钟。一旦该超时到期，VSCode 会强制放行物理删除并取消 token，
- * 使本值实际上难以生效——详见 handleDidDeleteCaseFile 中的「中断占位」兜底分支。
+ * 另注：VSCode 的 onWillDeleteFiles 的 event.waitUntil 存在**不可控的内部超时**
+ * （files.participants.timeout = 10 分钟，远大于本链路）。一旦该超时到期，VSCode
+ * 会强制放行物理删除并取消 token，使本值实际上难以生效——详见
+ * handleDidDeleteCaseFile 中的「中断占位」兜底分支。
  * 因此本值只解决"配置层误判"，无法消除 VSCode 强制放行导致的删除中断。
  */
-const PRECHECK_TIMEOUT_MS = 8 * 60 * 1000;
+const PRECHECK_TIMEOUT_MS = 100 * 1000;
 
 /** 确认接口超时专用错误，便于在 catch 分支中识别并上报专门的埋点事件 */
 class PrecheckTimeoutError extends Error {
@@ -569,6 +571,9 @@ export async function handleCaseFileWillDelete(
     //      用独立 webview 弹窗以表格形式展示；否则走无表格的简单确认。
     // 预检异常（网络 / 返回非成功码）同样阻断删除，由 did 阶段弹插件封装的模态框。
     let confirmItems: DeleteConfirmItem[] = [];
+    // 弹窗「会同步删除 TMS 上 x 条案例」的 x：默认取文件内非空 testcase_id 行数，
+    // 确认接口成功返回后被覆盖为 type=1 + type=2 的真实可删除条数。
+    let caseCountForConfirm = nonEmptyIds.length;
     try {
         const tInfo = taskInfoResult;
         // 校验 1：未绑定测试任务 / 任务信息获取失败 → 阻断删除
@@ -617,6 +622,13 @@ export async function handleCaseFileWillDelete(
                 () => new PrecheckTimeoutError(PRECHECK_TIMEOUT_MS),
             );
             if (resp.returnCode === 'SUC0000' && Array.isArray(resp.body)) {
+                // 弹窗「会同步删除 TMS 上 x 条案例」的 x：
+                //   取确认接口返回中 type=1（允许删除）与 type=2（需确认后删除）的条目总数，
+                //   这两类代表「线上真实存在、删除会同步清理」的案例；
+                //   type=3（案例不存在）不计入 —— 它本来就不会被删除。
+                const deletableCount = resp.body.filter(
+                    (it: any) => Number(it?.type) === 1 || Number(it?.type) === 2,
+                ).length;
                 confirmItems = resp.body
                     .filter((it: any) => Number(it?.type) === 2)
                     .flatMap((it: any) => {
@@ -631,6 +643,8 @@ export async function handleCaseFileWillDelete(
                         }));
                     })
                     .filter((it: DeleteConfirmItem) => !!it.sourceId);
+                // 用确认接口实际可删除条数覆盖弹窗计数（而非文件内非空 id 行数）
+                caseCountForConfirm = deletableCount;
             } else {
                 // 删除确认接口返回非成功码：标记 needRestore 中止物理删除并还原文件；
                 // reportable=false 避免 did 阶段再弹一个空的「删除结果」modal；
@@ -693,10 +707,10 @@ export async function handleCaseFileWillDelete(
 
     const userConfirmed = confirmItems.length > 0
         ? await confirmCaseFileDeleteWithDetails(
-            { fileName: path.basename(filePath), caseCount: nonEmptyIds.length, items: confirmItems },
+            { fileName: path.basename(filePath), caseCount: caseCountForConfirm, items: confirmItems },
             token,
         )
-        : await confirmCaseFileDelete(filePath, nonEmptyIds.length, token);
+        : await confirmCaseFileDelete(filePath, caseCountForConfirm, token);
     if (!userConfirmed) {
         console.log('[workspaceListeners] 用户取消案例文件删除，标记 isUserCancel=true 到 willDeleteResults:', path.basename(filePath));
         if (pending) { pending.needRestore = true; pending.isUserCancel = true; pending.reportable = false; pending.total = nonEmptyIds.length; pending.successCount = 0; }

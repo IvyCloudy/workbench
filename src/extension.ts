@@ -91,7 +91,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // 的时间，远超默认 60 秒，会导致文件被强制删除后又被 did 阶段重建，删除始终无法完成。
     //
     // 取值 10 分钟，并与插件内另两个超时保持严格递减，确保前者不会被后者抢先触发：
-    //   files.participants.timeout(10min) > PRECHECK_TIMEOUT_MS(8min) > CONFIRM_DELETE_DEFAULT_TIMEOUT(6min)
+    //   files.participants.timeout(10min) > PRECHECK_TIMEOUT_MS(100s) > CONFIRM_DELETE_DEFAULT_TIMEOUT(90s)
     //
     // 仅在低于该值时提升，不覆盖用户已配置得更大的值；
     // 注意绝不能设为 0 —— 0 表示禁用 participants，会使 onWillDeleteFiles 删除拦截完全失效。

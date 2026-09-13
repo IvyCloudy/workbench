@@ -20,7 +20,7 @@
  *    - 各子项彼此独立，任一失败不影响其余，全部以 allSettled 兜底。
  *    - 纯工具模块（仅依赖各 store 的导出），不引入 vscode 命令 / UI，
  *      因此「通过要点删除」路径（单测友好）与「文件系统删除」路径均可复用。
- *    - 与 workspaceListeners.handleDidDeleteCaseFile、clearHighlightHandler
+ *    - 与 workspaceListeners（did 阶段案例文件删除决策链路）、clearHighlightHandler
  *      里内联的清理清单完全一致，集中于此避免三处散落、易漏改。
  * ============================================================================
  */

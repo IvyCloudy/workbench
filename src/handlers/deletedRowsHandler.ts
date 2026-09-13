@@ -3,6 +3,8 @@ import * as path from 'path';
 import { detectFileType, createParser } from '../parsers';
 import { syncDeletedRows, refreshAndGetDeletedRows } from '../utils/deletedRowsStore';
 import { showToast } from '../utils/message';
+import { reportDeleteResult } from '../utils/deleteFeedback';
+import type { PushFailure } from '../utils/message';
 import { TelemetryService } from '../utils/telemetry';
 import { getActiveFileUri, isTestCaseFile, telemetryErrProps } from '../utils/extensionHelpers';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
@@ -52,6 +54,21 @@ export async function handleSyncDeletedRows(): Promise<void> {
                 // 汇总分档：区分 type=1（删除成功）与 type=3（sourceId 不存在，仍算成功）
                 deletedSuccess: result.deletedSuccess,
                 deletedSourceMissing: result.deletedSourceMissing,
+            });
+            // P1-A1：与编辑器内右键删除对齐，也弹一个删除结果 modal 展示明细
+            // （之前只在表格内标记行状态，用户容易忽略失败原因）
+            const failures: PushFailure[] = result.failed
+                .map(f => ({ tsId: f.tsId, reason: f.reason || '线上删除失败' }))
+                .sort((a, b) => String(a.tsId).localeCompare(String(b.tsId)));
+            reportDeleteResult({
+                panel,
+                fileName: path.basename(uri.fsPath),
+                successCount: result.synced.length,
+                failures,
+                total: result.synced.length + result.failed.length,
+                error: undefined,
+                deletedSuccess: result.deletedSuccess.length,
+                deletedSourceMissing: result.deletedSourceMissing.length,
             });
         } else {
             // 无面板（文件未打开）时，退化为 toast 提示，避免静默无反馈

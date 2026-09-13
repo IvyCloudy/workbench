@@ -55,6 +55,7 @@ import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { TS_ID_COLUMN, isInTempFolder } from '../services/utils';
 import { resolveTaskInfoOrNull } from './pushCore.stages';
 import { TelemetryService } from '../utils/telemetry';
+import { telemetryTsIdListProps } from '../utils/extensionHelpers';
 import { showModal } from '../utils/message';
 import {
     confirmCaseFileDeleteWithDetails,
@@ -1206,6 +1207,15 @@ async function finalizeCaseFileAfterUserConfirm(
         success: String(successCount),
         failed: String(failures.length),
         filePath: path.basename(filePath),
+        // 汇总分档：区分 type=1 / type=3（均计入 synced）
+        deletedSuccess: String(syncResult.deletedSuccess.length),
+        deletedSourceMissing: String(syncResult.deletedSourceMissing.length),
+        // 成功 testcase_id 明细（便于事后审计），超长自动截断并标记
+        ...telemetryTsIdListProps({
+            syncedTsIds: syncResult.synced,
+            deletedSuccessIds: syncResult.deletedSuccess,
+            deletedSourceMissingIds: syncResult.deletedSourceMissing,
+        }),
     });
 
     if (failures.length === 0) {

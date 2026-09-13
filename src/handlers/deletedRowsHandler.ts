@@ -6,7 +6,7 @@ import { showToast } from '../utils/message';
 import { reportDeleteResult } from '../utils/deleteFeedback';
 import type { PushFailure } from '../utils/message';
 import { TelemetryService } from '../utils/telemetry';
-import { getActiveFileUri, isTestCaseFile, telemetryErrProps } from '../utils/extensionHelpers';
+import { getActiveFileUri, isTestCaseFile, telemetryErrProps, telemetryTsIdListProps } from '../utils/extensionHelpers';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 
 /**
@@ -84,6 +84,12 @@ export async function handleSyncDeletedRows(): Promise<void> {
             // 汇总分档：区分 type=1 / type=3（均计入 synced，但口径不同）
             deletedSuccess: String(result.deletedSuccess.length),
             deletedSourceMissing: String(result.deletedSourceMissing.length),
+            // 成功 testcase_id 明细（便于事后审计），超长自动截断并标记
+            ...telemetryTsIdListProps({
+                syncedTsIds: result.synced,
+                deletedSuccessIds: result.deletedSuccess,
+                deletedSourceMissingIds: result.deletedSourceMissing,
+            }),
         });
     } catch (err: any) {
         console.error('[syncDeletedRows] 失败:', err?.message || err);

@@ -211,7 +211,13 @@ function requestDeleteConfirm(tsIds, onProceed) {
         }
         if (result && result.ok && Array.isArray(result.items) && result.items.length > 0) {
             // 存在「需要确认」的案例 → 渲染带关联表格的确认弹窗
-            _showDeleteConfirmDialog(result.items, onProceed, ids);
+            // onlineDeleteCount：后端计算的「实际会同步删除到 TMS 的行数」（type=1 + type=2 合计），
+            // 用于首段红色大数字。不使用 ids.length，因为本次勾选行数可能包含本地新增（无 testCaseNo）
+            // 或线上已不存在（type=3）的行，与「真实线上删除数」口径不一致。
+            var _onlineDelCnt = (typeof result.onlineDeleteCount === 'number' && result.onlineDeleteCount >= 0)
+                ? result.onlineDeleteCount
+                : (Array.isArray(ids) ? ids.length : 0); // 兜底：老后端未返回该字段时退回旧口径
+            _showDeleteConfirmDialog(result.items, onProceed, ids, _onlineDelCnt);
         } else {
             // 无需额外确认 / 预检无结论降级 → 走原有简单确认
             _showPlainDeleteConfirm(onProceed, ids);
@@ -319,8 +325,10 @@ function _showPlainDeleteConfirm(onProceed, tsIds) {
  * @param items   需二次确认的案例明细
  * @param onProceed 用户点「确定删除」后执行
  * @param tsIds   本次涉及的 testcase_id；用户点「取消」/关闭时据此回滚 pending 态
+ * @param onlineDeleteCount 本次实际会调用 TMS 删除接口的行数（type=1 + type=2 合计）；
+ *                          用于首段红色大数字，与文件删除弹窗的 caseCount 口径一致。
  */
-function _showDeleteConfirmDialog(items, onProceed, tsIds) {
+function _showDeleteConfirmDialog(items, onProceed, tsIds, onlineDeleteCount) {
     var rowsHtml = '';
     for (var i = 0; i < items.length; i++) {
         var it = items[i] || {};
@@ -329,18 +337,29 @@ function _showDeleteConfirmDialog(items, onProceed, tsIds) {
         var exec = String(it.hasExec).toUpperCase() === 'Y' ? 'Y' : 'N';
         var bug = String(it.hasBug).toUpperCase() === 'Y' ? 'Y' : 'N';
         rowsHtml += '<tr>'
+            + '<td class="xs-dc-td xs-dc-idx">' + (i + 1) + '</td>'
             + '<td class="xs-dc-td xs-dc-no">' + escapeHtml(no) + '</td>'
             + '<td class="xs-dc-td xs-dc-name">' + escapeHtml(name) + '</td>'
             + '<td class="xs-dc-td xs-dc-flag" data-flag="' + exec + '">' + exec + '</td>'
             + '<td class="xs-dc-td xs-dc-flag" data-flag="' + bug + '">' + bug + '</td>'
             + '</tr>';
     }
-    var _count = Array.isArray(tsIds) ? tsIds.length : 0;
+    // 首段红字数量：优先使用后端精确统计的 onlineDeleteCount（type=1 + type=2 合计），
+    // 兜底才用 tsIds.length。与「案例文件删除」弹窗的 caseCount 口径完全一致。
+    var _count = (typeof onlineDeleteCount === 'number' && onlineDeleteCount >= 0)
+        ? onlineDeleteCount
+        : (Array.isArray(tsIds) ? tsIds.length : 0);
+    // 表格上方独立 hint：说明 Y/N 语义（与文件删除弹窗对齐，Y/N 说明从首段剥离到 hint）
+    var _tblHint = items.length > 0
+        ? '以下 <b>' + items.length + '</b> 条案例存在执行/缺陷关联（下表「执行」「缺陷」列，Y=存在，N=不存在）：'
+        : '';
     var html = ''
-        + '<div class="xs-dc-lead">谨慎操作：删除案例会同步删除 TMS 平台上的 '
-        + '<span class="xs-dc-count">' + _count + '</span> 条案例，并同步删除其执行和缺陷关联关系。如需继续操作，请忽略本提示（Y：存在，N：不存在）：</div>'
+        // 首段文案与文件删除对齐：聚焦「影响面」——本次删除会同步删除多少条线上案例
+        + '<div class="xs-dc-lead">谨慎操作：删除案例将同步删除 TMS 平台上的 '
+        + '<span class="xs-dc-count">' + _count + '</span> 条案例，以及这些案例的执行记录和缺陷关联。</div>'
+        + (_tblHint ? '<div class="xs-dc-tbl-hint">' + _tblHint + '</div>' : '')
         + '<div class="xs-dc-table-wrap"><table class="xs-dc-table">'
-        +   '<thead><tr><th>编号</th><th>名称</th><th>执行</th><th>缺陷</th></tr></thead>'
+        +   '<thead><tr><th class="xs-dc-th-idx" title="序号">#</th><th>编号</th><th>名称</th><th>执行</th><th>缺陷</th></tr></thead>'
         +   '<tbody>' + rowsHtml + '</tbody>'
         + '</table></div>'
         + '<div class="xs-dc-tail">删除不可恢复，是否确认删除</div>';

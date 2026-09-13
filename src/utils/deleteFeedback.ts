@@ -84,6 +84,7 @@ export function notifyPrecheckBlocked(params: {
  */
 export async function confirmCaseFileDeleteWithDetails(
     params: {
+        filePath: string;
         fileName: string;
         caseCount: number;
         items: DeleteConfirmItem[];
@@ -92,6 +93,7 @@ export async function confirmCaseFileDeleteWithDetails(
 ): Promise<boolean> {
     return showDeleteConfirmModal(
         {
+            filePath: params.filePath,
             fileName: params.fileName,
             caseCount: params.caseCount,
             items: Array.isArray(params.items) ? params.items : [],

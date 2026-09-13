@@ -286,6 +286,7 @@ async function handleClearAllMarks(_msg: any, ctx: EditorMsgCtx): Promise<void> 
  *   前端 → 扩展：{ type: 'confirmDeleteRows', data: { tsIds: string[] } }
  *   扩展 → 前端：{ type: 'confirmDeleteRowsResult', ok: boolean,
  *                  items: [{ sourceId, testCaseNo, testCaseName, hasExec, hasBug }],
+ *                  onlineDeleteCount?: number,   // 仅 ok=true：本次实际会调用 TMS 删除接口的行数（type=1 + type=2）
  *                  errorMessage?: string }
  */
 async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
@@ -306,27 +307,28 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
             // 任务信息获取失败（未绑定 / 解析异常）：**阻断删除**并用插件封装的模态框告知用户，
             // 与下方「接口返回非成功码」「网络异常」分支行为保持一致 —— 避免前端
             // 在无校验结论的情况下继续走简单确认弹窗，导致"两个弹窗同框"的体验问题。
-            // 文案与「案例文件删除」路径（workspaceListeners.handleCaseFileWillDelete）保持一致
-            const _errTxt = t.status === 'unbound'
+            // 文案与「案例文件删除」路径（workspaceListeners 中 did 阶段决策链路）保持一致
+        const _errTxt = t.status === 'unbound'
                 ? '当前文件未绑定测试任务，无法定位线上案例，请先绑定测试任务后再删除。'
                 : (t.errorMessage || '获取任务信息失败');
-            showModal(
-                ctx.webviewPanel,
-                'warning',
-                '提示',
-                `删除前校验未通过，已取消删除操作。\n\n错误信息：${_errTxt}`,
-            );
+            // 先 postMessage 通知前端清理 pending 态，再弹 modal（避免竞态）
             ctx.webviewPanel.webview.postMessage({
                 type: 'confirmDeleteRowsResult', ok: false, items: [], blocked: true,
                 errorMessage: _errTxt,
             });
+            showModal(
+                ctx.webviewPanel,
+                'warning',
+                '删除前校验未通过',
+                `本次删除已取消。\n\n错误信息：${_errTxt}`,
+            );
             return;
         }
         const resp = await confirmDeleteTestCase(ctx.extensionContext, t.taskInfo, tsIds);
         if (resp.returnCode !== 'SUC0000') {
             // 删除确认接口返回非成功码：**阻断删除**，并用插件封装的模态框告知用户。
             //
-            // 与「案例文件删除」路径（workspaceListeners.handleCaseFileWillDelete）保持行为一致：
+            // 与「案例文件删除」路径（workspaceListeners 中 did 阶段决策链路）保持行为一致：
             // 校验未通过即中止，不允许用户在无校验结论的情况下继续删除线上案例。
             //
             // 弹窗选型：用 showModal（插件封装的独立/内嵌 webview 模态框，带「确定」按钮、
@@ -337,17 +339,18 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
             // 错误信息只用后端 errorMsg（无则用占位文案），**不与 returnCode 拼接** ——
             // 弹窗已有独立的「返回码：xxx」行，拼接会导致 returnCode 重复出现两次。
             // 与「案例文件删除」路径（workspaceListeners）的文案口径保持一致。
-            const _errTxt = resp.errorMsg || '请稍后重试或联系管理员';
-            showModal(
-                ctx.webviewPanel,
-                'warning',
-                '提示',
-                `删除前校验未通过，已取消删除操作。\n\n返回码：${resp.returnCode || '-'}\n错误信息：${_errTxt}`,
-            );
+        const _errTxt = resp.errorMsg || '请稍后重试或联系管理员';
+            // 先 postMessage 通知前端清理 pending 态，再弹 modal（避免竞态）
             ctx.webviewPanel.webview.postMessage({
                 type: 'confirmDeleteRowsResult', ok: false, items: [], blocked: true,
                 errorMessage: _errTxt,
             });
+            showModal(
+                ctx.webviewPanel,
+                'warning',
+                '删除前校验未通过',
+                `本次删除已取消。\n\n返回码：${resp.returnCode || '-'}\n错误信息：${_errTxt}`,
+            );
             return;
         }
         // 只取 type=2（需要确认后删除）的案例，映射为前端表格所需字段
@@ -366,21 +369,39 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
                 }));
             })
             .filter((it: any) => !!it.sourceId);
-        ctx.webviewPanel.webview.postMessage({ type: 'confirmDeleteRowsResult', ok: true, items });
+        // 精确统计「本次实际会同步删除到 TMS 平台的案例数」：type=1（允许直接删除）
+        // + type=2（需要确认后删除）合计。type=3（线上不存在）不计入。
+        // 与「案例文件删除」路径（messageExtras.buildDeleteConfirmHtml 中的 caseCount）
+        // 口径保持一致——首段红色大数字必须严格等于「点确定后真正会调用 TMS 删除接口的行数」，
+        // 而不是本次勾选行数（tsIds.length），后者会把本地新增行/线上已不存在的行错误计入。
+        const onlineDeleteCount = raw
+            .filter((it: any) => {
+                const t = Number(it?.type);
+                return t === 1 || t === 2;
+            })
+            .reduce((sum: number, it: any) => {
+                const list = Array.isArray(it?.data) ? it.data : null;
+                // 有 data 数组则按 data 行数累加；否则按一条 sourceId 计一行（兼容后端可能的两种返回结构）
+                return sum + (list ? list.length : 1);
+            }, 0);
+        ctx.webviewPanel.webview.postMessage({
+            type: 'confirmDeleteRowsResult', ok: true, items, onlineDeleteCount,
+        });
     } catch (err: any) {
         // 预检异常（网络 / 解析 / 后端 5xx）：同样**阻断删除**并弹插件封装的模态框，
         // 与案例文件删除路径行为一致（见 handleConfirmDeleteRows 内非成功码分支的说明）。
         const _errTxt = String(err?.message || err || '删除确认接口调用失败');
-        showModal(
-            ctx.webviewPanel,
-            'warning',
-            '提示',
-            `删除前校验异常，已取消删除操作。\n\n错误信息：${_errTxt}`,
-        );
+        // 先 postMessage 通知前端清理 pending 态，再弹 modal（避免竞态）
         ctx.webviewPanel.webview.postMessage({
             type: 'confirmDeleteRowsResult', ok: false, items: [], blocked: true,
             errorMessage: _errTxt,
         });
+        showModal(
+            ctx.webviewPanel,
+            'warning',
+            '删除前校验异常',
+            `本次删除已取消。\n\n错误信息：${_errTxt}`,
+        );
     }
 }
 
@@ -553,7 +574,7 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
             ctx.webviewPanel,
             'error',
             '删除案例同步失败',
-            `删除案例同步失败，本次删除的 ${tsIds.length} 条案例均已保留（未删除）。\n\n错误信息：${_errText}`,
+            `因接口异常，${tsIds.length} 条案例仍保留在 TMS 平台，本地表格已恢复。请检查网络后重试或联系管理员。\n\n错误信息：${_errText}`,
         );
     }
 }

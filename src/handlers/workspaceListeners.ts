@@ -719,12 +719,14 @@ async function handleCaseFilesDidDelete(
     //   串行是为了避免瞬时并发大量线上请求 & 避免 panel reopen 竞态；
     //   批量模式下 finalize 不再 reopen 编辑器、不 postMessage，改为统一汇总；
     //   payloadSink 收集"打开文件后弹详情"所需的完整参数（供 onOpenFile 使用）。
+    //   syncedIdsSink 收集每个文件本次成功的三档 tsId，些 batch.done 埋点一次性汇总。
     const detailPayloadSink = new Map<string, DeleteResultPayload>();
+    const syncedIdsSink = createBatchSyncedIdsSink();
     const onlineResults: PushFileResult[] = [];
     for (const c of needConfirmCtxs) {
         if (c.stage !== 'needConfirm') continue;
         try {
-            const r = await finalizeCaseFileAfterUserConfirm(c, /* batchMode */ true, detailPayloadSink);
+            const r = await finalizeCaseFileAfterUserConfirm(c, /* batchMode */ true, detailPayloadSink, syncedIdsSink);
             onlineResults.push(r);
         } catch (err: any) {
             console.error('[workspaceListeners] batch finalize 异常:', c.entry.fileName, err?.message || err);
@@ -835,6 +837,38 @@ async function handleCaseFilesDidDelete(
             headerTitle: '删除完成',
             // 不展开失败明细，用户点击文件行时通过 presentDeleteResult 查看详情
             showFailureDetails: false,
+        });
+    }
+
+    // Step 12：批量汇总埋点上报
+    //   与逐文件的 `caseFileDelete.intercept.done`（batch='true'）互补：
+    //   - 逐文件事件：具体可下钻到单文件级别、但需客户端聚合；
+    //   - 汇总事件（本处）：直接回答"本次批量删了多少 tsId、多少文件、失败、跳过"，
+    //     便于大盘计算批量规模分布、成功率。
+    //   重要字段：batchTotalFiles / batchOnlineFiles / batchHardDeleteFiles / batchPrecheckFailedFiles
+    //   以及 allSyncedTsIds 汇总（取自 syncedIdsSink，与逐文件事件 tsId 并集一致）。
+    {
+        const summary = syncedIdsSink.snapshot();
+        const succeededOnlineFiles = onlineResults.filter(r => r.failCount === 0 && !r.error).length;
+        const failedOnlineFiles = onlineResults.length - succeededOnlineFiles;
+        TelemetryService.sendTelemetryEvent('caseFileDelete.batch.done', {
+            // 文件维度统计
+            batchTotalFiles: String(entries.length),
+            batchOnlineFiles: String(onlineResults.length),
+            batchOnlineSucceededFiles: String(succeededOnlineFiles),
+            batchOnlineFailedFiles: String(failedOnlineFiles),
+            batchHardDeleteFiles: String(hardDeleteResults.length),
+            batchPrecheckFailedFiles: String(skippedResults.length),
+            // tsId 维度统计（均仅统计线上删除部分；type=1 + type=3）
+            batchSyncedTotal: String(summary.syncedTsIds.length),
+            batchDeletedSuccessTotal: String(summary.deletedSuccessIds.length),
+            batchDeletedSourceMissingTotal: String(summary.deletedSourceMissingIds.length),
+            // 成功 testcase_id 明细（合集），超长自动截断并标记
+            ...telemetryTsIdListProps({
+                batchSyncedTsIds: summary.syncedTsIds,
+                batchDeletedSuccessIds: summary.deletedSuccessIds,
+                batchDeletedSourceMissingIds: summary.deletedSourceMissingIds,
+            }),
         });
     }
 }
@@ -1097,6 +1131,47 @@ interface DeleteResultPayload {
 }
 
 /**
+ * 批量删除"成功 tsId 明细"聚合器 —— 让 finalize 在批量场景下把
+ * 每个文件的 syncResult 三档 id 累加进来，最终由批量入口的 `caseFileDelete.batch.done`
+ * 埋点一次性上报"整批删除了哪些 tsId"。
+ *
+ * 设计要点：
+ *   - 只在批量分支（handleCaseFilesDidDelete N≥2）构造，单文件路径不传（其明细已在
+ *     `caseFileDelete.intercept.done` 单条事件里携带，避免重复上报）；
+ *   - 各文件 syncResult 的 synced/deletedSuccess/deletedSourceMissing 按追加语义合并；
+ *   - 不去重：同一次批量操作里，同一 tsId 不会横跨多个文件（业务上互斥），
+ *     假如未来出现重复上报也交给后端按 unique 聚合，客户端保持"忠实回放"语义。
+ */
+interface BatchSyncedIdsSink {
+    /** 追加一个文件的 syncResult 三档 tsId */
+    appendFromSyncResult(sync: { synced: string[]; deletedSuccess: string[]; deletedSourceMissing: string[] }): void;
+    /** 快照当前累计结果（用于 batch.done 埋点上报） */
+    snapshot(): { syncedTsIds: string[]; deletedSuccessIds: string[]; deletedSourceMissingIds: string[] };
+}
+
+/** 构造一个批量 tsId 明细聚合器（新的独立实例，避免跨批污染） */
+function createBatchSyncedIdsSink(): BatchSyncedIdsSink {
+    const synced: string[] = [];
+    const deletedSuccess: string[] = [];
+    const deletedSourceMissing: string[] = [];
+    return {
+        appendFromSyncResult(sync) {
+            if (Array.isArray(sync?.synced)) synced.push(...sync.synced);
+            if (Array.isArray(sync?.deletedSuccess)) deletedSuccess.push(...sync.deletedSuccess);
+            if (Array.isArray(sync?.deletedSourceMissing)) deletedSourceMissing.push(...sync.deletedSourceMissing);
+        },
+        snapshot() {
+            // 返回浅拷贝，避免外部修改回灌进内部累积状态
+            return {
+                syncedTsIds: synced.slice(),
+                deletedSuccessIds: deletedSuccess.slice(),
+                deletedSourceMissingIds: deletedSourceMissing.slice(),
+            };
+        },
+    };
+}
+
+/**
  * "用户已确认删除"之后的执行流程：
  *   调 syncDeletedRows → 全部成功真删 / 部分失败覆写为"仅失败行" → 弹结果反馈。
  *
@@ -1110,11 +1185,15 @@ interface DeleteResultPayload {
  * @param payloadSink 批量模式下的详情载荷收集器（可选）：
  *   若传入，则把该文件"打开后弹详情"所需的完整参数写入 map，
  *   由上层 onOpenFile 从中取出后调 presentDeleteResult 弹出详情弹窗。
+ * @param syncedIdsSink 批量模式下的"成功 tsId 明细"收集器（可选）：
+ *   若传入，则把该文件本次删除成功的三档 tsId 追加进去，供上层批量汇总埋点使用。
+ *   单文件路径不传（其明细已在 `caseFileDelete.intercept.done` 单条事件里携带）。
  */
 async function finalizeCaseFileAfterUserConfirm(
     ctx: Extract<CaseFileDecisionContext, { stage: 'needConfirm' }>,
     batchMode = false,
     payloadSink?: Map<string, DeleteResultPayload>,
+    syncedIdsSink?: BatchSyncedIdsSink,
 ): Promise<PushFileResult> {
     const { entry, tableData, sourceData, rows, rowTsIds, nonEmptyIds } = ctx;
     const { filePath, fileName, wasOpen } = entry;
@@ -1207,6 +1286,8 @@ async function finalizeCaseFileAfterUserConfirm(
         success: String(successCount),
         failed: String(failures.length),
         filePath: path.basename(filePath),
+        // 单文件 vs 批量子事件：便于后端按 session 聚合与分维度分析
+        batch: batchMode ? 'true' : 'false',
         // 汇总分档：区分 type=1 / type=3（均计入 synced）
         deletedSuccess: String(syncResult.deletedSuccess.length),
         deletedSourceMissing: String(syncResult.deletedSourceMissing.length),
@@ -1217,6 +1298,11 @@ async function finalizeCaseFileAfterUserConfirm(
             deletedSourceMissingIds: syncResult.deletedSourceMissing,
         }),
     });
+
+    // 批量模式：向上层 sink 回传本文件本次成功的三档 tsId，供批量汇总埋点使用。
+    if (syncedIdsSink) {
+        syncedIdsSink.appendFromSyncResult(syncResult);
+    }
 
     if (failures.length === 0) {
         // 全部成功 → 真删本地文件（关 tab、unlink、清理缓存、弹结果 modal）

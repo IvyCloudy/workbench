@@ -68,6 +68,11 @@ import { confirmDeleteTestCase } from '../services/http';
 // 批量删除结果汇总面板：复用批量推送的 pushUI（同一 webview 组件，onOpenFile 点击才打开文件）
 import { showPushSummary } from '../utils/pushUI';
 import type { PushFileResult } from '../utils/pushUI';
+import {
+    createBatchSyncedIdsSink,
+    type BatchSyncedIdsSink,
+    type FileUnlinkReport,
+} from '../utils/batchDeleteSink';
 
 /** 案例编辑器 viewType（保持与 BaseEditorProvider 注册值一致） */
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
@@ -688,11 +693,20 @@ async function handleCaseFilesDidDelete(
     //   （单文件路径仍在 decideAndFinalizeCaseFileDelete 里保留 wasOpen ? reopen 的原体验。）
 
     // Step 8: 无需线上的文件：直接真删（不再逐个弹提示，结果并入汇总面板）
+    //   注：syncedIdsSink 需在 Step 9 之前先创建（下移了 sink 初始化），
+    //   以便 hardDeleteOnly 文件的 unlink 结果也能回传，仅 hardDeleteOnly。
+    const syncedIdsSink = createBatchSyncedIdsSink();
     const hardDeleteResults: PushFileResult[] = [];
     for (const c of hardDeleteCtxs) {
         if (c.stage !== 'hardDelete') continue;
+        // 先在 sink 里标记本文件为 hardDeleteOnly（即使 unlink 失败也保留一条 per-file 记录）
+        syncedIdsSink.markHardDeleteOnly(c.entry.filePath);
         try {
-            await finalizeHardDelete(c.entry.filePath);
+            await finalizeHardDelete(c.entry.filePath, {
+                mode: 'hardDeleteOnly',
+                batch: true,
+                onUnlinkReport: report => syncedIdsSink.recordUnlink(report),
+            });
             hardDeleteResults.push({
                 filePath: c.entry.filePath,
                 fileName: c.entry.fileName,
@@ -719,9 +733,8 @@ async function handleCaseFilesDidDelete(
     //   串行是为了避免瞬时并发大量线上请求 & 避免 panel reopen 竞态；
     //   批量模式下 finalize 不再 reopen 编辑器、不 postMessage，改为统一汇总；
     //   payloadSink 收集"打开文件后弹详情"所需的完整参数（供 onOpenFile 使用）。
-    //   syncedIdsSink 收集每个文件本次成功的三档 tsId，些 batch.done 埋点一次性汇总。
+    //   syncedIdsSink 已在 Step 8 初始化（为了容纳 hardDeleteOnly 文件的 unlink 结果），本步直接复用。
     const detailPayloadSink = new Map<string, DeleteResultPayload>();
-    const syncedIdsSink = createBatchSyncedIdsSink();
     const onlineResults: PushFileResult[] = [];
     for (const c of needConfirmCtxs) {
         if (c.stage !== 'needConfirm') continue;
@@ -752,6 +765,9 @@ async function handleCaseFilesDidDelete(
     const skippedResults: PushFileResult[] = precheckFailedCtxs.map(c => {
         const reason = (c.stage === 'precheckFailed' ? c.precheckError : '') || '未知';
         precheckReasonByPath.set(c.entry.filePath, reason);
+        // 同时统一将预检失败写入批量 sink，以便在 batch.file 埋点中可追溯
+        //   "本批删除到底涉及哪些文件"（含预检失败，而非仅批量总览里的一个计数）。
+        syncedIdsSink.markPrecheckFailed(c.entry.filePath, reason);
         return {
             filePath: c.entry.filePath,
             fileName: c.entry.fileName,
@@ -871,6 +887,48 @@ async function handleCaseFilesDidDelete(
             }),
         });
     }
+
+    // Step 13：逐文件明细埋点上报（每个文件一条 `caseFileDelete.batch.file`）
+    //   与 Step 12 的总览事件互补：
+    //   - 总览事件回答"整批规模"；
+    //   - 本步事件回答"每个文件删了哪些 tsId、unlink 结果如何"，
+    //     便于后端按文件级别下钻分析（例如：定位到具体哪个文件删除失败）。
+    //   分开上报（每个文件一条）是有意为之：
+    //   （a）规避单事件字段的 8000 字符长度限制；
+    //   （b）每条事件天然自带文件归属，避免"大列表拼一起后归属不清"的问题。
+    //   范围：包含本次批量处理的所有文件 —— 含预检失败（precheckFailed=true / unlinkResult='skipped'），
+    //   以便后端回放完整的"批量文件清单"。
+    {
+        const fileRecords = syncedIdsSink.snapshotFiles();
+        const batchTotalFiles = fileRecords.length;
+        fileRecords.forEach((rec, idx) => {
+            TelemetryService.sendTelemetryEvent('caseFileDelete.batch.file', {
+                // 归属标识：让后端能把同一批次的多条 batch.file 拼回一起
+                fileIndex: String(idx),
+                batchTotalFiles: String(batchTotalFiles),
+                filePath: path.basename(rec.filePath),
+                // 文件类型：区分 hardDeleteOnly（无 tsId 直删）与走 TMS 同步的文件
+                hardDeleteOnly: rec.hardDeleteOnly ? 'true' : 'false',
+                // 预检失败标记：后端可据此筛选"未真正执行删除动作的文件"
+                precheckFailed: rec.precheckFailed ? 'true' : 'false',
+                precheckReason: rec.precheckReason,
+                // 文件 unlink 结果（预检失败时为 'skipped'）
+                unlinkResult: rec.unlinkResult,
+                unlinkErrorCode: rec.unlinkErrorCode,
+                fileSize: String(rec.fileSize),
+                // 本文件 tsId 三档计数（便于后端不解析明细也能做统计）
+                syncedCount: String(rec.syncedTsIds.length),
+                deletedSuccessCount: String(rec.deletedSuccessIds.length),
+                deletedSourceMissingCount: String(rec.deletedSourceMissingIds.length),
+                // 本文件 tsId 明细（分开上报后单文件明细通常都不会触发截断）
+                ...telemetryTsIdListProps({
+                    syncedTsIds: rec.syncedTsIds,
+                    deletedSuccessIds: rec.deletedSuccessIds,
+                    deletedSourceMissingIds: rec.deletedSourceMissingIds,
+                }),
+            });
+        });
+    }
 }
 
 /**
@@ -917,7 +975,7 @@ async function decideAndFinalizeCaseFileDelete(
 
     // 无需线上：直接真删
     if (ctx.stage === 'hardDelete') {
-        await finalizeHardDelete(entry.filePath);
+        await finalizeHardDelete(entry.filePath, { mode: 'hardDeleteOnly', batch: false });
         return;
     }
 
@@ -1131,45 +1189,9 @@ interface DeleteResultPayload {
 }
 
 /**
- * 批量删除"成功 tsId 明细"聚合器 —— 让 finalize 在批量场景下把
- * 每个文件的 syncResult 三档 id 累加进来，最终由批量入口的 `caseFileDelete.batch.done`
- * 埋点一次性上报"整批删除了哪些 tsId"。
- *
- * 设计要点：
- *   - 只在批量分支（handleCaseFilesDidDelete N≥2）构造，单文件路径不传（其明细已在
- *     `caseFileDelete.intercept.done` 单条事件里携带，避免重复上报）；
- *   - 各文件 syncResult 的 synced/deletedSuccess/deletedSourceMissing 按追加语义合并；
- *   - 不去重：同一次批量操作里，同一 tsId 不会横跨多个文件（业务上互斥），
- *     假如未来出现重复上报也交给后端按 unique 聚合，客户端保持"忠实回放"语义。
+ * 批量 sink 相关类型与工厂已拆到 utils/batchDeleteSink.ts（方便单测直接 import）。
+ * 以下仅使用其导出。
  */
-interface BatchSyncedIdsSink {
-    /** 追加一个文件的 syncResult 三档 tsId */
-    appendFromSyncResult(sync: { synced: string[]; deletedSuccess: string[]; deletedSourceMissing: string[] }): void;
-    /** 快照当前累计结果（用于 batch.done 埋点上报） */
-    snapshot(): { syncedTsIds: string[]; deletedSuccessIds: string[]; deletedSourceMissingIds: string[] };
-}
-
-/** 构造一个批量 tsId 明细聚合器（新的独立实例，避免跨批污染） */
-function createBatchSyncedIdsSink(): BatchSyncedIdsSink {
-    const synced: string[] = [];
-    const deletedSuccess: string[] = [];
-    const deletedSourceMissing: string[] = [];
-    return {
-        appendFromSyncResult(sync) {
-            if (Array.isArray(sync?.synced)) synced.push(...sync.synced);
-            if (Array.isArray(sync?.deletedSuccess)) deletedSuccess.push(...sync.deletedSuccess);
-            if (Array.isArray(sync?.deletedSourceMissing)) deletedSourceMissing.push(...sync.deletedSourceMissing);
-        },
-        snapshot() {
-            // 返回浅拷贝，避免外部修改回灌进内部累积状态
-            return {
-                syncedTsIds: synced.slice(),
-                deletedSuccessIds: deletedSuccess.slice(),
-                deletedSourceMissingIds: deletedSourceMissing.slice(),
-            };
-        },
-    };
-}
 
 /**
  * "用户已确认删除"之后的执行流程：
@@ -1301,12 +1323,19 @@ async function finalizeCaseFileAfterUserConfirm(
 
     // 批量模式：向上层 sink 回传本文件本次成功的三档 tsId，供批量汇总埋点使用。
     if (syncedIdsSink) {
-        syncedIdsSink.appendFromSyncResult(syncResult);
+        syncedIdsSink.appendFromSyncResult(filePath, syncResult);
     }
 
     if (failures.length === 0) {
         // 全部成功 → 真删本地文件（关 tab、unlink、清理缓存、弹结果 modal）
-        await finalizeHardDelete(filePath);
+        //   批量场景下同时将 unlink 结果回传 sink，供 batch.file 事件使用。
+        await finalizeHardDelete(filePath, {
+            mode: 'afterSync',
+            batch: batchMode,
+            onUnlinkReport: batchMode && syncedIdsSink
+                ? report => syncedIdsSink.recordUnlink(report)
+                : undefined,
+        });
         if (!batchMode) {
             // P0-B1：与失败场景统一走 reportDeleteResult（同款 modal），
             // 复用 deletedSuccess / deletedSourceMissing 明细展示，避免"成功走 modal、
@@ -1414,25 +1443,68 @@ async function finalizeCaseFileAfterUserConfirm(
 }
 
 /**
+ * finalizeHardDelete 的调用上下文选项（用于打点归因）。
+ *
+ * 需求：文件删除动作需要独立埋点事件 `caseFileDelete.file.unlink`，
+ *     以便与 tsId 同步事件解耦（后端能单独统计"实际删了多少文件、失败率、大小分布"）。
+ *
+ * 上层调用方按语义传入 mode / batch：
+ *   - mode='afterSync'：走完 TMS 同步后的真删（`finalizeCaseFileAfterUserConfirm` 收尾）
+ *   - mode='hardDeleteOnly'：无 testcase_id 或全部本地未推送 → 无需线上、直接真删
+ *
+ * 批量模式下再通过 onUnlinkReport 回调把结果回传给 per-file sink，
+ * 供批量汇总事件 `caseFileDelete.batch.file` 记录每个文件的删除结果。
+ */
+interface FinalizeHardDeleteOpts {
+    mode: 'afterSync' | 'hardDeleteOnly';
+    batch: boolean;
+    /** 批量场景下的回调：把 unlink 结果回传给 per-file sink */
+    onUnlinkReport?: (report: FileUnlinkReport) => void;
+}
+
+/**
  * 真删本地文件：关闭 tab（若已开）→ unlink → 清理缓存/绑定库。
  * 仅在"全部同步成功"或"文件本就无需线上操作"路径调用。
+ *
+ * 独立埋点：无论 unlink 成功/失败，都会上报 `caseFileDelete.file.unlink`，
+ * 便于后端分维度统计"删了多少个文件、失败率、大小分布、是否批量"，
+ * 与 `intercept.done`（tsId 同步维度）解耦，互不覆盖。
  */
-async function finalizeHardDelete(filePath: string): Promise<void> {
+async function finalizeHardDelete(filePath: string, opts?: FinalizeHardDeleteOpts): Promise<void> {
+    // unlink 前抓取文件大小，用于埋点分析（获取失败返回 -1 而非中断流程）
+    let fileSize = -1;
     try {
-        // 关闭已打开的案例编辑器 tab（若有）：用 revert + close 保底
+        const stat = await fs.promises.stat(filePath);
+        fileSize = stat.size;
+    } catch {
+        // 文件可能已不存在或权限不足，忽略即可
+    }
+
+    // 关闭已打开的案例编辑器 tab（若有）：用 revert + close 保底
+    let hadOpenPanel = false;
+    try {
         const panel = BaseEditorProvider.getPanel(filePath);
         if (panel) {
+            hadOpenPanel = true;
             try { panel.dispose(); } catch { /* ignore */ }
         }
     } catch (_) { /* ignore */ }
 
-    // 主动 unlink
+    // 主动 unlink：区分 ok / enoent / failed 三档，便于埋点归因
+    let unlinkResult: 'ok' | 'enoent' | 'failed' = 'ok';
     let unlinkErr: any = null;
+    let errorCode = '';
+    let errorMessage = '';
     try {
         await fs.promises.unlink(filePath);
     } catch (err: any) {
-        // 文件可能已不存在（并发场景）：忽略 ENOENT（等价于删除成功）
-        if (err?.code !== 'ENOENT') {
+        errorCode = String(err?.code || '');
+        errorMessage = String(err?.message || err || '').slice(0, 500);
+        if (err?.code === 'ENOENT') {
+            // 文件可能已不存在（并发场景）：等价删除成功
+            unlinkResult = 'enoent';
+        } else {
+            unlinkResult = 'failed';
             unlinkErr = err;
             console.warn('[workspaceListeners] finalizeHardDelete unlink 失败:', path.basename(filePath), err?.message || err);
         }
@@ -1441,7 +1513,36 @@ async function finalizeHardDelete(filePath: string): Promise<void> {
     // 清理插件侧的缓存/结定/高亮（无论 unlink 是否成功都经过清理，避免脏数据残留）
     try { await cleanupCaseFileTraces(filePath); } catch (_) { /* ignore */ }
 
-    // 将非 ENOENT 的 unlink 失败报告给上层，避免静默失败导致“提示删除成功但本地文件仍存在”
+    // 独立埋点：文件删除事件。无论成功/失败/ENOENT 都上报，便于失败率分析。
+    // 埋点异常绝不影响主流程（TelemetryService 内部已有 try/catch，但外层再包一层双保险）。
+    try {
+        TelemetryService.sendTelemetryEvent('caseFileDelete.file.unlink', {
+            filePath: path.basename(filePath),
+            unlinkResult,
+            errorCode,
+            errorMessage,
+            fileSize: String(fileSize),
+            hadOpenPanel: hadOpenPanel ? 'true' : 'false',
+            batch: opts?.batch ? 'true' : 'false',
+            mode: opts?.mode || 'afterSync',
+        });
+    } catch (_) { /* ignore */ }
+
+    // 批量场景：把本次结果回传给上层 sink，用于批量按文件汇总事件
+    if (opts?.onUnlinkReport) {
+        try {
+            opts.onUnlinkReport({
+                filePath,
+                unlinkResult,
+                errorCode,
+                errorMessage,
+                fileSize,
+                hadOpenPanel,
+            });
+        } catch (_) { /* ignore */ }
+    }
+
+    // 将非 ENOENT 的 unlink 失败报告给上层，避免静默失败导致"提示删除成功但本地文件仍存在"
     if (unlinkErr) {
         throw unlinkErr;
     }

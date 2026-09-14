@@ -583,7 +583,7 @@ function handleRequest(req, res) {
                             testCaseName: '模拟案例-' + sid,
                             hasExec: cHasExec ? 'Y' : 'N',
                             hasBug: cHasBug ? 'Y' : 'N',
-                            sourcePlatform: _caseSourceOf(sid)
+                            sourceType: _caseSourceOf(sid)
                         }]
                     };
                 }
@@ -598,7 +598,7 @@ function handleRequest(req, res) {
                         testCaseName: '模拟案例-' + sid,
                         hasExec: 'N',
                         hasBug: 'N',
-                        sourcePlatform: _caseSourceOf(sid)
+                        sourceType: _caseSourceOf(sid)
                     }]
                 };
             });
@@ -613,7 +613,7 @@ function handleRequest(req, res) {
                 if (it.type === 2) {
                     dlist.forEach(function (d, j) {
                         console.log('    [%d-%d] sourceId=%s type=2 来源=%s 执行关联=%s 缺陷关联=%s 编号=%s 名称=%s',
-                            i + 1, j + 1, it.sourceId, d.sourcePlatform || '-', d.hasExec, d.hasBug,
+                            i + 1, j + 1, it.sourceId, d.sourceType || '-', d.hasExec, d.hasBug,
                             d.testCaseNo || '-', d.testCaseName || '-');
                     });
                 } else {

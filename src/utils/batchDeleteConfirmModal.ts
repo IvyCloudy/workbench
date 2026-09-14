@@ -135,7 +135,7 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
         const rowsHtml = items.map((it, rowIdx) => {
             const exec = String(it.hasExec).trim().toUpperCase() === 'Y' ? 'Y' : 'N';
             const bug = String(it.hasBug).trim().toUpperCase() === 'Y' ? 'Y' : 'N';
-            const platform = it.sourcePlatform || '';
+            const platform = it.sourceType || '';
             return `<tr>`
                 + `<td class="xs-dc-td xs-dc-idx">${rowIdx + 1}</td>`
                 + `<td class="xs-dc-td xs-dc-no">${escapeHtml_(it.testCaseNo)}</td>`

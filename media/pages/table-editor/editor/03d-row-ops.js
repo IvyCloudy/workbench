@@ -339,7 +339,7 @@ function _showDeleteConfirmDialog(items, onProceed, tsIds, onlineDeleteCount) {
         var name = it.testCaseName || '';
         var exec = String(it.hasExec).toUpperCase() === 'Y' ? 'Y' : 'N';
         var bug = String(it.hasBug).toUpperCase() === 'Y' ? 'Y' : 'N';
-        var platform = it.sourcePlatform || '';
+        var platform = it.sourceType || '';
         rowsHtml += '<tr>'
             + '<td class="xs-dc-td xs-dc-idx">' + (i + 1) + '</td>'
             + '<td class="xs-dc-td xs-dc-no">' + escapeHtml(no) + '</td>'

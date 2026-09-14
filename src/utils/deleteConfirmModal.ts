@@ -31,6 +31,8 @@ export interface DeleteConfirmItem {
     hasExec: string;
     /** 是否存在缺陷关联：'Y' 存在 / 'N' 不存在 */
     hasBug: string;
+    /** 案例来源 */
+    sourcePlatform?: string;
 }
 
 /**
@@ -54,12 +56,14 @@ function buildDeleteConfirmHtml(
     const rowsHtml = items.map((it, idx) => {
         const exec = String(it.hasExec).trim().toUpperCase() === 'Y' ? 'Y' : 'N';
         const bug = String(it.hasBug).trim().toUpperCase() === 'Y' ? 'Y' : 'N';
+        const platform = it.sourcePlatform || '';
         return `<tr>`
             + `<td class="xs-dc-td xs-dc-idx">${idx + 1}</td>`
             + `<td class="xs-dc-td xs-dc-no">${escapeHtml_(it.testCaseNo)}</td>`
             + `<td class="xs-dc-td xs-dc-name">${escapeHtml_(it.testCaseName)}</td>`
             + `<td class="xs-dc-td xs-dc-flag" data-flag="${exec}">${exec}</td>`
             + `<td class="xs-dc-td xs-dc-flag" data-flag="${bug}">${bug}</td>`
+            + `<td class="xs-dc-td xs-dc-platform" title="${escapeHtml_(platform)}">${escapeHtml_(platform)}</td>`
             + `</tr>`;
     }).join('');
 
@@ -106,9 +110,10 @@ ${baseModalCss_(headerBg, color, '')}
     .xs-dc-table tbody tr:nth-child(even){background:#fcfcfc}
     .xs-dc-idx{width:8%;color:#999;text-align:center;white-space:nowrap;font-variant-numeric:tabular-nums}
     .xs-dc-no{width:28%;color:#666;white-space:nowrap}
-    .xs-dc-name{width:40%}
+    .xs-dc-name{width:33%}
     .xs-dc-phase{width:12%;color:#666}
-    .xs-dc-table td.xs-dc-flag{width:12%;text-align:center;font-weight:600;color:#c0392b}
+    .xs-dc-table td.xs-dc-platform{width:13%;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .xs-dc-table td.xs-dc-flag{width:10%;text-align:center;font-weight:600;color:#c0392b}
     .xs-dc-table td.xs-dc-flag[data-flag="N"]{color:#999;font-weight:400}
     .xs-dc-count{color:#d4380d;font-weight:700;font-size:15px;padding:0 2px}
     /* footer 左侧提示：与批量版对齐（xs-modal-footer 由 baseModalCss_ 提供 flex 布局） */
@@ -128,7 +133,7 @@ ${baseModalCss_(headerBg, color, '')}
             ${tblHint ? `<div class="xs-dc-tbl-hint">${tblHint}</div>` : ''}
             <div class="xs-dc-table-wrap">
                 <table class="xs-dc-table">
-<thead><tr><th class="xs-dc-th-c xs-dc-th-idx" title="序号">#</th><th>编号</th><th>名称</th><th class="xs-dc-th-c">执行</th><th class="xs-dc-th-c">缺陷</th></tr></thead>
+<thead><tr><th class="xs-dc-th-c xs-dc-th-idx" title="序号">#</th><th>编号</th><th>名称</th><th class="xs-dc-th-c">执行</th><th class="xs-dc-th-c">缺陷</th><th>来源</th></tr></thead>
                     <tbody>${rowsHtml}</tbody>
                 </table>
             </div>

@@ -135,19 +135,21 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
         const rowsHtml = items.map((it, rowIdx) => {
             const exec = String(it.hasExec).trim().toUpperCase() === 'Y' ? 'Y' : 'N';
             const bug = String(it.hasBug).trim().toUpperCase() === 'Y' ? 'Y' : 'N';
+            const platform = it.sourcePlatform || '';
             return `<tr>`
                 + `<td class="xs-dc-td xs-dc-idx">${rowIdx + 1}</td>`
                 + `<td class="xs-dc-td xs-dc-no">${escapeHtml_(it.testCaseNo)}</td>`
                 + `<td class="xs-dc-td xs-dc-name">${escapeHtml_(it.testCaseName)}</td>`
                 + `<td class="xs-dc-td xs-dc-flag" data-flag="${exec}">${exec}</td>`
                 + `<td class="xs-dc-td xs-dc-flag" data-flag="${bug}">${bug}</td>`
+                + `<td class="xs-dc-td xs-dc-platform" title="${escapeHtml_(platform)}">${escapeHtml_(platform)}</td>`
                 + `</tr>`;
         }).join('');
         const table = items.length > 0
             ? `<div class="xs-bd-tbl-hint">以下 <b>${items.length}</b> 条案例存在执行/缺陷关联（下表「执行」「缺陷」列，Y=存在，N=不存在）：</div>
                <div class="xs-bd-tbl-wrap">
                    <table class="xs-dc-table">
-<thead><tr><th class="xs-dc-th-c xs-dc-th-idx" title="序号">#</th><th>编号</th><th>名称</th><th class="xs-dc-th-c">执行</th><th class="xs-dc-th-c">缺陷</th></tr></thead>
+<thead><tr><th class="xs-dc-th-c xs-dc-th-idx" title="序号">#</th><th>编号</th><th>名称</th><th class="xs-dc-th-c">执行</th><th class="xs-dc-th-c">缺陷</th><th>来源</th></tr></thead>
                        <tbody>${rowsHtml}</tbody>
                    </table>
                </div>`
@@ -270,10 +272,11 @@ ${baseModalCss_(headerBg, color, '')}
     .xs-dc-table td{padding:6px 8px;border-bottom:1px solid #f0f0f0;color:#333;word-break:break-all}
     .xs-dc-table tbody tr:last-child td{border-bottom:none}
     .xs-dc-table tbody tr:nth-child(even){background:#fcfcfc}
-    .xs-dc-no{width:32%;color:#666;white-space:nowrap}
-    .xs-dc-name{width:44%}
-    .xs-dc-table td.xs-dc-flag{width:12%;text-align:center;font-weight:600;color:#c0392b}
+    .xs-dc-no{width:27%;color:#666;white-space:nowrap}
+    .xs-dc-name{width:35%}
+    .xs-dc-table td.xs-dc-flag{width:10%;text-align:center;font-weight:600;color:#c0392b}
     .xs-dc-table td.xs-dc-flag[data-flag="N"]{color:#999;font-weight:400}
+    .xs-dc-table td.xs-dc-platform{width:13%;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     /* 预检失败面板 */
     .xs-bd-fail{border:1px solid #ffccc7;background:#fff2f0;border-radius:4px;padding:10px 12px}
     .xs-bd-fail-head{display:flex;align-items:center;gap:10px;font-size:13px}

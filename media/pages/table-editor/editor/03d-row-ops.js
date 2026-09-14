@@ -240,7 +240,10 @@ function requestDeleteConfirm(tsIds, onProceed) {
         _showPrecheckTimeoutFallback(ids, onProceed);
     }, CONFIRM_TIMEOUT_MS);
     try {
-        S.vscode.postMessage({ type: 'confirmDeleteRows', data: { tsIds: ids } });
+        S.vscode.postMessage({
+            type: 'confirmDeleteRows',
+            data: { tsIds: ids },
+        });
     } catch (_) {
         finish({ ok: false, items: [] });
     }
@@ -336,12 +339,14 @@ function _showDeleteConfirmDialog(items, onProceed, tsIds, onlineDeleteCount) {
         var name = it.testCaseName || '';
         var exec = String(it.hasExec).toUpperCase() === 'Y' ? 'Y' : 'N';
         var bug = String(it.hasBug).toUpperCase() === 'Y' ? 'Y' : 'N';
+        var platform = it.sourcePlatform || '';
         rowsHtml += '<tr>'
             + '<td class="xs-dc-td xs-dc-idx">' + (i + 1) + '</td>'
             + '<td class="xs-dc-td xs-dc-no">' + escapeHtml(no) + '</td>'
             + '<td class="xs-dc-td xs-dc-name">' + escapeHtml(name) + '</td>'
             + '<td class="xs-dc-td xs-dc-flag" data-flag="' + exec + '">' + exec + '</td>'
             + '<td class="xs-dc-td xs-dc-flag" data-flag="' + bug + '">' + bug + '</td>'
+            + '<td class="xs-dc-td xs-dc-platform" title="' + escapeHtml(platform) + '">' + escapeHtml(platform) + '</td>'
             + '</tr>';
     }
     // 首段红字数量：优先使用后端精确统计的 onlineDeleteCount（type=1 + type=2 合计），
@@ -359,7 +364,7 @@ function _showDeleteConfirmDialog(items, onProceed, tsIds, onlineDeleteCount) {
         + '<span class="xs-dc-count">' + _count + '</span> 条案例，以及这些案例的执行记录和缺陷关联。</div>'
         + (_tblHint ? '<div class="xs-dc-tbl-hint">' + _tblHint + '</div>' : '')
         + '<div class="xs-dc-table-wrap"><table class="xs-dc-table">'
-        +   '<thead><tr><th class="xs-dc-th-idx" title="序号">#</th><th>编号</th><th>名称</th><th>执行</th><th>缺陷</th></tr></thead>'
+        +   '<thead><tr><th class="xs-dc-th-idx" title="序号">#</th><th>编号</th><th>名称</th><th>执行</th><th>缺陷</th><th>来源</th></tr></thead>'
         +   '<tbody>' + rowsHtml + '</tbody>'
         + '</table></div>'
         + '<div class="xs-dc-tail">删除不可恢复，是否确认删除</div>';

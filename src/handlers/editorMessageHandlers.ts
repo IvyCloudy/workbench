@@ -367,6 +367,7 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
                     testCaseName: String(d?.testCaseName ?? '').trim(),
                     hasExec: String(d?.hasExec ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
                     hasBug: String(d?.hasBug ?? 'N').trim().toUpperCase() === 'Y' ? 'Y' : 'N',
+                    sourcePlatform: String(d?.sourcePlatform ?? '').trim(),
                 }));
             })
             .filter((it: any) => !!it.sourceId);

@@ -532,11 +532,12 @@ tbody tr.xs-tr-frozen.selected td.xs-td{background:#dde7f3}
 .xs-dc-table tbody tr:last-child td{border-bottom:none}
 .xs-dc-table tbody tr:nth-child(even){background:#fcfcfc}
 .xs-dc-th-idx{text-align:center !important}
-.xs-dc-idx{width:8%;color:#999;text-align:center;white-space:nowrap;font-variant-numeric:tabular-nums}
-.xs-dc-no{width:28%;color:#666;white-space:nowrap}
-.xs-dc-name{width:40%}
+.xs-dc-idx{width:7%;color:#999;text-align:center;white-space:nowrap;font-variant-numeric:tabular-nums}
+.xs-dc-no{width:25%;color:#666;white-space:nowrap}
+.xs-dc-name{width:33%}
 
-.xs-dc-flag{width:12%;text-align:center;font-weight:600}
+.xs-dc-flag{width:10%;text-align:center;font-weight:600}
+.xs-dc-platform{width:13%;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Y 标记为警示色（存在关联），N 为次要色 */
 .xs-dc-flag:not(:empty){color:#c0392b}
 .xs-dc-table td.xs-dc-flag[data-flag="N"]{color:#999;font-weight:400}

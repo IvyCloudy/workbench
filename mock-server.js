@@ -517,6 +517,13 @@ function handleRequest(req, res) {
             var cSubTestTaskId = payload2.subTestTaskId || '';
             var cSourceIds = Array.isArray(payload2.sourceIds) ? payload2.sourceIds : [];
             var cOperationUser = payload2.operationUser || '';
+            // 案例来源：按 sourceId 稳定分配
+            var CASE_SOURCES = ['API', 'UI', 'Batch'];
+            function _caseSourceOf(sid) {
+                var idx = Math.floor(stableHash01(sid + '#src') * CASE_SOURCES.length);
+                if (idx < 0 || idx >= CASE_SOURCES.length) idx = 0;
+                return CASE_SOURCES[idx];
+            }
 
             var ts2 = new Date().toISOString();
             console.log('[%s] 收到删除确认请求(%s %s) testTaskNo=%s subTestTaskId=%s operationUser=%s 共 %d 条 sourceIds=%s',
@@ -575,7 +582,8 @@ function handleRequest(req, res) {
                             testCaseNo: 'TC' + stamp + (1000 + i),
                             testCaseName: '模拟案例-' + sid,
                             hasExec: cHasExec ? 'Y' : 'N',
-                            hasBug: cHasBug ? 'Y' : 'N'
+                            hasBug: cHasBug ? 'Y' : 'N',
+                            sourcePlatform: _caseSourceOf(sid)
                         }]
                     };
                 }
@@ -589,7 +597,8 @@ function handleRequest(req, res) {
                         testCaseNo: 'TC' + stamp + (1000 + i),
                         testCaseName: '模拟案例-' + sid,
                         hasExec: 'N',
-                        hasBug: 'N'
+                        hasBug: 'N',
+                        sourcePlatform: _caseSourceOf(sid)
                     }]
                 };
             });
@@ -603,8 +612,8 @@ function handleRequest(req, res) {
                 var dlist = Array.isArray(it.data) ? it.data : [];
                 if (it.type === 2) {
                     dlist.forEach(function (d, j) {
-                        console.log('    [%d-%d] sourceId=%s type=2 执行关联=%s 缺陷关联=%s 编号=%s 名称=%s',
-                            i + 1, j + 1, it.sourceId, d.hasExec, d.hasBug,
+                        console.log('    [%d-%d] sourceId=%s type=2 来源=%s 执行关联=%s 缺陷关联=%s 编号=%s 名称=%s',
+                            i + 1, j + 1, it.sourceId, d.sourcePlatform || '-', d.hasExec, d.hasBug,
                             d.testCaseNo || '-', d.testCaseName || '-');
                     });
                 } else {

@@ -656,15 +656,16 @@ export async function deleteTestCase(
  * 这些案例里哪些会连带删除「执行 / 缺陷」关联关系，需要用户二次确认。
  *
  * 后端契约：POST ${apiBaseUrl}/api/v1/delete-testAgent-case-confirm
- *   Body: { testTaskNo, subTestTaskId, sourceIds, operationUser }  ← 与删除案例接口完全一致
+ *   Body: { testTaskNo, subTestTaskId, sourceIds, operationUser }
  *
  * @param taskInfo  必填，{ testTaskNo, subTestTaskId }
  * @param sourceIds 必填，待确认案例的 testcase_id 列表
  *
- * 出参 body[]：{ sourceId, type, data: Array<{ sourceId, testCaseNo, testCaseName, hasExec, hasBug }> }
+ * 出参 body[]：{ sourceId, type, data: Array<{ sourceId, testCaseNo, testCaseName, hasExec, hasBug, sourcePlatform }> }
  *   type: 1 允许删除（无执行/缺陷关联）
  *         2 需要确认后删除（data 中每条 hasExec / hasBug 至少一个为 'Y'；一个 sourceId 可对应多条）
  *         3 案例不存在
+ *   data 每项含 sourcePlatform：案例来源
  *
  * 失败语义：本接口仅用于「提示增强」，因此**任何异常都不应阻断删除主流程**。
  *   调用方应在 catch 中降级为「不展示关联表格、按原有简单确认继续」。
@@ -681,6 +682,8 @@ export interface ConfirmDeleteCaseItem {
         hasExec?: string;
         /** 是否存在缺陷关联：'Y' 存在 / 'N' 不存在 */
         hasBug?: string;
+        /** 案例来源 */
+        sourcePlatform?: string;
     }>;
 }
 

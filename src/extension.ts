@@ -10,7 +10,6 @@
  *  较大处理逻辑已拆分至：
  *    - handlers/pushHandler.ts       文件推送
  *    - handlers/fileCreator.ts       文件创建（测试案例 / 测试要点）
- *    - handlers/editorCommands.ts    编辑器切换命令
  *    - handlers/workspaceListeners.ts 工作区文件变化监听（重命名、删除）
  *    - handlers/deletedRowsHandler.ts 已删除行同步
  *    - handlers/yamlPreOpenInterceptor.ts YAML CustomEditor 打开前置拦截
@@ -32,7 +31,6 @@ import { showModal, showToast } from './utils/message';
 import { BaseEditorProvider } from './providers/BaseEditorProvider';
 import { TelemetryService } from './utils/telemetry';
 import { getActiveFileUri, isTestCaseFile, updateShowIcon, telemetryErrProps } from './utils/extensionHelpers';
-import { registerEditorCommands } from './handlers/editorCommands';
 import { handleFilePush } from './handlers/pushHandler';
 import { handleCreateNewTestCase, handleCreateNewTestPoint } from './handlers/fileCreator';
 import { handleSyncDeletedRows } from './handlers/deletedRowsHandler';
@@ -155,9 +153,6 @@ export async function activate(context: vscode.ExtensionContext) {
                 throw err;
             }
         }),
-
-        // ---- 编辑器切换命令 ----
-        ...registerEditorCommands(context, /\.(csv|ya?ml|json)$/i),
 
         // ---- 推送命令 ----
         vscode.commands.registerCommand(

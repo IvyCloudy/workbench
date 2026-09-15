@@ -414,54 +414,34 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             TelemetryService.sendTelemetryErrorEvent('editor.keepEditor.failed', buildErrorProps(e));
         }
 
-        // 先识别文件类型；不合格直接展示错误页
+        // 先识别文件类型；不合格时渲染清晰报错页
         const resolved = this.resolveFile(document.uri);
+        // 相对打开工作区的路径，用于清晰的错误说明（层级从工作区根起算）
+        const relPath = vscode.workspace.asRelativePath(document.uri.fsPath, false);
         webviewPanel.title = fileName + ' - 测试案例编辑器';
         webviewPanel.webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
 
         if (!resolved.qualified || !resolved.type) {
-            // 「临时文件」文件夹内的文件：不识别为案例，直接使用默认（文本）编辑器打开，
+            // 「临时文件」文件夹内的文件：沿用历史行为，直接使用系统文本编辑器打开，
             // 不进入案例编辑器、也不自动添加 testcase_id 字段。
-            // 注意：必须用 showTextDocument 而非 openWith(uri,'default') —— 本扩展对
-            // **/测试任务/*/测试案例/** 下的 json/yaml/csv 注册了 priority=default 的 custom editor，
-            // 若用 openWith('default') 会再次路由回本 custom editor，造成 dispose↔resolve 死循环。
+            // 注意：必须用 showTextDocument 而非 openWith(uri,'default') —— 本扩展对这些文件
+            // 注册了 priority=default 的 custom editor，openWith('default') 会再次路由回本
+            // custom editor，造成 dispose↔resolve 死循环。
             if (isInTempFolder(document.uri.fsPath)) {
                 TelemetryService.sendTelemetryEvent('editor.opened.tempFolder', { targetFile: fileName });
                 log('⚠ 位于「临时文件」文件夹，改用文本编辑器打开');
-                // ⚠️ 关键：不能在 resolveCustomEditor 里直接 dispose(webviewPanel)。
-                //   直接 dispose 会让 VS Code 认为 CustomEditor 打开失败，弹出
-                //   "Unable to open ... OverlayWebview has been disposed"。
-                //   正确做法：先塞透明占位 HTML 让 resolve 正常返回，再用文本编辑器打开文件，
-                //   最后异步关闭当前 CustomEditor tab。
-                try {
-                    webviewPanel.webview.html = '<html><body style="margin:0;padding:0;background:transparent;"></body></html>';
-                } catch (_) { /* ignore */ }
-                try {
-                    const doc = await vscode.workspace.openTextDocument(document.uri);
-                    await vscode.window.showTextDocument(doc);
-                } catch (e: any) {
-                    log('打开文本编辑器失败: ' + (e?.message || e));
-                }
-                setTimeout(() => {
-                    void (async () => {
-                        for (const group of vscode.window.tabGroups.all) {
-                            for (const tab of group.tabs) {
-                                const input = tab.input as any;
-                                if (input && input.viewType === TESTCASE_EDITOR_VIEWTYPE
-                                    && input.uri instanceof vscode.Uri
-                                    && input.uri.toString() === document.uri.toString()) {
-                                    try { await vscode.window.tabGroups.close(tab, true); } catch (_) { /* ignore */ }
-                                }
-                            }
-                        }
-                    })();
-                }, 0);
+                this.redirectToTextEditor(document, webviewPanel, fileName, log);
                 return;
             }
+            // 其余不合格文件（含嵌套 测试任务、路径层级不对等）：渲染清晰报错页指出问题
+            // （哪一层不对 / 完整相对路径 / 排查建议，见 FileTypeChecker.getErrorMessage）。
+            // 说明：本扩展的 custom editor glob 仅匹配合格结构（测试任务/*/测试案例），
+            // 所以「双击」不满足要求的文件根本不会进入本编辑器（由 VS Code 默认文本打开）；
+            // 能到达这里的都是用户「显式 Open With > 测试案例编辑器」，应明确告知路径不满足要求。
             TelemetryService.sendTelemetryEvent('editor.opened.unqualified', { targetFile: fileName });
             log('⚠ unqualified, render error page');
             webviewPanel.webview.html = buildErrorHtml(
-                this.getErrorMessage(resolved.type, document.uri.fsPath),
+                this.getErrorMessage(resolved.type, relPath),
                 '不支持的文件',
                 [
                     { label: '用文本编辑器打开', action: 'openTextEditor', primary: true }
@@ -677,6 +657,47 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         }
         webviewPanel.webview.html = await this.buildEditorHtml(nonce, webviewPanel, session.type, taskInfoForWebView);
         log('✅ html ready');
+    }
+
+    /**
+     * 将不合格文件从案例编辑器重定向到系统文本编辑器打开（不弹错误页）。
+     *
+     * ⚠️ 关键：不能在 resolveCustomEditor 里直接 dispose(webviewPanel)。
+     *   直接 dispose 会让 VS Code 认为 CustomEditor 打开失败，弹出
+     *   "Unable to open ... OverlayWebview has been disposed"。
+     *   正确做法：先塞透明占位 HTML 让 resolve 正常返回，再用文本编辑器打开文件，
+     *   最后异步关闭当前 CustomEditor tab。
+     *
+     * @param log 带 panel 标识的日志函数
+     */
+    private redirectToTextEditor(
+        document: vscode.CustomDocument,
+        webviewPanel: vscode.WebviewPanel,
+        fileName: string,
+        log: (...args: any[]) => void
+    ): void {
+        try {
+            webviewPanel.webview.html = '<html><body style="margin:0;padding:0;background:transparent;"></body></html>';
+        } catch (_) { /* ignore */ }
+        try {
+            vscode.workspace.openTextDocument(document.uri).then(doc => vscode.window.showTextDocument(doc));
+        } catch (e: any) {
+            log('打开文本编辑器失败: ' + (e?.message || e));
+        }
+        setTimeout(() => {
+            void (async () => {
+                for (const group of vscode.window.tabGroups.all) {
+                    for (const tab of group.tabs) {
+                        const input = tab.input as any;
+                        if (input && input.viewType === TESTCASE_EDITOR_VIEWTYPE
+                            && input.uri instanceof vscode.Uri
+                            && input.uri.toString() === document.uri.toString()) {
+                            try { await vscode.window.tabGroups.close(tab, true); } catch (_) { /* ignore */ }
+                        }
+                    }
+                }
+            })();
+        }, 0);
     }
 
     /**

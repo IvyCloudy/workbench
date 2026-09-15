@@ -52,14 +52,6 @@
         "icon": "$(checklist)"
       },
       {
-        "command": "testcaseViewer.openWithEditor",
-        "title": "用测试案例编辑器打开"
-      },
-      {
-        "command": "testcaseViewer.openWithText",
-        "title": "用 Text Editor 打开"
-      },
-      {
         "command": "testcaseViewer.pushTestCaseFromExplorer",
         "title": "推送测试案例",
         "icon": "$(cloud-upload)"

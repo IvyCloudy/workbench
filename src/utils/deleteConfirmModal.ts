@@ -32,7 +32,7 @@ export interface DeleteConfirmItem {
     /** 是否存在缺陷关联：'Y' 存在 / 'N' 不存在 */
     hasBug: string;
     /** 案例来源 */
-    sourcePlatform?: string;
+    sourceType?: string;
 }
 
 /**
@@ -56,7 +56,7 @@ function buildDeleteConfirmHtml(
     const rowsHtml = items.map((it, idx) => {
         const exec = String(it.hasExec).trim().toUpperCase() === 'Y' ? 'Y' : 'N';
         const bug = String(it.hasBug).trim().toUpperCase() === 'Y' ? 'Y' : 'N';
-        const platform = it.sourcePlatform || '';
+        const platform = it.sourceType || '';
         return `<tr>`
             + `<td class="xs-dc-td xs-dc-idx">${idx + 1}</td>`
             + `<td class="xs-dc-td xs-dc-no">${escapeHtml_(it.testCaseNo)}</td>`

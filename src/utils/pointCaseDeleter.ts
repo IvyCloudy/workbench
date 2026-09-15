@@ -32,7 +32,7 @@
  *    5. 匹配到 0 条：不写盘、不报错，返回 deletedCount: 0。
  *    6. 删除后案例文件剩余行数为 0（即全部案例被删）：直接删除该案例文件，
  *      并清理其绑定关系（point-case-bindings.json）、推送快照、高亮与
- *      linker 缓存，避免出现"空案例文件 / 幽灵绑定"；结果 caseFileDeleted=true。
+ *      linker 缓存，避免出现"空案例文件 / 幽灵绑定"；结果 fileDeleted=true。
  *
  *  设计要点：
  *    - 使用 withFileLock 对案例文件路径加锁，与 writeBackTestCaseNos 共用
@@ -190,7 +190,11 @@ export interface DeleteCasesByPointResult {
     /** 删除后剩余行数 */
     remainingRecords: number;
     /** 案例文件是否因本次删除被整体清空并删除（remainingRecords===0 时为真） */
-    caseFileDeleted: boolean;
+    fileDeleted: boolean;
+    /** 被删除的案例文件绝对路径（fileDeleted 为 true 时填充，否则为空串） */
+    deletedFilePath?: string;
+    /** 文件删除失败原因（删除成功为空串；删除尝试失败时为错误描述） */
+    fileDeleteError?: string;
     /** 端到端耗时(ms)——不上报埋点，仅返回给调用方 */
     costMs: number;
 }
@@ -212,7 +216,11 @@ export interface DeleteCasesByPointsResult {
     /** 删除后剩余行数 */
     remainingRecords: number;
     /** 案例文件是否因本次删除被整体清空并删除 */
-    caseFileDeleted: boolean;
+    fileDeleted: boolean;
+    /** 被删除的案例文件绝对路径（fileDeleted 为 true 时填充，否则为空串） */
+    deletedFilePath?: string;
+    /** 文件删除失败原因（删除成功为空串；删除尝试失败时为错误描述） */
+    fileDeleteError?: string;
     /** 端到端耗时(ms)——仅返回给调用方 */
     costMs: number;
 }
@@ -352,8 +360,10 @@ export async function deleteCasesByPoints(
             // 回填真实耗时到逐要点明细（内部为 0，仅用于埋点展示）
             for (const pp of result.perPoint) {
                 pp.costMs = result.costMs;
-                // caseFileDeleted 是文件级语义，回填到逐要点明细便于单点 API 直接读取
-                pp.caseFileDeleted = result.caseFileDeleted;
+                // fileDeleted 是文件级语义，回填到逐要点明细便于单点 API 直接读取
+                pp.fileDeleted = result.fileDeleted;
+                pp.deletedFilePath = result.deletedFilePath;
+                pp.fileDeleteError = result.fileDeleteError;
             }
             // ① 逐要点各上报一条 done（明细口径：deletedCount 为单要点命中数）
             for (let i = 0; i < points.length; i++) {
@@ -382,9 +392,11 @@ async function deleteCasesFromCaseFile(
     point: Required<DeleteCasesByPointInput>,
 ): Promise<DeleteCasesByPointResult> {
     const agg = await deleteCasesFromCaseFileMulti(casePath, [point]);
-    // caseFileDeleted 是文件级语义，回填进单要点明细便于内部单点入口直接读取
+    // fileDeleted 是文件级语义，回填进单要点明细便于内部单点入口直接读取
     const r = agg.perPoint[0];
-    r.caseFileDeleted = agg.caseFileDeleted;
+    r.fileDeleted = agg.fileDeleted;
+    r.deletedFilePath = agg.deletedFilePath;
+    r.fileDeleteError = agg.fileDeleteError;
     r.costMs = agg.costMs;
     return r;
 }
@@ -507,7 +519,9 @@ async function deleteCasesFromCaseFileMulti(
             typeCount: perPointTypeCount[p],
             totalRecords,
             remainingRecords: totalRecords - cases.length,
-            caseFileDeleted: false,
+            fileDeleted: false,
+            deletedFilePath: '',
+            fileDeleteError: '',
             costMs: 0,
         };
     });
@@ -535,7 +549,9 @@ async function deleteCasesFromCaseFileMulti(
             typeCount,
             totalRecords,
             remainingRecords: totalRecords,
-            caseFileDeleted: false,
+            fileDeleted: false,
+            deletedFilePath: '',
+            fileDeleteError: '',
             costMs: Date.now() - t0,
         };
     }
@@ -549,11 +565,13 @@ async function deleteCasesFromCaseFileMulti(
     //   并清理其绑定关系 + 所有相关追踪存储，避免出现"幽灵案例文件/绑定"。
     if (remainingRecords === 0) {
         let fileDeleted = false;
+        let fileDeleteError = '';
         try {
             await fs.promises.unlink(casePath);
             fileDeleted = true;
         } catch (err: any) {
             // 文件已不存在 / 无权限等：记录但不阻断（继续清理绑定与缓存）
+            fileDeleteError = err?.message || String(err);
             logger.warn('删除空的案例文件失败（不影响绑定清理）', err?.message);
         }
 
@@ -582,7 +600,9 @@ async function deleteCasesFromCaseFileMulti(
             typeCount,
             totalRecords,
             remainingRecords: 0,
-            caseFileDeleted: fileDeleted,
+            fileDeleted: fileDeleted,
+            deletedFilePath: fileDeleted ? casePath : '',
+            fileDeleteError,
             costMs: Date.now() - t0,
         };
     }
@@ -636,7 +656,9 @@ async function deleteCasesFromCaseFileMulti(
         typeCount,
         totalRecords,
         remainingRecords,
-        caseFileDeleted: false,
+        fileDeleted: false,
+        deletedFilePath: '',
+        fileDeleteError: '',
         costMs: Date.now() - t0,
     };
 }
@@ -788,7 +810,8 @@ function emitDoneTelemetry(
             deletedCount: String(result.deletedCount),
             totalRecords: String(result.totalRecords),
             remainingRecords: String(result.remainingRecords),
-            caseFileDeleted: String(result.caseFileDeleted ? 1 : 0),
+            fileDeleted: String(result.fileDeleted ? 1 : 0),
+            fileDeleteError: result.fileDeleteError || '',
             type1: String(result.typeCount.type1),
             type2: String(result.typeCount.type2),
             type3: String(result.typeCount.type3),
@@ -836,7 +859,8 @@ function emitAggregateDoneTelemetry(
             deletedCount: String(result.deletedCount),
             totalRecords: String(result.totalRecords),
             remainingRecords: String(result.remainingRecords),
-            caseFileDeleted: String(result.caseFileDeleted ? 1 : 0),
+            fileDeleted: String(result.fileDeleted ? 1 : 0),
+            fileDeleteError: result.fileDeleteError || '',
             type1: String(result.typeCount.type1),
             type2: String(result.typeCount.type2),
             type3: String(result.typeCount.type3),

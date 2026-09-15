@@ -543,7 +543,7 @@ describe('pointCaseDeleter · 案例文件清空', () => {
         (removePathInBindings as any).mockResolvedValue(true);
     });
 
-    it('全部案例被删除后：案例文件从磁盘删除 + 清理绑定关系 + caseFileDeleted=true', async () => {
+    it('全部案例被删除后：案例文件从磁盘删除 + 清理绑定关系 + fileDeleted=true', async () => {
         const dir = mkTmpDir();
         const fp = writeYaml(dir, 'cases.yaml', `- testcase_id: TC001\n  name: 唯一案例\n  path: 模块/功能/要点\n`);
         expect(fs.existsSync(fp)).toBe(true);
@@ -554,7 +554,7 @@ describe('pointCaseDeleter · 案例文件清空', () => {
         });
 
         // 1) 结果标记案例文件已删除
-        expect(res.caseFileDeleted).toBe(true);
+        expect(res.fileDeleted).toBe(true);
         expect(res.deletedCount).toBe(1);
         expect(res.remainingRecords).toBe(0);
         // 2) 文件确实从磁盘消失
@@ -564,7 +564,7 @@ describe('pointCaseDeleter · 案例文件清空', () => {
         expect(removePathInBindings).toHaveBeenCalledWith(fp);
     });
 
-    it('部分删除（仍有剩余案例）→ 不删除文件、不清理绑定、caseFileDeleted=false', async () => {
+    it('部分删除（仍有剩余案例）→ 不删除文件、不清理绑定、fileDeleted=false', async () => {
         const dir = mkTmpDir();
         const fp = writeYaml(dir, 'cases.yaml',
             `- testcase_id: TC001\n  name: 案例A\n  path: 模块/功能/要点A\n` +
@@ -576,7 +576,7 @@ describe('pointCaseDeleter · 案例文件清空', () => {
             type: 1, path: '模块/功能/要点A', pcoTotal: 0, pointTotal: 1, caseTotal: 1,
         });
 
-        expect(res.caseFileDeleted).toBe(false);
+        expect(res.fileDeleted).toBe(false);
         expect(res.deletedCount).toBe(1);
         expect(res.remainingRecords).toBe(1);
         expect(fs.existsSync(fp)).toBe(true);
@@ -595,7 +595,7 @@ describe('pointCaseDeleter · 案例文件清空', () => {
             { type: 1, path: '模块/功能/要点B', pcoTotal: 0, pointTotal: 1, caseTotal: 1 },
         ]);
 
-        expect(res.caseFileDeleted).toBe(true);
+        expect(res.fileDeleted).toBe(true);
         expect(res.deletedCount).toBe(2);
         expect(res.remainingRecords).toBe(0);
         expect(fs.existsSync(fp)).toBe(false);

@@ -55,7 +55,7 @@ import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { TS_ID_COLUMN, isInTempFolder } from '../services/utils';
 import { resolveTaskInfoOrNull } from './pushCore.stages';
 import { TelemetryService } from '../utils/telemetry';
-import { telemetryTsIdListProps } from '../utils/extensionHelpers';
+import { caseDeletionTelemetryProps } from '../utils/extensionHelpers';
 import { showModal } from '../utils/message';
 import {
     confirmCaseFileDeleteWithDetails,
@@ -879,11 +879,11 @@ async function handleCaseFilesDidDelete(
             batchSyncedTotal: String(summary.syncedTsIds.length),
             batchDeletedSuccessTotal: String(summary.deletedSuccessIds.length),
             batchDeletedSourceMissingTotal: String(summary.deletedSourceMissingIds.length),
-            // 成功 testcase_id 明细（合集），超长自动截断并标记
-            ...telemetryTsIdListProps({
-                batchSyncedTsIds: summary.syncedTsIds,
-                batchDeletedSuccessIds: summary.deletedSuccessIds,
-                batchDeletedSourceMissingIds: summary.deletedSourceMissingIds,
+            // 成功 testcase_id 明细（合集，全场景一致命名）
+            ...caseDeletionTelemetryProps({
+                synced: summary.syncedTsIds,
+                deletedSuccess: summary.deletedSuccessIds,
+                deletedSourceMissing: summary.deletedSourceMissingIds,
             }),
         });
     }
@@ -906,7 +906,6 @@ async function handleCaseFilesDidDelete(
                 // 归属标识：让后端能把同一批次的多条 batch.file 拼回一起
                 fileIndex: String(idx),
                 batchTotalFiles: String(batchTotalFiles),
-                filePath: path.basename(rec.filePath),
                 // 文件类型：区分 hardDeleteOnly（无 tsId 直删）与走 TMS 同步的文件
                 hardDeleteOnly: rec.hardDeleteOnly ? 'true' : 'false',
                 // 预检失败标记：后端可据此筛选"未真正执行删除动作的文件"
@@ -920,11 +919,12 @@ async function handleCaseFilesDidDelete(
                 syncedCount: String(rec.syncedTsIds.length),
                 deletedSuccessCount: String(rec.deletedSuccessIds.length),
                 deletedSourceMissingCount: String(rec.deletedSourceMissingIds.length),
-                // 本文件 tsId 明细（分开上报后单文件明细通常都不会触发截断）
-                ...telemetryTsIdListProps({
-                    syncedTsIds: rec.syncedTsIds,
-                    deletedSuccessIds: rec.deletedSuccessIds,
-                    deletedSourceMissingIds: rec.deletedSourceMissingIds,
+                // 本文件 tsId 明细 + 文件路径（全场景一致命名）
+                ...caseDeletionTelemetryProps({
+                    filePath: rec.filePath,
+                    synced: rec.syncedTsIds,
+                    deletedSuccess: rec.deletedSuccessIds,
+                    deletedSourceMissing: rec.deletedSourceMissingIds,
                 }),
             });
         });
@@ -1308,17 +1308,17 @@ async function finalizeCaseFileAfterUserConfirm(
         total: String(nonEmptyIds.length),
         success: String(successCount),
         failed: String(failures.length),
-        filePath: path.basename(filePath),
         // 单文件 vs 批量子事件：便于后端按 session 聚合与分维度分析
         batch: batchMode ? 'true' : 'false',
         // 汇总分档：区分 type=1 / type=3（均计入 synced）
         deletedSuccess: String(syncResult.deletedSuccess.length),
         deletedSourceMissing: String(syncResult.deletedSourceMissing.length),
-        // 成功 testcase_id 明细（便于事后审计），超长自动截断并标记
-        ...telemetryTsIdListProps({
-            syncedTsIds: syncResult.synced,
-            deletedSuccessIds: syncResult.deletedSuccess,
-            deletedSourceMissingIds: syncResult.deletedSourceMissing,
+        // 已删除案例 testcase_id 明细 + 文件路径（与全场景埋点字段命名保持一致）
+        ...caseDeletionTelemetryProps({
+            filePath,
+            synced: syncResult.synced,
+            deletedSuccess: syncResult.deletedSuccess,
+            deletedSourceMissing: syncResult.deletedSourceMissing,
         }),
     });
 

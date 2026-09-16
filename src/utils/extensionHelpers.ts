@@ -71,6 +71,40 @@ export function telemetryTsIdListProps(lists: Record<string, ReadonlyArray<strin
     return props;
 }
 
+/**
+ * 案例删除类埋点的**统一字段构造器**（全场景一致命名）。
+ *
+ * 目的：让「通过要点删除关联案例 / 编辑器内删除案例行 / 同步已删除行 / 批量删除案例」
+ * 等所有案例删除场景的埋点，携带**完全一致**的字段命名，便于跨场景聚合与下钻分析。
+ *
+ * 输出字段：
+ *   - deletedFilePath                 : 被删除案例所在文件的**绝对路径**（未传入则为空串）
+ *   - deletedTestcaseIds              : 本次成功删除（线上同步）的 testcase_id，`|` 拼接
+ *   - deletedTestcaseIdCount          : 上述列表真实条数
+ *   - deletedTestcaseIdsTruncated     : 仅截断时出现，恒为 'true'
+ *   - deletedSuccessTestcaseIds       : 其中 type=1（sourceId 真实存在并删除）子集
+ *   - deletedSuccessTestcaseIdCount
+ *   - deletedSourceMissingTestcaseIds : 其中 type=3（sourceId 不存在仍算成功）子集
+ *   - deletedSourceMissingTestcaseIdCount
+ *
+ * tsId 列表的 join / 截断 / 计数逻辑复用 telemetryTsIdListProps。
+ */
+export function caseDeletionTelemetryProps(opts: {
+    filePath?: string;
+    synced?: ReadonlyArray<string>;
+    deletedSuccess?: ReadonlyArray<string>;
+    deletedSourceMissing?: ReadonlyArray<string>;
+}): Record<string, string> {
+    const props: Record<string, string> = {};
+    if (opts.filePath !== undefined) props.deletedFilePath = opts.filePath;
+    Object.assign(props, telemetryTsIdListProps({
+        deletedTestcaseIds: opts.synced ?? [],
+        deletedSuccessTestcaseIds: opts.deletedSuccess ?? [],
+        deletedSourceMissingTestcaseIds: opts.deletedSourceMissing ?? [],
+    }));
+    return props;
+}
+
 export function getActiveFileUri(): vscode.Uri | undefined {
     const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
     if (!tab) return undefined;

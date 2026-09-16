@@ -631,6 +631,9 @@ export async function deleteTestCase(
                 httpStatus: String(response.status),
                 totalRows: String(sourceIds.length),
                 costMs: _costMs,
+                // 已删除案例 testcase_id 明细（与全场景埋点字段命名保持一致）
+                deletedTestcaseIds: sourceIds.join('|'),
+                deletedTestcaseIdCount: String(sourceIds.length),
             });
         } else {
             TelemetryService.sendTelemetryErrorEvent('api.deleteTestCase.fail', {

@@ -300,12 +300,12 @@ export async function deleteCasesByPoints(
 
     // ---- 1) 入参校验 ----
     if (!pointFilePath || typeof pointFilePath !== 'string') {
-        const err = new Error('deleteCasesByPoints: pointFilePath 不能为空');
+        const err = new Error('测试要点文件路径不能为空');
         emitErrorTelemetry(err, tInfo, { points: input?.points }, '');
         throw err;
     }
     if (!input || !Array.isArray(input.points) || input.points.length === 0) {
-        const err = new Error('deleteCasesByPoints: points 不能为空数组');
+        const err = new Error('要点列表不能为空');
         emitErrorTelemetry(err, tInfo, { points: input?.points }, '');
         throw err;
     }
@@ -314,20 +314,20 @@ export async function deleteCasesByPoints(
     const points: Required<DeleteCasesByPointInput>[] = [];
     for (const raw of input.points) {
         if (!raw || typeof raw !== 'object') {
-            const err = new Error('deleteCasesByPoints: 单个 point 参数不能为空');
+            const err = new Error('单个要点参数不能为空');
             emitErrorTelemetry(err, tInfo, { points: input.points }, '');
             throw err;
         }
         const type = Number(raw.type);
         if (![1, 2, 3, 4].includes(type)) {
-            const err = new Error(`deleteCasesByPoints: 单个 point 的 type 必须为 1/2/3/4（收到 ${type}）`);
+            const err = new Error(`单个要点的类型必须为 1/2/3/4（收到 ${type}）`);
             emitErrorTelemetry(err, tInfo, { points: input.points }, '');
             throw err;
         }
         // 仅 type∈{1,3} 触发删除，且必须带非空 path
         const ppath = (raw.path ?? '').toString().trim();
         if ((type === 1 || type === 3) && !ppath) {
-            const err = new Error(`deleteCasesByPoints: type=${type} 必须携带非空 path 才能定位待删案例`);
+            const err = new Error(`类型=${type} 必须携带非空路径才能定位待删案例`);
             emitErrorTelemetry(err, tInfo, { points: input.points }, '');
             throw err;
         }
@@ -344,12 +344,12 @@ export async function deleteCasesByPoints(
     // ---- 2) 查绑定 → 案例文件路径 ----
     const casePath = getCaseOfPoint(pointFilePath);
     if (!casePath) {
-        const err = new Error(`deleteCasesByPoints: 测试要点未绑定案例文件 (${pointFilePath})`);
+        const err = new Error('测试要点未绑定案例文件');
         emitErrorTelemetry(err, tInfo, { points: input.points }, '');
         throw err;
     }
     if (!fs.existsSync(casePath)) {
-        const err = new Error(`deleteCasesByPoints: 案例文件不存在 (${casePath})`);
+        const err = new Error('案例文件不存在');
         emitErrorTelemetry(err, tInfo, { points: input.points }, casePath);
         throw err;
     }
@@ -420,7 +420,7 @@ async function deleteCasesFromCaseFileMulti(
     // ---- 3.1) 解析文件 ----
     const fileType = detectFileType(casePath);
     if (!fileType) {
-        throw new Error(`deleteCasesByPoint: 不支持的文件类型 (${casePath})`);
+        throw new Error('不支持的文件类型');
     }
     const parser = createParser(fileType);
     const parsed = await parser.parse(casePath);

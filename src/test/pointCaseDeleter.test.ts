@@ -59,7 +59,7 @@ function writeYaml(dir: string, name: string, content: string): string {
 // ============================================================================
 describe('pointCaseDeleter · 入参校验', () => {
     it('pointFilePath 为空 → 抛错', async () => {
-        await expect(deleteCasesByPoint('', { type: 1, path: 'x' })).rejects.toThrow(/pointFilePath/);
+        await expect(deleteCasesByPoint('', { type: 1, path: 'x' })).rejects.toThrow(/测试要点文件路径不能为空/);
     });
 
     it('point 为空 → 抛错', async () => {
@@ -68,17 +68,17 @@ describe('pointCaseDeleter · 入参校验', () => {
 
     it('type 非法（非 1/2/3/4）→ 抛错', async () => {
         await expect(deleteCasesByPoint('/tmp/x.md', { type: 9, path: 'x' }))
-            .rejects.toThrow(/type 必须为/);
+            .rejects.toThrow(/类型必须为/);
     });
 
     it('type=1 却缺 path → 抛错', async () => {
         await expect(deleteCasesByPoint('/tmp/x.md', { type: 1 }))
-            .rejects.toThrow(/必须携带非空 path/);
+            .rejects.toThrow(/必须携带非空路径/);
     });
 
     it('type=3 却缺 path → 抛错', async () => {
         await expect(deleteCasesByPoint('/tmp/x.md', { type: 3 }))
-            .rejects.toThrow(/必须携带非空 path/);
+            .rejects.toThrow(/必须携带非空路径/);
     });
 
     it('type=2 / type=4 不触发删除，无需 path（不抛错）；type=4 与 type=2 在埋点分档里区分', async () => {
@@ -467,19 +467,19 @@ describe('deleteCasesByPoints · 公共方法入参校验', () => {
     it('points 为空数组 → 抛错', async () => {
         await expect(
             deleteCasesByPoints('/tmp/x.md', { points: [] }),
-        ).rejects.toThrow(/points 不能为空数组/);
+        ).rejects.toThrow(/要点列表不能为空/);
     });
 
     it('单个结果项 type 非法 → 抛错', async () => {
         await expect(
             deleteCasesByPoints('/tmp/x.md', { points: [{ type: 7, path: 'x' }] }),
-        ).rejects.toThrow(/type 必须为/);
+        ).rejects.toThrow(/类型必须为/);
     });
 
     it('type=1 缺 path → 抛错', async () => {
         await expect(
             deleteCasesByPoints('/tmp/x.md', { points: [{ type: 1 }] }),
-        ).rejects.toThrow(/必须携带非空 path/);
+        ).rejects.toThrow(/必须携带非空路径/);
     });
 });
 

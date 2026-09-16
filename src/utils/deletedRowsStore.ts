@@ -65,6 +65,12 @@ export interface SyncDeletedResult {
      */
     deletedSuccess: string[];
     deletedSourceMissing: string[];
+    /**
+     * 是否"未绑定测试任务、跳过线上接口"的本地清理结果。
+     * true 时 synced / deletedSuccess 即本次本地删除的所有行（无线上同步），
+     * 调用方据此向用户提示"删除仅清理本地，不会同步到线上"。
+     */
+    localOnly?: boolean;
 }
 
 // ============================================
@@ -256,63 +262,77 @@ export async function syncDeletedRows(
     //     '2' 失败（放入 failed，不清除本地追踪，可重试）
     //     '3' sourceId 不存在 —— 按需求仍视为"删除成功"，本地同样清理，
     //         但汇总时通过 deletedSourceMissing 与 type=1 的 deletedSuccess 区分
+    let isLocalOnly = false;
     try {
         if (!cachedContext) {
             throw new Error('已删除行存储尚未初始化（请确认扩展已激活）');
         }
         const taskInfo = await resolveTaskInfoOrNull(filePath);
-        if (taskInfo.status !== 'ok') {
-            throw new Error(
-                taskInfo.status === 'unbound'
-                    ? '当前文件未绑定测试任务，无法同步删除'
-                    : (taskInfo.errorMessage || '获取测试任务信息失败'),
+        let resp: any = null;
+        if (taskInfo.status === 'unbound') {
+            // 未绑定测试任务：无线上接口可同步，按"本地清理"处理 ——
+            // 直接把待同步行视为本地删除成功（仅清 tracking/snapshot，不调后端），
+            // 与"全部本地未推送 → hardDelete"语义一致；提示由调用方（编辑器/文件删除）toast 给出。
+            TelemetryService.sendTelemetryEvent('deletedRowsStore.syncSkipped', {
+                reason: 'unbound',
+                filePath: path.basename(filePath),
+                totalRows: String(targetIds.length),
+            });
+            synced.push(...targetIds);
+            deletedSuccess.push(...targetIds);
+            isLocalOnly = true;
+        } else if (taskInfo.status === 'ok') {
+            resp = await deleteTestCase(
+                cachedContext,
+                { testTaskNo: taskInfo.taskInfo.testTaskNo, subTestTaskId: taskInfo.taskInfo.subTestTaskId },
+                targetIds,
             );
+            if (resp.returnCode !== 'SUC0000') {
+                throw new Error(resp.errorMsg || `删除接口返回 ${resp.returnCode}`);
+            }
+        } else {
+            // status === 'error'：获取任务信息异常，保守阻断（与历史一致）
+            throw new Error(taskInfo.errorMessage || '获取测试任务信息失败');
         }
 
-        const resp = await deleteTestCase(
-            cachedContext,
-            { testTaskNo: taskInfo.taskInfo.testTaskNo, subTestTaskId: taskInfo.taskInfo.subTestTaskId },
-            targetIds,
-        );
+        // 仅当线上接口有返回（status==='ok'）时才解析 body；
+        // 未绑定分支已在上方把 targetIds 直接计入 synced/deletedSuccess，此处跳过。
+        if (resp) {
+            // 依据 body 逐条 type 判定成功/失败；sourceId 对应 testcase_id
+            //   - type='2' 失败的失败原因使用接口返回的 data 字段（更贴合后端实际语义）
+            const resultBody: Array<{ sourceId?: string; type?: string; data?: any }> = Array.isArray(resp.body) ? resp.body : [];
+            const typeBySourceId = new Map<string, string>();
+            const dataBySourceId = new Map<string, any>();
+            for (const item of resultBody) {
+                const sid = String(item?.sourceId ?? '').trim();
+                if (!sid) continue;
+                typeBySourceId.set(sid, String(item?.type ?? ''));
+                if (item?.data != null) dataBySourceId.set(sid, item.data);
+            }
 
-        if (resp.returnCode !== 'SUC0000') {
-            throw new Error(resp.errorMsg || `删除接口返回 ${resp.returnCode}`);
-        }
-
-        // 依据 body 逐条 type 判定成功/失败；sourceId 对应 testcase_id
-        //   - type='2' 失败的失败原因使用接口返回的 data 字段（更贴合后端实际语义）
-        const resultBody: Array<{ sourceId?: string; type?: string; data?: any }> = Array.isArray(resp.body) ? resp.body : [];
-        const typeBySourceId = new Map<string, string>();
-        const dataBySourceId = new Map<string, any>();
-        for (const item of resultBody) {
-            const sid = String(item?.sourceId ?? '').trim();
-            if (!sid) continue;
-            typeBySourceId.set(sid, String(item?.type ?? ''));
-            if (item?.data != null) dataBySourceId.set(sid, item.data);
-        }
-
-        for (const id of targetIds) {
-            const t = typeBySourceId.get(id);
-            if (t === '1') {
-                // 线上删除成功：清理本地追踪与快照
-                synced.push(id);
-                deletedSuccess.push(id);
-            } else if (t === '3') {
-                // sourceId 不存在：按需求仍视为删除成功，本地同样清理，
-                // 但汇总分档到 deletedSourceMissing，便于区分"线上本就没有这条"的情况
-                synced.push(id);
-                deletedSourceMissing.push(id);
-            } else if (t === '2') {
-                // 失败原因取接口返回的 data（兜底文案仅在接口未给 data 时使用）
-                const failData = dataBySourceId.get(id);
-                const reason = failData != null ? String(failData) : '线上删除失败';
-                failed.push({ tsId: id, reason });
-            } else if (t === '4') {
-                // 含 CMBT 关联，后端不允许删除：保留文件、标记失败（与 type=2 同属可重试/人工处理）
-                failed.push({ tsId: id, reason: '含 CMBT 关联，不允许删除' });
-            } else {
-                // 接口未返回该 sourceId 的结果（既非 1/2/3/4），按失败保守处理
-                failed.push({ tsId: id, reason: '线上删除结果缺失（接口未返回该 sourceId）' });
+            for (const id of targetIds) {
+                const t = typeBySourceId.get(id);
+                if (t === '1') {
+                    // 线上删除成功：清理本地追踪与快照
+                    synced.push(id);
+                    deletedSuccess.push(id);
+                } else if (t === '3') {
+                    // sourceId 不存在：按需求仍视为删除成功，本地同样清理，
+                    // 但汇总分档到 deletedSourceMissing，便于区分"线上本就没有这条"的情况
+                    synced.push(id);
+                    deletedSourceMissing.push(id);
+                } else if (t === '2') {
+                    // 失败原因取接口返回的 data（兜底文案仅在接口未给 data 时使用）
+                    const failData = dataBySourceId.get(id);
+                    const reason = failData != null ? String(failData) : '线上删除失败';
+                    failed.push({ tsId: id, reason });
+                } else if (t === '4') {
+                    // 含 CMBT 关联，后端不允许删除：保留文件、标记失败（与 type=2 同属可重试/人工处理）
+                    failed.push({ tsId: id, reason: '含 CMBT 关联，不允许删除' });
+                } else {
+                    // 接口未返回该 sourceId 的结果（既非 1/2/3/4），按失败保守处理
+                    failed.push({ tsId: id, reason: '线上删除结果缺失（接口未返回该 sourceId）' });
+                }
             }
         }
     } catch (err: any) {
@@ -347,7 +367,7 @@ export async function syncDeletedRows(
         console.log(`[DeletedRowsStore] 已同步并清除 ${synced.length} 行: ${filePath}`);
     }
 
-    return { synced, failed, deletedSuccess, deletedSourceMissing };
+    return { synced, failed, deletedSuccess, deletedSourceMissing, localOnly: isLocalOnly };
 }
 
 /**

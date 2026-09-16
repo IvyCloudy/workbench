@@ -304,14 +304,21 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
     }
     try {
         const t = await resolveTaskInfoOrNull(filePath);
+        if (t.status === 'unbound') {
+            // 未绑定测试任务：无需线上预检，直接允许用户确认后本地删除（不调线上接口）。
+            // 返回 ok:true（无关联表格、onlineDeleteCount=0），前端走简单确认弹窗；
+            // 额外带 unbound:true 供前端做"删除仅清理本地、不会同步到线上"提示。
+            ctx.webviewPanel.webview.postMessage({
+                type: 'confirmDeleteRowsResult', ok: true, items: [], onlineDeleteCount: 0, unbound: true,
+            });
+            return;
+        }
         if (t.status !== 'ok') {
-            // 任务信息获取失败（未绑定 / 解析异常）：**阻断删除**并用插件封装的模态框告知用户，
+            // 任务信息获取异常（非"未绑定"）：**阻断删除**并用插件封装的模态框告知用户，
             // 与下方「接口返回非成功码」「网络异常」分支行为保持一致 —— 避免前端
             // 在无校验结论的情况下继续走简单确认弹窗，导致"两个弹窗同框"的体验问题。
             // 文案与「案例文件删除」路径（workspaceListeners 中 did 阶段决策链路）保持一致
-        const _errTxt = t.status === 'unbound'
-                ? '当前文件未绑定测试任务，无法定位线上案例，请先绑定测试任务后再删除。'
-                : (t.errorMessage || '获取任务信息失败');
+        const _errTxt = t.errorMessage || '获取任务信息失败';
             // 先 postMessage 通知前端清理 pending 态，再弹 modal（避免竞态）
             ctx.webviewPanel.webview.postMessage({
                 type: 'confirmDeleteRowsResult', ok: false, items: [], blocked: true,
@@ -524,6 +531,7 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
         TelemetryService.sendTelemetryEvent('editor.deleteRows.synced', {
             // 已删除案例 testcase_id 明细 + 文件路径（与全场景埋点字段命名保持一致，统一由 syncDeletedResultTelemetryProps 构造）
             ...syncDeletedResultTelemetryProps(result, filePath),
+            localOnly: result.localOnly ? 'true' : 'false',
         });
     } catch (err: any) {
         console.error('[editor.deleteRows] 同步失败:', err?.message || err);

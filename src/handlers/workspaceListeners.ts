@@ -647,6 +647,7 @@ async function handleCaseFilesDidDelete(
             fileName: c.entry.fileName,
             caseCount: c.stage === 'needConfirm' ? c.caseCountForConfirm : 0,
             items: c.stage === 'needConfirm' ? c.confirmItems : [],
+            unbound: c.stage === 'needConfirm' ? !!c.unbound : false,
         })),
         ...precheckFailedCtxs.map(c => ({
             filePath: c.entry.filePath,
@@ -981,12 +982,12 @@ async function decideAndFinalizeCaseFileDelete(
     }
 
     // 需要用户确认
-    const { confirmItems, caseCountForConfirm } = ctx;
+    const { confirmItems, caseCountForConfirm, unbound } = ctx;
     const userConfirmed = confirmItems.length > 0
         ? await confirmCaseFileDeleteWithDetails(
-            { filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, items: confirmItems },
+            { filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, items: confirmItems, unbound },
         )
-        : await showDeleteConfirmSimpleModal({ filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm });
+        : await showDeleteConfirmSimpleModal({ filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, unbound });
 
     if (!userConfirmed) {
         if (entry.wasOpen) await reopenCaseFile(entry.filePath);
@@ -1025,6 +1026,8 @@ type CaseFileDecisionContext =
         nonEmptyIds: string[];
         confirmItems: DeleteConfirmItem[];
         caseCountForConfirm: number;
+        /** 未绑定测试任务：跳过线上预检，仅本地删除 */
+        unbound?: boolean;
     }
     | {
         stage: 'precheckFailed';
@@ -1111,11 +1114,24 @@ async function prepareCaseFileDecisionContext(
         return { stage: 'hardDelete', entry, rowCount: rows.length };
     }
 
-    // 校验 1：未绑定测试任务 → 预检失败
+    // 校验 1：未绑定测试任务 → 不阻断，走"本地删除确认"（无线上预检、无关联表格）
+    if (taskInfoResult.status === 'unbound') {
+        return {
+            stage: 'needConfirm',
+            entry,
+            tableData,
+            sourceData,
+            rows,
+            rowTsIds,
+            nonEmptyIds,
+            confirmItems: [],
+            caseCountForConfirm: nonEmptyIds.length,
+            unbound: true,
+        };
+    }
+    // 校验 1b：获取任务信息异常（非"未绑定"）→ 预检失败，保守阻断
     if (taskInfoResult.status !== 'ok') {
-        const _errTxt = taskInfoResult.status === 'unbound'
-            ? '当前文件未绑定测试任务，无法定位线上案例，请先绑定测试任务后再删除。'
-            : (taskInfoResult.errorMessage || '获取测试任务信息失败');
+        const _errTxt = taskInfoResult.errorMessage || '获取测试任务信息失败';
         return { stage: 'precheckFailed', entry, precheckError: _errTxt };
     }
 
@@ -1222,7 +1238,7 @@ async function finalizeCaseFileAfterUserConfirm(
     const { entry, tableData, sourceData, rows, rowTsIds, nonEmptyIds } = ctx;
     const { filePath, fileName, wasOpen } = entry;
 
-    let syncResult: { synced: string[]; failed: Array<{ tsId: string; reason: string }>; deletedSuccess: string[]; deletedSourceMissing: string[] };
+    let syncResult: { synced: string[]; failed: Array<{ tsId: string; reason: string }>; deletedSuccess: string[]; deletedSourceMissing: string[]; localOnly?: boolean };
     try {
         syncResult = await syncDeletedRows(filePath, nonEmptyIds);
     } catch (err: any) {
@@ -1311,6 +1327,8 @@ async function finalizeCaseFileAfterUserConfirm(
         failed: String(failures.length),
         // 单文件 vs 批量子事件：便于后端按 session 聚合与分维度分析
         batch: batchMode ? 'true' : 'false',
+        // 是否未绑定测试任务、仅本地清理（未调线上接口）
+        localOnly: syncResult.localOnly ? 'true' : 'false',
         // 汇总分档：区分 type=1 / type=3（均计入 synced）
         deletedSuccess: String(syncResult.deletedSuccess.length),
         deletedSourceMissing: String(syncResult.deletedSourceMissing.length),

@@ -145,6 +145,7 @@ export async function confirmCaseFileDeleteWithDetails(
         fileName: string;
         caseCount: number;
         items: DeleteConfirmItem[];
+        unbound?: boolean;
     },
     token?: vscode.CancellationToken,
 ): Promise<boolean> {
@@ -154,6 +155,7 @@ export async function confirmCaseFileDeleteWithDetails(
             fileName: params.fileName,
             caseCount: params.caseCount,
             items: Array.isArray(params.items) ? params.items : [],
+            unbound: params.unbound,
         },
         token,
     );

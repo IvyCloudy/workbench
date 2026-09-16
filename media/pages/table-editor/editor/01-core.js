@@ -1015,6 +1015,7 @@ window.addEventListener('message', function (e) {
                 items: _items,
                 errorMessage: m.errorMessage || '',
                 blocked: _blocked,
+                unbound: !!m.unbound,
             });
         }
     } else if (m.type === 'deleteRowsResult') {

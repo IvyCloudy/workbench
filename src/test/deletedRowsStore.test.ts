@@ -38,6 +38,7 @@ vi.mock('vscode', () => ({
 }));
 
 import { syncDeletedRows, ensureDeletedRowsFile } from '../utils/deletedRowsStore';
+import { resolveTaskInfoOrNull } from '../handlers/pushCore.stages';
 
 // 初始化 cachedContext（syncDeletedRows 内部使用）
 import * as deletedRowsStore from '../utils/deletedRowsStore';
@@ -167,5 +168,21 @@ describe('syncDeletedRows · type 分档', () => {
         expect(res.deletedSuccess).toEqual([]);
         expect(res.deletedSourceMissing).toEqual([]);
         expect(res.failed.map(f => f.tsId).sort()).toEqual(['TC001', 'TC002']);
+    });
+
+    it('未绑定测试任务 → 跳过线上接口，按本地清理处理（localOnly）', async () => {
+        // 覆盖 resolveTaskInfoOrNull 返回 unbound（不调线上删除接口、不阻断）
+        vi.mocked(resolveTaskInfoOrNull).mockResolvedValueOnce({ status: 'unbound' });
+
+        const res = await syncDeletedRows(fp, ['TC001', 'TC002', 'TC003', 'TC004']);
+
+        // 不调用线上删除接口
+        expect(mockDeleteTestCase).not.toHaveBeenCalled();
+        // 全部视为本地删除成功
+        expect(res.localOnly).toBe(true);
+        expect(res.synced.sort()).toEqual(['TC001', 'TC002', 'TC003', 'TC004']);
+        expect(res.deletedSuccess.sort()).toEqual(['TC001', 'TC002', 'TC003', 'TC004']);
+        expect(res.deletedSourceMissing).toEqual([]);
+        expect(res.failed).toEqual([]);
     });
 });

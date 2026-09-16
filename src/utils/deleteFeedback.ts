@@ -18,8 +18,25 @@ import { showApiError, showDeleteConfirmModal } from './messageExtras';
 import { showModal } from './message';
 import type { MsgType, PushFailure } from './message';
 import type { DeleteConfirmItem } from './messageExtras';
+import type { SyncDeletedResult } from './deletedRowsStore';
 
 export type { DeleteConfirmItem, PushFailure };
+
+/**
+ * 从同步删除结果构造「删除失败明细」列表（供 reportDeleteResult 弹窗渲染）。
+ *
+ * 统一各调用点（编辑器内删除 / 同步已删除行 / 案例文件删除）对
+ * `result.failed → PushFailure[]` 的转换口径，避免重复手写 map + 兜底文案。
+ *
+ * @param result          syncDeletedRows 的返回结果
+ * @param fallbackReason  单条失败原因缺失时的兜底文案
+ */
+export function buildDeleteFailures(
+    result: SyncDeletedResult,
+    fallbackReason = '线上删除失败',
+): PushFailure[] {
+    return result.failed.map(f => ({ tsId: f.tsId, reason: f.reason || fallbackReason }));
+}
 
 /**
  * 线上预检（删除确认接口）返回非成功码时的降级提示。

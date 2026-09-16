@@ -70,6 +70,7 @@ import { createLogger } from './logger';
 import { TS_ID_COLUMN } from '../services/utils';
 import { TelemetryService } from './telemetry';
 import { stackHead } from '../services/utils';
+import { telemetryTsIdListProps } from './telemetryProps';
 
 const logger = createLogger('pcDeleter');
 
@@ -787,6 +788,43 @@ function applyRemoveByIndices(
  *   └── 性能
  *       costMs             端到端耗时（毫秒）
  */
+
+/**
+ * 案例删除「案例维度」埋点字段构造器（逐要点 done 与多要点聚合 done 共享）。
+ * 同时负责 deletedTestcaseIds 的 join / 超长截断 / 计数（复用 telemetryTsIdListProps），
+ * 避免两个上报函数各自手写导致字段不一致 / 缺截断保护。
+ */
+function pointDeletionCaseProps(
+    result: {
+        filePath?: string;
+        deletedCount: number;
+        totalRecords: number;
+        remainingRecords: number;
+        fileDeleted: boolean;
+        fileDeleteError?: string;
+        deletedFilePath?: string;
+        typeCount: { type1: number; type2: number; type3: number };
+        costMs: number;
+        deletedCases: DeletedCaseItem[];
+    },
+): Record<string, string> {
+    const ids = (result.deletedCases || []).map(c => String(c.testcaseId));
+    return {
+        fileExt: path.extname(result.filePath || '').toLowerCase(),
+        deletedCount: String(result.deletedCount),
+        totalRecords: String(result.totalRecords),
+        remainingRecords: String(result.remainingRecords),
+        fileDeleted: String(result.fileDeleted ? 1 : 0),
+        fileDeleteError: result.fileDeleteError || '',
+        deletedFilePath: result.deletedFilePath || '',
+        type1: String(result.typeCount.type1),
+        type2: String(result.typeCount.type2),
+        type3: String(result.typeCount.type3),
+        costMs: String(result.costMs),
+        ...telemetryTsIdListProps({ deletedTestcaseIds: ids }),
+    };
+}
+
 function emitDoneTelemetry(
     result: DeleteCasesByPointResult,
     tInfo: Required<DeleteCasesTaskInfo>,
@@ -805,20 +843,8 @@ function emitDoneTelemetry(
             pcoTotal: String(p.pcoTotal),
             pointTotal: String(p.pointTotal),
             caseTotal: String(p.caseTotal),
-            // 案例维度
-            fileExt: path.extname(result.filePath).toLowerCase(),
-            deletedCount: String(result.deletedCount),
-            totalRecords: String(result.totalRecords),
-            remainingRecords: String(result.remainingRecords),
-            fileDeleted: String(result.fileDeleted ? 1 : 0),
-            fileDeleteError: result.fileDeleteError || '',
-            deletedTestcaseIds: (result.deletedCases || []).map(c => c.testcaseId).join('|'),
-            deletedFilePath: result.deletedFilePath || '',
-            type1: String(result.typeCount.type1),
-            type2: String(result.typeCount.type2),
-            type3: String(result.typeCount.type3),
-            // 性能
-            costMs: String(result.costMs),
+            // 案例维度（与多要点聚合事件共享构造器，保证字段完全一致）
+            ...pointDeletionCaseProps(result),
         });
     } catch {
         // 埋点绝不阻断业务
@@ -856,20 +882,8 @@ function emitAggregateDoneTelemetry(
             pcoTotal: joinField(p => String(p.pcoTotal)),
             pointTotal: joinField(p => String(p.pointTotal)),
             caseTotal: joinField(p => String(p.caseTotal)),
-            // 案例维度（全局去重口径）
-            fileExt: path.extname(result.filePath).toLowerCase(),
-            deletedCount: String(result.deletedCount),
-            totalRecords: String(result.totalRecords),
-            remainingRecords: String(result.remainingRecords),
-            fileDeleted: String(result.fileDeleted ? 1 : 0),
-            fileDeleteError: result.fileDeleteError || '',
-            deletedTestcaseIds: (result.deletedCases || []).map(c => c.testcaseId).join('|'),
-            deletedFilePath: result.deletedFilePath || '',
-            type1: String(result.typeCount.type1),
-            type2: String(result.typeCount.type2),
-            type3: String(result.typeCount.type3),
-            // 性能（真实耗时）
-            costMs: String(result.costMs),
+            // 案例维度（与逐要点事件共享构造器，保证字段完全一致）
+            ...pointDeletionCaseProps(result),
         });
     } catch {
         // 埋点绝不阻断业务

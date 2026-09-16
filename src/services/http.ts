@@ -21,6 +21,7 @@ import { execFile } from 'child_process';
 import { readConfig } from './storage';
 import { TelemetryService } from '../utils/telemetry';
 import { stackHead } from './utils';
+import { telemetryTsIdListProps } from '../utils/telemetryProps';
 import { mapRowToCaseItem } from '../utils/pushDataMapper';
 import type { AppConfig, ApiResponse, QueryOptions } from '../types';
 
@@ -631,9 +632,8 @@ export async function deleteTestCase(
                 httpStatus: String(response.status),
                 totalRows: String(sourceIds.length),
                 costMs: _costMs,
-                // 已删除案例 testcase_id 明细（与全场景埋点字段命名保持一致）
-                deletedTestcaseIds: sourceIds.join('|'),
-                deletedTestcaseIdCount: String(sourceIds.length),
+                // 已删除案例 testcase_id 明细（与全场景埋点字段命名保持一致，含超长截断保护）
+                ...telemetryTsIdListProps({ deletedTestcaseIds: sourceIds }),
             });
         } else {
             TelemetryService.sendTelemetryErrorEvent('api.deleteTestCase.fail', {

@@ -26,14 +26,14 @@ import { applyDiffHighlight, type EditorSession } from '../services/diffHighligh
 import { getMarks, setMarks, clearMarks } from '../utils/markStore';
 import { getHeaderLabels, onHeaderLabelsChange } from '../utils/headerLabels';
 import { showSaveResult, showPushErrorModal, showModal } from '../utils/message';
-import { reportDeleteResult } from '../utils/deleteFeedback';
+import { reportDeleteResult, buildDeleteFailures } from '../utils/deleteFeedback';
 import type { PushFailure } from '../utils/message';
 import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { confirmDeleteTestCase } from '../services/http';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { TelemetryService } from '../utils/telemetry';
 import { buildErrorProps } from '../services/utils';
-import { caseDeletionTelemetryProps } from '../utils/extensionHelpers';
+import { syncDeletedResultTelemetryProps } from '../utils/extensionHelpers';
 import { resolveTaskInfoOrNull } from '../handlers/pushCore.stages';
 import { TS_ID_COLUMN } from '../services/utils';
 import { detectFileType, createParser } from '../parsers';
@@ -512,12 +512,8 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
 
         // 弹删除结果弹窗（在当前案例编辑器内嵌 modal，同款样式；见 05f-delete-result.js）
         try {
-            const failures: PushFailure[] = result.failed
-                .map(f => ({
-                    tsId: f.tsId,
-                    reason: f.reason || '线上删除失败',
-                    rowIndex: tsIdToPostRowIndex.get(f.tsId),
-                }))
+            const failures: PushFailure[] = buildDeleteFailures(result)
+                .map(f => ({ ...f, rowIndex: tsIdToPostRowIndex.get(f.tsId) }))
                 // 按行号升序展示；无行号的排最后，其内部按 tsId 稳定排序
                 .sort((a, b) => {
                     const ai = a.rowIndex == null ? Number.POSITIVE_INFINITY : a.rowIndex;
@@ -539,18 +535,8 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
         } catch (_e) { /* ignore */ }
 
         TelemetryService.sendTelemetryEvent('editor.deleteRows.synced', {
-            syncedTotal: String(result.synced.length),
-            failedRows: String(result.failed.length),
-            // 汇总分档：区分 type=1 / type=3（均计入 synced，但口径不同）
-            deletedSuccess: String(result.deletedSuccess.length),
-            deletedSourceMissing: String(result.deletedSourceMissing.length),
-            // 已删除案例 testcase_id 明细 + 文件路径（与全场景埋点字段命名保持一致）
-            ...caseDeletionTelemetryProps({
-                filePath,
-                synced: result.synced,
-                deletedSuccess: result.deletedSuccess,
-                deletedSourceMissing: result.deletedSourceMissing,
-            }),
+            // 已删除案例 testcase_id 明细 + 文件路径（与全场景埋点字段命名保持一致，统一由 syncDeletedResultTelemetryProps 构造）
+            ...syncDeletedResultTelemetryProps(result, filePath),
         });
     } catch (err: any) {
         console.error('[editor.deleteRows] 同步失败:', err?.message || err);

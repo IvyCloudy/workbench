@@ -3,10 +3,9 @@ import * as path from 'path';
 import { detectFileType, createParser } from '../parsers';
 import { syncDeletedRows, refreshAndGetDeletedRows } from '../utils/deletedRowsStore';
 import { showToast } from '../utils/message';
-import { reportDeleteResult } from '../utils/deleteFeedback';
-import type { PushFailure } from '../utils/message';
+import { reportDeleteResult, buildDeleteFailures } from '../utils/deleteFeedback';
 import { TelemetryService } from '../utils/telemetry';
-import { getActiveFileUri, isTestCaseFile, telemetryErrProps, caseDeletionTelemetryProps } from '../utils/extensionHelpers';
+import { getActiveFileUri, isTestCaseFile, telemetryErrProps, syncDeletedResultTelemetryProps } from '../utils/extensionHelpers';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 
 /**
@@ -57,8 +56,7 @@ export async function handleSyncDeletedRows(): Promise<void> {
             });
             // P1-A1：与编辑器内右键删除对齐，也弹一个删除结果 modal 展示明细
             // （之前只在表格内标记行状态，用户容易忽略失败原因）
-            const failures: PushFailure[] = result.failed
-                .map(f => ({ tsId: f.tsId, reason: f.reason || '线上删除失败' }))
+            const failures = buildDeleteFailures(result)
                 .sort((a, b) => String(a.tsId).localeCompare(String(b.tsId)));
             reportDeleteResult({
                 panel,
@@ -79,18 +77,8 @@ export async function handleSyncDeletedRows(): Promise<void> {
             showToast(undefined, result.failed.length > 0 ? 'warning' : 'info', msg);
         }
         TelemetryService.sendTelemetryEvent('syncDeletedRows.complete', {
-            syncedTotal: String(result.synced.length),
-            failedRows: String(result.failed.length),
-            // 汇总分档：区分 type=1 / type=3（均计入 synced，但口径不同）
-            deletedSuccess: String(result.deletedSuccess.length),
-            deletedSourceMissing: String(result.deletedSourceMissing.length),
-            // 已删除案例 testcase_id 明细 + 文件路径（与全场景埋点字段命名保持一致）
-            ...caseDeletionTelemetryProps({
-                filePath: uri.fsPath,
-                synced: result.synced,
-                deletedSuccess: result.deletedSuccess,
-                deletedSourceMissing: result.deletedSourceMissing,
-            }),
+            // 已删除案例 testcase_id 明细 + 文件路径（与全场景埋点字段命名保持一致，统一由 syncDeletedResultTelemetryProps 构造）
+            ...syncDeletedResultTelemetryProps(result, uri.fsPath),
         });
     } catch (err: any) {
         console.error('[syncDeletedRows] 失败:', err?.message || err);

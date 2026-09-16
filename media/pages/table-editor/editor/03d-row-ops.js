@@ -220,7 +220,8 @@ function requestDeleteConfirm(tsIds, onProceed) {
             _showDeleteConfirmDialog(result.items, onProceed, ids, _onlineDelCnt);
         } else {
             // 无需额外确认 / 预检无结论降级 → 走原有简单确认
-            _showPlainDeleteConfirm(onProceed, ids);
+            // 携带 result.unbound：未绑定测试任务时前端提示「仅本地删除、不会同步 TMS」
+            _showPlainDeleteConfirm(onProceed, ids, result && result.unbound);
         }
     };
     if (ids.length === 0 || typeof S.vscode === 'undefined' || !S.vscode) {
@@ -294,17 +295,24 @@ function _showPrecheckTimeoutFallback(ids, onProceed) {
  *
  * @param onProceed 用户点「确定删除」后执行
  * @param tsIds     本次涉及的 testcase_id；用户点「取消」/关闭时据此回滚 pending 态
+ * @param unbound   是否未绑定测试任务：true 时提示「仅本地删除、不会同步 TMS」
  */
-function _showPlainDeleteConfirm(onProceed, tsIds) {
+function _showPlainDeleteConfirm(onProceed, tsIds, unbound) {
     if (typeof xsConfirm === 'function') {
         var _count = Array.isArray(tsIds) ? tsIds.length : 0;
-        var _html = '<div class="xs-dc-lead">谨慎操作：删除案例会同步删除 TMS 平台上的 '
-            + '<span class="xs-dc-count">' + _count + '</span> 条案例，此操作不可恢复。是否确定删除？</div>';
+        var _html;
+        if (unbound) {
+            _html = '<div class="xs-dc-lead">当前案例文件未绑定测试任务，删除案例仅影响本地，'
+                + '不会同步删除 TMS 平台上的案例。是否继续删除？</div>';
+        } else {
+            _html = '<div class="xs-dc-lead">谨慎操作：删除案例会同步删除 TMS 平台上的 '
+                + '<span class="xs-dc-count">' + _count + '</span> 条案例，此操作不可恢复。是否确定删除？</div>';
+        }
         xsConfirm({
-            title: '删除案例',
+            title: '删除案例确认',
             html: _html,
             type: 'warning',
-            okText: '确定删除',
+            okText: unbound ? '继续删除' : '确定删除',
             // 显式传宽度 420px，避继承表格明细弹窗的 88vw 默认宽度
             // （不传时弹窗会撑满屏幕，与"案例文件删除"的简单确认弹窗不一致）
             width: '420px',
@@ -322,7 +330,7 @@ function _showPlainDeleteConfirm(onProceed, tsIds) {
  * 布局（按需求）：
  *   第 1 段：原有提示（谨慎操作 + 同步删除 TMS 平台案例）+ 新要求
  *           （同步删除执行和缺陷关联关系 + 如需继续操作请忽略本提示说明）
- *   第 2 段：表格（编号 / 名称 / 执行 / 缺陷），true→Y，false→N
+ *   第 2 段：表格（编号 / 名称 / 来源 / 执行 / 缺陷），true→Y，false→N
  *   第 3 段：删除不可恢复，是否确认删除（「不可恢复」统一放在结尾段，首段不重复）
  *
  * @param items   需二次确认的案例明细
@@ -344,9 +352,9 @@ function _showDeleteConfirmDialog(items, onProceed, tsIds, onlineDeleteCount) {
             + '<td class="xs-dc-td xs-dc-idx">' + (i + 1) + '</td>'
             + '<td class="xs-dc-td xs-dc-no">' + escapeHtml(no) + '</td>'
             + '<td class="xs-dc-td xs-dc-name">' + escapeHtml(name) + '</td>'
+            + '<td class="xs-dc-td xs-dc-platform" title="' + escapeHtml(platform) + '">' + escapeHtml(platform) + '</td>'
             + '<td class="xs-dc-td xs-dc-flag" data-flag="' + exec + '">' + exec + '</td>'
             + '<td class="xs-dc-td xs-dc-flag" data-flag="' + bug + '">' + bug + '</td>'
-            + '<td class="xs-dc-td xs-dc-platform" title="' + escapeHtml(platform) + '">' + escapeHtml(platform) + '</td>'
             + '</tr>';
     }
     // 首段红字数量：优先使用后端精确统计的 onlineDeleteCount（type=1 + type=2 合计），
@@ -364,14 +372,14 @@ function _showDeleteConfirmDialog(items, onProceed, tsIds, onlineDeleteCount) {
         + '<span class="xs-dc-count">' + _count + '</span> 条案例，以及这些案例的执行记录和缺陷关联。</div>'
         + (_tblHint ? '<div class="xs-dc-tbl-hint">' + _tblHint + '</div>' : '')
         + '<div class="xs-dc-table-wrap"><table class="xs-dc-table">'
-        +   '<thead><tr><th class="xs-dc-th-idx" title="序号">#</th><th>编号</th><th>名称</th><th>执行</th><th>缺陷</th><th>来源</th></tr></thead>'
+        +   '<thead><tr><th class="xs-dc-th-idx" title="序号">#</th><th>编号</th><th>名称</th><th>来源</th><th>执行</th><th>缺陷</th></tr></thead>'
         +   '<tbody>' + rowsHtml + '</tbody>'
         + '</table></div>'
         + '<div class="xs-dc-tail">删除不可恢复，是否确认删除</div>';
 
     if (typeof xsConfirm === 'function') {
         xsConfirm({
-            title: '删除案例',
+            title: '删除案例确认',
             html: html,
             width: '620px',
             type: 'warning',

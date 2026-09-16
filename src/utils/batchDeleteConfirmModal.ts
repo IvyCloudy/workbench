@@ -49,6 +49,11 @@ export interface BatchDeleteFileEntry {
     hardDeleteOnly?: boolean;
     /** 本地行数（仅 hardDeleteOnly=true 时使用，用于 pane 内提示删除影响范围）。 */
     localRowCount?: number;
+    /**
+     * 是否未绑定测试任务：true 时本文件删除仅清理本地、不会同步到 TMS，
+     * 弹窗话术与统计口径（计入「仅本地删除」而非「同步 TMS」）均按本地删除处理。
+     */
+    unbound?: boolean;
 }
 
 /**
@@ -80,8 +85,8 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
 
     const ok = entries.filter(e => !e.precheckError);
     const failed = entries.filter(e => !!e.precheckError);
-    // 「需同步 TMS」= 预检通过 且 非 hardDeleteOnly 的文件
-    const needTms = ok.filter(e => !e.hardDeleteOnly);
+    // 「需同步 TMS」= 预检通过 且 非 hardDeleteOnly 且 非 unbound 的文件
+    const needTms = ok.filter(e => !e.hardDeleteOnly && !e.unbound);
     // 「仅本地删除」= 预检通过 且 hardDeleteOnly 的文件
     const hardOnly = ok.filter(e => !!e.hardDeleteOnly);
     // 累加口径：只统计 needTms 的 caseCount（真正会调 TMS 的行数），
@@ -96,6 +101,7 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
     const failedCount = failed.length;
     const needTmsCount = needTms.length;
     const hardOnlyCount = hardOnly.length;
+    const unboundCount = ok.filter(e => !!e.unbound).length;
 
     // 倒计时秒数（可调）；okCount=0 时按钮直接 disabled，不进入倒计时
     const COUNTDOWN_SECS = 3;
@@ -140,24 +146,26 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
                 + `<td class="xs-dc-td xs-dc-idx">${rowIdx + 1}</td>`
                 + `<td class="xs-dc-td xs-dc-no">${escapeHtml_(it.testCaseNo)}</td>`
                 + `<td class="xs-dc-td xs-dc-name">${escapeHtml_(it.testCaseName)}</td>`
+                + `<td class="xs-dc-td xs-dc-platform" title="${escapeHtml_(platform)}">${escapeHtml_(platform)}</td>`
                 + `<td class="xs-dc-td xs-dc-flag" data-flag="${exec}">${exec}</td>`
                 + `<td class="xs-dc-td xs-dc-flag" data-flag="${bug}">${bug}</td>`
-                + `<td class="xs-dc-td xs-dc-platform" title="${escapeHtml_(platform)}">${escapeHtml_(platform)}</td>`
                 + `</tr>`;
         }).join('');
         const table = items.length > 0
             ? `<div class="xs-bd-tbl-hint">以下 <b>${items.length}</b> 条案例存在执行/缺陷关联（下表「执行」「缺陷」列，Y=存在，N=不存在）：</div>
                <div class="xs-bd-tbl-wrap">
                    <table class="xs-dc-table">
-<thead><tr><th class="xs-dc-th-c xs-dc-th-idx" title="序号">#</th><th>编号</th><th>名称</th><th class="xs-dc-th-c">执行</th><th class="xs-dc-th-c">缺陷</th><th>来源</th></tr></thead>
+<thead><tr><th class="xs-dc-th-c xs-dc-th-idx" title="序号">#</th><th>编号</th><th>名称</th><th>来源</th><th class="xs-dc-th-c">执行</th><th class="xs-dc-th-c">缺陷</th></tr></thead>
                        <tbody>${rowsHtml}</tbody>
                    </table>
                </div>`
             : `<div class="xs-bd-empty">该文件下无需二次确认的执行/缺陷关联案例。</div>`;
         // pane meta 文案：区分「同步 TMS」与「仅本地删除」两种语义，避免将本地行数当线上行数展示。
-        const paneMeta = e.hardDeleteOnly
-            ? `<div class="xs-bd-pane-meta">仅删除本地文件（共 <b class="xs-bd-count">${e.localRowCount || 0}</b> 行），不涉及 TMS 平台。</div>`
-            : `<div class="xs-bd-pane-meta">删除本文件将同步删除 TMS 平台上的 <b class="xs-bd-count">${e.caseCount}</b> 条案例，以及这些案例的执行记录和缺陷关联。</div>`;
+        const paneMeta = e.unbound
+            ? `<div class="xs-bd-pane-meta">当前文件未绑定测试任务，删除仅清理本地，不会同步删除 TMS 平台上的案例。</div>`
+            : (e.hardDeleteOnly
+                ? `<div class="xs-bd-pane-meta">仅删除本地文件（共 <b class="xs-bd-count">${e.localRowCount || 0}</b> 行），不涉及 TMS 平台。</div>`
+                : `<div class="xs-bd-pane-meta">删除本文件将同步删除 TMS 平台上的 <b class="xs-bd-count">${e.caseCount}</b> 条案例，以及这些案例的执行记录和缺陷关联。</div>`);
         return `<div class="xs-bd-pane${idx === 0 ? ' xs-bd-pane-active' : ''}" role="tabpanel" data-idx="${idx}">
             <div class="xs-bd-file-path" title="${escapeHtml_(e.filePath || e.fileName)}">${escapeHtml_(e.filePath || e.fileName)}</div>
             ${paneMeta}
@@ -174,6 +182,9 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
     if (hardOnlyCount > 0) {
         riskLines.push(`<b>${hardOnlyCount}</b> 个文件仅删除本地（无 TMS 同步）`);
     }
+    if (unboundCount > 0) {
+        riskLines.push(`<b>${unboundCount}</b> 个文件未绑定测试任务，仅本地删除、不同步 TMS`);
+    }
     if (failedCount > 0) {
         riskLines.push(`<b>${failedCount}</b> 个文件预检失败，将被跳过、不会删除`);
     }
@@ -189,6 +200,7 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
     const headerParts: string[] = [];
     if (needTmsCount > 0) headerParts.push(`${needTmsCount} 需同步 TMS·${totalCases} 案例`);
     if (hardOnlyCount > 0) headerParts.push(`${hardOnlyCount} 仅本地`);
+    if (unboundCount > 0) headerParts.push(`${unboundCount} 未绑定`);
     if (failedCount > 0) headerParts.push(`${failedCount} 跳过`);
     const headerSuffix = headerParts.length > 0 ? `（${headerParts.join(' / ')}）` : '';
     const headerTitleHtml = `删除案例 — 共 ${fileCount} 个文件${headerSuffix}`;
@@ -462,7 +474,7 @@ export function showBatchDeleteConfirmModal(
         try {
             panel = vscode.window.createWebviewPanel(
                 'batchDeleteConfirmModal',
-                '批量删除案例',
+                '批量删除案例确认',
                 // 与「批量删除结果」汇总面板保持一致：落在当前编辑器活动列（Tab 区），
                 // 不再作为浮动 modal / 固定第一列面板呈现。
                 { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },

@@ -49,6 +49,7 @@ function buildDeleteConfirmHtml(
     fileName: string,
     caseCount: number,
     items: DeleteConfirmItem[],
+    unbound: boolean = false,
 ): string {
     const color = MODAL_COLOR_WARNING;
     const headerBg = MODAL_HEADER_BG_WARNING;
@@ -61,16 +62,18 @@ function buildDeleteConfirmHtml(
             + `<td class="xs-dc-td xs-dc-idx">${idx + 1}</td>`
             + `<td class="xs-dc-td xs-dc-no">${escapeHtml_(it.testCaseNo)}</td>`
             + `<td class="xs-dc-td xs-dc-name">${escapeHtml_(it.testCaseName)}</td>`
+            + `<td class="xs-dc-td xs-dc-platform" title="${escapeHtml_(platform)}">${escapeHtml_(platform)}</td>`
             + `<td class="xs-dc-td xs-dc-flag" data-flag="${exec}">${exec}</td>`
             + `<td class="xs-dc-td xs-dc-flag" data-flag="${bug}">${bug}</td>`
-            + `<td class="xs-dc-td xs-dc-platform" title="${escapeHtml_(platform)}">${escapeHtml_(platform)}</td>`
             + `</tr>`;
     }).join('');
 
     // 导语：聚焦「影响面」，文件路径独立成行展示；用户视线路径为「路径 → 影响面 → 表格 → footer 提示」
-    const lead = `谨慎操作：删除本文件将同步删除 TMS 平台上的 `
-        + `<span class="xs-dc-count">${caseCount}</span> 条案例，`
-        + `以及这些案例的执行记录和缺陷关联。`;
+    const lead = unbound
+        ? '当前文件未绑定测试任务，删除仅清理本地，不会同步删除 TMS 平台上的案例。'
+        : `谨慎操作：删除本文件将同步删除 TMS 平台上的 `
+            + `<span class="xs-dc-count">${caseCount}</span> 条案例，`
+            + `以及这些案例的执行记录和缺陷关联。`;
     // 表格上方独立 hint：说明表格的含义与 Y/N 语义
     const tblHint = items.length > 0
         ? `以下 <b>${items.length}</b> 条案例存在执行/缺陷关联（下表「执行」「缺陷」列，Y=存在，N=不存在）：`
@@ -125,7 +128,7 @@ ${baseModalCss_(headerBg, color, '')}
     <div class="xs-modal-dialog">
         <div class="xs-modal-header">
             <span class="xs-pr-icon">!</span>
-            <span class="xs-modal-title">删除案例（同步删除 TMS 平台 ${caseCount} 条案例）</span>
+            <span class="xs-modal-title">${unbound ? '删除案例（仅本地删除，不会同步 TMS）' : `删除案例（同步删除 TMS 平台 ${caseCount} 条案例）`}</span>
         </div>
         <div class="xs-modal-body">
             <div class="xs-dc-file-path" title="${escapeHtml_(filePath)}">${escapeHtml_(filePath)}</div>
@@ -133,7 +136,7 @@ ${baseModalCss_(headerBg, color, '')}
             ${tblHint ? `<div class="xs-dc-tbl-hint">${tblHint}</div>` : ''}
             <div class="xs-dc-table-wrap">
                 <table class="xs-dc-table">
-<thead><tr><th class="xs-dc-th-c xs-dc-th-idx" title="序号">#</th><th>编号</th><th>名称</th><th class="xs-dc-th-c">执行</th><th class="xs-dc-th-c">缺陷</th><th>来源</th></tr></thead>
+<thead><tr><th class="xs-dc-th-c xs-dc-th-idx" title="序号">#</th><th>编号</th><th>名称</th><th>来源</th><th class="xs-dc-th-c">执行</th><th class="xs-dc-th-c">缺陷</th></tr></thead>
                     <tbody>${rowsHtml}</tbody>
                 </table>
             </div>
@@ -181,18 +184,18 @@ ${baseModalCss_(headerBg, color, '')}
  * @returns true=用户确认删除；false=取消 / 关闭 / token 取消
  */
 export function showDeleteConfirmModal(
-    opts: { filePath: string; fileName: string; caseCount: number; items: DeleteConfirmItem[] },
+    opts: { filePath: string; fileName: string; caseCount: number; items: DeleteConfirmItem[]; unbound?: boolean },
     token?: vscode.CancellationToken,
 ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
         const panel = vscode.window.createWebviewPanel(
             'deleteConfirmModal',
-            '删除案例',
+            '删除案例确认',
             { viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
             { enableScripts: true, retainContextWhenHidden: false },
         );
         panel.webview.html = buildDeleteConfirmHtml(
-            opts.filePath, opts.fileName, opts.caseCount, Array.isArray(opts.items) ? opts.items : [],
+            opts.filePath, opts.fileName, opts.caseCount, Array.isArray(opts.items) ? opts.items : [], opts.unbound,
         );
 
         let settled = false;
@@ -225,11 +228,13 @@ export function showDeleteConfirmModal(
  * 样式与 baseModalCss_ 完全一致（warning 配色 / 420px 宽 / 12px 16px header / 20px 16px body / 10px 16px footer），
  * 与「案例编辑器内删除」弹窗视觉完全统一。
  */
-function buildDeleteConfirmSimpleHtml(filePath: string, fileName: string, caseCount: number): string {
+function buildDeleteConfirmSimpleHtml(filePath: string, fileName: string, caseCount: number, unbound: boolean = false): string {
     const color = MODAL_COLOR_WARNING;
     const headerBg = MODAL_HEADER_BG_WARNING;
-    const lead = `谨慎操作：删除文件「${escapeHtml_(fileName)}」将同步删除 TMS 平台上的 `
-        + `<span class="xs-dc-count">${caseCount}</span> 条案例，以及这些案例的执行记录和缺陷关联，此操作不可恢复。是否确定删除？`;
+    const lead = unbound
+        ? '当前文件未绑定测试任务，删除仅清理本地，不会同步删除 TMS 平台上的案例。是否继续删除？'
+        : `谨慎操作：删除文件「${escapeHtml_(fileName)}」将同步删除 TMS 平台上的 `
+            + `<span class="xs-dc-count">${caseCount}</span> 条案例，以及这些案例的执行记录和缺陷关联，此操作不可恢复。是否确定删除？`;
 
     return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -260,12 +265,12 @@ ${baseModalCss_(headerBg, color, '')}
     <div class="xs-modal-dialog">
         <div class="xs-modal-header">
             <span class="xs-pr-icon">!</span>
-            <span class="xs-modal-title">删除案例</span>
+            <span class="xs-modal-title">${unbound ? '删除案例（仅本地删除）' : '删除案例'}</span>
         </div>
         <div class="xs-modal-body"><div class="xs-dc-file-path" title="${escapeHtml_(filePath)}">${escapeHtml_(filePath)}</div>${lead}</div>
         <div class="xs-modal-footer">
             <button class="xs-btn" id="cancelBtn">取消</button>
-            <button class="xs-btn xs-btn-p" id="okBtn">确定删除</button>
+            <button class="xs-btn xs-btn-p" id="okBtn">${unbound ? '继续删除' : '确定删除'}</button>
         </div>
     </div>
 </div>
@@ -305,17 +310,17 @@ ${baseModalCss_(headerBg, color, '')}
  * @returns true=用户确认删除；false=取消 / 关闭 / token 取消
  */
 export function showDeleteConfirmSimpleModal(
-    opts: { filePath: string; fileName: string; caseCount: number },
+    opts: { filePath: string; fileName: string; caseCount: number; unbound?: boolean },
     token?: vscode.CancellationToken,
 ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
         const panel = vscode.window.createWebviewPanel(
             'deleteConfirmSimpleModal',
-            '删除案例',
+            '删除案例确认',
             { viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
             { enableScripts: true, retainContextWhenHidden: false },
         );
-        panel.webview.html = buildDeleteConfirmSimpleHtml(opts.filePath, opts.fileName, opts.caseCount);
+        panel.webview.html = buildDeleteConfirmSimpleHtml(opts.filePath, opts.fileName, opts.caseCount, opts.unbound);
 
         let settled = false;
         const finish = (v: boolean) => {

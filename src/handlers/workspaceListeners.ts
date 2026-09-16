@@ -60,6 +60,7 @@ import { showModal } from '../utils/message';
 import {
     confirmCaseFileDeleteWithDetails,
     reportDeleteResult,
+    postDeleteRowsResult,
 } from '../utils/deleteFeedback';
 import { showDeleteConfirmSimpleModal, showBatchDeleteConfirmModal } from '../utils/messageExtras';
 import type { PushFailure, DeleteConfirmItem } from '../utils/deleteFeedback';
@@ -1387,20 +1388,12 @@ async function finalizeCaseFileAfterUserConfirm(
         }
 
         // 回传 deleteRowsResult 到 panel（渲染失败行高亮 + # 列 tooltip）
-        const panel = BaseEditorProvider.getPanel(filePath);
-        if (panel) {
-            const reasons: Array<[string, string]> = failures.map(f => [String(f.tsId), String(f.reason || '')]);
-            try {
-                panel.webview.postMessage({
-                    type: 'deleteRowsResult',
-                    synced: Array.from(syncedSet).map(String),
-                    failed: failures.map(f => String(f.tsId)),
-                    reasons,
-                    deletedSuccess: syncResult.deletedSuccess,
-                    deletedSourceMissing: syncResult.deletedSourceMissing,
-                });
-            } catch (_) { /* ignore */ }
-        }
+        postDeleteRowsResult(BaseEditorProvider.getPanel(filePath), {
+            synced: Array.from(syncedSet).map(String),
+            failed: failures.map(f => ({ tsId: String(f.tsId), reason: String(f.reason || '') })),
+            deletedSuccess: syncResult.deletedSuccess,
+            deletedSourceMissing: syncResult.deletedSourceMissing,
+        });
 
         await presentDeleteResult({
             filePath,

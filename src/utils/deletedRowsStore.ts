@@ -307,8 +307,11 @@ export async function syncDeletedRows(
                 const failData = dataBySourceId.get(id);
                 const reason = failData != null ? String(failData) : '线上删除失败';
                 failed.push({ tsId: id, reason });
+            } else if (t === '4') {
+                // 含 CMBT 关联，后端不允许删除：保留文件、标记失败（与 type=2 同属可重试/人工处理）
+                failed.push({ tsId: id, reason: '含 CMBT 关联，不允许删除' });
             } else {
-                // 接口未返回该 sourceId 的结果，按失败保守处理
+                // 接口未返回该 sourceId 的结果（既非 1/2/3/4），按失败保守处理
                 failed.push({ tsId: id, reason: '线上删除结果缺失（接口未返回该 sourceId）' });
             }
         }

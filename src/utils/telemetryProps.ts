@@ -133,11 +133,15 @@ export function syncDeletedResultTelemetryProps(
     result: SyncDeletedResult,
     filePath?: string,
 ): Record<string, string> {
+    // 说明：synced / success / missing 的 tsId 列表与计数统一由 caseDeletionTelemetryProps
+    // 以 `deletedTestcaseIds[Count]` / `deletedSuccessTestcaseIds[Count]` /
+    // `deletedSourceMissingTestcaseIds[Count]` 命名输出（与 caseFileDelete.intercept.done 等
+    // 全场景一致），故此处不再额外输出裸 `deletedSuccess` / `deletedSourceMissing` 计数，
+    // 避免同一事件里两套命名口径并存、下钻分析时混淆（P3）。
+    // deletedTestcaseIdCount 已覆盖 synced 总数，`failedRows` 是 caseDeletionTelemetryProps
+    // 未覆盖的失败行计数，二者即为本事件所需的全部聚合字段。
     return {
-        syncedTotal: String(result.synced.length),
         failedRows: String(result.failed.length),
-        deletedSuccess: String(result.deletedSuccess.length),
-        deletedSourceMissing: String(result.deletedSourceMissing.length),
         ...caseDeletionTelemetryProps({
             filePath,
             synced: result.synced,

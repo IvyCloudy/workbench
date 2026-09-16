@@ -3,7 +3,7 @@ import * as path from 'path';
 import { detectFileType, createParser } from '../parsers';
 import { syncDeletedRows, refreshAndGetDeletedRows } from '../utils/deletedRowsStore';
 import { showToast } from '../utils/message';
-import { reportDeleteResult, buildDeleteFailures } from '../utils/deleteFeedback';
+import { reportDeleteResult, buildDeleteFailures, postDeleteRowsResult } from '../utils/deleteFeedback';
 import { TelemetryService } from '../utils/telemetry';
 import { getActiveFileUri, isTestCaseFile, telemetryErrProps, syncDeletedResultTelemetryProps } from '../utils/extensionHelpers';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
@@ -42,18 +42,8 @@ export async function handleSyncDeletedRows(): Promise<void> {
         // 把成功/失败的 tsId 回传前端，前端据此真正删除成功的行（接口失败的行保留不丢，
         // 并在表格内以置灰+划线 + 失败原因标记）。
         const panel = BaseEditorProvider.getPanel(uri.fsPath);
-        const failedTsIds = result.failed.map(f => f.tsId);
-        const reasons = result.failed.map(f => [f.tsId, f.reason] as [string, string]);
         if (panel) {
-            panel.webview.postMessage({
-                type: 'deleteRowsResult',
-                synced: result.synced,
-                failed: failedTsIds,
-                reasons,
-                // 汇总分档：区分 type=1（删除成功）与 type=3（sourceId 不存在，仍算成功）
-                deletedSuccess: result.deletedSuccess,
-                deletedSourceMissing: result.deletedSourceMissing,
-            });
+            postDeleteRowsResult(panel, result);
             // P1-A1：与编辑器内右键删除对齐，也弹一个删除结果 modal 展示明细
             // （之前只在表格内标记行状态，用户容易忽略失败原因）
             const failures = buildDeleteFailures(result)

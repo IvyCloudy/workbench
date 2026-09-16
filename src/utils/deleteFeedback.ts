@@ -39,6 +39,46 @@ export function buildDeleteFailures(
 }
 
 /**
+ * 统一把「删除同步结果」回传案例编辑器面板（渲染成功行删除 + 失败行高亮/置灰 + # 列 tooltip）。
+ *
+ * 收敛编辑器内删除、同步已删除行、案例文件删除三处重复的
+ * `postMessage({type:'deleteRowsResult'})` 拼接逻辑（P1 去重），
+ * 避免 synced / failed / reasons / deletedSuccess / deletedSourceMissing 字段口径漂移。
+ *
+ * @param panel 目标 webview 面板；未打开（undefined）时静默跳过，由调用方自行降级（toast/modal）
+ * @param input 删除同步结果（可直接传 syncDeletedRows 的返回；或从 PushFailure[] 组装）
+ */
+export interface PostDeleteRowsResultInput {
+    /** 成功删除（type=1 + type=3）的 tsId 列表 */
+    synced: ReadonlyArray<string>;
+    /** 失败明细（tsId + 原因） */
+    failed: ReadonlyArray<{ tsId: string; reason?: string }>;
+    /** 线上真实删除成功的 tsId（type=1） */
+    deletedSuccess: ReadonlyArray<string>;
+    /** 线上本不存在、已同步清理的 tsId（type=3） */
+    deletedSourceMissing: ReadonlyArray<string>;
+}
+
+export function postDeleteRowsResult(
+    panel: vscode.WebviewPanel | undefined,
+    input: PostDeleteRowsResultInput,
+): void {
+    if (!panel) return;
+    const failed = input.failed.map(f => ({ tsId: String(f.tsId), reason: String(f.reason || '') }));
+    const reasons: Array<[string, string]> = failed.map(f => [f.tsId, f.reason]);
+    try {
+        panel.webview.postMessage({
+            type: 'deleteRowsResult',
+            synced: input.synced.map(String),
+            failed: failed.map(f => f.tsId),
+            reasons,
+            deletedSuccess: input.deletedSuccess.map(String),
+            deletedSourceMissing: input.deletedSourceMissing.map(String),
+        });
+    } catch (_) { /* ignore */ }
+}
+
+/**
  * 线上预检（删除确认接口）返回非成功码时的降级提示。
  *
  * 只做提示、不阻断删除：调用方在提示后继续走原生 modal 确认。

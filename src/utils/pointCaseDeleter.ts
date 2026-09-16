@@ -46,7 +46,7 @@
  *    · pointCaseDeleter.done   —— 每次调用（无论是否命中）都会上报，字段包含
  *      测试任务维度（testTaskNo/subTestTaskId/artifactId）、要点维度
  *      （pointId/pointName/pointPath）、案例维度（fileExt/deletedCount/
- *      totalRecords/type1/type2/type3）以及 costMs。
+ *      totalRecords/type1/type2/type3/type4）以及 costMs。
  *    · pointCaseDeleter.error  —— 抛异常路径统一上报，包含 errorMessage/
  *      stackHead + taskInfo/point 上下文，便于线上定位。
  *    · taskInfo 由调用方通过入参传入（Q2-a 决策），deleter 不主动查绑定。
@@ -185,7 +185,7 @@ export interface DeleteCasesByPointResult {
     /** 被删除的行数（== deletedCases.length） */
     deletedCount: number;
     /** 匹配类型分档（诊断用） */
-    typeCount: { type1: number; type2: number; type3: number };
+    typeCount: { type1: number; type2: number; type3: number; type4: number };
     /** 案例文件原总行数 */
     totalRecords: number;
     /** 删除后剩余行数 */
@@ -211,7 +211,7 @@ export interface DeleteCasesByPointsResult {
     /** 实际被删除的案例去重计数（== deletedCases.length） */
     deletedCount: number;
     /** 匹配类型分档汇总（所有要点合并） */
-    typeCount: { type1: number; type2: number; type3: number };
+    typeCount: { type1: number; type2: number; type3: number; type4: number };
     /** 案例文件原总行数 */
     totalRecords: number;
     /** 删除后剩余行数 */
@@ -439,7 +439,8 @@ async function deleteCasesFromCaseFileMulti(
     //     · pcoTotal=0 且 pointTotal=1 → path 是单个案例路径，删除「path 等于 path」的案例（精确）
     //   typeCount 分档（保持埋点字段名兼容）：
     //     type1 = 精确匹配删除（单案例），type2 = 前缀匹配删除（功能条目/测试点），
-    //     type3 = 未触发删除（type=2/4）
+    //     type3 = 未触发删除（type=2/4 合计），type4 = 其中 type=4（含 CMBT 不允许删除）
+    //            的明细，便于把"业务规则拦截(CMBT)"与"真实失败(type=2)"在聚合埋点里区分统计
     const tsIdIdx = headers.indexOf(TS_ID_COLUMN);
     const caseIdIdx = tsIdIdx >= 0 ? tsIdIdx : headers.indexOf(CASE_ID_FIELD);
     const nameIdx = headers.indexOf(CASE_NAME_FIELD);
@@ -463,15 +464,20 @@ async function deleteCasesFromCaseFileMulti(
     const perPointRowIdx: Set<number>[] = points.map(() => new Set<number>());
     /** 被删除案例的摘要（顺序为磁盘中出现顺序） */
     const deletedCases: DeletedCaseItem[] = [];
-    const typeCount = { type1: 0, type2: 0, type3: 0 };
+    const typeCount = { type1: 0, type2: 0, type3: 0, type4: 0 };
     /** 逐要点匹配的 type 分档 */
-    const perPointTypeCount = points.map(() => ({ type1: 0, type2: 0, type3: 0 }));
+    const perPointTypeCount = points.map(() => ({ type1: 0, type2: 0, type3: 0, type4: 0 }));
 
-    // type=2/4 不触发删除：每个此类结果项计 1 次到 type3（不按行重复计数）
+    // type=2/4 不触发删除：每个此类结果项计 1 次到 type3（不按行重复计数）；
+    // 其中 type=4（含 CMBT 不允许删除）额外单独计入 type4，避免与 type=2 失败合并丢失区分
     for (let p = 0; p < points.length; p++) {
         if (!plan[p].trigger) {
             typeCount.type3++;
             perPointTypeCount[p].type3++;
+            if (points[p].type === 4) {
+                typeCount.type4++;
+                perPointTypeCount[p].type4++;
+            }
         }
     }
 
@@ -487,9 +493,9 @@ async function deleteCasesFromCaseFileMulti(
         for (let p = 0; p < points.length; p++) {
             const pl = plan[p];
             if (!pl.trigger) continue;
-            const hit = pl.mode === 'prefix'
-                ? (pl.target !== '' && recPath.startsWith(pl.target))
-                : (recPath === pl.target);
+            // 复用规范助手 pathHit_（带 '/' 边界保护，与 pathHit_ 单测契约一致），
+            // 避免 inline startsWith 越界误删（如 '模块/功能X' 被 '模块/功能' 前缀命中）
+            const hit = pathHit_(recPath, pl.target, pl.mode);
             if (!hit) continue;
 
             deletedRowIdxSet.add(i);
@@ -784,7 +790,7 @@ function applyRemoveByIndices(
  *   │   deletedCount       实际被删除案例数（核心业务指标）
  *   │   totalRecords       案例文件原总行数
  *   │   remainingRecords   删除后剩余行数
- *   │   type1/type2/type3  分档命中数（匹配置信度分析）
+ *   │   type1/type2/type3/type4  分档命中数（匹配置信度分析；type4 = 含 CMBT 拦截）
  *   └── 性能
  *       costMs             端到端耗时（毫秒）
  */
@@ -803,7 +809,7 @@ function pointDeletionCaseProps(
         fileDeleted: boolean;
         fileDeleteError?: string;
         deletedFilePath?: string;
-        typeCount: { type1: number; type2: number; type3: number };
+        typeCount: { type1: number; type2: number; type3: number; type4: number };
         costMs: number;
         deletedCases: DeletedCaseItem[];
     },
@@ -820,6 +826,7 @@ function pointDeletionCaseProps(
         type1: String(result.typeCount.type1),
         type2: String(result.typeCount.type2),
         type3: String(result.typeCount.type3),
+        type4: String(result.typeCount.type4),
         costMs: String(result.costMs),
         ...telemetryTsIdListProps({ deletedTestcaseIds: ids }),
     };

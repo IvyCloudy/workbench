@@ -81,14 +81,18 @@ describe('pointCaseDeleter · 入参校验', () => {
             .rejects.toThrow(/必须携带非空 path/);
     });
 
-    it('type=2 / type=4 不触发删除，无需 path（不抛错）', async () => {
+    it('type=2 / type=4 不触发删除，无需 path（不抛错）；type=4 与 type=2 在埋点分档里区分', async () => {
         const dir = mkTmpDir();
         const fp = writeYaml(dir, 'cases.yaml', `- testcase_id: TC001\n  name: a\n  path: 模块/功能\n`);
         // 直接走内部入口验证：type=2/4 不应删除任何行
         const res = await deleteCasesFromCaseFile(fp, { type: 2, path: '', data: '失败原因' });
         expect(res.deletedCount).toBe(0);
+        expect(res.typeCount.type3).toBe(1); // type=2 计入 type3
+        expect(res.typeCount.type4).toBe(0); // 非 CMBT，type4 为 0
         const res4 = await deleteCasesFromCaseFile(fp, { type: 4, path: '', data: '含CMBT' });
         expect(res4.deletedCount).toBe(0);
+        expect(res4.typeCount.type3).toBe(1); // type=4 仍计入 type3（合计）
+        expect(res4.typeCount.type4).toBe(1); // 但单独计入 type4，区别于 type=2 失败
     });
 });
 
@@ -183,6 +187,41 @@ describe('pointCaseDeleter · yaml 格式', () => {
         expect(res.deletedCount).toBe(0);
         expect(res.remainingRecords).toBe(5);
         expect(fs.statSync(fp).mtimeMs).toBe(mtimeBefore);
+    });
+});
+
+// ============================================================================
+// 2.x) 前缀边界保护（越界不误删）—— 回归测试，锁定 P4/P5 修复
+// ============================================================================
+describe('pointCaseDeleter · 前缀边界保护（越界不误删）', () => {
+    let dir: string;
+    beforeEach(() => { dir = mkTmpDir(); });
+    afterEach(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
+
+    // 目标 '账户中心/登录' 的同级兄弟：路径是目标路径的字符串延伸（无 '/' 间隔）
+    const YAML = `- testcase_id: TC001
+  name: 登录
+  path: 账户中心/登录
+- testcase_id: TC002
+  name: 登录失败
+  path: 账户中心/登录失败
+- testcase_id: TC003
+  name: 登录超时
+  path: 账户中心/登录超时
+`;
+
+    it('前缀匹配只删目标及其子路径，不越界误删同级兄弟案例', async () => {
+        const fp = writeYaml(dir, 'cases.yaml', YAML);
+        // pcoTotal>0 → 前缀匹配模式
+        const res = await deleteCasesFromCaseFile(fp, {
+            type: 1, path: '账户中心/登录', pcoTotal: 1, pointTotal: 1,
+        });
+        expect(res.deletedCount).toBe(1);
+        expect(res.deletedCases.map(c => c.testcaseId)).toEqual(['TC001']);
+        const disk = fs.readFileSync(fp, 'utf-8');
+        // 兄弟案例（路径为字符串延伸）必须保留，否则即为越界误删
+        expect(disk).toContain('TC002');
+        expect(disk).toContain('TC003');
     });
 });
 

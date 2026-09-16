@@ -26,7 +26,7 @@ import { applyDiffHighlight, type EditorSession } from '../services/diffHighligh
 import { getMarks, setMarks, clearMarks } from '../utils/markStore';
 import { getHeaderLabels, onHeaderLabelsChange } from '../utils/headerLabels';
 import { showSaveResult, showPushErrorModal, showModal } from '../utils/message';
-import { reportDeleteResult, buildDeleteFailures } from '../utils/deleteFeedback';
+import { reportDeleteResult, buildDeleteFailures, postDeleteRowsResult } from '../utils/deleteFeedback';
 import type { PushFailure } from '../utils/message';
 import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { confirmDeleteTestCase } from '../services/http';
@@ -492,22 +492,9 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
         // 一方面把成功/失败的 tsId 回传前端，前端据此真正删除成功行（失败行保留不丢，
         // 并在表格内以置灰+划线 + 失败原因标记）；另一方面弹“删除结果”汇总弹窗
         // （与文件删除的弹窗同款）罗列失败行及原因。
-        const failedTsIds = result.failed.map(f => f.tsId);
-        const reasonsById = new Map<string, string>();
-        result.failed.forEach(f => reasonsById.set(f.tsId, f.reason));
         try {
             const panel = BaseEditorProvider.getPanel(filePath);
-            if (panel) {
-                panel.webview.postMessage({
-                    type: 'deleteRowsResult',
-                    synced: result.synced,
-                    failed: failedTsIds,
-                    reasons: Array.from(reasonsById.entries()),
-                    // 汇总分档：区分 type=1（删除成功）与 type=3（sourceId 不存在，仍算成功）
-                    deletedSuccess: result.deletedSuccess,
-                    deletedSourceMissing: result.deletedSourceMissing,
-                });
-            }
+            postDeleteRowsResult(panel, result);
         } catch (_e) { /* ignore */ }
 
         // 弹删除结果弹窗（在当前案例编辑器内嵌 modal，同款样式；见 05f-delete-result.js）

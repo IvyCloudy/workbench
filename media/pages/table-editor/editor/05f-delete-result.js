@@ -153,7 +153,7 @@ function showDeleteResultModal(payload) {
         }
     }
 
-    if (hintEl) hintEl.textContent = (failures.length > 0) ? '点击行号可定位到表格对应行；失败行仍保留在表格中（置灰+划线+失败原因）' : '';
+    if (hintEl) hintEl.textContent = (failures.length > 0) ? '点击行号可定位到表格对应行；失败原因见表格行号提示' : '';
     if (copyBtn) copyBtn.style.display = (failures.length > 0) ? '' : 'none';
 
     // 缓存全量明细文本，便于复制

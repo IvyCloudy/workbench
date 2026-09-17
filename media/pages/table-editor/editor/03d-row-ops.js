@@ -532,12 +532,13 @@ function deleteRow(ri) {
         return;
     }
 
-    // 已推送行：先标记为待删除（置灰+划线），发消息让扩展端调接口，等回包再真删
-    _collectPendingDelete([rowToDelete]);
-    renderTable();
     if (typeof S.vscode !== 'undefined' && S.vscode) {
         // 谨慎操作：删除会同步删除 TMS 平台上的案例，先弹窗确认
         var _doDelete = function () {
+            // 仅在用户确认删除、真正发删除请求时才标记「待删除」（置灰+划线），
+            // 与 deleteSelectedRows 保持一致；避免取消确认后行仍停在置灰态
+            _collectPendingDelete([rowToDelete]);
+            renderTable();
             // 携带当前表格中所有非空 tsId 的有序快照，供扩展端算「删除后视图行号」
             // 避免扩展端重新读盘（磁盘可能滞后于内存）
             var _tsIdOrder = _snapshotTsIdOrder();

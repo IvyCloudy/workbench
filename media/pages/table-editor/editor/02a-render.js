@@ -467,20 +467,20 @@ function _buildRowHtml(ri, tsIdColIdx) {
             if (rowFailTime === 0) rowFailTime = 1;
         }
     }
-    // 待删除行（已发删除请求、接口尚未返回）：置灰+划线，不可编辑
-    var pendingDelCls = '';
-    // 删除失败行（接口返回失败，保留在表中，红标 + 失败原因）：最终态，优先级高于"待删除中"
-    var failedDelCls = '';
+    // 待删除行（已发删除请求、接口尚未返回）：不再做置灰+删除线高亮（与正常行视觉一致）
+    var isPendingDel = false;
+    // 删除失败行：保留在表中，不再做高亮；失败原因仅用于行号 hover 提示
+    var isFailedDel = false;
     var failedDelReason = '';
     if (tsIdColIdx >= 0) {
         var _tsId = row[tsIdColIdx];
         if (_tsId !== undefined && _tsId !== null && _tsId !== '') {
             var _tsIdStr = String(_tsId);
             if (S._pendingDeleteTsIds && S._pendingDeleteTsIds.size > 0 && S._pendingDeleteTsIds.has(_tsIdStr)) {
-                pendingDelCls = ' xs-tr-pending-delete';
+                isPendingDel = true;
             }
             if (S._failedDeleteTsIds && S._failedDeleteTsIds.size > 0 && S._failedDeleteTsIds.has(_tsIdStr)) {
-                failedDelCls = ' xs-tr-delete-failed';
+                isFailedDel = true;
                 if (S._failedDeleteReasons && S._failedDeleteReasons[_tsIdStr]) {
                     failedDelReason = S._failedDeleteReasons[_tsIdStr];
                 }
@@ -491,9 +491,9 @@ function _buildRowHtml(ri, tsIdColIdx) {
     // 各段使用换行符分隔，浏览器原生 tooltip 会自动分行展示，便于阅读长原因。
     var rowNumTitle = '原始行号: ' + (ri + 1);
     if (failReason) rowNumTitle += '\n推送失败：' + failReason;
-    if (failedDelCls) {
+    if (isFailedDel) {
         rowNumTitle += '\n删除失败：' + (failedDelReason || '线上拒绝删除');
-    } else if (pendingDelCls) {
+    } else if (isPendingDel) {
         rowNumTitle += '\n删除中（等待线上确认）';
     }
     // 渲染为普通行；不再提供整行 HTML5 拖动排序能力（与矩形拖选、行横扫存在交互冲突）。
@@ -562,7 +562,7 @@ function _buildRowHtml(ri, tsIdColIdx) {
             break;
         }
     }
-    var html = '<tr data-row="' + ri + '" class="' + (selCls + resizedCls + failCls + pendingDelCls + failedDelCls + expandedStepsCls + (rowFrozen ? ' xs-tr-frozen' : '')).trim() + '"' + rowStyle + '>'
+    var html = '<tr data-row="' + ri + '" class="' + (selCls + resizedCls + failCls + expandedStepsCls + (rowFrozen ? ' xs-tr-frozen' : '')).trim() + '"' + rowStyle + '>'
         + '<td class="xs-td xs-td-cb xs-td-rownum" data-row="' + ri + '" title="' + escapeHtml(rowNumTitle) + '">'
         +   '<span class="xs-rownum">' + (ri + 1) + '</span>'
         +   '<div class="xs-row-resizer" data-row="' + ri + '" title="拖动调整行高；双击自适应内容"></div>'

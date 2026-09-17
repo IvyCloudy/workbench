@@ -176,28 +176,16 @@ export interface DeletedCaseItem {
     caseName: string;
 }
 
-/** 删除结果 */
+/** 单个要点的删除明细 */
 export interface DeleteCasesByPointResult {
-    /** 案例文件绝对路径 */
-    filePath: string;
+    /** 要点身份（入参回显，便于核对"哪个要点删了哪些案例"） */
+    point: { type: number; path: string; data: string; pcoTotal: number; pointTotal: number };
     /** 被删除的案例列表（顺序为磁盘中出现顺序） */
     deletedCases: DeletedCaseItem[];
     /** 被删除的行数（== deletedCases.length） */
     deletedCount: number;
     /** 匹配类型分档（诊断用） */
     typeCount: { type1: number; type2: number; type3: number; type4: number };
-    /** 案例文件原总行数 */
-    totalRecords: number;
-    /** 删除后剩余行数 */
-    remainingRecords: number;
-    /** 案例文件是否因本次删除被整体清空并删除（remainingRecords===0 时为真） */
-    fileDeleted: boolean;
-    /** 被删除的案例文件绝对路径（fileDeleted 为 true 时填充，否则为空串） */
-    deletedFilePath?: string;
-    /** 文件删除失败原因（删除成功为空串；删除尝试失败时为错误描述） */
-    fileDeleteError?: string;
-    /** 端到端耗时(ms)——不上报埋点，仅返回给调用方 */
-    costMs: number;
 }
 
 /** 多要点删除的聚合结果（每个要点一项 DeleteCasesByPointResult） */
@@ -358,20 +346,14 @@ export async function deleteCasesByPoints(
     return withFileLock(casePath, async () => {
         try {
             const result = await deleteCasesFromCaseFileMulti(casePath, points);
-            // 回填真实耗时到逐要点明细（内部为 0，仅用于埋点展示）
-            for (const pp of result.perPoint) {
-                pp.costMs = result.costMs;
-                // fileDeleted 是文件级语义，回填到逐要点明细便于单点 API 直接读取
-                pp.fileDeleted = result.fileDeleted;
-                pp.deletedFilePath = result.deletedFilePath;
-                pp.fileDeleteError = result.fileDeleteError;
-            }
             // ① 逐要点各上报一条 done（明细口径：deletedCount 为单要点命中数）
             for (let i = 0; i < points.length; i++) {
-                emitDoneTelemetry(result.perPoint[i], tInfo, points[i]);
+                emitDoneTelemetry(result, result.perPoint[i], tInfo, points[i]);
             }
             // ② 额外上报一条聚合 done（全局口径：去重 deletedCount + 真实 costMs）
             emitAggregateDoneTelemetry(result, tInfo, points);
+            // [DEBUG] 直接打印返回结果（含逐要点 point 身份与删除明细），与返回结构完全一致
+            console.log('[pcDeleter] deleteCasesByPoints 结果:', JSON.stringify(result, null, 2));
             return result;
         } catch (err) {
             emitErrorTelemetry(err, tInfo, { points: input.points }, casePath);
@@ -393,13 +375,7 @@ async function deleteCasesFromCaseFile(
     point: Required<DeleteCasesByPointInput>,
 ): Promise<DeleteCasesByPointResult> {
     const agg = await deleteCasesFromCaseFileMulti(casePath, [point]);
-    // fileDeleted 是文件级语义，回填进单要点明细便于内部单点入口直接读取
-    const r = agg.perPoint[0];
-    r.fileDeleted = agg.fileDeleted;
-    r.deletedFilePath = agg.deletedFilePath;
-    r.fileDeleteError = agg.fileDeleteError;
-    r.costMs = agg.costMs;
-    return r;
+    return agg.perPoint[0];
 }
 
 /**
@@ -520,16 +496,10 @@ async function deleteCasesFromCaseFileMulti(
             });
         }
         return {
-            filePath: casePath,
+            point: { type: _pt.type, path: _pt.path, data: _pt.data, pcoTotal: _pt.pcoTotal, pointTotal: _pt.pointTotal },
             deletedCases: cases,
             deletedCount: cases.length,
             typeCount: perPointTypeCount[p],
-            totalRecords,
-            remainingRecords: totalRecords - cases.length,
-            fileDeleted: false,
-            deletedFilePath: '',
-            fileDeleteError: '',
-            costMs: 0,
         };
     });
 
@@ -833,7 +803,8 @@ function pointDeletionCaseProps(
 }
 
 function emitDoneTelemetry(
-    result: DeleteCasesByPointResult,
+    agg: DeleteCasesByPointsResult,
+    pp: DeleteCasesByPointResult,
     tInfo: Required<DeleteCasesTaskInfo>,
     p: Required<DeleteCasesByPointInput>,
 ): void {
@@ -842,7 +813,7 @@ function emitDoneTelemetry(
             // 测试任务维度
             testTaskNo: tInfo.testTaskNo,
             subTestTaskId: tInfo.subTestTaskId,
-            artifactId: tInfo.artifactId || path.basename(result.filePath),
+            artifactId: tInfo.artifactId || path.basename(agg.filePath),
             // 结果项维度（对齐后端删除契约）
             type: String(p.type),
             data: p.data,
@@ -850,8 +821,19 @@ function emitDoneTelemetry(
             pcoTotal: String(p.pcoTotal),
             pointTotal: String(p.pointTotal),
             caseTotal: String(p.caseTotal),
-            // 案例维度（与多要点聚合事件共享构造器，保证字段完全一致）
-            ...pointDeletionCaseProps(result),
+            // 案例维度（文件级字段取自聚合结果，单要点字段取自 pp，保证与聚合事件字段一致）
+            ...pointDeletionCaseProps({
+                filePath: agg.filePath,
+                deletedCount: pp.deletedCount,
+                totalRecords: agg.totalRecords,
+                remainingRecords: agg.remainingRecords,
+                fileDeleted: agg.fileDeleted,
+                fileDeleteError: agg.fileDeleteError,
+                deletedFilePath: agg.deletedFilePath,
+                typeCount: pp.typeCount,
+                costMs: agg.costMs,
+                deletedCases: pp.deletedCases,
+            }),
         });
     } catch {
         // 埋点绝不阻断业务

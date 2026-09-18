@@ -424,7 +424,10 @@ tbody tr.xs-tr-frozen.selected td.xs-td{background:#dde7f3}
 .xs-sf-search .xs-sf-clear.show{display:inline}
 .xs-sf-search .xs-sf-reset{position:absolute;right:14px;top:50%;transform:translateY(-50%);cursor:pointer;color:#999;font-size:14px;line-height:1;padding:0 2px;user-select:none}
 .xs-sf-search .xs-sf-reset:hover{color:var(--p)}
-.xs-sf-list{flex:1;overflow-y:auto;padding:4px 0;min-height:80px;max-height:260px}
+.xs-sf-list{flex:1;overflow-y:auto;padding:0 0 4px;min-height:80px;max-height:260px}
+/* 「(全选)」行固定在可滚动列表顶部，向下滚动时始终可见；其下边线替代原分隔线 */
+.xs-sf-list .xs-sf-item[data-role="all"]{position:sticky;top:0;z-index:2;background:#fff;border-bottom:1px solid var(--bd)}
+.xs-sf-list .xs-sf-item[data-role="all"]:hover{background:#f0f4ff}
 .xs-sf-item{display:flex;align-items:center;padding:4px 10px;cursor:pointer;font-size:12px;gap:6px;user-select:none}
 .xs-sf-item:hover{background:#f0f4ff}
 .xs-sf-item input[type=checkbox]{margin:0;flex-shrink:0;cursor:pointer}
@@ -432,7 +435,6 @@ tbody tr.xs-tr-frozen.selected td.xs-td{background:#dde7f3}
 .xs-sf-item .xs-sf-count{color:#999;font-size:11px;flex-shrink:0}
 .xs-sf-item.xs-sf-blank .xs-sf-label{color:#aaa;font-style:italic}
 .xs-sf-empty{padding:14px 12px;text-align:center;color:#aaa;font-size:12px}
-.xs-sf-divider{height:1px;background:var(--bd);margin:2px 0}
 .xs-sf-footer{display:flex;align-items:center;justify-content:space-between;padding:8px;border-top:1px solid var(--bd);gap:6px;flex-shrink:0}
 .xs-sf-footer .xs-sf-clear-btn{font-size:11px;color:var(--tl);cursor:pointer;background:transparent;border:none;padding:4px 6px}
 .xs-sf-footer .xs-sf-clear-btn:hover{color:var(--p);text-decoration:underline}

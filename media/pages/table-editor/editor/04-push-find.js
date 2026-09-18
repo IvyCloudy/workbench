@@ -1015,7 +1015,6 @@ function renderColFilterList() {
         +     '<span class="xs-sf-label"><strong>(全选' + (kw ? ' 搜索结果' : '') + ')</strong></span>'
         +     '<span class="xs-sf-count">' + filtered.length + '</span>'
         +   '</label>';
-    html += '<div class="xs-sf-divider"></div>';
     if (filtered.length === 0) {
         html += '<div class="xs-sf-empty">无匹配项</div>';
     } else {

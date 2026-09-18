@@ -138,9 +138,13 @@ function copyCell() {
             grid.push(line);
             _lines.push(_tsvLine.join('\t'));
         }
+        var _tsvJoined = _lines.join('\n');
         S.clip = grid;
+        // 记录本次写入系统剪贴板的 TSV：Ctrl+V 读到相同内容即为"表内复制 → Ctrl+V"，
+        // 直接复用右键「粘贴单元格」(pasteCell) 保证与右键行为一致；否则视为外部粘贴。
+        S._clipLastTsv = _tsvJoined;
         // 同步写入系统剪贴板（TSV），使 Ctrl+V 也可用；toast 由 _writeSystemClipboard 统一触发
-        _writeSystemClipboard(_lines.join('\n'),
+        _writeSystemClipboard(_tsvJoined,
             '已复制 ' + rowList.length + ' 行 × ' + (rc.c2 - rc.c1 + 1) + ' 列');
         return;
     }
@@ -160,15 +164,40 @@ function copyCell() {
     // 单格复制保留内部换行，并用双引号转义包裹，使 Ctrl+V 解析时不会把单元格内换行
     // 误判为行分隔符（步骤描述等多行内容才能完整保留）
     var _tsvSingle = _quoteTsvField(_cellValueToTsv(v0));
+    S._clipLastTsv = _tsvSingle;
     _writeSystemClipboard(_tsvSingle, '已复制');
 }
 
 function pasteCell() {
     if (S.clip === null || S.clip === undefined) return;
     if (S._ctxRow < 0 || S._ctxCol < 0) return;
-    // 二维数组（来自矩形复制）：从右键 (ctxRow, ctxCol) 作为左上角铺贴
+    // 单值剪贴板 + 多格选区 → 摊满整个选区（Excel 行为）；二维剪贴板 → 直接铺贴。
+    // Ctrl+V 与右键「粘贴单元格」共用本函数，二者结果保持一致。
+    var _grid = null;
     if (Array.isArray(S.clip) && S.clip.length > 0 && Array.isArray(S.clip[0])) {
-        var grid = S.clip;
+        _grid = S.clip;
+    } else {
+        var _rcSel = (typeof getCellSelRect === 'function') ? getCellSelRect() : null;
+        if (_rcSel && (_rcSel.r1 !== _rcSel.r2 || _rcSel.c1 !== _rcSel.c2)) {
+            // 目标行：选区内可见行（过滤模式跳过隐藏行），否则用原始行区间
+            var _fillRows = (typeof getSelRectRows === 'function') ? getSelRectRows() : null;
+            if (!_fillRows || _fillRows.length === 0) {
+                _fillRows = [];
+                for (var _fr0 = _rcSel.r1; _fr0 <= _rcSel.r2; _fr0++) _fillRows.push(_fr0);
+            }
+            var _fillW = _rcSel.c2 - _rcSel.c1 + 1;
+            _grid = [];
+            for (var _fi = 0; _fi < _fillRows.length; _fi++) {
+                var _fline = [];
+                for (var _fj = 0; _fj < _fillW; _fj++) _fline.push(S.clip);
+                _grid.push(_fline);
+            }
+            S._ctxRow = _rcSel.r1; S._ctxCol = _rcSel.c1; // 锚点对齐选区左上角
+        }
+    }
+    // 二维网格（矩形复制 / 单值填充）：从 (ctxRow, ctxCol) 作为左上角铺贴
+    if (_grid) {
+        var grid = _grid;
         var rows = (S.data && S.data.rows) || [];
         var headers = (S.data && S.data.headers) || [];
         pushHistory();
@@ -241,7 +270,13 @@ function pasteCell() {
                         ? ((typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(src) : src)
                         : formatCellValue(src);
                 } else if (isArrTarget && Array.isArray(src)) {
-                    nv = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(src) : src.slice();
+                    // 数组列 + 源为数组：纯标量数组深拷贝保留结构；含对象元素则序列化每个元素，
+                    // 避免 chip 渲染成 [object Object]（如把 steps 对象数组粘到非明细的数组列）
+                    var _hasObjS2 = false;
+                    for (var _soi2 = 0; _soi2 < src.length; _soi2++) { if (src[_soi2] && typeof src[_soi2] === 'object') { _hasObjS2 = true; break; } }
+                    nv = _hasObjS2
+                        ? src.map(function (_x) { return (_x && typeof _x === 'object') ? (function () { try { return JSON.stringify(_x); } catch (_e) { return ''; } })() : String(_x == null ? '' : _x); }).filter(function (_x) { return _x !== ''; })
+                        : ((typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(src) : src.slice());
                 } else if (src && typeof src === 'object') {
                     // 普通对象：深拷贝
                     nv = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(src) : src;
@@ -294,20 +329,22 @@ function pasteCell() {
         var s2 = (target === null || target === undefined) ? '' : (typeof target === 'object' ? (function () { try { return JSON.stringify(target); } catch (_e) { return ''; } })() : String(target));
         target = s2 === '' ? [] : s2.split(/;\s*|\n+/).map(function (x) { return x.trim(); }).filter(function (x) { return x !== ''; });
     } else if (!isArr && Array.isArray(target)) {
-        // 对象数组保留原结构（深拷贝），仅当目标列不是数组列时若是标量数组才扁平化为字符串
+        // 目标标量列遇到源为数组：不能直接把对象数组写进去，否则 chip 会渲染成 [object Object]；
+        // 统一用 formatCellValue 序列化为可读字符串（对象元素会单独 JSON 化后用 '; ' 拼接）。
+        target = formatCellValue(target);
+    } else if (isArr && Array.isArray(target)) {
+        // 目标数组列 + 源为数组：保留标量数组结构；若含对象元素，序列化为字符串，
+        // 避免 chip 渲染成 [object Object]；纯标量数组仍深拷贝保留结构。
         var hasObjT = false;
         for (var _toi = 0; _toi < target.length; _toi++) { if (target[_toi] && typeof target[_toi] === 'object') { hasObjT = true; break; } }
         if (hasObjT) {
-            target = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(target) : target;
+            target = target.map(function (_x) { return (_x && typeof _x === 'object') ? (function () { try { return JSON.stringify(_x); } catch (_e) { return ''; } })() : String(_x == null ? '' : _x); }).filter(function (_x) { return _x !== ''; });
         } else {
-            target = formatCellValue(target);
+            target = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(target) : target.slice();
         }
-    } else if (isArr && Array.isArray(target)) {
-        // 标量数组列：按需深拷贝；若是对象数组放进标量数组列，则序列化每个元素
-        target = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(target) : target.slice();
     } else if (target && typeof target === 'object') {
-        // 普通对象：直接深拷贝赋值
-        target = (typeof _deepCloneCellValue === 'function') ? _deepCloneCellValue(target) : target;
+        // 目标标量列遇到源为对象：序列化为字符串，避免渲染成 [object Object]
+        target = (function () { try { return JSON.stringify(target); } catch (_e) { return ''; } })();
     }
     S.data.rows[S._ctxRow][S._ctxCol] = target;
     S.mods.add(S._ctxRow + ',' + S._ctxCol);

@@ -411,6 +411,18 @@ function bindDocument() {
             }
             navigator.clipboard.readText().then(function (text) {
                 if (text === null || text === undefined) text = '';
+                // Ctrl+C / 右键「复制选区」都走 copyCell，它会把写入系统剪贴板的 TSV 记到 S._clipLastTsv。
+                // 若本次读到的系统剪贴板内容与之相同，说明是"表内复制 → Ctrl+V"，直接复用右键
+                // 「粘贴单元格」(pasteCell)：与右键粘贴结果完全一致，且 steps 等明细列按对象原文写入、
+                // 不会出现 [object Object]。外部复制（如 Excel）内容与此不一致，仍走下方 TSV 解析。
+                var _normTsv = function (_s) { return String(_s).replace(/\r\n?/g, '\n').replace(/\n+$/, ''); };
+                if (typeof S._clipLastTsv === 'string' && _normTsv(text) === _normTsv(S._clipLastTsv) && typeof pasteCell === 'function') {
+                    // pasteCell 以 (ctxRow, ctxCol) 为锚点；左键选格不会更新它，这里同步为当前选区
+                    // 左上角，保证 Ctrl+V 与右键粘贴落在同一位置。
+                    S._ctxRow = _rcPaste.r1; S._ctxCol = _rcPaste.c1;
+                    pasteCell();
+                    return;
+                }
                 var rows = (S.data && S.data.rows) || [];
                 var headers = (S.data && S.data.headers) || [];
                 if (rows.length === 0 || headers.length === 0) return;

@@ -85,9 +85,10 @@ function _pvgRenderReason(f, seq, kind) {
 /**
  * 渲染一组（同一行/同一 tsId 的多条问题）。
  *   · 组头：行号/tsId + 徽章（🚫 error / ⚠ warn），点击行号可跳转；
+ *   · 组头右侧：📋 复制案例 ID（优先 tsId，缺失兜底 fileName#L{rowIndex}）；
  *   · 组体：先 error 后 warn，条目连续编号 1..N。
  */
-function _pvgRenderGroup(group, groupIndex) {
+function _pvgRenderGroup(group, groupIndex, fileName) {
     var g = group || {};
     var errs = g.errors || [];
     var warns = g.warns || [];
@@ -109,12 +110,23 @@ function _pvgRenderGroup(group, groupIndex) {
         : '提醒';
     var badgeIcon = hasErr ? '🚫' : '⚠';
 
+    // P2（2026-09-19）复制案例 ID：优先 tsId；缺失时兜底为 fileName#L{rowIndex}
+    var copyText = g.tsId ? String(g.tsId) : '';
+    if (!copyText && hasRow) {
+        copyText = (fileName ? String(fileName) : '') + '#L' + g.rowIndex;
+    }
+    var copyBtnHtml = copyText
+        ? ('<button type="button" class="xs-pr-copy-btn" data-copy="'
+            + escapeHtml(copyText) + '" title="复制案例 ID：' + escapeHtml(copyText) + '">📋</button>')
+        : '';
+
     var groupCls = 'xs-pr-group ' + (hasErr ? 'is-error' : 'is-warn');
     var html = '<div class="' + groupCls + '">'
         +   '<div class="xs-pr-group-head">'
         +     '<span class="xs-pr-group-index">#' + groupIndex + '</span>'
         +     '<span class="' + rowCls + '"' + rowAttr + '>' + escapeHtml(rowText) + '</span>'
         +     '<span class="' + badgeCls + '">' + badgeIcon + ' ' + badgeText + '</span>'
+        +     copyBtnHtml
         +     '<span class="xs-pr-group-count">共 ' + totalInGroup + ' 条问题</span>'
         +   '</div>'
         +   '<div class="xs-pr-group-body">';
@@ -210,7 +222,7 @@ function showPreValidateGateModal(payload) {
             html = '<div class="xs-pr-empty">未检测到问题</div>';
         } else {
             for (var g = 0; g < groups.length; g++) {
-                html += _pvgRenderGroup(groups[g], g + 1);
+                html += _pvgRenderGroup(groups[g], g + 1, p.fileName);
             }
         }
         listEl.innerHTML = html;
@@ -227,6 +239,23 @@ function showPreValidateGateModal(payload) {
                         jumpToRowByDisplayIndex(rn);
                     }
                 }
+            });
+        }
+
+        // P2（2026-09-19）复制案例 ID：优先 clipboard API，并补一个轻提示
+        var copyBtns = listEl.querySelectorAll('.xs-pr-copy-btn');
+        for (var ci = 0; ci < copyBtns.length; ci++) {
+            copyBtns[ci].addEventListener('click', function (ev) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                var btn = ev.currentTarget;
+                var text = btn.getAttribute('data-copy') || '';
+                if (!text) return;
+                _pvgCopyToClipboard(text).then(function (ok) {
+                    if (typeof showToast === 'function') {
+                        showToast(ok ? ('已复制：' + text) : ('复制失败，请手动选中：' + text), ok ? 'success' : 'warn');
+                    }
+                });
             });
         }
     }
@@ -298,4 +327,41 @@ function _bindPreValidateGateModal() {
             }
         }
     });
+}
+
+/**
+ * P2（2026-09-19）复制文本到剪贴板：优先 navigator.clipboard API；
+ * 若不可用（VSCode Webview 可能未授权）降级到 document.execCommand('copy') 兜底。
+ * 返回 Promise<boolean>——成功 true / 失败 false，由调用方给出 toast。
+ */
+function _pvgCopyToClipboard(text) {
+    return new Promise(function (resolve) {
+        if (!text) { resolve(false); return; }
+        try {
+            if (navigator && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                navigator.clipboard.writeText(text).then(
+                    function () { resolve(true); },
+                    function () { resolve(_pvgFallbackCopy(text)); }
+                );
+                return;
+            }
+        } catch (_) { /* ignore：降级 */ }
+        resolve(_pvgFallbackCopy(text));
+    });
+}
+
+/** execCommand 兜底：创建离屏 textarea + select + copy。 */
+function _pvgFallbackCopy(text) {
+    try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.top = '-9999px';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return !!ok;
+    } catch (_) { return false; }
 }

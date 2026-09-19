@@ -408,8 +408,13 @@
             "是",
             "否"
           ],
-          "markdownDescription": "「关键案例」字段（YAML `key_flag` / CSV「关键案例」）的合法取值清单。\n\n- 空值时回退到清单**最后一项**作为默认值；非空但不在清单内则硬拦截。\n- 严格匹配，不支持 `Y/N`、`true/false` 等别名归一化。"
+          "markdownDescription": "「关键标识」字段（YAML `key_flag` / CSV「关键标识」）的合法取值清单。\n\n- 兼容旧列名「关键案例」（为向后兼容推送前置校验会额外补充 `0` / `1` 字面量作为历史兜底）。\n- 空值时回退到清单**最后一项**作为默认值；非空但不在清单内则硬拦截。\n- 严格匹配，不支持 `Y/N`、`true/false` 等别名归一化。"
 
+        },
+        "testcaseViewer.validate.checkTags": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "是否将「案例标签」字段（YAML `tags` / CSV「案例标签」）纳入推送前置校验。\n\n- 默认关闭（false）；开启后按需求文档 §2.3.1 「可选字段」规则执行「待补充」子串命中校验。\n- 开启后：打开文件时的黄色高亮 + 推送前弹窗的 warn 级待补充列表均会把 `tags` 字段一同纳入。\n- 不影响 error 级枚举/类型校验，仅控制 warn 级「待补充」扫描范围。"
         },
         "testcaseViewer.debug.yaml": {
           "type": "boolean",

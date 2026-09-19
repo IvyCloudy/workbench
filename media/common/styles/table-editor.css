@@ -968,6 +968,12 @@ tbody tr.xs-tr-push-failed .xse-table .xse-td-id .xse-idx-dot,
 #preValidateGateModal .xs-pr-group-index{flex-shrink:0;color:#999;font-variant-numeric:tabular-nums;font-weight:500;min-width:28px}
 #preValidateGateModal .xs-pr-group-head .xs-pr-row{margin-right:4px}
 #preValidateGateModal .xs-pr-group-count{margin-left:auto;color:#888;font-size:12px;font-variant-numeric:tabular-nums}
+/* P2（2026-09-19）复制案例 ID 按钮：右对齐、无边框圆角按钮；hover 与 active 走主色。 */
+#preValidateGateModal .xs-pr-copy-btn{flex-shrink:0;margin-left:auto;padding:2px 8px;border:1px solid transparent;border-radius:4px;background:transparent;color:#666;font-size:13px;line-height:1.4;cursor:pointer;transition:background .12s,color .12s,border-color .12s}
+#preValidateGateModal .xs-pr-copy-btn:hover{background:#eef4ff;color:#1a66ff;border-color:#c9dcff}
+#preValidateGateModal .xs-pr-copy-btn:active{background:#dbe9ff;color:#0d47a1}
+/* 复制按钮存在时，让 group-count 不再抢占 margin-left:auto，改为固定间距贴在复制按钮右侧 */
+#preValidateGateModal .xs-pr-copy-btn ~ .xs-pr-group-count{margin-left:8px}
 #preValidateGateModal .xs-pr-group-body{padding:2px 0}
 #preValidateGateModal .xs-pr-item-inline{display:flex;align-items:flex-start;gap:8px;padding:6px 14px;border-bottom:1px dashed #f2f2f2;font-size:12.5px;line-height:1.55}
 #preValidateGateModal .xs-pr-item-inline:last-child{border-bottom:none}

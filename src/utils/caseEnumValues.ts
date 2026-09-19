@@ -7,7 +7,7 @@
  *    - caseType  ← YAML `type`      / CSV「案例类型」
  *    - testType  ← YAML `test_type` / CSV「执行方式」
  *    - priority  ← YAML `priority`  / CSV「优先级」
- *    - keyFlag   ← YAML `key_flag`  / CSV「关键案例」
+ *    - keyFlag   ← YAML `key_flag`  / CSV「关键标识」（兼容旧列名「关键案例」）
  *
  *  取值来源（高 → 低）：
  *    1. VSCode 配置系统 `testcaseViewer.enum.<field>`
@@ -30,9 +30,10 @@ export type EnumField = 'caseType' | 'testType' | 'priority' | 'keyFlag';
 
 const CONFIG_PREFIX = 'testcaseViewer.enum';
 
-/** 代码级硬编码兜底（仅在 VSCode 环境异常/配置全丢失时使用，保证最小可用） */
+/** 代码级硬编码兜底（仅在 VSCode 环境异常/配置全丢失时使用，保证最小可用）。
+ * 2026-09-19：caseType 与 package.json 的 default（11 项）对齐，避免"兜底集合过窄"导致误判。 */
 const HARD_FALLBACK: Record<EnumField, string[]> = {
-    caseType: ['功能点类', '其他'],
+    caseType: ['功能点类', '流程类', '界面类', '批处理类', '数据仓库类', '报表统计类', '算法类', '安全类', '可用性检查类', '报文接口类', '其他'],
     testType: ['手工', 'UI自动化', '接口自动化', '自动化'],
     priority: ['高', '中', '低'],
     keyFlag:  ['是', '否'],
@@ -63,4 +64,33 @@ export function isValidEnumValue(field: EnumField, v: any): boolean {
     const s = String(v).trim();
     if (s === '') return false;
     return getEnumValues(field).indexOf(s) !== -1;
+}
+
+// ============================================================================
+//  校验开关读取（2026-09-19 P4）
+// ----------------------------------------------------------------------------
+//  为避免 preValidate/validators.ts 直接 import vscode（保持"纯 CPU 可单测"边界），
+//  统一把"读取 testcaseViewer.validate.* 布尔开关"的能力放在本模块暴露。
+// ============================================================================
+
+/** 支持的布尔型校验开关名（与 package.json 中 testcaseViewer.validate.* 一一对应） */
+export type ValidateFlag = 'checkTags';
+
+const VALIDATE_FLAG_PREFIX = 'testcaseViewer.validate';
+
+/** 布尔开关的硬编码兜底（配置全丢失时使用；与 package.json default 保持一致） */
+const VALIDATE_FLAG_FALLBACK: Record<ValidateFlag, boolean> = {
+    checkTags: false,
+};
+
+/**
+ * 读取指定校验开关的当前布尔值。
+ * 每次调用都会重新读配置，保证 settings.json 变更立即生效。
+ */
+export function getValidateFlag(flag: ValidateFlag): boolean {
+    try {
+        const cfg = vscode.workspace.getConfiguration().get<boolean>(`${VALIDATE_FLAG_PREFIX}.${flag}`);
+        if (typeof cfg === 'boolean') return cfg;
+    } catch { /* ignore：VSCode 环境异常时走硬兜底 */ }
+    return VALIDATE_FLAG_FALLBACK[flag];
 }

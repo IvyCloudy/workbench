@@ -23,11 +23,14 @@
  *   · reason 文案模板：`案例{字段中文名}取值不合法：{当前值}，应为 {合法集合/类型}`，
  *     与"待补充"文案风格保持一致，便于前端 05g 列表统一渲染。
  *
- * 允许取值集合（当前 B2 版本落地值 —— 需求文档中以 "…" 标注为"待系统枚举确认"，
- * 这里采用与用户对齐后的默认值，后续可通过配置替换）：
- *   TYPE_VALUES / TEST_TYPE_VALUES / PRIORITY_VALUES / KEY_FLAG_VALUES
- * 未来如需按团队/项目动态化，可将 ENUM_VALIDATOR 拆为工厂函数接收配置，
- * 但需保留"命中即 break、severity=error"的核心语义。
+ * 允许取值集合（2026-09-19 P0 修复）：
+ *   · 运行时通过 utils/caseEnumValues.getEnumValues(field) 动态读取，
+ *     与推送映射层 pushDataMapper 共用同一份配置源（package.json "testcaseViewer.enum.*"）；
+ *   · 为保持向后兼容（老测试直接引用了 TYPE_VALUES / KEY_FLAG_VALUES 等常量），
+ *     仍保留同名 export，但值改为 getEnumValues 的"当前快照"（首次读取时求值）；
+ *   · KEY_FLAG_VALUES 特殊策略：在配置基础上强制补上 '0'/'1' 兜底（历史 CSV 用 0/1 表达），
+ *     该策略与 pushDataMapper.resolveKeyFlag 的行为保持一致。
+ * 未来如需按团队/项目动态化，直接在 settings.json 覆盖 testcaseViewer.enum.* 即可。
  */
 
 // 2026-09-19 解耦：改为直接引用 preValidate 与 pushCore.types，
@@ -35,64 +38,93 @@
 import type { RowLike } from './pushCore.types';
 import type { RowValidator } from '../preValidate/validators';
 import type { PushInterfaceField } from '../utils/pushFailureCategory';
+import { getEnumValues } from '../utils/caseEnumValues';
 
-/** 案例类型（`type` / 「案例类型」）合法取值 —— 与 TMS 系统枚举对齐。 */
-export const TYPE_VALUES: readonly string[] = [
-    '功能点类', '流程类', '界面类', '性能类', '接口类', '兼容性类', '易用性类', '安全类', '其他',
-];
+/**
+ * 从配置中拉取「关键标识」合法取值，并保留 0/1 兜底以兼容历史 CSV。
+ * 单独抽出方法便于测试注入 & 与 pushDataMapper 行为一致。
+ */
+function readKeyFlagValues(): readonly string[] {
+    const base = getEnumValues('keyFlag') || [];
+    const set = new Set<string>(base);
+    // 强制兜底：老 CSV 常用 0/1 表达是否（与 pushDataMapper.resolveKeyFlag 保持一致）
+    set.add('0');
+    set.add('1');
+    return Array.from(set);
+}
 
-/** 执行方式（`test_type` / 「执行方式」）合法取值。 */
-export const TEST_TYPE_VALUES: readonly string[] = ['手工', '自动化'];
+/**
+ * 案例类型（`type` / 「案例类型」）合法取值 —— @deprecated 请优先使用 getEnumValues('caseType')。
+ * 保留 export 是为了向后兼容既有单测（如 pushCoreEnumTypeValidators.test.ts）。
+ * 首次求值 = 模块加载时的 VSCode 配置快照；运行期以 getEnumValues 为准。
+ */
+export const TYPE_VALUES: readonly string[] = getEnumValues('caseType');
 
-/** 优先级（`priority` / 「优先级」）合法取值。 */
-export const PRIORITY_VALUES: readonly string[] = ['高', '中', '低'];
+/** 执行方式（`test_type` / 「执行方式」）合法取值 —— @deprecated 请优先使用 getEnumValues('testType')。 */
+export const TEST_TYPE_VALUES: readonly string[] = getEnumValues('testType');
 
-/** 关键标识（`key_flag` / 「关键标识」）合法取值（兼容中文与 0/1 双写法）。 */
-export const KEY_FLAG_VALUES: readonly string[] = ['是', '否', '0', '1'];
+/** 优先级（`priority` / 「优先级」）合法取值 —— @deprecated 请优先使用 getEnumValues('priority')。 */
+export const PRIORITY_VALUES: readonly string[] = getEnumValues('priority');
+
+/** 关键标识（`key_flag` / 「关键标识」）合法取值（兼容中文与 0/1 双写法）—— @deprecated 请优先使用 readKeyFlagValues()。 */
+export const KEY_FLAG_VALUES: readonly string[] = readKeyFlagValues();
 
 /** 单个枚举字段的校验规则条目。 */
 interface EnumFieldRule {
     /** YAML 键名（英文），如 `type` / `test_type` / `priority` / `key_flag` */
     yamlKey: string;
-    /** CSV 列名（中文），与 headerLabels.json 对齐 */
+    /** CSV 列名（中文），主用列名（与需求文档 §2.3.1 对齐） */
     csvKey: string;
+    /** CSV 兼容旧列名（可选）；例如 keyFlag 曾用「关键案例」。识别时优先 csvKey，缺失兜底 csvKeyAlt。 */
+    csvKeyAlt?: string;
     /** 中文字段名，用于 reason 文案 */
     label: string;
-    /** 合法取值集合（大小写敏感 + 去除首尾空格后比较） */
-    allowed: readonly string[];
+    /** 合法取值集合读取器（运行时读取，保证 settings.json 变更实时生效） */
+    readAllowed: () => readonly string[];
     /** 归一化到的接口字段码（用于埋点下钻 & 前端字段级高亮） */
     field: PushInterfaceField;
 }
 
-/** 4 项枚举字段规则表 —— 顺序即 reason 拼装顺序（同行多字段命中时按此顺序汇总）。 */
+/**
+ * 4 项枚举字段规则表 —— 顺序即 reason 拼装顺序（同行多字段命中时按此顺序汇总）。
+ * P0 修复（2026-09-19）：allowed 改为 readAllowed 惰性求值，与 pushDataMapper 共用同一份配置源。
+ * P1 兼容（2026-09-19）：keyFlag 的 CSV 列名统一为「关键标识」，同时兼容旧列名「关键案例」。
+ */
 const ENUM_RULES: readonly EnumFieldRule[] = [
-    { yamlKey: 'type',       csvKey: '案例类型',   label: '案例类型',   allowed: TYPE_VALUES,       field: 'type'    },
-    { yamlKey: 'test_type',  csvKey: '执行方式',   label: '执行方式',   allowed: TEST_TYPE_VALUES,  field: 'testType'},
-    { yamlKey: 'priority',   csvKey: '优先级',     label: '优先级',     allowed: PRIORITY_VALUES,   field: 'priority'},
-    { yamlKey: 'key_flag',   csvKey: '关键标识',   label: '关键标识',   allowed: KEY_FLAG_VALUES,   field: 'keyFlag' },
+    { yamlKey: 'type',       csvKey: '案例类型',   label: '案例类型',   readAllowed: () => getEnumValues('caseType'),  field: 'type'    },
+    { yamlKey: 'test_type',  csvKey: '执行方式',   label: '执行方式',   readAllowed: () => getEnumValues('testType'),  field: 'testType'},
+    { yamlKey: 'priority',   csvKey: '优先级',     label: '优先级',     readAllowed: () => getEnumValues('priority'),  field: 'priority'},
+    { yamlKey: 'key_flag',   csvKey: '关键标识',   csvKeyAlt: '关键案例', label: '关键标识', readAllowed: readKeyFlagValues, field: 'keyFlag' },
 ];
 
 /**
- * 从行对象读取"某枚举字段"的原始值（YAML 键优先，CSV 中文列名兜底）。
+ * 从行对象读取"某枚举字段"的原始值（YAML 键优先，CSV 主列名兜底，兼容旧列名 csvKeyAlt）。
  * 值经过 trim；空值/undefined/null 返回空串（由调用方决定是否算命中）。
  */
 function readEnumRaw(row: RowLike, rule: EnumFieldRule): string {
     const y = (row as any)?.[rule.yamlKey];
     const c = (row as any)?.[rule.csvKey];
-    const raw = (y !== undefined && y !== null && y !== '') ? y : c;
+    const cAlt = rule.csvKeyAlt ? (row as any)?.[rule.csvKeyAlt] : undefined;
+    // 优先级：YAML 英文键 > CSV 主列名 > CSV 兼容旧列名
+    let raw: any;
+    if (y !== undefined && y !== null && y !== '') raw = y;
+    else if (c !== undefined && c !== null && c !== '') raw = c;
+    else if (cAlt !== undefined && cAlt !== null && cAlt !== '') raw = cAlt;
+    else raw = (y !== undefined ? y : (c !== undefined ? c : cAlt));
     if (raw === undefined || raw === null) return '';
     return String(raw).trim();
 }
 
 /**
- * 判断行对象是否"完全没有"某枚举字段（YAML 键 & CSV 列都 undefined）。
+ * 判断行对象是否"完全没有"某枚举字段（YAML 键 & CSV 主/旧列名都 undefined）。
  * 用于兼容旧模板文件 —— 若源文件根本没这个字段，跳过校验避免误伤；
  * 而"字段存在但值为空串（`type: ""`）"仍会判为不合法，符合需求 2.3.3 语义。
  */
 function isEnumFieldAbsent(row: RowLike, rule: EnumFieldRule): boolean {
     const y = (row as any)?.[rule.yamlKey];
     const c = (row as any)?.[rule.csvKey];
-    return y === undefined && c === undefined;
+    const cAlt = rule.csvKeyAlt ? (row as any)?.[rule.csvKeyAlt] : undefined;
+    return y === undefined && c === undefined && cAlt === undefined;
 }
 
 /** 判断字符串值是否落在 allowed 集合内（严格相等，不做同义词/别名归一化）。 */
@@ -122,10 +154,11 @@ export const ENUM_VALIDATOR: RowValidator = {
         for (const rule of ENUM_RULES) {
             if (isEnumFieldAbsent(row, rule)) continue; // 完全缺省 → 跳过（兼容旧文件）
             const val = readEnumRaw(row, rule);
-            if (!isAllowedEnum(val, rule.allowed)) {
+            const allowed = rule.readAllowed(); // P0：运行时读取，保证 settings.json 变更实时生效
+            if (!isAllowedEnum(val, allowed)) {
                 if (!primaryField) primaryField = rule.field;
                 const shown = val === '' ? '空' : `"${val}"`;
-                hits.push(`${rule.label}=${shown}（应为 ${rule.allowed.join('/')})`);
+                hits.push(`${rule.label}=${shown}（应为 ${allowed.join('/')})`);
             }
         }
         if (hits.length === 0) return null;

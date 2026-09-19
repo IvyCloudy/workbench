@@ -28,6 +28,7 @@ import { isTestAgentUuid, isTestFlowUuid } from '../utils/testcaseId';
 import { TS_ID_COLUMN } from '../services/utils';
 import type { PushFailureItem, RowLike, PushSubField } from '../handlers/pushCore.types';
 import { B2_ERROR_VALIDATORS } from '../handlers/pushCore.enumTypeValidators';
+import { getValidateFlag } from '../utils/caseEnumValues';
 
 // =============================================================
 // 行级小工具
@@ -261,6 +262,15 @@ function scanTodoPlaceholderFields(row: RowLike): { hitLabels: string[]; primary
             field: 'testCaseDes',
         },
     ];
+    // P4（2026-09-19）：可选字段「案例标签」—— 默认关闭（需求文档 §2.3.1），
+    // 由配置 testcaseViewer.validate.checkTags 控制；开启后同样走「待补充」字面量匹配。
+    if (getValidateFlag('checkTags')) {
+        CHECKS.push({
+            label: '案例标签',
+            locate: r => (containsTodoPlaceholder((r as any)['tags']) || containsTodoPlaceholder((r as any)['案例标签'])) ? [{ label: '' }] : [],
+            field: 'testCaseName', // 没有专用接口字段，先挂 testCaseName 作兵岭归类（前端仅用于列级兵岭高亮）
+        });
+    }
     const hitLabels: string[] = [];
     const hitCells: TodoHitCell[] = [];
     let primaryField: PushInterfaceField | undefined;

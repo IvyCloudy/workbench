@@ -29,6 +29,7 @@ import {
     detectMissingColumns,
     buildMissingColumnReason,
 } from './missingColumns';
+import { buildCsvRowLikes } from './csvRowAdapter';
 
 // ----------------------------------------------------------------------------
 // 防抖配置（依 B3 需求最终定稿：yaml / json 500ms，csv 800ms）
@@ -107,17 +108,9 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
             // 修复（2026-09-19）：CSV parser 的 sourceData 恒为 null（见 csv-parser.ts），
             // 若继续走"src 为空 → sourceRows=[]"分支，会导致 CSV 文件从来不跑行级校验
             // （现象：单元格「功能点类111」这种非法枚举值不会飘红、编辑期弹窗不触发）。
-            // 这里改为从 tableData.headers + rows 组装以中文列名为 key 的对象数组，
-            // 与 ENUM_VALIDATOR 的 csvKey（如「案例类型」「执行方式」）严格对齐。
-            const headers = parsedHeaders || [];
-            const rows: string[][] = parsed?.tableData?.rows || [];
-            sourceRows = rows.map(cells => {
-                const obj: RowLike = {};
-                for (let i = 0; i < headers.length; i++) {
-                    (obj as any)[headers[i]] = cells[i] ?? '';
-                }
-                return obj;
-            });
+            // P4 · 抽公共 buildCsvRowLikes 以便与 batchPreValidate 共享一份实现，避免行数据组装
+            // 逻辑双份维护、任一处修复漏另一处。
+            sourceRows = buildCsvRowLikes(parsedHeaders, parsed?.tableData?.rows);
         } else if (Array.isArray(src)) {
             sourceRows = src as RowLike[];
         } else if (src && typeof src === 'object') {

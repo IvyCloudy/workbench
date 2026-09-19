@@ -28,6 +28,7 @@ import { detectFileType, createParser } from '../parsers';
 import { FILE_PATTERNS, isInQualifiedDir } from '../services/utils';
 import { runValidatorsOnRowsPure } from './validators';
 import { detectMissingColumns, buildMissingColumnReason } from './missingColumns';
+import { buildCsvRowLikes } from './csvRowAdapter';
 import type { RowLike, PushFailureItem } from '../handlers/pushCore.types';
 
 /** 单文件批量前置校验结果。 */
@@ -99,15 +100,8 @@ export async function validateFileForPush(
         if (fileType === 'csv') {
             // 与 editValidationHandler._doValidate 完全对齐：CSV parser.sourceData 恒为 null，
             // 需从 headers + rows 组装以中文列名为 key 的对象数组，与 ENUM_VALIDATOR 的 csvKey 对齐。
-            const headers = parsedHeaders || [];
-            const rows: string[][] = parsed?.tableData?.rows || [];
-            sourceRows = rows.map(cells => {
-                const obj: RowLike = {};
-                for (let i = 0; i < headers.length; i++) {
-                    (obj as any)[headers[i]] = cells[i] ?? '';
-                }
-                return obj;
-            });
+            // P4 · 使用共享的 buildCsvRowLikes 避免逻辑双份维护。
+            sourceRows = buildCsvRowLikes(parsedHeaders, parsed?.tableData?.rows);
         } else if (Array.isArray(src)) {
             sourceRows = src as RowLike[];
         } else if (src && typeof src === 'object') {

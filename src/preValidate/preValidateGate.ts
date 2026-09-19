@@ -85,6 +85,15 @@ export function openPreValidateGate(
                     rowIndex: f.rowIndex,
                     severity: f.severity || 'error',
                     field: f.field,
+                    // R2（2026-09-19）：同行多字段命中时，把每条 hit 的独立单字段话术透给 webview，
+                    //   05g 弹窗按 hits[i].singleReason 逐条渲染 bullet（"每项各一条"），
+                    //   顶层 reason 仍保留完整汇总句以兼容单 hit 回退渲染路径。
+                    hits: Array.isArray(f.hits) ? f.hits.map(h => ({
+                        field: h.field,
+                        stepIdx: h.stepIdx,
+                        subField: h.subField,
+                        singleReason: h.singleReason,
+                    })) : undefined,
                 })),
             });
         } catch (err: any) {

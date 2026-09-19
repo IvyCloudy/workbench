@@ -221,7 +221,15 @@ export interface PushFailureItem {
      *     用于弹窗跳转与 reason 摘要；
      *   - 单 hit 场景下（普通 `check`）该字段为 undefined，向后兼容。
      */
-    hits?: Array<{ field?: PushInterfaceField; stepIdx?: number; subField?: PushSubField }>;
+    hits?: Array<{ field?: PushInterfaceField; stepIdx?: number; subField?: PushSubField; singleReason?: string }>;
+    /**
+     * B4 · R2（2026-09-19）：checkMulti 返回的单条 hit 附带"只讲自身字段"的独立话术。
+     *   - 顶层 failure.reason 仍是完整汇总句（保持旧口径），供埋点/落盘等消费方使用；
+     *   - 前端 05g 弹窗遍历 hits[] 时优先取 hit.singleReason 渲染 bullet，实现
+     *     "同一行 N 个字段错 → N 条 bullet"的分项展示，行号只在卡片头显示一次。
+     *   - 单 hit 场景可缺省（前端回退到 failure.reason）。
+     */
+    singleReason?: string;
     /**
      * 严重级别（预校验层专用）：
      *   - 'error'：硬拦截（占位/空 tsId/格式非法/接口失败），无法忽略

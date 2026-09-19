@@ -110,7 +110,7 @@ describe('B2 枚举字段校验（ENUM_VALIDATOR · error）', () => {
 
     it('CSV 中文列名（「案例类型」/「执行方式」/「优先级」/「关键案例」）也被识别', () => {
         const hit = ENUM_VALIDATOR.check(
-            { '案例类型': '功能点类', '执行方式': '手工', '优先级': '中', '关键案例': '0' } as any,
+            { '案例类型': '功能点类', '执行方式': '手工', '优先级': '中', '关键案例': '是' } as any,
             VALID_TSID_1,
         );
         expect(hit).toBeNull(); // 全合法 → 不命中
@@ -150,10 +150,16 @@ describe('B2 枚举字段校验（ENUM_VALIDATOR · error）', () => {
     });
 });
 
-describe('B2 关键案例（key_flag）—— 4 种合法写法都支持', () => {
+describe('B2 关键案例（key_flag）—— 合法取值仅「是/否」（配置驱动）', () => {
     it.each(KEY_FLAG_VALUES.map(v => [v]))('key_flag="%s" → 合法', (val) => {
         const hit = ENUM_VALIDATOR.check({ key_flag: val } as any, VALID_TSID_1);
         expect(hit).toBeNull();
+    });
+
+    it('key_flag="1" → 不合法（历史 0/1 兜底已移除）', () => {
+        const hit = ENUM_VALIDATOR.check({ key_flag: '1' } as any, VALID_TSID_1);
+        expect(hit).not.toBeNull();
+        expect(hit!.field).toBe('keyFlag');
     });
 
     it('key_flag=2 → 不合法', () => {
@@ -231,6 +237,35 @@ describe('B2 端到端：runValidators / stepPreValidate 集成', () => {
         expect(droppedIndex.has(0)).toBe(true);
     });
 
+    it('runValidators：同行 type + test_type 均非法 → 汇总为 1 条 failure，hits 覆盖两字段（前端多列并列标红）', () => {
+        // 2026-09-19 修复回归：此前 ENUM_VALIDATOR 仅取 primaryField='type'，
+        // 导致前端只有「案例类型」列标红、「执行方式」列被吞。
+        // checkMulti 覆盖后：failure.hits 数组应同时包含 'type' 与 'testType'，
+        // 让前端按 hits[].field 逐一标红两列。
+        const rows = [
+            { [TS_ID_COLUMN]: VALID_TSID_1, type: '功能点类/流程类/界面类...', test_type: '手工/自动化' },
+        ];
+        const { failuresByKind } = runValidators(rows as any, i => i + 1);
+        expect(failuresByKind['enumInvalid']).toHaveLength(1);
+        const item = failuresByKind['enumInvalid']![0];
+        expect(item.field).toBe('type'); // primaryField 仍取第一个命中（向后兼容单值口径）
+        expect(Array.isArray(item.hits)).toBe(true);
+        const hitFields = (item.hits || []).map(h => h.field);
+        expect(hitFields).toEqual(expect.arrayContaining(['type', 'testType']));
+        // R2（2026-09-19）：每条 hit 应携带"只讲自身字段"的独立话术 singleReason，
+        //   供前端 05g 弹窗按 hits 拆条渲染 bullet；顶层 reason 仍是完整汇总句。
+        const singleReasons = (item.hits || []).map(h => (h as any).singleReason);
+        expect(singleReasons.every(r => typeof r === 'string' && r.length > 0)).toBe(true);
+        // type 那条 singleReason 只讲案例类型，不含"执行方式"
+        const typeHit = (item.hits || []).find(h => h.field === 'type');
+        expect((typeHit as any).singleReason).toContain('案例类型');
+        expect((typeHit as any).singleReason).not.toContain('执行方式');
+        // testType 那条 singleReason 只讲执行方式，不含"案例类型"
+        const ttHit = (item.hits || []).find(h => h.field === 'testType');
+        expect((ttHit as any).singleReason).toContain('执行方式');
+        expect((ttHit as any).singleReason).not.toContain('案例类型');
+    });
+
     it('runValidators：非法计划执行次数 → severity=error，category=planExecNum.format', () => {
         const rows = [
             { [TS_ID_COLUMN]: VALID_TSID_1, plan_exec_num: 'abc' },
@@ -285,14 +320,27 @@ describe('B2 端到端：runValidators / stepPreValidate 集成', () => {
         expect(droppedIndex.size).toBe(1);
     });
 
-    it('tsId 层硬失败（invalidFormat）→ 不再扫后续 validator（避免噪音）', () => {
-        // tsId 本身格式非法 → 后续基于 tsId 的字段级问题无意义，跳过扫描。
-        // 期望：只有 invalidFormat 一条；enumInvalid / todoPlaceholder 都不产出。
+    it('tsId 格式非法（invalidFormat）仍会继续扫后续 validator：一次性暴露所有问题', () => {
+        // 2026-09-19 方案 B：invalidFormat 不再短路本行后续 validator。
+        // 用户需要"打开文件即一次看见所有问题"，而非"先修 testcase_id 再回来看"。
+        // 期望：invalidFormat + enumInvalid + todoPlaceholder 三条 failure 都产出。
         const rows = [
             { [TS_ID_COLUMN]: 'not-a-uuid', type: '错', description: '「待补充」' },
         ];
         const { failuresByKind } = runValidators(rows as any, i => i + 1);
         expect(failuresByKind['invalidFormat']).toHaveLength(1);
+        expect(failuresByKind['enumInvalid']).toHaveLength(1);
+        expect(failuresByKind['todoPlaceholder']).toHaveLength(1);
+    });
+
+    it('tsId 为空（empty）→ 仍然短路本行后续 validator（避免伪 ID 的噪音）', () => {
+        // empty 保留"命中即 break"：空 tsId 会退化成 __EMPTY_TSID_ROW_i__ 伪 ID，
+        // 后续字段级 failure 无法定位到真实案例，一起报会造成弹窗噪音爆炸。
+        const rows = [
+            { [TS_ID_COLUMN]: '', type: '错', description: '「待补充」' },
+        ];
+        const { failuresByKind } = runValidators(rows as any, i => i + 1);
+        expect(failuresByKind['empty']).toHaveLength(1);
         expect(failuresByKind['enumInvalid'] ?? []).toHaveLength(0);
         expect(failuresByKind['todoPlaceholder'] ?? []).toHaveLength(0);
     });

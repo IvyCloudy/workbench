@@ -65,32 +65,3 @@ export function isValidEnumValue(field: EnumField, v: any): boolean {
     if (s === '') return false;
     return getEnumValues(field).indexOf(s) !== -1;
 }
-
-// ============================================================================
-//  校验开关读取（2026-09-19 P4）
-// ----------------------------------------------------------------------------
-//  为避免 preValidate/validators.ts 直接 import vscode（保持"纯 CPU 可单测"边界），
-//  统一把"读取 testcaseViewer.validate.* 布尔开关"的能力放在本模块暴露。
-// ============================================================================
-
-/** 支持的布尔型校验开关名（与 package.json 中 testcaseViewer.validate.* 一一对应） */
-export type ValidateFlag = 'checkTags';
-
-const VALIDATE_FLAG_PREFIX = 'testcaseViewer.validate';
-
-/** 布尔开关的硬编码兜底（配置全丢失时使用；与 package.json default 保持一致） */
-const VALIDATE_FLAG_FALLBACK: Record<ValidateFlag, boolean> = {
-    checkTags: false,
-};
-
-/**
- * 读取指定校验开关的当前布尔值。
- * 每次调用都会重新读配置，保证 settings.json 变更立即生效。
- */
-export function getValidateFlag(flag: ValidateFlag): boolean {
-    try {
-        const cfg = vscode.workspace.getConfiguration().get<boolean>(`${VALIDATE_FLAG_PREFIX}.${flag}`);
-        if (typeof cfg === 'boolean') return cfg;
-    } catch { /* ignore：VSCode 环境异常时走硬兜底 */ }
-    return VALIDATE_FLAG_FALLBACK[flag];
-}

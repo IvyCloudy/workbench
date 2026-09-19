@@ -10,22 +10,30 @@
  *  设计原则：
  *    1. 复用推送期的 DEFAULT_VALIDATORS —— 与 stepPreValidate 使用同一套规则。
  *    2. Y 方案：编辑期校验结果就是当前唯一权威源，覆盖之前的推送失败盘。
- *    3. 防抖：yaml 500ms / csv 800ms；解析失败静默降级为空清单。
- *    4. 只对合规目录下的 yaml/csv 生效。
+ *    3. 防抖：yaml / json 500ms（结构化文档、parse 廉价） / csv 800ms（整表组装稍重）；解析失败静默降级为空清单。
+ *    4. 只对合规目录下的 yaml / csv / json 生效（需求 §2.2.1 明确 csv/json/yaml 三类均要参与）。
  *    5. 通过 BaseEditorProvider.postEditValidationRefresh 通知已打开 webview 拉新。
  * ============================================================================
  */
 import * as vscode from 'vscode';
 import { runValidatorsOnRowsPure } from './validators';
 import type { RowLike } from '../handlers/pushCore.types';
+import type { PushFailureItem } from '../handlers/pushCore.types';
+import { classifyFailure } from '../utils/pushFailure/categoryClassify';
 import { persistPushFailures, clearFailures } from '../utils/pushFailureStore';
 import { detectFileType, createParser, type FileType } from '../parsers';
 import { FILE_PATTERNS, isInQualifiedDir } from '../services/utils';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { TelemetryService } from '../utils/telemetry';
+import {
+    detectMissingColumns,
+    buildMissingColumnReason,
+} from './missingColumns';
 
 // ----------------------------------------------------------------------------
-// 防抖配置（依 B3 需求最终定稿：yaml 500ms / csv 800ms）
+// 防抖配置（依 B3 需求最终定稿：yaml / json 500ms，csv 800ms）
+//   · yaml / json 是结构化文档，parse 廉价 → 短防抖，反馈更快
+//   · csv 需按 headers + rows 组装成对象，大文件稍重 → 长防抖，避免频繁抖动
 // ----------------------------------------------------------------------------
 const DEBOUNCE_MS_YAML = 500;
 const DEBOUNCE_MS_CSV = 800;
@@ -36,8 +44,18 @@ const _pendingTimers: Map<string, NodeJS.Timeout> = new Map();
 // filePath -> 最近一次 validate 序列号；用于异步竞态时丢弃过期结果
 const _seqMap: Map<string, number> = new Map();
 
+// 说明：2026-09-19 后策略调整为「仅『打开文件』时弹窗，保存/编辑一律不弹」。
+// 因此打开通路每次都强制弹（用户如果没改就再打开，理应再看到提示），无需再做
+// 指纹去重。保留常量位仅用于必要时的调试观察，不参与逻辑判断。
+
 /**
  * 识别目标文件类型 + 合规目录：不合规的文件不参与编辑期校验。
+ *
+ * 支持类型：
+ *   · .yaml / .yml → 'yaml'
+ *   · .csv         → 'csv'
+ *   · .json        → 'json'（2026-09-19 补齐 P1：需求 §2.2.1 / §3 明确 csv/json/yaml 三类均要参与）
+ * 三类文件均要求位于「测试任务/<任务>/测试案例/」合规目录内，且不在「临时文件」文件夹下。
  */
 function resolveTargetType(filePath: string): FileType | null {
     const lower = filePath.toLowerCase();
@@ -47,13 +65,28 @@ function resolveTargetType(filePath: string): FileType | null {
     if (lower.endsWith('.csv')) {
         return isInQualifiedDir(filePath, FILE_PATTERNS.CSV) ? 'csv' : null;
     }
+    if (lower.endsWith('.json')) {
+        return isInQualifiedDir(filePath, FILE_PATTERNS.JSON) ? 'json' : null;
+    }
     return null;
 }
 
 /**
  * 真正的校验执行体：parse → 跑规则 → 覆盖式写盘 → 通知 webview 刷新。
+ *
+ * @param filePath        目标文件绝对路径
+ * @param promptOnMissing 是否在"打开文件"通路弹窗。
+ *                        · true  → 由"打开文件"通路（TextEditor / CustomEditor 首次打开）驱动，
+ *                                  按需求 §2.2.1 / §2.3.5 弹窗，合并"文件级（缺列）+ 行级
+ *                                  （枚举非法 / 待补充 / 名称空 / 计划执行次数非法 …）"所有问题
+ *                                  一次性展示；
+ *                        · false → 由"保存 / 编辑防抖"通路驱动，仅静默跑校验、刷新高亮，
+ *                                  不打断用户手上的动作（对齐用户诉求：
+ *                                  「只需要在文件打开时弹窗，推送前校验包含该项，文件修改保存无需触发」）。
+ *                        无论 true/false，结构性检测本身都会跑（用于给行级高亮/持久化提供数据基础，
+ *                        以及给推送前 stepPreValidate 共用同一份判定）。
  */
-async function _doValidate(filePath: string): Promise<void> {
+async function _doValidate(filePath: string, promptOnMissing: boolean = false): Promise<void> {
     const seq = (_seqMap.get(filePath) || 0) + 1;
     _seqMap.set(filePath, seq);
 
@@ -62,10 +95,30 @@ async function _doValidate(filePath: string): Promise<void> {
 
     const parser = createParser(fileType);
     let sourceRows: RowLike[] = [];
+    let parsedHeaders: string[] | undefined;
+    let parsedSourceData: any;
     try {
         const parsed = await parser.parse(filePath);
+        parsedHeaders = parsed?.tableData?.headers;
+        parsedSourceData = parsed?.sourceData;
         const src = parsed.sourceData;
-        if (Array.isArray(src)) {
+
+        if (fileType === 'csv') {
+            // 修复（2026-09-19）：CSV parser 的 sourceData 恒为 null（见 csv-parser.ts），
+            // 若继续走"src 为空 → sourceRows=[]"分支，会导致 CSV 文件从来不跑行级校验
+            // （现象：单元格「功能点类111」这种非法枚举值不会飘红、编辑期弹窗不触发）。
+            // 这里改为从 tableData.headers + rows 组装以中文列名为 key 的对象数组，
+            // 与 ENUM_VALIDATOR 的 csvKey（如「案例类型」「执行方式」）严格对齐。
+            const headers = parsedHeaders || [];
+            const rows: string[][] = parsed?.tableData?.rows || [];
+            sourceRows = rows.map(cells => {
+                const obj: RowLike = {};
+                for (let i = 0; i < headers.length; i++) {
+                    (obj as any)[headers[i]] = cells[i] ?? '';
+                }
+                return obj;
+            });
+        } else if (Array.isArray(src)) {
             sourceRows = src as RowLike[];
         } else if (src && typeof src === 'object') {
             sourceRows = [src as RowLike];
@@ -76,11 +129,82 @@ async function _doValidate(filePath: string): Promise<void> {
         sourceRows = [];
     }
 
+    // §2.3.5 · 结构性检查（缺列）预计算：先算出文件级 failures，但不立即弹窗。
+    //   · 保存 / 编辑防抖通路（promptOnMissing=false）也会跑本段检测，用于让行级校验
+    //     和推送前拦截拿到最新数据，但**不弹窗**，避免打断用户手上的动作。
+    //   · 打开通路（promptOnMissing=true）会把结构性 failures 与行级 failures 合并后
+    //     一次性弹一个 05g 弹窗，避免用户先看到缺列弹窗、再看到行级 refresh，两次打断。
+    let fileLevelFailures: PushFailureItem[] = [];
+    let missingLabelsForTelemetry: string[] = [];
+    if (parsedHeaders !== undefined || parsedSourceData !== undefined) {
+        const missingResult = detectMissingColumns(fileType, parsedHeaders, parsedSourceData);
+        if (!missingResult.ok && missingResult.missing.length > 0) {
+            // 组装文件级 failures —— 与 stepPreValidate 中的推送前拦截结构完全一致：
+            //   · tsId='__FILE_LEVEL__' 让 05g 分组到同一张卡片（不按行拆散）；
+            //   · rowIndex 留空 → 前端走文件级渲染分支（不显示"第 N 行"）；
+            //   · reason 由 buildMissingColumnReason(hit, fileType) 组装
+            //     （YAML 带英文键 `xxx（对应 YAML 字段：xxx）`；CSV 纯中文）。
+            fileLevelFailures = missingResult.missing.map(hit => {
+                const reason = buildMissingColumnReason(hit, fileType);
+                return {
+                    tsId: '__FILE_LEVEL__',
+                    reason,
+                    category: classifyFailure({ reason, validatorKind: 'missingColumn' }),
+                    severity: 'error' as const,
+                } as PushFailureItem;
+            });
+            missingLabelsForTelemetry = missingResult.missing.map(m => m.label);
+        }
+    }
+
     // 异步竞态保护：慢 parse 已被后续 fast parse 覆盖，不再写盘
     if (_seqMap.get(filePath) !== seq) return;
 
     // 编辑期视图：源数据的 1-based 索引即行号（parse 后已按文件顺序）
     const failures = runValidatorsOnRowsPure(sourceRows, i => i + 1);
+
+    // §2.3.5 · 打开文件通路：把文件级（缺列）+ 行级（枚举/待补充/名称空/计划执行次数等）合并成
+    //   一份 failures 一次弹出，与推送前拦截共用同一个 05g 弹窗（openPreValidateGate）。
+    //   顺序：文件级置顶（tsId='__FILE_LEVEL__'）→ 行级按行号；前端渲染时天然按此顺序显示。
+    if (promptOnMissing && (fileLevelFailures.length > 0 || failures.length > 0)) {
+        const combined: PushFailureItem[] = [
+            ...fileLevelFailures,
+            ...failures.map(f => ({
+                tsId: f.tsId,
+                reason: f.reason,
+                category: f.category,
+                field: f.field,
+                severity: f.severity,
+                rowIndex: f.rowIndex,
+                stepIdx: f.stepIdx,
+                subField: f.subField,
+                hits: f.hits,
+            } as PushFailureItem)),
+        ];
+        const fileName = filePath.split(/[\\/]/).pop() || filePath;
+        void BaseEditorProvider.postFileLevelPreValidateGate(filePath, fileName, combined)
+            .catch(err => {
+                console.warn('[EditValidation] 打开弹窗失败:', err?.message || err);
+            });
+        if (fileLevelFailures.length > 0) {
+            TelemetryService.sendTelemetryEvent('editValidation.missingColumnsDetected', {
+                fileFormat: fileType,
+                missingCount: String(fileLevelFailures.length),
+                missingLabels: missingLabelsForTelemetry.join('|'),
+                trigger: 'open',
+            });
+        }
+        if (failures.length > 0) {
+            const openErr = failures.filter(f => f.severity !== 'warn').length;
+            const openWarn = failures.length - openErr;
+            TelemetryService.sendTelemetryEvent('editValidation.openPromptFailures', {
+                fileFormat: fileType,
+                errorCount: String(openErr),
+                warnCount: String(openWarn),
+                fileLevelCount: String(fileLevelFailures.length),
+            });
+        }
+    }
 
     try {
         if (failures.length === 0) {
@@ -127,11 +251,24 @@ async function _doValidate(filePath: string): Promise<void> {
 
 /**
  * 请求一次编辑期校验（外部驱动入口，含防抖）。
+ *
+ * @param opts.immediate         为 true 时跳过防抖立即执行（打开 / 保存 / webview 挂载均用此路径）。
+ * @param opts.promptOnMissing   为 true 时"打开文件"通路会弹 05g 弹窗，
+ *                               合并「文件级缺列 + 行级枚举非法/待补充/名称空/计划执行次数非法…」
+ *                               一次性展示；仅"打开文件"通路应传 true。
+ *                               保存 / 编辑防抖通路默认 false —— 只静默跑校验、不弹窗，
+ *                               对齐用户诉求「文件修改保存无需触发弹窗」。
+ * @returns Promise<void>        · immediate=true 时可 await 等待「校验+写盘+refresh」全部完成，
+ *                                 用于 webview 打开场景避免首帧 init 早于 pushFailures 写盘导致漏染色；
+ *                               · immediate=false（防抖通路）时立即返回 resolved Promise，仅登记 timer。
  */
-export function requestEditValidation(filePath: string, opts?: { immediate?: boolean }): void {
-    if (!filePath) return;
+export function requestEditValidation(
+    filePath: string,
+    opts?: { immediate?: boolean; promptOnMissing?: boolean },
+): Promise<void> {
+    if (!filePath) return Promise.resolve();
     const type = resolveTargetType(filePath);
-    if (!type) return;
+    if (!type) return Promise.resolve();
 
     const existing = _pendingTimers.get(filePath);
     if (existing) {
@@ -139,25 +276,36 @@ export function requestEditValidation(filePath: string, opts?: { immediate?: boo
         _pendingTimers.delete(filePath);
     }
 
+    const promptOnMissing = !!opts?.promptOnMissing;
+
     if (opts?.immediate) {
-        void _doValidate(filePath).catch(err => {
+        return _doValidate(filePath, promptOnMissing).catch(err => {
             console.warn('[EditValidation] immediate validate 异常:', err?.message || err);
         });
-        return;
     }
 
-    const debounce = type === 'yaml' ? DEBOUNCE_MS_YAML : DEBOUNCE_MS_CSV;
+    // 防抖档位分流：yaml / json 是结构化文档（顶层键=字段名，parse 廉价），走 500ms 快档；
+    // csv 需要走整表 headers+rows 组装（大文件下更重），走 800ms 稳档。
+    const debounce = (type === 'yaml' || type === 'json') ? DEBOUNCE_MS_YAML : DEBOUNCE_MS_CSV;
     const timer = setTimeout(() => {
         _pendingTimers.delete(filePath);
-        void _doValidate(filePath).catch(err => {
+        // 防抖通路（用户正在编辑）永远不弹窗 —— 仅刷新行级高亮 / 失败盘。
+        void _doValidate(filePath, false).catch(err => {
             console.warn('[EditValidation] debounced validate 异常:', err?.message || err);
         });
     }, debounce);
     _pendingTimers.set(filePath, timer);
+    return Promise.resolve();
 }
 
 /**
  * activate 时调用：注册文档打开 / 变更 / 保存监听。
+ *
+ * 弹窗策略（对齐用户诉求「只在文件打开时弹窗」）：
+ *   · onDidOpenTextDocument         → 打开 TextEditor 视图，弹窗 ✅
+ *   · triggerEditValidationOnWebviewOpen → 打开 CustomEditor 视图，弹窗 ✅
+ *   · onDidSaveTextDocument         → 保存，不弹窗 ❌（仍立即跑校验刷新高亮）
+ *   · onDidChangeTextDocument       → 编辑防抖，不弹窗 ❌
  */
 export function registerEditValidation(): vscode.Disposable[] {
     const subs: vscode.Disposable[] = [];
@@ -165,27 +313,35 @@ export function registerEditValidation(): vscode.Disposable[] {
     subs.push(vscode.workspace.onDidChangeTextDocument(e => {
         const fp = e.document?.uri?.fsPath;
         if (!fp) return;
+        // 编辑期：走防抖 + 不弹窗
         requestEditValidation(fp);
     }));
 
     subs.push(vscode.workspace.onDidSaveTextDocument(doc => {
         const fp = doc?.uri?.fsPath;
         if (!fp) return;
-        requestEditValidation(fp, { immediate: true });
+        // 保存：立即跑校验（同步高亮），但不弹窗 —— promptOnMissing 显式为 false
+        requestEditValidation(fp, { immediate: true, promptOnMissing: false });
     }));
 
     subs.push(vscode.workspace.onDidOpenTextDocument(doc => {
         const fp = doc?.uri?.fsPath;
         if (!fp) return;
-        requestEditValidation(fp, { immediate: true });
+        // 打开：立即跑 + 弹窗
+        requestEditValidation(fp, { immediate: true, promptOnMissing: true });
     }));
 
     return subs;
 }
 
 /**
- * BaseEditorProvider 打开 webview 时调用：确保该文件"打开即刻校验一次"。
+ * BaseEditorProvider 打开 webview（CustomEditor）时调用：
+ * 确保该文件"打开即刻校验一次" + 弹结构性缺列窗（如有）。
+ *
+ * 返回值为 Promise<void>：调用方可 await 等待「校验 + 写盘 + refresh」全部完成，
+ * 让 webview 首帧 init 之后必然带上最新的 pushFailures 用于红/黄单元格上色，
+ * 避免出现「打开文件后瞬间还看不到高亮，稍后才染色」的抖动体验。
  */
-export function triggerEditValidationOnWebviewOpen(filePath: string): void {
-    requestEditValidation(filePath, { immediate: true });
+export function triggerEditValidationOnWebviewOpen(filePath: string): Promise<void> {
+    return requestEditValidation(filePath, { immediate: true, promptOnMissing: true });
 }

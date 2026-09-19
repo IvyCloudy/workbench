@@ -28,7 +28,6 @@ import { isTestAgentUuid, isTestFlowUuid } from '../utils/testcaseId';
 import { TS_ID_COLUMN } from '../services/utils';
 import type { PushFailureItem, RowLike, PushSubField } from '../handlers/pushCore.types';
 import { B2_ERROR_VALIDATORS } from '../handlers/pushCore.enumTypeValidators';
-import { getValidateFlag } from '../utils/caseEnumValues';
 
 // =============================================================
 // 行级小工具
@@ -48,7 +47,7 @@ export function readTsId(rec: RowLike | undefined | null): string {
 /** 单条行级预校验规则。返回失败明细或 null（通过）。 */
 export interface RowValidator {
     /** 校验类型标识；用于埋点事件名与 aborted reason 归类 */
-    kind: 'placeholder' | 'empty' | 'todoPlaceholder' | (string & {});
+    kind: 'placeholder' | 'empty' | 'todoPlaceholder' | 'nameEmpty' | (string & {});
     /**
      * 严重级别：
      *   - 'error'：硬拦截，命中行从 payload 剔除、不参与后端推送（占位/空/格式非法）
@@ -192,9 +191,10 @@ function scanTodoPlaceholderFields(row: RowLike): { hitLabels: string[]; primary
         locate: (r: RowLike) => LocateHit[];
         field: PushInterfaceField;
     }> = [
-        // 步骤（operation / data）：YAML 走 steps[]；CSV 走「步骤描述」整列
+        // 步骤描述（operation / data）：YAML 走 steps[]；CSV 走「步骤描述」整列
+        // label 与 CSV 现网列名保持一致（避免 hover 提示"步骤"与实际列名"步骤描述"不符）
         {
-            label: '步骤',
+            label: '步骤描述',
             locate: r => {
                 const hits: LocateHit[] = [];
                 const steps = (r as any)['steps'];
@@ -249,12 +249,6 @@ function scanTodoPlaceholderFields(row: RowLike): { hitLabels: string[]; primary
             },
             field: 'preCondition',
         },
-        // 案例名称
-        {
-            label: '案例名称',
-            locate: r => (containsTodoPlaceholder((r as any)['name']) || containsTodoPlaceholder((r as any)['名称'])) ? [{ label: '' }] : [],
-            field: 'testCaseName',
-        },
         // 案例描述
         {
             label: '案例描述',
@@ -262,15 +256,9 @@ function scanTodoPlaceholderFields(row: RowLike): { hitLabels: string[]; primary
             field: 'testCaseDes',
         },
     ];
-    // P4（2026-09-19）：可选字段「案例标签」—— 默认关闭（需求文档 §2.3.1），
-    // 由配置 testcaseViewer.validate.checkTags 控制；开启后同样走「待补充」字面量匹配。
-    if (getValidateFlag('checkTags')) {
-        CHECKS.push({
-            label: '案例标签',
-            locate: r => (containsTodoPlaceholder((r as any)['tags']) || containsTodoPlaceholder((r as any)['案例标签'])) ? [{ label: '' }] : [],
-            field: 'testCaseName', // 没有专用接口字段，先挂 testCaseName 作兵岭归类（前端仅用于列级兵岭高亮）
-        });
-    }
+    // 说明（2026-09-19 需求变更）：
+    //   · 案例名称改走 NAME_EMPTY_VALIDATOR（error 级 · 非空校验），不再纳入本扫描；
+    //   · 案例标签（tags）不再进行任何校验（需求确认移除 D6）。
     const hitLabels: string[] = [];
     const hitCells: TodoHitCell[] = [];
     let primaryField: PushInterfaceField | undefined;
@@ -309,21 +297,69 @@ const TODO_PLACEHOLDER_VALIDATOR: RowValidator = {
         if (hitLabels.length === 0) return null;
         return {
             tsId,
-            reason: `案例内容含「待补充」，命中字段：${hitLabels.join('、')}；请完善后再推送`,
+            // 文案精简（2026-09-19）：去掉"；请完善后再推送"尾巴，行为指引已由弹窗组头/该轻拦截行为本身传达。
+            reason: `案例内容含「待补充」，命中字段：${hitLabels.join('、')}`,
             field: primaryField,
         };
     },
     checkMulti(row, tsId) {
         const { hitLabels, hitCells } = scanTodoPlaceholderFields(row);
         if (hitLabels.length === 0 || hitCells.length === 0) return [];
-        const reason = `案例内容含「待补充」，命中字段：${hitLabels.join('、')}；请完善后再推送`;
-        return hitCells.map(cell => ({
+        const reason = `案例内容含「待补充」，命中字段：${hitLabels.join('、')}`;
+        // B5 · 字段级独立 reason：为每个 hit 生成"只讲自身位置"的 singleReason，
+        //   供前端 hover 单元格时只显示该单元格自己的问题（而非行级合并 reason）。
+        //   语义：无子路径 label → "案例内容含「待补充」（案例描述）"；
+        //         有子路径 label → "案例内容含「待补充」（第 1 步·步骤名称）"。
+        return hitCells.map(cell => {
+            // 字段中文标签：与 CSV 现网列名严格对齐（步骤描述 / 预期结果 / 前置条件 / 案例描述），
+            //   避免 hover 提示与用户在文件中看到的列名不一致；testCaseName 保留业务术语「案例名称」，
+            //   与 NAME_EMPTY_VALIDATOR reason"案例名称未填写"及产品语境一致。
+            const fieldLabel = ({
+                description: '步骤描述',
+                expected: '预期结果',
+                preCondition: '前置条件',
+                testCaseDes: '案例描述',
+                testCaseName: '案例名称',
+            } as Record<string, string>)[cell.field] || cell.field;
+            const posLabel = cell.label && cell.label !== '' ? `${fieldLabel}·${cell.label}` : fieldLabel;
+            return {
+                tsId,
+                reason,
+                field: cell.field,
+                stepIdx: cell.stepIdx,
+                subField: cell.subField,
+                singleReason: `案例内容含「待补充」（${posLabel}）`,
+            } as any;
+        });
+    },
+};
+
+// -----------------------------------------------------------------------------
+// 案例名称非空校验（D4 · 2026-09-19 error 级硬拦截）
+// -----------------------------------------------------------------------------
+// 需求变更：案例名称（name / 「名称」）由"文本『待补充』匹配"升级为"非空校验"，
+// 属推送必备条件之一（空名称将导致 TMS 拒绝）。
+//   · 兼容策略（对齐 ENUM_VALIDATOR）：字段完全缺省（YAML 键 & CSV 列都 undefined）
+//     → 跳过校验，避免误伤未使用该字段的旧模板；
+//   · 字段存在但为空串 / 仅空白字符 → 判为 error 级不合法，行从 payload 剔除。
+// -----------------------------------------------------------------------------
+const NAME_EMPTY_VALIDATOR: RowValidator = {
+    kind: 'nameEmpty',
+    severity: 'error',
+    check(row, tsId) {
+        const y = (row as any)?.['name'];
+        const c = (row as any)?.['名称'];
+        // 字段完全缺省（yaml 键 & csv 列都 undefined）→ 跳过校验
+        if (y === undefined && c === undefined) return null;
+        const raw = (y !== undefined && y !== null) ? y : c;
+        const s = raw == null ? '' : String(raw).trim();
+        if (s !== '') return null;
+        return {
             tsId,
-            reason,
-            field: cell.field,
-            stepIdx: cell.stepIdx,
-            subField: cell.subField,
-        }));
+            // 文案精简（2026-09-19）：去掉"，将导致推送校验失败：请补充后再推送"尾巴，保留事实描述即可。
+            reason: '案例名称未填写',
+            field: 'testCaseName',
+        };
     },
 };
 
@@ -333,15 +369,87 @@ export const DEFAULT_VALIDATORS: RowValidator[] = [
     EMPTY_VALIDATOR,
     FORMAT_VALIDATOR,
     ...B2_ERROR_VALIDATORS,       // B2：枚举取值 + 计划执行次数类型（error 级）
+    NAME_EMPTY_VALIDATOR,         // D4：案例名称非空（error 级）
     TODO_PLACEHOLDER_VALIDATOR,   // B1：「待补充」字面量（warn 级，排在末尾）
 ];
 
+// -----------------------------------------------------------------------------
+// D5 · 案例唯一性：同文件内 (name, path) 组合重复校验（2026-09-19 新增 · error 级硬拦截）
+// -----------------------------------------------------------------------------
+// 需求：同一份案例文件中，若两条案例的 (案例名称, 案例路径) 完全相同，则均视为
+// 重复案例，均标记为 error，只标红 `name`/`名称` 单元格；`path`/「路径」列不标红。
+//
+// 与其它 validator 的差异：本校验属于"跨行聚合"，无法在 RowValidator 单行签名内
+// 完成，因此提取为独立的 batch 扫描函数，在 runValidators 主循环外先算出"重复行集"，
+// 再在主循环中对命中行插入一条 failure。
+//
+// 归一化规则（与 NAME_EMPTY_VALIDATOR 对齐）：
+//   · name  : yaml `name`  → csv 「名称」（trim 后比较，大小写敏感）
+//   · path  : yaml `path`  → csv 「路径」（trim 后比较，大小写敏感）
+//   · 缺省与空值不参与去重（避免误判：多条"名称都为空"被强报"重复"，
+//     空名称由 NAME_EMPTY_VALIDATOR 单独处理）
+// -----------------------------------------------------------------------------
+function _readNameFieldRaw(row: RowLike): string {
+    const y = (row as any)?.['name'];
+    const c = (row as any)?.['名称'];
+    const raw = (y !== undefined && y !== null) ? y : c;
+    return raw == null ? '' : String(raw).trim();
+}
+function _readPathFieldRaw(row: RowLike): string {
+    const y = (row as any)?.['path'];
+    const c = (row as any)?.['路径'];
+    const raw = (y !== undefined && y !== null) ? y : c;
+    return raw == null ? '' : String(raw).trim();
+}
+
 /**
- * placeholder / empty / invalidFormat 三类是 **tsId 层面的必要条件**（tsId 不可用），
- * 若 tsId 都非法，后续基于 tsId 的字段级失败（enumInvalid 等）意义不大 —— 因此对这 3 类，
- * 仍保留"命中即 break"的旧行为，避免"tsId 缺失/非法"的行同时又刷出一堆字段级问题的噪音。
+ * 扫描整批行，返回"命中重复(name, path)组"的行索引集合。
+ *   · 输入索引 = rows 数组的原始 index i（与 runValidators 主循环 for i 对齐）
+ *   · 名称或路径为空的行**不参与**重复判定（避免与 NAME_EMPTY_VALIDATOR 语义冲突）
+ *   · 同一 (name, path) 组内所有行均被标红（并非仅"第二次出现"）
  */
-const TSID_HARD_KINDS = new Set<string>(['placeholder', 'empty', 'invalidFormat']);
+function scanDuplicateNameRows(rows: RowLike[]): Set<number> {
+    const dup = new Set<number>();
+    if (!Array.isArray(rows) || rows.length < 2) return dup;
+    // 桶：key = `${name}\u0001${path}` → 索引数组
+    const bucket: Record<string, number[]> = Object.create(null);
+    for (let i = 0; i < rows.length; i++) {
+        const rec = rows[i];
+        if (!rec) continue;
+        // 样例行不参与（与 runValidators 主循环 isSampleTsId 跳过口径一致）
+        const tsId = readTsId(rec);
+        if (isSampleTsId(tsId)) continue;
+        const name = _readNameFieldRaw(rec);
+        const path = _readPathFieldRaw(rec);
+        // 名称或路径任一为空 → 跳过（不参与重复判定）
+        if (name === '' || path === '') continue;
+        // 使用不可见字符 \u0001 作分隔符，避免 name 里含 '|' 等常见字符导致的键冲突
+        const key = `${name}\u0001${path}`;
+        (bucket[key] || (bucket[key] = [])).push(i);
+    }
+    for (const key of Object.keys(bucket)) {
+        const arr = bucket[key];
+        if (arr.length >= 2) {
+            for (const i of arr) dup.add(i);
+        }
+    }
+    return dup;
+}
+
+/**
+ * empty / placeholder 两类保留"命中即 break"：
+ *  · empty      —— testcase_id 完全为空，会退化成 `__EMPTY_TSID_ROW_i__` 伪 ID，
+ *                   再叠加一堆字段级 failure 只会让弹窗噪音爆炸；
+ *  · placeholder —— 值恰好是占位串 `TESTCASE_ID`，逻辑上是"未填写"的一种特化标签，
+ *                   实际也会命中 invalidFormat，若不 break 会同一行叠 2 条 tsId 层 reason。
+ *
+ * 变更（2026-09-19，需求方案 B）：invalidFormat 不再纳入硬 break —
+ * 用户诉求为"打开文件即能一次性看见所有问题（枚举非法 / 待补充 / 名称空 …）"，
+ * 而非"先修 testcase_id、再回来看其它问题"的两轮体验；测试案例中 400 行 uuid 格式
+ * 全部非法却导致「待补充」被吞掉的场景即由此产生，改后同一行会同时暴露 tsId 格式
+ * 与其它字段级问题，用户可一次性修完。
+ */
+const TSID_HARD_KINDS = new Set<string>(['empty', 'placeholder']);
 
 export function runValidators(
     rows: RowLike[],
@@ -351,6 +459,13 @@ export function runValidators(
     const failuresByKind: Record<string, PushFailureItem[]> = {};
     const droppedIndex = new Set<number>();
     if (!Array.isArray(rows)) return { failuresByKind, droppedIndex };
+
+    // D5 · 批级扫描：先算出"命中 (name, path) 重复"的行索引集合（i 与主循环 for i 对齐）。
+    //   跨行判定必须在整批粒度做，因此从单行 validator 剥离，改由 runValidators 统一注入 failure。
+    //   仅在 DEFAULT_VALIDATORS 走全量模式（含此 kind）时执行；测试/工具函数指定单 validator 时跳过。
+    const enableDuplicateCheck = validators === DEFAULT_VALIDATORS
+        || validators.some(v => v && v.kind === 'duplicateName');
+    const duplicateRowSet = enableDuplicateCheck ? scanDuplicateNameRows(rows) : new Set<number>();
 
     for (let i = 0; i < rows.length; i++) {
         const rec = rows[i];
@@ -383,7 +498,7 @@ export function runValidators(
                     severity,
                     stepIdx: primary.stepIdx,
                     subField: primary.subField,
-                    hits: hits.map(h => ({ field: h.field, stepIdx: h.stepIdx, subField: h.subField })),
+                    hits: hits.map(h => ({ field: h.field, stepIdx: h.stepIdx, subField: h.subField, singleReason: (h as any).singleReason })),
                 };
                 (failuresByKind[v.kind] ||= []).push(item);
             } else {
@@ -408,6 +523,26 @@ export function runValidators(
                     tsIdHardHit = true;
                 }
             }
+        }
+
+        // D5 · 案例唯一性 failure 注入：本行命中"重复 (name, path)"组时，追加一条 error 级 failure。
+        //   与其它 validator 相同：走 field='testCaseName' 精确定位 → 前端仅红 name/名称 列。
+        //   若 tsId 层已硬拦截（empty/placeholder），本轮已 break 退出上面 for v，
+        //   此处仍走独立分支：即使 tsId 是伪 ID，重复也应展现（用户可通过复制"文件路径+行号"定位）。
+        if (duplicateRowSet.has(i)) {
+            const rowIndex = resolveRowIndex(i);
+            const nameVal = _readNameFieldRaw(rec);
+            const reasonText = `重复案例名称：同文件内已存在相同 (名称, 路径) 的案例「${nameVal}」`;
+            const item: PushFailureItem = {
+                tsId: tsId === '' ? `__EMPTY_TSID_ROW_${rowIndex}__` : tsId,
+                reason: reasonText,
+                rowIndex,
+                category: classifyFailure({ reason: reasonText, validatorKind: 'duplicateName' }),
+                field: 'testCaseName',
+                severity: 'error',
+            };
+            (failuresByKind['duplicateName'] ||= []).push(item);
+            droppedIndex.add(i);
         }
     }
     return { failuresByKind, droppedIndex };
@@ -450,11 +585,16 @@ export function runValidatorsOnRowsPure(
 ): PushFailureItem[] {
     const { failuresByKind } = runValidators(rows, resolveRowIndex, validators);
     return [
+        // §2.3.5：结构性错误优先展示（编辑期与推送期同口径）
+        ...(failuresByKind['missingColumn'] || []),
         ...(failuresByKind['placeholder'] || []),
         ...(failuresByKind['empty'] || []),
         ...(failuresByKind['invalidFormat'] || []),
         ...(failuresByKind['enumInvalid'] || []),
         ...(failuresByKind['planExecNumInvalid'] || []),
+        ...(failuresByKind['nameEmpty'] || []),
+        // D5 · 案例唯一性 error 与其它 error 级同层展示（排在同类 error 尾部）
+        ...(failuresByKind['duplicateName'] || []),
         ...(failuresByKind['todoPlaceholder'] || []),
     ];
 }

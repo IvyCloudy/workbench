@@ -28,8 +28,6 @@
  *     与推送映射层 pushDataMapper 共用同一份配置源（package.json "testcaseViewer.enum.*"）；
  *   · 为保持向后兼容（老测试直接引用了 TYPE_VALUES / KEY_FLAG_VALUES 等常量），
  *     仍保留同名 export，但值改为 getEnumValues 的"当前快照"（首次读取时求值）；
- *   · KEY_FLAG_VALUES 特殊策略：在配置基础上强制补上 '0'/'1' 兜底（历史 CSV 用 0/1 表达），
- *     该策略与 pushDataMapper.resolveKeyFlag 的行为保持一致。
  * 未来如需按团队/项目动态化，直接在 settings.json 覆盖 testcaseViewer.enum.* 即可。
  */
 
@@ -41,16 +39,12 @@ import type { PushInterfaceField } from '../utils/pushFailureCategory';
 import { getEnumValues } from '../utils/caseEnumValues';
 
 /**
- * 从配置中拉取「关键案例」合法取值，并保留 0/1 兜底以兼容历史 CSV。
+ * 从配置中拉取「关键案例」合法取值（严格按 testcaseViewer.enum.keyFlag 为准，默认仅「是/否」）。
+ * 2026-09-19：根据需求调整，移除旧 CSV 的 0/1 兵岭，keyFlag 完全以配置清单为准。
  * 单独抽出方法便于测试注入 & 与 pushDataMapper 行为一致。
  */
 function readKeyFlagValues(): readonly string[] {
-    const base = getEnumValues('keyFlag') || [];
-    const set = new Set<string>(base);
-    // 强制兜底：老 CSV 常用 0/1 表达是否（与 pushDataMapper.resolveKeyFlag 保持一致）
-    set.add('0');
-    set.add('1');
-    return Array.from(set);
+    return getEnumValues('keyFlag');
 }
 
 /**
@@ -66,7 +60,7 @@ export const TEST_TYPE_VALUES: readonly string[] = getEnumValues('testType');
 /** 优先级（`priority` / 「优先级」）合法取值 —— @deprecated 请优先使用 getEnumValues('priority')。 */
 export const PRIORITY_VALUES: readonly string[] = getEnumValues('priority');
 
-/** 关键案例（`key_flag` / 「关键案例」）合法取值（兼容中文与 0/1 双写法）—— @deprecated 请优先使用 readKeyFlagValues()。 */
+/** 关键案例（`key_flag` / 「关键案例」）合法取值—— @deprecated 请优先使用 readKeyFlagValues()。 */
 export const KEY_FLAG_VALUES: readonly string[] = readKeyFlagValues();
 
 /** 单个枚举字段的校验规则条目。 */
@@ -146,28 +140,68 @@ function isAllowedEnum(val: string, allowed: readonly string[]): boolean {
  * 同行多字段命中时汇总为一条（reason 列出所有不合法字段与建议取值），
  * field 取"第一个命中的字段"（对应埋点主字段维度）。
  */
+/**
+ * 内部：扫描一行的全部枚举字段，返回命中明细。
+ * 与 check / checkMulti 共用，保证两条通路的判定逻辑严格一致。
+ *   · hitLabels ：用于 reason 汇总话术（保持"命中即列全部"的旧口径）
+ *   · hitFields ：每个命中字段的 PushInterfaceField，供 checkMulti 展开为多条 hit
+ */
+function scanEnumFields(row: RowLike): { hitLabels: string[]; hitFields: PushInterfaceField[] } {
+    const hitLabels: string[] = [];
+    const hitFields: PushInterfaceField[] = [];
+    for (const rule of ENUM_RULES) {
+        if (isEnumFieldAbsent(row, rule)) continue; // 完全缺省 → 跳过（兼容旧文件）
+        const val = readEnumRaw(row, rule);
+        const allowed = rule.readAllowed();
+        if (!isAllowedEnum(val, allowed)) {
+            const shown = val === '' ? '空' : `"${val}"`;
+            hitLabels.push(`${rule.label}=${shown}（应为 ${allowed.join('/')})`);
+            hitFields.push(rule.field);
+        }
+    }
+    return { hitLabels, hitFields };
+}
+
 export const ENUM_VALIDATOR: RowValidator = {
     kind: 'enumInvalid',
     severity: 'error',
     check(row, tsId) {
-        const hits: string[] = [];
-        let primaryField: PushInterfaceField | undefined;
-        for (const rule of ENUM_RULES) {
-            if (isEnumFieldAbsent(row, rule)) continue; // 完全缺省 → 跳过（兼容旧文件）
-            const val = readEnumRaw(row, rule);
-            const allowed = rule.readAllowed(); // P0：运行时读取，保证 settings.json 变更实时生效
-            if (!isAllowedEnum(val, allowed)) {
-                if (!primaryField) primaryField = rule.field;
-                const shown = val === '' ? '空' : `"${val}"`;
-                hits.push(`${rule.label}=${shown}（应为 ${allowed.join('/')})`);
-            }
-        }
-        if (hits.length === 0) return null;
+        const { hitLabels, hitFields } = scanEnumFields(row);
+        if (hitLabels.length === 0) return null;
         return {
             tsId,
-            reason: `案例存在枚举字段取值不合法，将导致推送校验失败：${hits.join('；')}`,
-            field: primaryField,
+            // 文案精简（2026-09-19）：去掉"案例存在枚举字段取值不合法，将导致推送校验失败："冗余前缀，
+            // 严重级与行为指引已由 05g 弹窗组头承载，bullet 只保留"字段错在哪"的事实。
+            reason: hitLabels.join('；'),
+            field: hitFields[0], // 兼容单值口径：primaryField = 第一个命中字段
         };
+    },
+    /**
+     * B4 升级（2026-09-19 修复）：同行多个枚举字段命中时，为每个字段各产出一条 hit，
+     * 交由 runValidators 汇总为一条 failure + hits 数组，让前端能对每一列独立标红。
+     *
+     * 修复现象：CSV 表格中 `type` 和 `test_type` 同时非法时，此前仅取 primaryField='type'
+     *   导致只有「案例类型」列标红，「执行方式」列被吞掉。checkMulti 覆盖后两列均标红。
+     *
+     * 2026-09-19 · R2 增强："每一项各占一条 bullet" —— 除了 field 定位外，
+     *   还为每个 hit 附一条**只讲自身字段**的独立 reason（如「执行方式=... 应为 ...」），
+     *   前端 05g 弹窗按 hits[i].reason 逐条渲染 bullet，行号只在卡片头显示一次。
+     *   顶层 failure.reason 仍保留完整汇总句（用于埋点/落盘等旧口径消费方）。
+     */
+    checkMulti(row, tsId) {
+        const { hitLabels, hitFields } = scanEnumFields(row);
+        if (hitLabels.length === 0) return [];
+        // 文案精简（2026-09-19）：所有 reason / singleReason 去掉"案例存在枚举字段取值不合法，将导致推送校验失败："冗余前缀。
+        // 汇总句仅保留字段级 label 用分号拼接（供顶层 failure.reason / 埋点消费）；单条 hit 只讲自身字段。
+        const summary = hitLabels.join('；');
+        return hitFields.map((field, i) => ({
+            tsId,
+            reason: i === 0 ? summary : hitLabels[i],
+            field,
+            // singleReason：与 reason 语义解耦 —— 无论 i 是否为 0，都提供一条"只讲自己"的话术，
+            // 前端渲染 bullet 时优先取 singleReason，保证第一条 bullet 也不会显示成汇总句。
+            singleReason: hitLabels[i],
+        }));
     },
 };
 
@@ -209,7 +243,9 @@ export const PLAN_EXEC_NUM_VALIDATOR: RowValidator = {
         const shown = (v === '' || v === undefined || v === null) ? '空' : `"${String(v)}"`;
         return {
             tsId,
-            reason: `案例的计划执行次数取值不合法，将导致推送校验失败：${shown}（应为非负整数）`,
+            // 文案精简（2026-09-19）：去掉"案例的计划执行次数取值不合法，将导致推送校验失败："冗余前缀，
+            // 与枚举校验器保持一致，只保留"字段=值（应为...）"事实描述。
+            reason: `计划执行次数=${shown}（应为非负整数）`,
             field: 'planExecNum',
         };
     },

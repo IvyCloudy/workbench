@@ -16,6 +16,7 @@
  */
 import * as vscode from 'vscode';
 import { escapeHtml_, baseModalCss_, formatFailures_, showResultErrorModal_, showResultModalFallback_ } from './messageExtras';
+import type { PushInterfaceField } from './pushFailureCategory';
 
 // ============================================
 // 类型定义
@@ -29,6 +30,32 @@ export interface PushFailure {
     tsId: string;
     reason: string;
     rowIndex?: number;
+    /**
+     * 严重级别（B4：软/硬拦截分栏展示）：
+     *   - 'error'（默认）：硬拦截失败（占位/空/格式非法/接口拒绝），红色渲染
+     *   - 'warn'          ：软拦截命中（如「待补充」质量类），黄色渲染，
+     *                       行已被后端成功接收（Y 方案：不阻断推送），仅事后知情
+     * 缺省视为 'error'（历史接口失败项均未带该字段）。
+     */
+    severity?: 'error' | 'warn';
+    /**
+     * B3 · 字段级 severity（与 fields 一一对应的平行数组）：
+     * 同一 tsId 内若 error/warn 字段并存，前端可按具体字段独立染色。长度必须与 fields 一致。
+     */
+    fieldSeverities?: Array<'error' | 'warn'>;
+    /**
+     * B4 · 字段级细粒度定位数组（与 fields 一一对应）：
+     *   - fieldCells[i] = { stepIdx: 1, subField: 'operation' } → 表示"第 2 步的步骤名称"
+     *   - fieldCells[i] = {} 或未定义 → 无细粒度定位，前端回退到"整列高亮"
+     * 用途：前端展开态子表格 sub-td 精确高亮 + 明细弹窗 dv2 输入框精确高亮。
+     */
+    fieldCells?: Array<{ stepIdx?: number; subField?: string } | null>;
+    /**
+     * 命中的接口字段码（PushInterfaceField，如 'description' / 'testCaseName' / 'sourceId'）。
+     * 用于 B3 · 单元格级失败高亮：前端根据 field → headers 中的列索引精准染色，
+     * 不再对整行铺红/黄底。缺省时前端将回退到只染 testcase_id 列作为视觉锚点。
+     */
+    field?: PushInterfaceField;
 }
 
 // ============================================

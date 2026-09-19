@@ -462,6 +462,26 @@ describe('pushFailureCategory · 29 个真实后端报错场景覆盖', () => {
         expect(failureFieldOf({ reason: '案例 [abc] 的「执行方式」取值 "foo" 不合法，仅支持：手工 / UI自动化...', mapErrorReason: 'invalidTestType' })).toBe('testType');
     });
 
+    it('pushDataMapper 案例类型不合法（invalidCaseType）→ type.enum', () => {
+        const r1 = { reason: '案例 [abc] 的「案例类型」取值 "foo" 不合法，仅支持：功能点类 / 其他', mapErrorReason: 'invalidCaseType' };
+        expect(classifyFailure(r1)).toBe('type.enum');
+        expect(failureFieldOf(r1)).toBe('type');
+        const r2 = { reason: '案例 [abc] 的「案例类型」未填写，仅支持：功能点类 / 其他', mapErrorReason: 'invalidCaseType' };
+        expect(classifyFailure(r2)).toBe('type.enum');
+    });
+
+    it('pushDataMapper 优先级不合法（invalidPriority）→ priority.enum', () => {
+        const r = { reason: '案例 [abc] 的「优先级」取值 "P0" 不合法，仅支持：高 / 中 / 低', mapErrorReason: 'invalidPriority' };
+        expect(classifyFailure(r)).toBe('priority.enum');
+        expect(failureFieldOf(r)).toBe('priority');
+    });
+
+    it('pushDataMapper 关键案例不合法（invalidKeyFlag）→ keyFlag.enum', () => {
+        const r = { reason: '案例 [abc] 的「关键案例」取值 "Y" 不合法，仅支持：是 / 否', mapErrorReason: 'invalidKeyFlag' };
+        expect(classifyFailure(r)).toBe('keyFlag.enum');
+        expect(failureFieldOf(r)).toBe('keyFlag');
+    });
+
     it('pushCore 样例数据拦截 → sample（带 sourceId 字段）', () => {
         expect(classifyFailure({ reason: '为样例数据，不允许推送。请修改"案例唯一标识，不可修改"等占位字段为真实数据后再试' })).toBe('sample');
         expect(failureFieldOf({ reason: '为样例数据，不允许推送。请修改"案例唯一标识，不可修改"等占位字段为真实数据后再试' })).toBeUndefined();

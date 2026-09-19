@@ -60,7 +60,7 @@ const run = (rows: Array<Record<string, string>>) => {
         description: '推送测试',
         steps: [{ operation: '执行', ui_expected: ['ok'] }],
         test_type: '手工',
-        '执行方式': '手工',
+        type: '功能点类',
         ...r,
     }));
     return runPush({

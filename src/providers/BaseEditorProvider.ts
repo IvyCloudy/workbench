@@ -22,6 +22,7 @@ import * as path from 'path';
 import { getNonce, isInQualifiedDir, buildErrorHtml, FILE_PATTERNS, TS_ID_COLUMN, escapeHtml, formatLogTime, isInTempFolder } from '../services/utils';
 import { getCurrentTaskInfo, type CurrentTask } from '../utils/commands';
 import { showPushErrorModal, showPushResult, showPushDone, showModal } from '../utils/message';
+import { openPreValidateGate } from '../utils/preValidateGate';
 import { clearHighlight } from '../utils/highlightStore';
 import { createParser, ensureTrackingColumns, type FileType } from '../parsers';
 import { TelemetryService } from '../utils/telemetry';
@@ -194,6 +195,12 @@ export class PushViaHttpClient implements PushStrategy {
                 undefined,
                 '未绑定任务，无法推送。请在测试任务插件绑定后再试。',
             ),
+            /**
+             * 前置校验门控（B5）：stepPreValidate 后、剔除前触发，弹出前置校验窗口。
+             * 有 error → 只允许「关闭」（cancel）；仅 warn → 用户可选「忽略并继续」（continue）。
+             * 决策语义详见 utils/preValidateGate.ts。
+             */
+            preValidateGate: (failures) => openPreValidateGate(webviewPanel, baseName, failures),
             // 校验类失败：需要在弹窗中列出具体行号，交给 showPushResult 而非 modal
             onPlaceholderTestcaseId: (failures) =>
                 postWebviewError('testcase_id 为占位值 TESTCASE_ID，不允许推送', 'result', failures),
@@ -374,6 +381,26 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         try { entry.markSelfSave?.(); } catch (_) { /* ignore */ }
     }
 
+    /**
+     * B3 · 编辑期主动校验：让打开中的 webview 拉一次最新失败盘并重绘。
+     * - 调用方：editValidationHandler.ts 在 debounce 到期或保存后触发。
+     * - 面板未打开时 no-op。
+     * - 实现细节：走 panelEntry.refresh 触发 pusher.push（reason='editValidation'），
+     *   full-data 帧会自动携带 pushFailures 字段（含 severity），前端
+     *   HighlightModel.applyPushFailuresPayload 会顺带写入 _pushFailedSeverity Map，
+     *   由 02a-render.js 按 severity 打红/黄行。
+     *   force=false 避免打断用户编辑；clearAllMods=false 保留用户修改高亮。
+     */
+    static async postEditValidationRefresh(filePath: string): Promise<void> {
+        const entry = BaseEditorProvider.panelMap.get(filePath);
+        if (!entry) return;
+        try {
+            await entry.refresh?.('editValidation', false, false);
+        } catch (e: any) {
+            console.warn('[postEditValidationRefresh] refresh failed:', e?.message || e);
+        }
+    }
+
     constructor(protected extensionUri: vscode.Uri, context?: vscode.ExtensionContext) {
         this.context = context;
     }
@@ -496,6 +523,17 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         // 用于让 BaseEditorProvider.postExplorerPushRefresh 等外部入口驱动本 panel 刷新高亮。
         const panelEntry: PanelEntry = { panel: webviewPanel, ready, markReady };
         BaseEditorProvider.panelMap.set(filePath, panelEntry);
+
+        // B3：webview 打开 → 立刻在扩展端跑一次编辑期校验，确保红/黄高亮在 restoreHighlightState
+        // 之前就写好盘（loadStore 有缓存 mtime 检查，webview 端 restore 时会读到最新结果）。
+        // triggerEditValidationOnWebviewOpen 内部会自识别是否合规目录 + yaml/csv，
+        // 不合规文件（临时文件夹等）自然 no-op。
+        try {
+            const { triggerEditValidationOnWebviewOpen } = await import('../handlers/editValidationHandler');
+            triggerEditValidationOnWebviewOpen(filePath);
+        } catch (e: any) {
+            console.warn('[BaseEditorProvider] 触发编辑期校验失败（已忽略）:', e?.message || e);
+        }
 
         // ---- YAML 语法级可解析性拦截 ----
         // 目的：拦截"YAML 库根本无法解析"的病态文件（未闭合引号 / mapping 崩坏 / anchor 冲突等）。
@@ -716,7 +754,9 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         //   05e-array-editor    —— 数组列编辑器，并在末尾调用 init()
         //   05f-delete-result   —— 删除结果弹窗（与推送结果同款样式，独立状态）
         const editorScriptFiles = [
-                'editor/00-highlight-util.js',
+                'editor/highlight/00a-highlight-util.js',
+                'editor/highlight/00b-highlight-model-write.js',
+                'editor/highlight/00c-highlight-model-snap.js',
                 'editor/01-core.js',
                 'editor/02a-render.js',
                 'editor/02b-bind.js',
@@ -731,12 +771,14 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             'editor/03g-clipboard.js',
             'editor/03h-detail-helpers.js',
             'editor/04-push-find.js',
+            'editor/05h-push-failures-store.js',
             'editor/05a-push-result.js',
             'editor/05b-prompt-confirm.js',
             'editor/05c-detail-modal.js',
             'editor/05d-detail-write.js',
             'editor/05e-array-editor.js',
-            'editor/05f-delete-result.js'
+            'editor/05f-delete-result.js',
+            'editor/05g-pre-validate-gate.js'
         ];
         const editorScriptsHtml = editorScriptFiles.map((rel) => {
             const uri = webviewPanel.webview.asWebviewUri(

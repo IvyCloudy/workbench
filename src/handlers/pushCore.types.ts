@@ -7,7 +7,23 @@ import type * as vscode from 'vscode';
 import type { FileParser } from '../parsers';
 import type { PushFailCategory, PushInterfaceField } from '../utils/pushFailureCategory';
 
-/** 校验/过滤阶段的输入行结构（只需 TS_ID_COLUMN 字段） */
+/**
+ * 「步骤子字段」枚举：仅当失败点可定位到 steps[i] 的某个子字段时才有值。
+ * - operation    / data                → 步骤描述列 / 数据列
+ * - ui_expected  / api_expected / db_expected → 预期结果列（3 类分组）
+ * - preCondition                        → 前置条件（stepIdx 对应 preconditions[i]）
+ * 命中此枚举后，前端展开态子表格可精确定位到「第 stepIdx 步·某 sub-td」，
+ * 弹窗 dv2 可定位到「data-di=stepIdx 的步骤 + data-field=subField 的输入框」。
+ */
+export type PushSubField =
+    | 'operation'
+    | 'data'
+    | 'ui_expected'
+    | 'api_expected'
+    | 'db_expected'
+    | 'preCondition';
+
+/** RowLike 保持不变 —— */
 export type RowLike = Record<string, any>;
 
 /**
@@ -17,6 +33,20 @@ export type RowLike = Record<string, any>;
 export interface PushCoreHooks {
     /** 未绑定任务 */
     onUnbound: () => void;
+    /**
+     * 前置校验门控（B5：推送前拦截 UI）。
+     * stepPreValidate 结束、行剔除已计算但尚未调用后端时触发，
+     * 由 hook 弹出「前置校验窗口」（分栏展示 error/warn），等待用户决策：
+     *   - resolve('cancel')   → runPush 短路走 onComplete（failures 完整回传，
+     *                            对齐 Q3=B "记录不拦截"语义，成功数为 0）；
+     *   - resolve('continue') → 沿用现有逻辑：error 项剔除、warn 项进入后端调用。
+     *
+     * 触发条件：failures.length > 0（即存在任一 error 或 warn）；
+     *   - 有 error → 只显示「关闭」，禁止继续（Q2=A：忽略并继续按钮不出现）；
+     *   - 全 warn → 显示「取消 / 忽略并继续」两个按钮。
+     * 未实现该 hook 时（如批量右键场景）自动 fallback 为 'continue'，行为与老版一致。
+     */
+    preValidateGate?: (failures: PushFailureItem[]) => Promise<'continue' | 'cancel'>;
     /**
      * 拉取任务信息时抛出异常（网络抖动 / 后端 5xx 等）。
      * 未实现时会降级走 onBackendError；调用方可实现以给出更精准的文案。
@@ -173,6 +203,32 @@ export interface PushFailureItem {
     category?: PushFailCategory;
     /** 命中的接口字段码（聚焦维度；字段类错误才有值，其余为 undefined） */
     field?: PushInterfaceField;
+    /**
+     * B4 · 步骤下标（0-based）：仅当失败点可定位到 steps[i] 或 preconditions[i] 时才有值；
+     * 与 subField 成对出现，用于前端展开态 sub-td / 弹窗 dv2 精确定位。
+     */
+    stepIdx?: number;
+    /**
+     * B4 · 步骤子字段：见 PushSubField 说明；命中细粒度定位时与 stepIdx 成对出现。
+     */
+    subField?: PushSubField;
+    /**
+     * B4 · 同行多字段命中的完整位置数组：
+     *   - 只在 validator 通过 `checkMulti` 返回多条 hits 时有值；
+     *   - 每一项独立表示一个命中位置（field / stepIdx / subField 三元组），主要用于
+     *     前端展开态子表格 sub-td 与 dv2 弹窗字段卡片的精确高亮；
+     *   - 顶层 `field / stepIdx / subField` 仍代表"首要"命中位置（primary），
+     *     用于弹窗跳转与 reason 摘要；
+     *   - 单 hit 场景下（普通 `check`）该字段为 undefined，向后兼容。
+     */
+    hits?: Array<{ field?: PushInterfaceField; stepIdx?: number; subField?: PushSubField }>;
+    /**
+     * 严重级别（预校验层专用）：
+     *   - 'error'：硬拦截（占位/空 tsId/格式非法/接口失败），无法忽略
+     *   - 'warn' ：软拦截（如「待补充」质量类内容），可"忽略并继续"推送
+     * 缺省视为 'error'（向后兼容：接口失败等历史项无该字段）。
+     */
+    severity?: 'error' | 'warn';
 }
 
 /**

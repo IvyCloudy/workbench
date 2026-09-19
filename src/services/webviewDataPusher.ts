@@ -27,13 +27,14 @@ import { buildErrorProps } from './utils';
 
 /** 需要触发 diff 高亮的 push 原因集合。集中管理便于扩展与阅读：
  *  - 'init' / 'reload' / 'pushSuccess'：字面量原因；
+ *  - 'editValidation'：编辑期防抖校验后 push-failures.json 已刷新，需重跑 diff 以剔除已修复行的旧单元格高亮；
  *  - 'externalChange:*'：外部变更（fsWatcher / onDidSaveTextDocument）通过前缀命中。
  */
-const DIFF_TRIGGER_REASONS = new Set<string>(['init', 'pushSuccess', 'reload']);
+const DIFF_TRIGGER_REASONS = new Set<string>(['init', 'pushSuccess', 'reload', 'editValidation']);
 const DIFF_TRIGGER_PREFIXES: readonly string[] = ['externalChange:'];
-/** 触发 diff 时若结果为空，pushSuccess/reload 需要显式清空前端残留高亮（'null'），
+/** 触发 diff 时若结果为空，pushSuccess/reload/editValidation 需要显式清空前端残留高亮（'null'），
  *  init/externalChange 保持前端已有状态（'undefined'）。 */
-const EMPTY_DIFF_NULL_REASONS = new Set<string>(['pushSuccess', 'reload']);
+const EMPTY_DIFF_NULL_REASONS = new Set<string>(['pushSuccess', 'reload', 'editValidation']);
 /** saveHighlight / pushSuccess 帧不回推 userMarks，避免覆盖前端最新 mark 状态 */
 const SKIP_USERMARKS_REASONS = new Set<string>(['saveHighlight', 'pushSuccess']);
 

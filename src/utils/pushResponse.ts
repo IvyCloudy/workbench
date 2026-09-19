@@ -12,6 +12,7 @@
 
 import { TS_ID_COLUMN } from '../services/utils';
 import { classifyFailure, extractInterfaceField, type PushFailCategory, type PushInterfaceField } from './pushFailureCategory';
+import type { PushSubField } from '../handlers/pushCore.types';
 
 // ============================================
 // 类型定义
@@ -34,6 +35,10 @@ export interface PushResponseFailure {
     field?: PushInterfaceField;
     /** 客户端字段映射错误的 reason 码（如 missingTestcaseId），用于精确归类到 字段.性质 复合码 */
     mapErrorReason?: string;
+    /** B4 · 步骤下标（0-based）：定位到具体 steps[i] / preconditions[i] 时才有值 */
+    stepIdx?: number;
+    /** B4 · 步骤子字段：与 stepIdx 成对出现，前端用于展开态 sub-td / 弹窗 dv2 精确高亮 */
+    subField?: PushSubField;
 }
 
 /** parsePushResponse 返回值 */

@@ -36,6 +36,7 @@ import type { PushFailureItem, PushCoreHooks, RunPushOptions, PushContext } from
 import {
     readTsId,
     runValidators,
+    runValidatorsOnRowsPure,
     DEFAULT_VALIDATORS,
     collectPlaceholderTestcaseIdFailures,
     collectEmptyTestcaseIdFailures,
@@ -72,6 +73,7 @@ export type {
 export {
     readTsId,
     runValidators,
+    runValidatorsOnRowsPure,
     DEFAULT_VALIDATORS,
     collectPlaceholderTestcaseIdFailures,
     collectEmptyTestcaseIdFailures,
@@ -261,6 +263,38 @@ export async function runPush(opts: RunPushOptions): Promise<void> {
 
         const pre = await stepPreValidate(ctx, rows);
         preValidationFailures = pre.failures;
+
+        // ─── 前置校验门控（B5）─────────────────────────────────────────────
+        // 有 error/warn 时先弹「前置校验窗口」等用户决策。
+        //   - 无 hook（如批量场景）：直接 continue，保持原有行为；
+        //   - hook 存在且返回 'cancel'：完全静默 —— 不调后端、不发完成态弹窗、
+        //     不写快照，仅记录一条 pushAborted 埋点用于观测。前端 loading 由
+        //     05g-pre-validate-gate.js 内的 S._pushing=false 自己解锁。
+        //   - hook 返回 'continue'：沿用原逻辑（error 剔除 / warn 进接口）。
+        // 注意 gate 必须在 applyPreValidationDrops 之前调用，否则用户看到的清单
+        // 与"真正会被剔除的行"不一致；hook 内异常按 'continue' 兜底，避免弹窗故障阻塞推送。
+        if (preValidationFailures.length > 0 && typeof ctx.hooks.preValidateGate === 'function') {
+            let gateDecision: 'continue' | 'cancel' = 'continue';
+            try {
+                gateDecision = await ctx.hooks.preValidateGate(preValidationFailures);
+                if (gateDecision !== 'cancel') gateDecision = 'continue';
+            } catch (gateErr: any) {
+                console.warn(`[推送][${ctx.traceId}] preValidateGate 抛错，按 continue 兜底:`, gateErr?.message || gateErr);
+                gateDecision = 'continue';
+            }
+            if (gateDecision === 'cancel') {
+                // 静默取消：仅埋点 & 诊断，不触发 onComplete（避免弹推送结果窗口）
+                const hasError = preValidationFailures.some(f => f.severity !== 'warn');
+                emitAborted(ctx, hasError ? 'preValidateGateBlocked' : 'preValidateGateCancelled', {
+                    count: String(preValidationFailures.length),
+                    ...buildFailDimensions(preValidationFailures),
+                });
+                pushDiag(`[前置校验门控] 用户取消 | 失败=${preValidationFailures.length} | 静默关闭，不调接口/不弹完成态`);
+                showPushDiag();
+                emitProgress(ctx.hooks, 'done', { rows: 0 });
+                return;
+            }
+        }
 
         const applied = applyPreValidationDrops(rows, pre.droppedIndex);
         rows = applied.rows;

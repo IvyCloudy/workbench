@@ -43,6 +43,7 @@ import { openOrCreateHeaderLabelsSettings } from './utils/headerLabels';
 import { initYamlDiagnostics } from './utils/yamlValidator';
 import { registerYamlValidation, disposeYamlValidation } from './handlers/yamlValidationHandler';
 import { registerYamlPreOpenInterceptor } from './handlers/yamlPreOpenInterceptor';
+import { registerEditValidation } from './handlers/editValidationHandler';
 import { handleLinkerDiagnostic } from './handlers/linkerDiagnosticCommand';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
@@ -115,6 +116,8 @@ export async function activate(context: vscode.ExtensionContext) {
         tabChangeListener,
         yamlPreOpenInterceptor,
         ...registerYamlValidation(),
+        // B3：编辑期主动校验监听器（文档打开 / 变更 / 保存）
+        ...registerEditValidation(),
 
         // ---- 自定义编辑器 ----
         vscode.window.registerCustomEditorProvider(

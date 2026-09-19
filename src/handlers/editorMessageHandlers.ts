@@ -35,6 +35,8 @@ import { TelemetryService } from '../utils/telemetry';
 import { buildErrorProps } from '../services/utils';
 import { syncDeletedResultTelemetryProps } from '../utils/extensionHelpers';
 import { resolveTaskInfoOrNull } from '../handlers/pushCore.stages';
+import { resolvePreValidateGate } from '../utils/preValidateGate';
+import { requestEditValidation } from '../handlers/editValidationHandler';
 import { TS_ID_COLUMN } from '../services/utils';
 import { detectFileType, createParser } from '../parsers';
 import type { PushStrategy, PushContext } from '../providers/BaseEditorProvider';
@@ -81,6 +83,7 @@ function buildHandlers(): Record<string, Handler> {
         clearAllMarks: handleClearAllMarks,
         deleteRows: handleDeleteRows,
         confirmDeleteRows: handleConfirmDeleteRows,
+        preValidateGateResponse: handlePreValidateGateResponse,
         telemetry: handleTelemetry,
     };
 }
@@ -96,6 +99,19 @@ async function handleTelemetry(msg: any, _ctx: EditorMsgCtx): Promise<void> {
     if (!eventName || typeof eventName !== 'string') return;
     const properties = (msg?.properties && typeof msg.properties === 'object') ? msg.properties : {};
     TelemetryService.sendTelemetryEvent(eventName, properties);
+}
+
+/**
+ * 前置校验门控回消息处理（B5）。
+ * webview 在用户点击「取消」/「忽略并继续」后 postMessage 回来：
+ *   { type:'preValidateGateResponse', gateId, decision:'continue'|'cancel' }
+ * 本 handler 只做单纯的路由，实际结算逻辑在 utils/preValidateGate 中。
+ */
+async function handlePreValidateGateResponse(msg: any, _ctx: EditorMsgCtx): Promise<void> {
+    const gateId = typeof msg?.gateId === 'string' ? msg.gateId : '';
+    if (!gateId) return;
+    const decision = msg?.decision === 'continue' ? 'continue' : 'cancel';
+    resolvePreValidateGate(gateId, decision);
 }
 
 /**
@@ -203,6 +219,21 @@ async function handleSave(msg: any, ctx: EditorMsgCtx): Promise<void> {
     ctx.pusher.push(false, 'saveHighlight');
     showSaveResult(ctx.webviewPanel, true);
     ctx.log('💾 saved msg posted');
+
+    // ------------------------------------------------------------------
+    // B3 修复：CustomEditor 单元格保存走 parser.save 直写磁盘，绕过 vscode
+    // TextDocument 层，因此不会触发 onDidSaveTextDocument / onDidChangeTextDocument，
+    // editValidationHandler 里注册的两个监听都收不到通知 —— 结果就是：
+    // 用户改好非法枚举值（比如 test_type 从 "手工/UI" → "手工"）后，
+    // push-failures.json 一直保留旧的 error 记录，前端单元格颜色不消失。
+    // 这里在写盘完成后立刻主动触发一次编辑期校验（immediate 绕过防抖），
+    // 由校验闭环去覆盖式写盘 + 通过 postEditValidationRefresh 走 diff 链路清理前端旧高亮。
+    // ------------------------------------------------------------------
+    try {
+        requestEditValidation(filePath, { immediate: true });
+    } catch (err: any) {
+        ctx.log('⚠ requestEditValidation after save failed:', err?.message || err);
+    }
 }
 
 async function handlePushTestCase(msg: any, ctx: EditorMsgCtx): Promise<void> {

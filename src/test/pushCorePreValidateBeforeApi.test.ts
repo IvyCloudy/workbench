@@ -56,10 +56,13 @@ const run = (rows: Array<Record<string, string>>) => {
     const hooks = baseHooks();
     // 给每行注入 mapper 必填字段（description + steps），确保合法行能通过预校验到达接口；
     // 本文件关注"非法格式拦截"，不关注字段内容，故用最小合法字段集。
+    // 注：test_type 必须落在 TEST_TYPE_VALUES = ['手工','自动化']（B2 枚举校验），
+    //     type 使用 TYPE_VALUES 内取值，否则合法行也会被 B2 error 拦截。
     const enriched = rows.map((r) => ({
         description: '推送测试',
         path: '/功能测试/子模块/',
-        test_type: '界面',
+        test_type: '手工',
+        type: '功能点类',
         steps: [{ operation: '执行', ui_expected: ['ok'] }],
         ...r,
     }));

@@ -74,9 +74,43 @@ interface PushProgressItem {
     text: string;
 }
 
+/** 批量前置校验结果（单文件） */
+export interface ValidateGateFileEntry {
+    filePath: string;
+    fileName: string;
+    /** 该文件的所有 failures（含 severity/rowIndex/tsId 等，格式同 05g 内部） */
+    failures: Array<{
+        tsId: string;
+        reason: string;
+        rowIndex?: number;
+        severity?: 'error' | 'warn';
+        field?: string;
+        stepIdx?: number;
+        subField?: string;
+        hits?: Array<{ field?: string; stepIdx?: number; subField?: string; singleReason?: string }>;
+    }>;
+}
+
+/** 进度面板阶段（用于切换标题文案） */
+export type PushProgressPhase = 'validating' | 'pushing';
+
 /** 进度面板控制接口 */
 export interface PushProgressPanel {
     update(item: PushProgressItem): void;
+    /**
+     * 切换当前阶段（影响进度视图头部文案）：
+     *   · validating → "正在校验测试案例..." / 完成 x / N
+     *   · pushing    → "正在推送测试案例..." / 已完成 x / N（默认阶段）
+     */
+    setPhase(phase: PushProgressPhase): void;
+    /**
+     * 展示批量前置校验汇总视图（复用 05g 语义）：
+     *   · 至少一个文件含 error → 只显示【关闭】，返回 'cancel'；
+ *   · 全部纯 warn         → 显示【取消】+【忽略并继续】；
+     *   · 全部无问题时不应调用此方法（上层直接进入推送即可）。
+     * Promise 在用户点击按钮后 resolve；面板销毁按 'cancel' 兜底。
+     */
+    showValidateGate(entries: ValidateGateFileEntry[]): Promise<'continue' | 'cancel'>;
     /** 推送完成 → 面板切换到总结视图，Promise 在用户关闭后 resolve */
     done(results: PushFileResult[], onOpenFile?: (result: PushFileResult) => Promise<void>): Promise<void>;
     dispose(): void;
@@ -368,6 +402,10 @@ export function createPushProgress(totalFiles: number, options?: PushProgressOpt
     let _done = false;
     let _summaryResults: PushFileResult[] = [];
     let _onOpenFile: ((result: PushFileResult) => Promise<void>) | undefined;
+    // 当前阶段：validating（前置校验中）→ pushing（真正推送中）
+    let _phase: PushProgressPhase = 'pushing';
+    // 校验汇总视图的 pending resolver（用户点【取消】/【忽略并继续】时结算）
+    let _validateGateResolver: ((decision: 'continue' | 'cancel') => void) | null = null;
 
     for (let i = 0; i < totalFiles; i++) {
         items.push({ fileName: '', status: 'pending', text: '' });
@@ -382,9 +420,11 @@ export function createPushProgress(totalFiles: number, options?: PushProgressOpt
         const pct = totalFiles > 0 ? Math.round((completed / totalFiles) * 100) : 0;
 
         const barColor = _cancelled ? '#f0a020' : '#0078d4';
-        const _progressTitle = options?.progressTitle || '正在推送测试案例...';
+        const _progressTitle = _phase === 'validating'
+            ? '正在校验测试案例...'
+            : (options?.progressTitle || '正在推送测试案例...');
         const _progressCancelTitle = options?.progressCancelTitle || '已取消';
-        const _verb = options?.progressVerb || '推送';
+        const _verb = _phase === 'validating' ? '校验' : (options?.progressVerb || '推送');
         const headerTitle = _cancelled ? _progressCancelTitle : _progressTitle;
         const headerSub = _cancelled
             ? `${_verb}过程被取消`
@@ -469,6 +509,132 @@ export function createPushProgress(totalFiles: number, options?: PushProgressOpt
 </html>`;
     }
 
+    // ──────────────── 前置校验汇总视图 HTML（05g 复用）────────────────────
+    // 与 media/pages/table-editor/editor/05g-pre-validate-gate.js 语义完全一致：
+    //   · 分组：一张卡片 = 一行案例（或一个文件级问题），错误在前警告在后
+    //   · 文件维度：外层按文件分区（章节标题带图标 + 问题条数），文件内按 rowIndex 升序
+    //   · Q2=A：整批只要有 error → 只显示【关闭】按钮，禁止继续；
+    //   · Q3=保留：全部 warn → 显示【取消】+【忽略并继续】
+    //
+    // 该视图专用于批量推送前的"整批统一校验"，与推送中/推送后视图共用一个 webview 面板，
+    // 独立的样式作用域（.xs-vg-*）避免污染总结视图（.file-row 系列）。
+    function buildValidateGateHtml(entries: ValidateGateFileEntry[]): string {
+        // 汇总统计（跨文件）
+        let totalErr = 0, totalWarn = 0, errFileCount = 0, warnOnlyFileCount = 0;
+        for (const en of entries) {
+            const eCnt = en.failures.filter(f => (f.severity || 'error') !== 'warn').length;
+            const wCnt = en.failures.length - eCnt;
+            totalErr += eCnt;
+            totalWarn += wCnt;
+            if (eCnt > 0) errFileCount++;
+            else if (wCnt > 0) warnOnlyFileCount++;
+        }
+        const hasError = totalErr > 0;
+        const status = hasError ? 'error' : 'warning';
+        const headerBg = hasError
+            ? 'linear-gradient(180deg,#fdecea,#fdf3f3)'
+            : 'linear-gradient(180deg,#fef3e0,#fff8ec)';
+        const headerBd = hasError ? '#f1c4c2' : '#f5d6a4';
+        const iconBg = hasError ? '#e5484d' : '#f0a020';
+        const iconChar = hasError ? '🚫' : '⚠';
+        const titleSuffix = hasError ? '（阻断）' : '（提醒）';
+
+        // 按文件构建单行（仅文件级汇总；不展开每行明细 → 明细通过点击文件名跳转到编辑器时由 05g 弹窗承载）
+        const fileRowsHtml = entries.map((en, fi) => {
+            const failures = en.failures || [];
+            if (failures.length === 0) return '';
+            const eCnt = failures.filter(f => (f.severity || 'error') !== 'warn').length;
+            const wCnt = failures.length - eCnt;
+            const isErr = eCnt > 0;
+            const icon = isErr ? '✕' : '⚠';
+            const iconColor = isErr ? '#dc3545' : '#f0a020';
+            const rowCls = isErr ? 'file-error' : 'file-warn';
+            const statusClass = isErr ? 'status-err' : 'status-warn';
+
+            const parts: string[] = [];
+            if (eCnt > 0) parts.push(`<span class="s-err">${eCnt} 阻断</span>`);
+            if (wCnt > 0) parts.push(`<span class="s-warn">${wCnt} 提醒</span>`);
+            const statusHtml = parts.join(' / ') + ` · 共 ${failures.length} 条问题`;
+            const statusTooltip = `${isErr ? '阻断' : '提醒'} · 共 ${failures.length} 条问题（点击文件名查看明细）`;
+
+            return `
+    <div class="file-row ${rowCls}" data-file-index="${fi}" data-file-path="${escapeHtml(en.filePath)}" title="点击打开：${escapeHtml(en.filePath)}">
+        <div class="file-header">
+            <span class="file-icon" style="color:${iconColor}">${icon}</span>
+            <span class="file-name-col" title="${escapeHtml(en.filePath)}">${escapeHtml(en.fileName)}</span>
+            <span class="file-status-col ${statusClass}" title="${escapeHtml(statusTooltip)}">${statusHtml}</span>
+        </div>
+    </div>`;
+        }).join('');
+
+        // 底部按钮：Q2=A + Q3=保留
+        const cancelText = hasError ? '关闭' : '取消';
+        const continueBtnHtml = hasError
+            ? ''
+            : `<button class="btn btn-primary" id="vgContinueBtn">忽略并继续</button>`;
+        const hintText = hasError
+            ? (totalWarn > 0 ? '请先修复"阻断"类问题；"提醒"类可修复后一并推送' : '请修复上述阻断问题后重新推送')
+            : '点击"忽略并继续"将推送包含"待补充"的案例，可稍后完善';
+
+        return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${escapeHtml('案例格式校验')}</title>
+<style>
+    ${sharedCss()}
+    .vg-header{display:flex;align-items:center;padding:14px 20px;background:${headerBg};border-bottom:1px solid ${headerBd};gap:12px;flex-shrink:0}
+    .vg-header-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;font-size:15px;color:#fff;background:${iconBg};flex-shrink:0}
+    .vg-header-title{font-size:15px;font-weight:600;flex:1}
+    .vg-header-stats{font-size:12px;color:#555}
+    .vg-header-stats .s-err{color:#dc3545;font-weight:600}
+    .vg-header-stats .s-warn{color:#f0a020;font-weight:600}
+    .file-status-col .s-err{color:#dc3545;font-weight:600}
+    .file-status-col .s-warn{color:#f0a020;font-weight:600}
+    .vg-footer{display:flex;align-items:center;padding:10px 20px;border-top:1px solid var(--bd);gap:8px;flex-shrink:0;background:#fafafa}
+    .vg-hint{flex:1;font-size:12px;color:#888}
+    .btn-primary{background:${iconBg};color:#fff;border-color:${iconBg}}
+</style>
+</head>
+<body>
+<div class="vg-header">
+    <span class="vg-header-icon">${iconChar}</span>
+        <span class="vg-header-title">案例格式校验${titleSuffix}</span>
+    <span class="vg-header-stats">
+        涉及 ${entries.length} 个文件
+        ${errFileCount > 0 ? ` · <span class="s-err">${errFileCount}</span> 阻断` : ''}
+        ${warnOnlyFileCount > 0 ? ` · <span class="s-warn">${warnOnlyFileCount}</span> 仅提醒` : ''}
+        &nbsp;·&nbsp; 共 <b>${totalErr + totalWarn}</b> 条问题
+    </span>
+</div>
+<div class="file-list">${fileRowsHtml}</div>
+<div class="vg-footer">
+    <span class="vg-hint">${escapeHtml(hintText)}</span>
+    <button class="btn" id="vgCancelBtn">${cancelText}</button>
+    ${continueBtnHtml}
+</div>
+<script>
+    (function(){
+        var vscode = acquireVsCodeApi();
+        document.getElementById('vgCancelBtn').onclick = function(){ vscode.postMessage({type:'validateGateResponse', decision:'cancel'}); };
+        var cb = document.getElementById('vgContinueBtn');
+        if (cb) cb.onclick = function(){ vscode.postMessage({type:'validateGateResponse', decision:'continue'}); };
+        // 文件行点击 → 在编辑器中打开（复用面板已有的 progressOpenFile 消息），
+        // 打开后由案例编辑器自动触发校验并弹出明细弹窗（05g），无需在本视图内展示明细。
+        document.querySelector('.file-list').addEventListener('click', function(e){
+            var row = e.target.closest('.file-row');
+            if (!row) return;
+            var fp = row.getAttribute('data-file-path') || '';
+            if (fp) vscode.postMessage({ type: 'progressOpenFile', filePath: fp });
+        });
+        document.addEventListener('keydown',function(e){ if(e.key==='Escape') vscode.postMessage({type:'validateGateResponse', decision:'cancel'}); });
+    })();
+</script>
+</body>
+</html>`;
+    }
+
     // ──────────────── 创建/复用面板 ────────────────────────────────
     let modalPanel: vscode.WebviewPanel;
         if (_activeProgressPanel && !isPanelDisposed(_activeProgressPanel)) {
@@ -490,7 +656,7 @@ export function createPushProgress(totalFiles: number, options?: PushProgressOpt
         }
     modalPanel.webview.html = buildProgressHtml();
 
-    // 统一消息处理（进度阶段 + 总结阶段），捕获 Disposable 用于复用时解除
+    // 统一消息处理（进度阶段 + 校验汇总阶段 + 总结阶段），捕获 Disposable 用于复用时解除
     _activeMsgDisposable = modalPanel.webview.onDidReceiveMessage(async (msg) => {
         if (msg.type === 'closePushProgress') {
             if (!_done) _cancelled = true;
@@ -501,8 +667,42 @@ export function createPushProgress(totalFiles: number, options?: PushProgressOpt
         } else if (msg.type === 'progressOpenFile') {
             const fp = typeof msg.filePath === 'string' ? msg.filePath : '';
             if (fp) {
-                try { await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(fp)); } catch (e) { /* ignore */ }
+                try {
+                    // 强制以案例编辑器（CustomEditor）打开：保证 BaseEditorProvider.panelMap
+                    // 中一定存在对应 webview 面板，后续 postFileLevelPreValidateGate 才能
+                    // 拿到面板并弹出 05g 明细。若走 'vscode.open' 让系统决策，某些 csv/json
+                    // 场景可能落到 TextEditor，导致 panelMap 未注册而 no-op。
+                    await vscode.commands.executeCommand(
+                        'vscode.openWith',
+                        vscode.Uri.file(fp),
+                        'testcaseViewer.unifiedEditor',
+                        { viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
+                    );
+                } catch (e) {
+                    // openWith 失败兜底：仍尝试 vscode.open（用户至少能看到文件）
+                    try { await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(fp)); } catch (_) { /* ignore */ }
+                }
+                // 主动触发一次"打开时校验" —— 修复：文件已打开时 VS Code 不再抛
+                // onDidOpenTextDocument，导致 registerEditValidation 里的弹窗链路不会执行；
+                // 这里显式调用 immediate+promptOnMissing 强制刷一次 05g 明细弹窗。
+                try {
+                    const mod = await import('../preValidate/editValidationHandler');
+                    if (mod && typeof mod.requestEditValidation === 'function') {
+                        mod.requestEditValidation(fp, { immediate: true, promptOnMissing: true });
+                    }
+                } catch (e) { /* ignore */ }
             }
+        } else if (msg.type === 'validateGateResponse') {
+            // 前置校验汇总视图 → 用户按钮决策
+            const decision = msg.decision === 'continue' ? 'continue' : 'cancel';
+            if (_validateGateResolver) {
+                const r = _validateGateResolver;
+                _validateGateResolver = null;
+                r(decision);
+            }
+            // 决策后不主动切视图 —— 上层调用方拿到 decision 后：
+            //   · continue → setPhase('pushing') + 更新 items 即可切回进度视图
+            //   · cancel   → dispose() 关闭面板
         } else if (msg.type === 'closePushSummary') {
             modalPanel.dispose();
         } else if (msg.type === 'pushSummaryOpenFile') {
@@ -518,11 +718,43 @@ export function createPushProgress(totalFiles: number, options?: PushProgressOpt
             _activeProgressPanel = null;
         }
         if (!_done) _cancelled = true;
+        // 面板销毁 → 若还有 pending 的校验决策，兜底 cancel
+        if (_validateGateResolver) {
+            const r = _validateGateResolver;
+            _validateGateResolver = null;
+            r('cancel');
+        }
     });
 
     // ──────────────── 返回控制接口 ────────────────────────────────
     return {
         get cancelled() { return _cancelled; },
+        setPhase(phase: PushProgressPhase) {
+            _phase = phase;
+            if (!isPanelDisposed(modalPanel)) {
+                // 切回进度视图时，同步将 tab 标题恢复为面板默认值（避免在推送阶段仍显示“案例格式校验”）
+                try { modalPanel.title = options?.panelTitle || '推送测试案例'; } catch (_) { /* ignore */ }
+                modalPanel.webview.html = buildProgressHtml();
+            }
+        },
+        showValidateGate(entries: ValidateGateFileEntry[]): Promise<'continue' | 'cancel'> {
+            return new Promise<'continue' | 'cancel'>((resolve) => {
+                if (isPanelDisposed(modalPanel)) {
+                    resolve('cancel');
+                    return;
+                }
+                // 若之前已有 pending gate（异常情况），先按 cancel 结算，避免 resolver 泄漏
+                if (_validateGateResolver) {
+                    const prev = _validateGateResolver;
+                    _validateGateResolver = null;
+                    try { prev('cancel'); } catch (_) { /* ignore */ }
+                }
+                _validateGateResolver = resolve;
+                // 将 tab 标题临时切为“案例格式校验”，用户决策后恢复为面板默认标题（“推送测试案例”）
+                try { modalPanel.title = '案例格式校验'; } catch (_) { /* ignore */ }
+                modalPanel.webview.html = buildValidateGateHtml(entries);
+            });
+        },
         update(item: PushProgressItem) {
             let targetIdx = -1;
             // 优先按文件名精确匹配（避免依赖状态顺序导致的错位）

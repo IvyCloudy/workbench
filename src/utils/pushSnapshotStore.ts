@@ -57,6 +57,11 @@ function isPlaceholderTsId(id: string): boolean {
 const DETAIL_SEP = '\x01';   // 主表 / 明细分隔符
 const ITEM_SEP = '\x02';     // 多个明细字段之间的分隔符
 
+// 【方案 A】按 header 名对齐快照的特殊键：与 tsId 命名空间正交（tsId 不会是这个字面量）。
+// 写快照时把当时的 headers 顺序整串塞进 snapshots[__headers__] 里（\x00 分隔），
+// diff 时若两次 headers 不完全一致，就按名字重建列映射，避免"中间插入列"导致整表泛黄。
+const HEADERS_KEY = '__headers__';
+
 // ============================================
 // 类型定义
 // ============================================
@@ -250,6 +255,14 @@ export function buildSnapshotsForFile(
         }
     }
 
+    // 【方案 A】写入 headers 顺序：全量模式覆盖为当前 headers；
+    // 增量模式若旧快照已有 __headers__ 且列结构一致，则保留；否则以当前 headers 为准。
+    if (!pushedTsIds) {
+        snapshots[HEADERS_KEY] = headers.join('\x00');
+    } else if (!snapshots[HEADERS_KEY]) {
+        snapshots[HEADERS_KEY] = headers.join('\x00');
+    }
+
     rows.forEach((row, rowIdx) => {
         const id = row[tsIdIdx] != null ? String(row[tsIdIdx]) : '';
         if (!id) return;
@@ -274,6 +287,7 @@ export function buildSnapshotsForFile(
     // 兜底清理：历史遗留脏数据可能已把样例行的 tsId 写入快照。
     // 每次保存都顺手把这类残留剔除，避免长期存在导致 diff 一直误报。
     for (const key of Object.keys(snapshots)) {
+        if (key === HEADERS_KEY) continue;
         if (isPlaceholderTsId(key)) delete snapshots[key];
     }
 
@@ -296,7 +310,7 @@ export async function savePushSnapshotPrepared(
     const store = loadStore();
     store[filePath] = snapshots;
     await saveStore(store);
-    const updatedCount = Object.keys(snapshots).length;
+    const updatedCount = Object.keys(snapshots).filter(k => k !== HEADERS_KEY).length;
     console.log(`[SnapshotStore] 已保存推送快照(预构建): ${filePath} (${updatedCount} 行)`);
 }
 
@@ -358,13 +372,35 @@ export function diffPushSnapshot(
     // 多实例下读到其他窗口已写入前的旧缓存（隐患 γ）
     const store = loadStore();
     const snapshots = store[filePath];
-    if (!snapshots || Object.keys(snapshots).length === 0) return null;
+    if (!snapshots || Object.keys(snapshots).filter(k => k !== HEADERS_KEY).length === 0) return null;
 
     const headers = tableData.headers || [];
     const rows = tableData.rows || [];
     const tsIdIdx = headers.indexOf(TS_ID_COLUMN);
     const tcIdx = headers.indexOf(TC_NO_COLUMN);
     if (tsIdIdx < 0) return null;
+
+    // 【方案 A】解析快照当时的 headers（若有），建立 “当前列 idx -> 旧快照列 idx” 的名字映射。
+    // - 旧快照无 __headers__（旧格式）：回退到旧行为——按下标对齐，行为与修改前完全一致。
+    // - 列名在新/旧中都存在 → 正常取旧值参与 diff；
+    // - 列名仅在当前存在（新增列）→ 旧值作空串。但为避免“只新增一列就把每行非空单元格都标为变更”，
+        //   在后面的列对比循环里会直接 skip 新增列（只对旧快照中存在的列做 diff）。
+    // - 列名仅在旧快照存在（已删除的列）→ 无处可映射，同样忽略（不标为 changed）。
+    const oldHeadersRaw = snapshots[HEADERS_KEY];
+    const oldHeaders: string[] | null = typeof oldHeadersRaw === 'string' && oldHeadersRaw.length > 0
+        ? oldHeadersRaw.split('\x00')
+        : null;
+    const isNewFormat = oldHeaders !== null;
+    // curIdx -> oldIdx；若当前列在旧快照中不存在，值为 -1
+    const curToOldIdx: number[] = new Array(headers.length).fill(-1);
+    if (isNewFormat && oldHeaders) {
+        const oldNameToIdx = new Map<string, number>();
+        oldHeaders.forEach((h, i) => { oldNameToIdx.set(h, i); });
+        for (let ci = 0; ci < headers.length; ci++) {
+            const oi = oldNameToIdx.get(headers[ci]);
+            curToOldIdx[ci] = oi === undefined ? -1 : oi;
+        }
+    }
 
     // 加载当前文件的失败 tsId 集合。用于阻断"推送失败的新增行"再次被判定为新增行——
     // 否则前端会同时叠加红色（xs-tr-push-failed）与绿色（xs-td-push-added）高亮。
@@ -463,30 +499,48 @@ export function diffPushSnapshot(
             : '';
 
         const oldCells = oldMainPart.split('\x00');
-        // 兼容旧快照：旧快照可能保存了原始的 testCaseNo 值，标准化为 '' 以匹配当前排除逻辑
-        if (tcIdx >= 0 && tcIdx < oldCells.length) {
-            oldCells[tcIdx] = '';
+        // 【方案 A】新格式快照下 oldCells 长度与 oldHeaders 对齐（而非与当前 headers 对齐）。
+        // 下面的兼容处理均需区分处理：
+        //   - 新格式：按 oldHeaders 名字定位 testCaseNo / detail 列；
+        //   - 旧格式（未存 __headers__）：保持历史行为，按当前下标处理。
+        if (isNewFormat && oldHeaders) {
+            // 把旧快照中 testCaseNo 列列值标准化为 ''（旧快照可能持了真实值）
+            const oldTcIdx = oldHeaders.indexOf(TC_NO_COLUMN);
+            if (oldTcIdx >= 0 && oldTcIdx < oldCells.length) oldCells[oldTcIdx] = '';
+            // detail 列同样置空（旧版快照可能写了 '[N 项]' 或展开文本）
+            for (let oi = 0; oi < oldCells.length && oi < oldHeaders.length; oi++) {
+                if (detailColIdxByField.has(oldHeaders[oi])) oldCells[oi] = '';
+            }
+        } else {
+            // 兼容旧快照：旧版本快照可能保存了原始的 testCaseNo 值，标准化为 '' 以匹配当前排除逻辑
+            if (tcIdx >= 0 && tcIdx < oldCells.length) {
+                oldCells[tcIdx] = '';
+            }
+            // 老基线：老版本快照的 detail 列写入了 '[N 项]' 展示文本，diff 时同样置空对齐
+            for (let ci = 0; ci < oldCells.length && ci < headers.length; ci++) {
+                if (detailColIdxByField.has(headers[ci])) oldCells[ci] = '';
+            }
         }
-        // 兼容老基线：老版本快照的 detail 列写入了 '[N 项]' 展示文本，diff 时同样置空对齐
-        for (let ci = 0; ci < oldCells.length && ci < headers.length; ci++) {
-            if (detailColIdxByField.has(headers[ci])) oldCells[ci] = '';
-        }
-        const oldMainNormalized = oldCells.slice(0, headers.length).join('\x00');
 
-        // 3) 对比主表单元格
-        const newMainSerialized = cells.join('\x00');
+        // 3) 对比主表单元格：【方案 A】按列名逐列对比，同时兼容新旧格式。
+        // 主表是否改变以”任一旧列与当前对应列不同“为准；新增列不参与 diff，删除的列不参与 diff。
         let mainChanged = false;
         const changedCols: number[] = [];
 
-        if (oldMainNormalized !== newMainSerialized) {
-            mainChanged = true;
-            for (let ci = 0; ci < cells.length; ci++) {
-                if (ci === tcIdx) continue;
-                if (detailColIdxByField.has(headers[ci])) continue;
-                const oldVal = ci < oldCells.length ? oldCells[ci] : '';
-                if (oldVal !== cells[ci]) {
-                    changedCols.push(ci);
-                }
+        for (let ci = 0; ci < cells.length; ci++) {
+            if (ci === tcIdx) continue;
+            if (detailColIdxByField.has(headers[ci])) continue;
+            let oldVal = '';
+            if (isNewFormat) {
+                const oi = curToOldIdx[ci];
+                if (oi < 0) continue; // 新增的列，旧快照无对应，不参与 diff（避免全表泛黄）
+                oldVal = oi < oldCells.length ? oldCells[oi] : '';
+            } else {
+                oldVal = ci < oldCells.length ? oldCells[ci] : '';
+            }
+            if (oldVal !== cells[ci]) {
+                mainChanged = true;
+                changedCols.push(ci);
             }
         }
 
@@ -535,7 +589,9 @@ export function diffPushSnapshot(
     // 检测快照中有但当前数据中已不存在的行（删除）
     // 只有 testCaseNo 非空（即推送过的行）删除才记录到已删除行
     const deletedInfos: DeletedRowInfo[] = [];
-    const snapshotIds = Object.keys(snapshots);
+    const snapshotIds = Object.keys(snapshots).filter(k => k !== HEADERS_KEY);
+    // 删除判定中 testCaseNo 列的位置：新格式依旧 headers，旧格式依当前 headers
+    const oldTcIdxForDelete = isNewFormat && oldHeaders ? oldHeaders.indexOf(TC_NO_COLUMN) : tcIdx;
     for (const id of snapshotIds) {
         // 防御历史脏快照：若快照里遗留样例行 tsId，也不判为「删除」，避免误绘幽灵行
         if (isPlaceholderTsId(id)) continue;
@@ -545,7 +601,7 @@ export function diffPushSnapshot(
             const mainPart = raw.indexOf(DETAIL_SEP) >= 0 ? raw.split(DETAIL_SEP)[0] : raw;
             const oldCells = mainPart.split('\x00');
             // 检查快照中 testCaseNo 列的值，为空说明未推送过，不记录
-            const tcNo = tcIdx >= 0 && tcIdx < oldCells.length ? oldCells[tcIdx] : '';
+            const tcNo = oldTcIdxForDelete >= 0 && oldTcIdxForDelete < oldCells.length ? oldCells[oldTcIdxForDelete] : '';
             if (!tcNo) continue;
             deletedInfos.push({
                 tsId: id,
@@ -607,7 +663,7 @@ export function getDeletedSnapshotIds(
     // 统一走 loadStore()（内部已做 mtime 缓存校验）
     const store = loadStore();
     const snapshots = store[filePath];
-    if (!snapshots || Object.keys(snapshots).length === 0) return [];
+    if (!snapshots || Object.keys(snapshots).filter(k => k !== HEADERS_KEY).length === 0) return [];
 
     const headers = tableData.headers || [];
     const rows = tableData.rows || [];
@@ -617,6 +673,7 @@ export function getDeletedSnapshotIds(
     const currIdSet = new Set(rows.map(r => r[tsIdIdx] != null ? String(r[tsIdIdx]) : '').filter(Boolean));
     const deleted: DeletedRowInfo[] = [];
     for (const id of Object.keys(snapshots)) {
+        if (id === HEADERS_KEY) continue;
         if (!currIdSet.has(id)) {
             // 新旧格式兼容：先剥离明细签名再取主表单元格
             const raw = snapshots[id];
@@ -649,7 +706,7 @@ export async function upgradeSnapshotDetail(
     if (!detailTables || !Array.isArray(detailTables) || detailTables.length === 0) return;
     const store = loadStore();
     const snapshots = store[filePath];
-    if (!snapshots || Object.keys(snapshots).length === 0) return;
+    if (!snapshots || Object.keys(snapshots).filter(k => k !== HEADERS_KEY).length === 0) return;
     const headers = tableData.headers || [];
     const rows = tableData.rows || [];
     const tsIdIdx = headers.indexOf(TS_ID_COLUMN);
@@ -696,7 +753,7 @@ export async function clearDeletedSnapshots(filePath: string, tsIds: string[]): 
     }
     if (removed.length === 0) return;
 
-    if (Object.keys(snapshots).length === 0) {
+    if (Object.keys(snapshots).filter(k => k !== HEADERS_KEY).length === 0) {
         delete store[filePath];
     } else {
         store[filePath] = snapshots;

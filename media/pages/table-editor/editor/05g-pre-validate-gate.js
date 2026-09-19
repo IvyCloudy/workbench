@@ -11,8 +11,10 @@
  *      由扩展端 utils/preValidateGate.ts 结算 runPush 的阻塞点。
  *
  * 分组排序规则（_pvgGroupByRow）：
- *   · 有 error 的组优先靠前（用户先处理阻断项）；
- *   · 同类组内按 rowIndex 升序（阅读顺序 = 文件顺序）。
+ *   · 文件级问题（tsId='__FILE_LEVEL__'）置顶；
+ *   · 其余行级组严格按 rowIndex 升序（阅读顺序 = 文件顺序），不再让"有 error"跨越行号顺序，
+ *     避免出现"第 10 行 → 第 14 行 → 第 11 行"这种反直觉跳序；
+ *   · 同一行内的 error/warn 排序仍是"先 error 后 warn"，只影响组内条目 seq。
  *
  * 消息契约：
  *   ext → webview：{ type:'preValidateGate', gateId, fileName,
@@ -58,16 +60,55 @@ function _pvgGroupByRow(failures) {
         if (f.severity === 'warn') g.warns.push(f);
         else g.errors.push(f);
     }
-    // 排序：有 error 的行优先，其次按 rowIndex 升序
+    // 排序（§2.3.5）：
+    //   1) 文件级问题（tsId='__FILE_LEVEL__'）永远排在第 1 位 ——
+    //      结构性错误优先于行级校验展示，避免"缺列"这类必修问题被淹没在行级失败列表中；
+    //   2) 其余行级组严格按 rowIndex 升序（阅读顺序 = 文件顺序）——
+    //      即便某行只有 warn、后一行有 error，也保持文件自然顺序，避免出现
+    //      "第 10 行 → 第 14 行 → 第 11 行"这种反直觉跳序。
+    //   · 同一行内的 error/warn 顺序仍在 _pvgRenderGroup 中保持"先 error 后 warn"，
+    //     只影响组内条目 seq，不影响组之间排序。
+    //   · 无 rowIndex 的兜底组（罕见：如 tsId 分组但缺行号）按 Infinity 落尾。
     groups.sort(function (a, b) {
-        var ae = a.errors.length > 0 ? 0 : 1;
-        var be = b.errors.length > 0 ? 0 : 1;
-        if (ae !== be) return ae - be;
+        var af = a.tsId === '__FILE_LEVEL__' ? 0 : 1;
+        var bf = b.tsId === '__FILE_LEVEL__' ? 0 : 1;
+        if (af !== bf) return af - bf;
         var ar = a.rowIndex == null ? Infinity : a.rowIndex;
         var br = b.rowIndex == null ? Infinity : b.rowIndex;
         return ar - br;
     });
     return groups;
+}
+
+/**
+ * R2（2026-09-19）· 把一条 failure 按 hits[] 展开为 N 条"可渲染项"（每条只讲一个字段）。
+ *   · 触发条件：f.hits 是数组且长度 ≥ 2 且至少存在一条 hit 带 singleReason；
+ *   · 展开后每条项目继承 severity/tsId/rowIndex，reason 改用 hit.singleReason；
+ *   · 单 hit 或无 hits 的场景保持原对象不动，与旧口径完全一致。
+ * 目的：让弹窗"每一项各占一条 bullet"，行号仅在卡片头显示一次。
+ */
+function _pvgExpandFailureByHits(f) {
+    if (!f || !Array.isArray(f.hits) || f.hits.length < 2) return [f];
+    var hasSingle = false;
+    for (var i = 0; i < f.hits.length; i++) {
+        if (f.hits[i] && f.hits[i].singleReason) { hasSingle = true; break; }
+    }
+    if (!hasSingle) return [f];
+    var out = [];
+    for (var k = 0; k < f.hits.length; k++) {
+        var h = f.hits[k] || {};
+        var reason = h.singleReason || f.reason || '';
+        out.push({
+            tsId: f.tsId,
+            reason: reason,
+            rowIndex: f.rowIndex,
+            severity: f.severity,
+            field: h.field != null ? h.field : f.field,
+            stepIdx: h.stepIdx,
+            subField: h.subField,
+        });
+    }
+    return out;
 }
 
 /** 渲染单条问题的 reason 行（不含行号，行号在组头显示）。 */
@@ -85,23 +126,31 @@ function _pvgRenderReason(f, seq, kind) {
 /**
  * 渲染一组（同一行/同一 tsId 的多条问题）。
  *   · 组头：行号/tsId + 徽章（🚫 error / ⚠ warn），点击行号可跳转；
- *   · 组头右侧：📋 复制案例 ID（优先 tsId，缺失兜底 fileName#L{rowIndex}）；
+ *   · 组头右侧：分类计数「阻断 X · 提醒 Y」（与顶部 summary 口径一致），
+ *     去掉了此前的 📋 复制案例 ID 图标（用户反馈可读性优先，不再摆放次要操作）；
  *   · 组体：先 error 后 warn，条目连续编号 1..N。
  */
 function _pvgRenderGroup(group, groupIndex, fileName) {
     var g = group || {};
     var errs = g.errors || [];
     var warns = g.warns || [];
-    var totalInGroup = errs.length + warns.length;
     var hasErr = errs.length > 0;
     var hasWarn = warns.length > 0;
 
     var hasRow = (g.rowIndex != null && g.rowIndex > 0);
-    var rowText = hasRow
-        ? ('第 ' + g.rowIndex + ' 行')
-        : ('testcase_id ' + (g.tsId ? String(g.tsId).slice(0, 8) + '…' : '(无)'));
-    var rowCls = 'xs-pr-row' + (hasRow ? ' is-link' : '');
-    var rowAttr = hasRow ? (' data-row="' + g.rowIndex + '" title="点击定位到该行"') : '';
+    // §2.3.5 · 文件级问题（缺必备列/字段）：tsId 使用固定伪值 '__FILE_LEVEL__'，
+    //   此时不显示"testcase_id 前8位"，也不提供复制按钮/跳转，避免误导用户以为某一行有问题。
+    var isFileLevel = (g.tsId === '__FILE_LEVEL__');
+    var rowText;
+    if (isFileLevel) {
+        rowText = '📁 文件级问题（缺必备列/字段）';
+    } else if (hasRow) {
+        rowText = '第 ' + g.rowIndex + ' 行';
+    } else {
+        rowText = 'testcase_id ' + (g.tsId ? String(g.tsId).slice(0, 8) + '…' : '(无)');
+    }
+    var rowCls = 'xs-pr-row' + (hasRow && !isFileLevel ? ' is-link' : '');
+    var rowAttr = (hasRow && !isFileLevel) ? (' data-row="' + g.rowIndex + '" title="点击定位到该行"') : '';
 
     // 组头徽章：同行有 error 就用红色；否则用黄色
     var badgeCls = hasErr ? 'xs-pr-badge is-error' : 'xs-pr-badge is-warn';
@@ -110,15 +159,18 @@ function _pvgRenderGroup(group, groupIndex, fileName) {
         : '提醒';
     var badgeIcon = hasErr ? '🚫' : '⚠';
 
-    // P2（2026-09-19）复制案例 ID：优先 tsId；缺失时兜底为 fileName#L{rowIndex}
-    var copyText = g.tsId ? String(g.tsId) : '';
-    if (!copyText && hasRow) {
-        copyText = (fileName ? String(fileName) : '') + '#L' + g.rowIndex;
-    }
-    var copyBtnHtml = copyText
-        ? ('<button type="button" class="xs-pr-copy-btn" data-copy="'
-            + escapeHtml(copyText) + '" title="复制案例 ID：' + escapeHtml(copyText) + '">📋</button>')
-        : '';
+    // 2026-09-19 · 卡片头右侧「分类计数」——与顶部概要区口径一致：
+    //   · 顶部：影响行数 X · 阻断 A 行 · 仅提醒 B 行 · 共 N 条问题（失败 E / 待完善 W）
+    //   · 卡片：按 error/warn 分类显示，让每行的问题构成一眼可辨
+    //     - 同时含 error + warn：显示「阻断 E · 提醒 W」
+    //     - 仅 error：显示「阻断 E」
+    //     - 仅 warn ：显示「提醒 W」
+    //   之前使用的📋复制案例 ID 按钮已按需求移除（多数用户不需要复制 tsId，
+    //   反而占用视觉空间；如需复制可通过行号点击跳转后在编辑器内查看）。
+    var _countParts = [];
+    if (errs.length > 0) _countParts.push('阻断 <span class="xs-pr-num is-failed">' + errs.length + '</span>');
+    if (warns.length > 0) _countParts.push('提醒 <span class="xs-pr-num is-warn">' + warns.length + '</span>');
+    var _countHtml = _countParts.join(' · ');
 
     var groupCls = 'xs-pr-group ' + (hasErr ? 'is-error' : 'is-warn');
     var html = '<div class="' + groupCls + '">'
@@ -126,8 +178,7 @@ function _pvgRenderGroup(group, groupIndex, fileName) {
         +     '<span class="xs-pr-group-index">#' + groupIndex + '</span>'
         +     '<span class="' + rowCls + '"' + rowAttr + '>' + escapeHtml(rowText) + '</span>'
         +     '<span class="' + badgeCls + '">' + badgeIcon + ' ' + badgeText + '</span>'
-        +     copyBtnHtml
-        +     '<span class="xs-pr-group-count">共 ' + totalInGroup + ' 条问题</span>'
+        +     '<span class="xs-pr-group-count">' + _countHtml + '</span>'
         +   '</div>'
         +   '<div class="xs-pr-group-body">';
     var seq = 1;
@@ -155,7 +206,14 @@ function showPreValidateGateModal(payload) {
     var p = payload || {};
     _pvgCurrentGateId = p.gateId || null;
 
-    var failures = Array.isArray(p.failures) ? p.failures : [];
+    var rawFailures = Array.isArray(p.failures) ? p.failures : [];
+    // R2（2026-09-19）：同一行多字段命中时，先按 hits[].singleReason 展开为多条
+    // "每一项各一条"的可渲染项；单命中场景不变。后续分组/计数均基于展开后的数组。
+    var failures = [];
+    for (var _fi = 0; _fi < rawFailures.length; _fi++) {
+        var _expanded = _pvgExpandFailureByHits(rawFailures[_fi]);
+        for (var _ei = 0; _ei < _expanded.length; _ei++) failures.push(_expanded[_ei]);
+    }
     var errorFailures = [];
     var warnFailures = [];
     failures.forEach(function (f) {
@@ -191,7 +249,13 @@ function showPreValidateGateModal(payload) {
     if (iconEl) iconEl.textContent = hasError ? '🚫' : '⚠';
     if (titleEl) {
         var fn = p.fileName ? ('：' + p.fileName) : '';
-        titleEl.textContent = (hasError ? '推送已阻止' : '推送前检查') + fn;
+        // 2026-09-19（P4）标题统一为「案例格式校验」——覆盖
+        //   · 打开文件时（编辑期弹窗）
+        //   · 推送前置拦截（stepPreValidate）
+        //   · 批量推送总结点入后（P3 复用 05g）
+        // 后缀根据严重级给出状态提示，帮助用户第一眼判断是否可继续。
+        var titleSuffix = hasError ? '（阻断）' : '（提醒）';
+        titleEl.textContent = '案例格式校验' + titleSuffix + fn;
     }
 
     // 概要区：既展示"影响行数"（更贴用户心智：多少行需要处理），
@@ -214,8 +278,9 @@ function showPreValidateGateModal(payload) {
         summaryEl.innerHTML = htmlS;
     }
 
-    // 列表：按行分组渲染，每组一张卡片，卡片内先 error 后 warn。
-    // 组之间的排序：有 error 的组优先靠前（用户先处理阻断），组内条目连续编号。
+        // 列表：按行分组渲染，每组一张卡片，卡片内先 error 后 warn。
+    // 组之间排序：文件级问题置顶，其余严格按 rowIndex 升序（与文件行号一致），
+    // 避免 error 组跨越行号插到 warn 组前面造成阅读跳序。组内条目连续编号。
     if (listEl) {
         var html = '';
         if (groups.length === 0) {
@@ -242,22 +307,8 @@ function showPreValidateGateModal(payload) {
             });
         }
 
-        // P2（2026-09-19）复制案例 ID：优先 clipboard API，并补一个轻提示
-        var copyBtns = listEl.querySelectorAll('.xs-pr-copy-btn');
-        for (var ci = 0; ci < copyBtns.length; ci++) {
-            copyBtns[ci].addEventListener('click', function (ev) {
-                ev.preventDefault();
-                ev.stopPropagation();
-                var btn = ev.currentTarget;
-                var text = btn.getAttribute('data-copy') || '';
-                if (!text) return;
-                _pvgCopyToClipboard(text).then(function (ok) {
-                    if (typeof showToast === 'function') {
-                        showToast(ok ? ('已复制：' + text) : ('复制失败，请手动选中：' + text), ok ? 'success' : 'warn');
-                    }
-                });
-            });
-        }
+        // 卡片右上角复制案例 ID 图标（📋）已按需求移除，此处不再需要绑定点击事件；
+        // _pvgCopyToClipboard / _pvgFallbackCopy 保留在下方，供其它入口（若将来需要）复用。
     }
 
     // 底部提示 + 按钮显隐（Q2=A：有 error 时隐藏「忽略并继续」）

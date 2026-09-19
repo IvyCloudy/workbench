@@ -28,6 +28,7 @@ import { createParser, ensureTrackingColumns, type FileType } from '../parsers';
 import { TelemetryService } from '../utils/telemetry';
 import { buildErrorProps } from '../services/utils';
 import { runPush } from '../handlers/pushCore';
+import type { PushFailureItem } from '../handlers/pushCore.types';
 import { type EditorSession } from '../services/diffHighlight';
 import { WebviewDataPusher, type PrefetchResult } from '../services/webviewDataPusher';
 import { FileWatchService } from '../services/fileWatchService';
@@ -401,6 +402,44 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         }
     }
 
+    /**
+     * §2.3.5 · 打开文件时的合并弹窗：把「文件级（缺列）+ 行级（枚举非法 / 待补充 / 名称空 /
+     *   计划执行次数非法 …）」所有校验问题合并成一份 failures，通过已注册的 webview 面板
+     *   复用 openPreValidateGate 的自定义弹窗（05g），与推送前拦截共用同一份 UI，避免走
+     *   VSCode 原生 modal 与推送前语义分裂。
+     *
+     * 语义：
+     *   · 面板未打开（如用户尚未点开该文件、或还是纯 TextEditor 视图）时 no-op；
+     *   · 等待 panelEntry.ready 后再 postMessage，避免早期消息丢失；
+     *   · 用户点"关闭/取消/Esc"→ decision='cancel'；此处不关心 decision，
+     *     仅用于承接 openPreValidateGate 的 Promise，避免 pending 泄漏；
+     *   · failures 中如含任意 error → 05g 只显示"关闭"按钮，无"忽略并继续"；
+     *   · failures 全为 warn → 05g 显示"关闭 + 忽略并继续"，此入口不关心用户的选择结果。
+     *
+     * 与推送前拦截共用同一份 failures 结构：
+     *   · 文件级 → tsId='__FILE_LEVEL__'（05g 内部走文件级渲染分支）；
+     *   · 行级   → 带 rowIndex / hits，按行号在 05g 内部聚合渲染。
+     */
+    static async postFileLevelPreValidateGate(
+        filePath: string,
+        fileName: string,
+        failures: PushFailureItem[],
+    ): Promise<void> {
+        if (!Array.isArray(failures) || failures.length === 0) return;
+        const entry = BaseEditorProvider.panelMap.get(filePath);
+        if (!entry) return;
+        try {
+            // 等 webview 就绪再发消息（初次打开：resolveCustomEditor 早于前端 init 消息）
+            await entry.ready;
+        } catch (_) { /* ready 内部不抛，兜底忽略 */ }
+        try {
+            // 结果 Promise 用后即弃：本入口不关心用户是否点了"关闭"（都视为已知悉）。
+            void openPreValidateGate(entry.panel, fileName, failures);
+        } catch (e: any) {
+            console.warn('[postFileLevelPreValidateGate] postMessage failed:', e?.message || e);
+        }
+    }
+
     constructor(protected extensionUri: vscode.Uri, context?: vscode.ExtensionContext) {
         this.context = context;
     }
@@ -528,9 +567,17 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         // 之前就写好盘（loadStore 有缓存 mtime 检查，webview 端 restore 时会读到最新结果）。
         // triggerEditValidationOnWebviewOpen 内部会自识别是否合规目录 + yaml/csv，
         // 不合规文件（临时文件夹等）自然 no-op。
+        //
+        // 关键时序（await 至写盘完成）：
+        //   1. 本次 await 等待 _doValidate 走完「parse → validators → persistPushFailures」；
+        //   2. 弹窗（postFileLevelPreValidateGate）内部走 fire-and-forget，会 await 本 panel
+        //      的 ready 再弹，因此不会阻塞本 await；
+        //   3. 主线 return 后进入 registerHandlers / init 帧发送，此时 getFailures(filePath)
+        //      拿到的即为最新失败盘 → webview 首帧就能带上红/黄单元格高亮，
+        //      避免出现「先无高亮 → 后异步刷新才上色」的短暂错觉。
         try {
             const { triggerEditValidationOnWebviewOpen } = await import('../handlers/editValidationHandler');
-            triggerEditValidationOnWebviewOpen(filePath);
+            await triggerEditValidationOnWebviewOpen(filePath);
         } catch (e: any) {
             console.warn('[BaseEditorProvider] 触发编辑期校验失败（已忽略）:', e?.message || e);
         }

@@ -39,6 +39,9 @@
         // B4 · 字段细粒度定位：与 _pushFailedFields 一一对应的
         //   Array<{stepIdx?, subField?}> Map。用于展开态子表格 sub-td 与弹窗 dv2 输入框高亮。
         if (!S._pushFailedFieldCells) S._pushFailedFieldCells = new Map();
+        // B5 · 字段级独立 reason：与 _pushFailedFields 一一对应的 string[] Map。
+        //   用于 hover 单元格时只显示该单元格自己的问题（而非行级合并 reason）。
+        if (!S._pushFailedFieldReasons) S._pushFailedFieldReasons = new Map();
     }
 
     /**
@@ -54,6 +57,7 @@
         if (S._pushFailedFields) S._pushFailedFields.delete(key);
         if (S._pushFailedFieldSeverity) S._pushFailedFieldSeverity.delete(key);
         if (S._pushFailedFieldCells) S._pushFailedFieldCells.delete(key);
+        if (S._pushFailedFieldReasons) S._pushFailedFieldReasons.delete(key);
         return cleared;
     }
 
@@ -68,10 +72,12 @@
                     field: (h && h.field) || f.field,
                     stepIdx: h && h.stepIdx,
                     subField: h && h.subField,
+                    // B5 · 位置级独立 reason：优先取 hit.singleReason（checkMulti 同行多字段时提供细粒度原因）
+                    singleReason: h && typeof h.singleReason === 'string' ? h.singleReason : undefined,
                 };
             });
         }
-        return [{ field: f && f.field, stepIdx: f && f.stepIdx, subField: f && f.subField }];
+        return [{ field: f && f.field, stepIdx: f && f.stepIdx, subField: f && f.subField, singleReason: f && f.singleReason }];
     }
 
     /**
@@ -139,15 +145,21 @@
             else S._pushFailedSeverity.set(key, sev);
 
             var positions = _positionsOf(f);
+            var _fReason = String(f.reason || '');
             for (var pi = 0; pi < positions.length; pi++) {
                 var p = positions[pi];
                 if (!p.field || typeof p.field !== 'string') continue;
                 var existed = S._pushFailedFields.get(key) || [];
                 var existedSev = S._pushFailedFieldSeverity.get(key) || [];
                 var existedCells = S._pushFailedFieldCells.get(key) || [];
-                // 兜底对齐长度（防御旧快照：fields 有但 fieldSeverities/fieldCells 缺）
+                var existedReasons = S._pushFailedFieldReasons.get(key) || [];
+                // 兜底对齐长度（防御旧快照：fields 有但 fieldSeverities/fieldCells/fieldReasons 缺）
                 while (existedSev.length < existed.length) existedSev.push('error');
                 while (existedCells.length < existed.length) existedCells.push({});
+                while (existedReasons.length < existed.length) existedReasons.push(_fReason);
+                // B5 · 单位置独立 reason：优先取 p.singleReason（checkMulti 同行多字段时为每个位置提供细粒度原因），
+                //   否则回退到 f.reason（单字段命中时 f.reason 就是该位置字段自己的原因）。
+                var pReason = (p && typeof p.singleReason === 'string' && p.singleReason) ? p.singleReason : _fReason;
                 // 解析本次命中的细粒度定位
                 var inStepIdx = (typeof p.stepIdx === 'number' && isFinite(p.stepIdx) && p.stepIdx >= 0) ? p.stepIdx : undefined;
                 var inSubField = (typeof p.subField === 'string' && p.subField) ? p.subField : undefined;
@@ -163,13 +175,16 @@
                     existed.push(p.field);
                     existedSev.push(sev);
                     existedCells.push({ stepIdx: inStepIdx, subField: inSubField });
-                } else if (sev === 'error') {
-                    // 同三元组重复命中：error 压 warn
-                    existedSev[fi] = 'error';
+                    existedReasons.push(pReason);
+                } else {
+                    // 同三元组重复命中：error 压 warn；reason 若新入非空则覆盖（以新为准）。
+                    if (sev === 'error') existedSev[fi] = 'error';
+                    if (pReason) existedReasons[fi] = pReason;
                 }
                 S._pushFailedFields.set(key, existed);
                 S._pushFailedFieldSeverity.set(key, existedSev);
                 S._pushFailedFieldCells.set(key, existedCells);
+                S._pushFailedFieldReasons.set(key, existedReasons);
             }
         });
 

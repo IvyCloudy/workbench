@@ -63,6 +63,13 @@ export interface PushFailureItem {
      */
     fieldCells?: PushFailureFieldCell[];
     /**
+     * B5 · 字段级独立 reason（与 fields 数组一一对应）：
+     *   同一 tsId 内多个字段命中时，每个字段可携带自己的失败原因，供前端 hover
+     *   "只显示该单元格的问题"（而非整行合并 reason）。长度必须等于 fields.length；
+     *   读盘时若缺失或长度不一致，会用行级 reason 补齐（保持向后兼容）。
+     */
+    fieldReasons?: string[];
+    /**
      * @deprecated 旧字段，保留仅用于向后兼容读取。写入统一走 fields。
      */
     field?: PushInterfaceField;
@@ -147,7 +154,18 @@ function normalizeEntry(raw: any): PushFailureEntry {
                     return {};
                 });
             }
-            out[k] = { reason, timestamp: ts, category: cat, fields: fieldsArr, fieldSeverities: fieldSevArr, fieldCells: fieldCellsArr, severity: sev };
+            // B5 · fieldReasons：与 fields 一一对应；旧盘缺失时用行级 reason 逐位补齐，
+            //   保证前端「按字段查 reason」总能拿到一条可读的原因。
+            let fieldReasonsArr: string[] | undefined;
+            if (fieldsArr && fieldsArr.length > 0) {
+                const srcReasons = Array.isArray(v.fieldReasons) ? v.fieldReasons : [];
+                fieldReasonsArr = fieldsArr.map((_f, i) => {
+                    const r = srcReasons[i];
+                    if (typeof r === 'string' && r) return r;
+                    return reason; // 兜底用行级 reason（旧盘唯一可用来源）
+                });
+            }
+            out[k] = { reason, timestamp: ts, category: cat, fields: fieldsArr, fieldSeverities: fieldSevArr, fieldCells: fieldCellsArr, fieldReasons: fieldReasonsArr, severity: sev };
         }
     }
     return out;
@@ -282,7 +300,7 @@ export async function cleanupOrphanedFailures(): Promise<void> {
 export async function mergeFailures(
     filePath: string,
     batchTsIds: string[],
-    failures: { [tsId: string]: string | { reason: string; category?: PushFailCategory; field?: PushInterfaceField; severity?: 'error' | 'warn'; stepIdx?: number; subField?: PushSubField } },
+    failures: { [tsId: string]: string | { reason: string; category?: PushFailCategory; field?: PushInterfaceField; severity?: 'error' | 'warn'; stepIdx?: number; subField?: PushSubField; fieldReason?: string } },
     successTsIds?: string[]
 ): Promise<void> {
     // 行级 severity 提升辅助：error > warn > undefined
@@ -335,6 +353,11 @@ export async function mergeFailures(
                 ? undefined
                 : ((typeof raw.subField === 'string' && raw.subField) ? raw.subField : undefined);
             const inCell: PushFailureFieldCell = { stepIdx: inStepIdx, subField: inSubField };
+            // B5 · 字段级 reason：优先取显式 fieldReason（多字段合并时调用方传入单条 reason）；
+            //   否则回退到 inReason（单字段命中时可直接当 fieldReason 使用）。
+            const inFieldReason: string = (typeof raw === 'string')
+                ? inReason
+                : (typeof raw.fieldReason === 'string' && raw.fieldReason ? raw.fieldReason : inReason);
 
             const existing = entry[k];
             if (!existing) {
@@ -345,6 +368,7 @@ export async function mergeFailures(
                     fields: inField ? [inField] : undefined,
                     fieldSeverities: inField ? [inSeverity || 'error'] : undefined,
                     fieldCells: inField ? [inCell] : undefined,
+                    fieldReasons: inField ? [inFieldReason] : undefined,
                     severity: inSeverity,
                 };
                 continue;
@@ -361,9 +385,15 @@ export async function mergeFailures(
             const mergedFieldCells: PushFailureFieldCell[] = Array.isArray(existing.fieldCells)
                 ? existing.fieldCells.slice()
                 : mergedFields.map(() => ({}));
-            // 兜底对齐长度（防御旧盘：fields 有但 fieldSeverities / fieldCells 缺）
+            // B5 · fieldReasons：与 fields 平行。旧盘无时先用行级 reason 补齐，
+            //   本次 merge 新入时再按位覆盖。
+            const mergedFieldReasons: string[] = Array.isArray(existing.fieldReasons)
+                ? existing.fieldReasons.slice()
+                : mergedFields.map(() => existing.reason || '');
+            // 兜底对齐长度（防御旧盘：fields 有但 fieldSeverities / fieldCells / fieldReasons 缺）
             while (mergedFieldSev.length < mergedFields.length) mergedFieldSev.push(existing.severity || 'error');
             while (mergedFieldCells.length < mergedFields.length) mergedFieldCells.push({});
+            while (mergedFieldReasons.length < mergedFields.length) mergedFieldReasons.push(existing.reason || '');
             if (inField) {
                 // 以 (field, stepIdx, subField) 三元组定位现有位（nullish 相等也视为同一个，避免同一 cell 重复写入）
                 let fi = -1;
@@ -376,10 +406,14 @@ export async function mergeFailures(
                     mergedFields.push(inField);
                     mergedFieldSev.push(inSeverity || 'error');
                     mergedFieldCells.push(inCell);
+                    mergedFieldReasons.push(inFieldReason);
                 } else {
                     // 同三元组再次命中：severity 取更严重
                     const bumped = bumpRowSeverity(mergedFieldSev[fi], inSeverity) || mergedFieldSev[fi];
                     if (bumped === 'error' || bumped === 'warn') mergedFieldSev[fi] = bumped;
+                    // B5 · reason：同位新入若非空则覆盖（error 压 warn 时同步拿新原因；
+                    //   相同 severity 重复命中时也以新原因为准，旧日志无需保留）。
+                    if (inFieldReason) mergedFieldReasons[fi] = inFieldReason;
                 }
             }
             // 合并：reason 拼接去重
@@ -393,6 +427,7 @@ export async function mergeFailures(
                 fields: mergedFields.length > 0 ? mergedFields : undefined,
                 fieldSeverities: mergedFields.length > 0 ? mergedFieldSev : undefined,
                 fieldCells: mergedFields.length > 0 ? mergedFieldCells : undefined,
+                fieldReasons: mergedFields.length > 0 ? mergedFieldReasons : undefined,
                 severity: mergedRowSeverity,
             };
         }
@@ -442,6 +477,8 @@ export async function persistPushFailures(
         fieldSeverities: Array<'error' | 'warn'>;
         /** B4 · 与 fields 一一对应的字段细粒度定位（未命中细粒度则为空对象） */
         fieldCells: PushFailureFieldCell[];
+        /** B5 · 与 fields 一一对应的字段级独立 reason（供前端 hover 时只显示该单元格自己的原因） */
+        fieldReasons: string[];
         /** 行级 severity（fieldSeverities 中最严重值）——用于行号竖条颜色 */
         severity?: 'error' | 'warn';
     }
@@ -449,21 +486,24 @@ export async function persistPushFailures(
     failures.forEach(f => {
         if (!f || f.tsId === undefined || f.tsId === null || f.tsId === '') return;
         const key = String(f.tsId);
-        const bucket = agg[key] || (agg[key] = { reasons: [], fields: [], fieldSeverities: [], fieldCells: [] });
+        const bucket = agg[key] || (agg[key] = { reasons: [], fields: [], fieldSeverities: [], fieldCells: [], fieldReasons: [] });
         const r = String(f.reason || '');
         if (r && bucket.reasons.indexOf(r) < 0) bucket.reasons.push(r);
         if (!bucket.categoryFirst && f.category) bucket.categoryFirst = f.category;
         const fSev: 'error' | 'warn' = (f.severity === 'warn') ? 'warn' : 'error';
         // B4 · 若 PushFailureItem 携带 hits[]（checkMulti 聚合形态），按每个 hit 独立累加位置；
         //   否则退化为单点累加（保持向后兼容）。
-        const positions: Array<{ field?: PushInterfaceField; stepIdx?: number; subField?: PushSubField }> =
+        //   B5 · fieldReason：优先取 hit.singleReason（同行多字段 checkMulti 时可为每个位置提供细粒度原因），
+        //   否则回退到 f.reason（单字段命中 / 同行共享原因时）。
+        const positions: Array<{ field?: PushInterfaceField; stepIdx?: number; subField?: PushSubField; singleReason?: string }> =
             Array.isArray(f.hits) && f.hits.length > 0
-                ? f.hits.map(h => ({ field: h.field ?? f.field, stepIdx: h.stepIdx, subField: h.subField }))
+                ? f.hits.map(h => ({ field: h.field ?? f.field, stepIdx: h.stepIdx, subField: h.subField, singleReason: (h as any).singleReason }))
                 : [{ field: f.field, stepIdx: f.stepIdx, subField: f.subField }];
         for (const pos of positions) {
             // B4 · 结构化 (field, stepIdx, subField) 三元组：同三元组同行多次命中仅保留一个
             const inStepIdx = (typeof pos.stepIdx === 'number' && isFinite(pos.stepIdx) && pos.stepIdx >= 0) ? pos.stepIdx : undefined;
             const inSubField = (typeof pos.subField === 'string' && pos.subField) ? pos.subField : undefined;
+            const posReason = (typeof pos.singleReason === 'string' && pos.singleReason) ? pos.singleReason : r;
             if (pos.field) {
                 let idx = -1;
                 for (let m = 0; m < bucket.fields.length; m++) {
@@ -475,9 +515,11 @@ export async function persistPushFailures(
                     bucket.fields.push(pos.field);
                     bucket.fieldSeverities.push(fSev);
                     bucket.fieldCells.push({ stepIdx: inStepIdx, subField: inSubField });
+                    bucket.fieldReasons.push(posReason);
                 } else {
-                    // 同三元组多次命中：error 压 warn
+                    // 同三元组多次命中：error 压 warn；reason 若新入非空则覆盖（以新为准）
                     if (fSev === 'error') bucket.fieldSeverities[idx] = 'error';
+                    if (posReason) bucket.fieldReasons[idx] = posReason;
                 }
             }
         }
@@ -489,7 +531,7 @@ export async function persistPushFailures(
     //   多字段时先通过循环调用 mergeFailures 二次合并 —— 或者在下面直接分批传）。
     // 为简化实现：把 fields 数组"逐条"注入 failuresMap，通过多次 mergeFailures 调用
     //   触发内部 severity/fields/fieldCells 合并逻辑。
-    const failuresMap: { [tsId: string]: { reason: string; category?: PushFailCategory; field?: PushInterfaceField; severity?: 'error' | 'warn'; stepIdx?: number; subField?: PushSubField } } = {};
+    const failuresMap: { [tsId: string]: { reason: string; category?: PushFailCategory; field?: PushInterfaceField; severity?: 'error' | 'warn'; stepIdx?: number; subField?: PushSubField; fieldReason?: string } } = {};
     Object.keys(agg).forEach(tsId => {
         const b = agg[tsId];
         failuresMap[tsId] = {
@@ -504,6 +546,8 @@ export async function persistPushFailures(
             // B4 · 字段细粒度定位：首字段携带自己的 stepIdx/subField
             stepIdx: b.fieldCells[0]?.stepIdx,
             subField: b.fieldCells[0]?.subField,
+            // B5 · 字段级独立 reason：首字段携带自己的 reason（而非合并后的 reasons.join）
+            fieldReason: b.fieldReasons[0] || b.reasons[0] || '',
         };
     });
     const successTsIds: string[] = successMappings
@@ -515,12 +559,13 @@ export async function persistPushFailures(
     // 补齐多字段：mergeFailures 内部按"新入 field/stepIdx/subField 与已存 fields 合并去重"，
     //   所以对同 tsId 剩余字段进行二次以上的 merge 调用即可把 fields 累积起来。
     //   注意：这里的 batchTsIds 传空数组，避免再次清盘；successTsIds 也传空避免误清。
-    const extraRounds: Array<{ [tsId: string]: { reason: string; field: PushInterfaceField; severity: 'error' | 'warn'; stepIdx?: number; subField?: PushSubField } }> = [];
+    const extraRounds: Array<{ [tsId: string]: { reason: string; field: PushInterfaceField; severity: 'error' | 'warn'; stepIdx?: number; subField?: PushSubField; fieldReason?: string } }> = [];
     Object.keys(agg).forEach(tsId => {
         const b = agg[tsId];
         const restFields = b.fields.slice(1);
         const restSev = b.fieldSeverities.slice(1);
         const restCells = b.fieldCells.slice(1);
+        const restReasons = b.fieldReasons.slice(1);
         for (let i = 0; i < restFields.length; i++) {
             if (!extraRounds[i]) extraRounds[i] = {};
             extraRounds[i][tsId] = {
@@ -531,6 +576,8 @@ export async function persistPushFailures(
                 // B4 · 同时携带细粒度定位，以 (field, stepIdx, subField) 三元组去重
                 stepIdx: restCells[i]?.stepIdx,
                 subField: restCells[i]?.subField,
+                // B5 · 字段级独立 reason：每个补齐字段带自己的 reason
+                fieldReason: restReasons[i] || '',
             };
         }
     });

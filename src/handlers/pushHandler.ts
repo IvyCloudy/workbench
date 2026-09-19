@@ -11,6 +11,8 @@ import { TelemetryService } from '../utils/telemetry';
 import { runPush, buildRowIndexMappings, buildFailDimensions, PushFailureItem } from './pushCore';
 import { validateYamlContent, publishYamlDiagnostics } from '../utils/yamlValidator';
 import { YAML_CMD_FIX_ALL } from '../utils/yamlConstants';
+import { validateFileForPush } from '../preValidate/batchPreValidate';
+import { openPreValidateGate } from '../preValidate/preValidateGate';
 import {
     classifyFailure,
     failureFieldOf,
@@ -491,6 +493,16 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
             telemetryPrefix: 'explorerPush',
             hooks: {
                 markSelfSave: () => BaseEditorProvider.markPanelSelfSave(filePath),
+                // ─── 前置校验门控（B5）─────────────────────────────────────────────
+                // 单文件资源管理器推送：与编辑器内推送共用同一份 05g 交互。
+                //   · panel 已在上方 ensureOpenedInTestcaseEditor 拿到 → webview 内弹校验汇总
+                //   · error → 只显示"关闭"，强制阻断（用户须修正后再推送）
+                //   · 仅 warn（「待补充」）→ 可"忽略并继续"
+                //   · 无 panel 场景（例如强制关闭编辑器）→ hook 未生效，退化为 continue
+                //     保持原有推送行为，避免误伤。
+                preValidateGate: panel
+                    ? (failures) => openPreValidateGate(panel!, baseName, failures)
+                    : undefined,
                 afterWriteBack: async ({ hasFailure }) => {
                     await BaseEditorProvider.postExplorerPushRefresh(filePath, hasFailure);
                 },
@@ -562,6 +574,115 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         fileCount: String(totalFiles),
         extBreakdown,
     });
+
+    // ─── 阶段 0：批量前置校验（新增，Q1=A / Q2=无打扰 / Q3=保留纯 warn 继续入口）─────
+    // 策略：
+    //   · 面板切到"校验中"文案；逐文件跑 validateFileForPush（纯校验，无落盘/无埋点）
+    //   · 汇总所有含 failures 的文件：
+    //       - 若整批 无任何 failures       → 直接进入推送循环（无打扰，Q2 决策）
+    //       - 若整批 有 error              → 05g 汇总视图仅允许【关闭】，整批阻断
+    //       - 若整批 仅 warn（无 error）   → 05g 汇总视图允许【忽略并继续推送】（Q3 决策）
+    //   · 校验阶段的取消（用户主动点关闭）与推送阶段一致，走 progressPanel.cancelled
+    progressPanel.setPhase('validating');
+    const preValidateStartTs = Date.now();
+    const validateEntries: import('../utils/pushUI').ValidateGateFileEntry[] = [];
+    let validateCancelled = false;
+    for (let vi = 0; vi < files.length; vi++) {
+        progressPanel.update({
+            fileName: files[vi].relativePath,
+            status: 'pushing',
+            text: '校验中...',
+        });
+        if (progressPanel.cancelled) { validateCancelled = true; break; }
+        let vRes;
+        try {
+            vRes = await validateFileForPush(files[vi].uri.fsPath, files[vi].relativePath);
+        } catch (err: any) {
+            // 校验器崩溃：不阻断批次，按"无问题"处理，交给推送阶段暴露真正问题
+            console.warn('[推送][批量][前置校验] validate 异常:', files[vi].relativePath, err?.message || err);
+            vRes = { filePath: files[vi].uri.fsPath, fileName: files[vi].relativePath, failures: [], hasError: false, hasOnlyWarn: false, skipped: true };
+        }
+        if (vRes.failures.length > 0) {
+            validateEntries.push({
+                filePath: vRes.filePath,
+                fileName: vRes.fileName,
+                failures: vRes.failures.map(f => ({
+                    tsId: f.tsId,
+                    reason: f.reason,
+                    rowIndex: f.rowIndex,
+                    severity: f.severity || 'error',
+                    field: f.field,
+                    stepIdx: f.stepIdx,
+                    subField: f.subField,
+                    hits: f.hits,
+                })),
+            });
+        }
+        progressPanel.update({
+            fileName: files[vi].relativePath,
+            status: vRes.hasError ? 'error' : (vRes.hasOnlyWarn ? 'warning' : 'done'),
+            text: vRes.failures.length === 0
+                ? '校验通过'
+                : `校验命中 ${vRes.failures.length} 项${vRes.hasError ? '（含阻断）' : '（仅提醒）'}`,
+        });
+        if (progressPanel.cancelled) { validateCancelled = true; break; }
+    }
+    const preValidateCostMs = Date.now() - preValidateStartTs;
+
+    // 用户在校验阶段主动关闭面板 → 整批取消，不进入推送
+    if (validateCancelled) {
+        TelemetryService.sendTelemetryEvent('explorerPush.batch.preValidate.cancelled', {
+            fileCount: String(totalFiles),
+            checked: String(validateEntries.length),
+            durationMs: String(preValidateCostMs),
+        });
+        return;
+    }
+
+    // 有 failures → 弹 05g 汇总视图（复用进度面板）
+    if (validateEntries.length > 0) {
+        const totalErrRows = validateEntries.reduce((s, e) => s + e.failures.filter(f => (f.severity || 'error') !== 'warn').length, 0);
+        const totalWarnRows = validateEntries.reduce((s, e) => s + e.failures.filter(f => f.severity === 'warn').length, 0);
+        const hasError = totalErrRows > 0;
+        TelemetryService.sendTelemetryEvent('explorerPush.batch.preValidate.hit', {
+            fileCount: String(totalFiles),
+            hitFileCount: String(validateEntries.length),
+            errorFiles: String(validateEntries.filter(e => e.failures.some(f => (f.severity || 'error') !== 'warn')).length),
+            errorRows: String(totalErrRows),
+            warnRows: String(totalWarnRows),
+            durationMs: String(preValidateCostMs),
+        });
+        const decision = await progressPanel.showValidateGate(validateEntries);
+        if (decision === 'cancel') {
+            // 有 error 时"关闭" = 整批阻断；纯 warn 时"取消" = 整批取消。两种都直接结束。
+            TelemetryService.sendTelemetryEvent('explorerPush.batch.preValidate.blocked', {
+                fileCount: String(totalFiles),
+                hitFileCount: String(validateEntries.length),
+                hasError: hasError ? '1' : '0',
+                errorRows: String(totalErrRows),
+                warnRows: String(totalWarnRows),
+            });
+            try { progressPanel.dispose(); } catch (_) { /* ignore */ }
+            return;
+        }
+        // continue：仅可能出现在纯 warn 分支（有 error 时 05g 只显示"关闭"，不会 continue）
+        TelemetryService.sendTelemetryEvent('explorerPush.batch.preValidate.continue', {
+            fileCount: String(totalFiles),
+            hitFileCount: String(validateEntries.length),
+            warnRows: String(totalWarnRows),
+        });
+    }
+    // 切回"推送中"文案，进入原有推送循环
+    progressPanel.setPhase('pushing');
+    // 复位所有文件进度项为 pending（前置校验阶段把 status 打成了 done/warning/error，
+    // 若不复位会让"推送中"阶段的初始行状态错乱）。
+    for (let ri = 0; ri < files.length; ri++) {
+        progressPanel.update({
+            fileName: files[ri].relativePath,
+            status: 'pending',
+            text: '',
+        });
+    }
 
     let cancelled = false;
     for (let i = 0; i < files.length; i++) {

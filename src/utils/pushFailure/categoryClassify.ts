@@ -61,6 +61,7 @@ export type PushFailCategory =
     | 'sourceNotSupported'
     | 'bizReject'
     | 'todo.placeholder'
+    | 'structure.missingColumn'
     | 'unknown'
     // —— 字段级复合码：`${field}.${nature}` ——
     | `${string}.${FailNature}`;
@@ -77,6 +78,11 @@ const VALIDATOR_KIND_TO_CATEGORY: Record<string, PushFailCategory> = {
     todoPlaceholder: 'todo.placeholder' as PushFailCategory,
     enumInvalid: 'enumInvalid',
     planExecNumInvalid: 'planExecNum.format' as PushFailCategory,
+    nameEmpty: 'testCaseName.empty' as PushFailCategory,
+    // §2.3.6 · 案例唯一性：同文件内 (name, path) 重复（error 级，强制阻断）
+    duplicateName: 'testCaseName.dup' as PushFailCategory,
+    // §2.3.5 结构完整性 · 必备列/字段存在性校验（error 级，强制阻断）
+    missingColumn: 'structure.missingColumn',
 };
 
 /** MapErrorFields.reason → category（字段映射错误用）。 */
@@ -186,6 +192,7 @@ const FIELD_RELATED_CATEGORIES: PushFailCategory[] = [
     'notFound', 'taskNotFound', 'testPointMissing', 'pathNotMatchPoint',
     'sourceNotSupported', 'bizReject',
     'todo.placeholder',
+    'structure.missingColumn',
 ];
 
 /** 判断某 category 是否字段相关（含复合码 `字段.性质` 与性质级兜底名）。 */

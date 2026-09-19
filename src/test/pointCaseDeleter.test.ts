@@ -124,9 +124,10 @@ describe('pointCaseDeleter · yaml 格式', () => {
     it('pcoTotal>0（功能条目路径）→ 前缀匹配删除其下所有案例', async () => {
         const fp = writeYaml(dir, 'cases.yaml', YAML);
         // pcoTotal>0 且 path=账户中心/登录 → 命中 TC001/TC002/TC003（前缀）
-        const res = await deleteCasesFromCaseFile(fp, {
+        // 走 Multi 入口拿顶层聚合结果（remainingRecords 是文件级字段）
+        const res = await deleteCasesFromCaseFileMulti(fp, [{
             type: 1, path: '账户中心/登录', pcoTotal: 2, pointTotal: 3,
-        });
+        }]);
         expect(res.deletedCount).toBe(3);
         expect(res.typeCount.type2).toBe(3); // 前缀匹配
         expect(res.remainingRecords).toBe(2);
@@ -139,9 +140,9 @@ describe('pointCaseDeleter · yaml 格式', () => {
     it('pointTotal>1（测试点路径）→ 前缀匹配删除该测试点下所有案例', async () => {
         const fp = writeYaml(dir, 'cases.yaml', YAML);
         // pointTotal>1 且 path=交易/订单 → 命中 TC004/TC005
-        const res = await deleteCasesFromCaseFile(fp, {
+        const res = await deleteCasesFromCaseFileMulti(fp, [{
             type: 1, path: '交易/订单', pcoTotal: 0, pointTotal: 2,
-        });
+        }]);
         expect(res.deletedCount).toBe(2);
         expect(res.remainingRecords).toBe(3);
         const disk = fs.readFileSync(fp, 'utf-8');
@@ -151,9 +152,9 @@ describe('pointCaseDeleter · yaml 格式', () => {
 
     it('pcoTotal=0 且 pointTotal=1（单案例路径）→ 精确匹配只删一条', async () => {
         const fp = writeYaml(dir, 'cases.yaml', YAML);
-        const res = await deleteCasesFromCaseFile(fp, {
+        const res = await deleteCasesFromCaseFileMulti(fp, [{
             type: 1, path: '账户中心/登录/二次校验', pcoTotal: 0, pointTotal: 1,
-        });
+        }]);
         expect(res.deletedCount).toBe(2); // 二次校验下两条案例
         expect(res.typeCount.type1).toBe(2); // 精确匹配
         expect(res.remainingRecords).toBe(3);
@@ -162,9 +163,9 @@ describe('pointCaseDeleter · yaml 格式', () => {
     it('精确匹配不会被前缀误伤：path=交易/订单 精确时只删 path 完全相等的', async () => {
         const fp = writeYaml(dir, 'cases.yaml', YAML);
         // pcoTotal=0 & pointTotal=1 → 精确匹配，'交易/订单' 无完全相等项 → 0 条
-        const res = await deleteCasesFromCaseFile(fp, {
+        const res = await deleteCasesFromCaseFileMulti(fp, [{
             type: 1, path: '交易/订单', pcoTotal: 0, pointTotal: 1,
-        });
+        }]);
         expect(res.deletedCount).toBe(0);
         expect(res.remainingRecords).toBe(5);
     });
@@ -181,9 +182,9 @@ describe('pointCaseDeleter · yaml 格式', () => {
         const fp = writeYaml(dir, 'cases.yaml', YAML);
         const mtimeBefore = fs.statSync(fp).mtimeMs;
         await new Promise(r => setTimeout(r, 20));
-        const res = await deleteCasesFromCaseFile(fp, {
+        const res = await deleteCasesFromCaseFileMulti(fp, [{
             type: 1, path: '不存在/路径', pcoTotal: 0, pointTotal: 1,
-        });
+        }]);
         expect(res.deletedCount).toBe(0);
         expect(res.remainingRecords).toBe(5);
         expect(fs.statSync(fp).mtimeMs).toBe(mtimeBefore);
@@ -241,9 +242,9 @@ describe('pointCaseDeleter · json 格式', () => {
             { testcase_id: 'JS003', name: '案例3', path: '账户/资料' },
         ], null, 2), 'utf-8');
 
-        const res = await deleteCasesFromCaseFile(fp, {
+        const res = await deleteCasesFromCaseFileMulti(fp, [{
             type: 1, path: '交易/订单', pcoTotal: 1, pointTotal: 2,
-        });
+        }]);
         expect(res.deletedCount).toBe(2);
         expect(res.remainingRecords).toBe(1);
 
@@ -492,16 +493,27 @@ describe('pointCaseDeleter · 埋点', () => {
     beforeEach(() => { telemetryEvents.length = 0; });
 
     it('emitDoneTelemetry 上报完整字段（含新契约维度）', () => {
+        // bbde57c 后 emitDoneTelemetry 4 参：agg（顶层，含 filePath/totalRecords/remainingRecords/
+        // fileDeleted/costMs）+ pp（单要点，含 deletedCases/deletedCount/typeCount）+ tInfo + p
+        const pp = {
+            point: { type: 1, path: '账户中心/登录/二次校验', data: '', pcoTotal: 0, pointTotal: 1 },
+            deletedCases: [{ testcaseId: 'TC1', caseName: 'n1' }],
+            deletedCount: 1,
+            typeCount: { type1: 1, type2: 0, type3: 0, type4: 0 },
+        };
         emitDoneTelemetry(
             {
                 filePath: '/abs/dir/cases.yaml',
-                deletedCases: [{ testcaseId: 'TC1', caseName: 'n1' }],
+                perPoint: [pp],
+                deletedCases: pp.deletedCases,
                 deletedCount: 1,
-                typeCount: { type1: 1, type2: 0, type3: 0 },
+                typeCount: { type1: 1, type2: 0, type3: 0, type4: 0 },
                 totalRecords: 3,
                 remainingRecords: 2,
+                fileDeleted: false,
                 costMs: 42,
             },
+            pp,
             { testTaskNo: 'TT001', subTestTaskId: 'ST001', artifactId: 'ART-9' },
             { type: 1, data: '', path: '账户中心/登录/二次校验', pcoTotal: 0, pointTotal: 1, caseTotal: 1 },
         );
@@ -531,16 +543,25 @@ describe('pointCaseDeleter · 埋点', () => {
     });
 
     it('artifactId 缺省时→以案例文件 basename 兜底', () => {
+        const pp = {
+            point: { type: 1, path: 'x', data: '', pcoTotal: 0, pointTotal: 1 },
+            deletedCases: [],
+            deletedCount: 0,
+            typeCount: { type1: 0, type2: 0, type3: 0, type4: 0 },
+        };
         emitDoneTelemetry(
             {
                 filePath: '/abs/dir/orders.json',
+                perPoint: [pp],
                 deletedCases: [],
                 deletedCount: 0,
-                typeCount: { type1: 0, type2: 0, type3: 0 },
+                typeCount: { type1: 0, type2: 0, type3: 0, type4: 0 },
                 totalRecords: 5,
                 remainingRecords: 5,
+                fileDeleted: false,
                 costMs: 3,
             },
+            pp,
             { testTaskNo: '', subTestTaskId: '', artifactId: '' },
             { type: 1, data: '', path: 'x', pcoTotal: 0, pointTotal: 1, caseTotal: 0 },
         );
@@ -588,9 +609,9 @@ describe('pointCaseDeleter · 案例文件清空', () => {
         expect(fs.existsSync(fp)).toBe(true);
 
         // 精确匹配删除这一条案例 → 剩余行数 0
-        const res = await deleteCasesFromCaseFile(fp, {
+        const res = await deleteCasesFromCaseFileMulti(fp, [{
             type: 1, path: '模块/功能/要点', pcoTotal: 0, pointTotal: 1, caseTotal: 1,
-        });
+        }]);
 
         // 1) 结果标记案例文件已删除
         expect(res.fileDeleted).toBe(true);
@@ -611,9 +632,9 @@ describe('pointCaseDeleter · 案例文件清空', () => {
         expect(fs.existsSync(fp)).toBe(true);
 
         // 前缀匹配删除 要点A 下案例（仅 TC001）
-        const res = await deleteCasesFromCaseFile(fp, {
+        const res = await deleteCasesFromCaseFileMulti(fp, [{
             type: 1, path: '模块/功能/要点A', pcoTotal: 0, pointTotal: 1, caseTotal: 1,
-        });
+        }]);
 
         expect(res.fileDeleted).toBe(false);
         expect(res.deletedCount).toBe(1);

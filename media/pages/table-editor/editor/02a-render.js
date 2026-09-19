@@ -507,12 +507,12 @@ function _buildRowHtml(ri, tsIdColIdx) {
             }
         }
     }
-    // 行号格 title：失败行显示「原始行号: N」与「推送校验失败/删除失败」等信息，
+    // 行号格 title：失败行显示「原始行号: N」与「格式校验失败/删除失败」等信息，
     // 各段使用换行符分隔，浏览器原生 tooltip 会自动分行展示，便于阅读长原因。
     // 此处的失败均为「前置校验拦截」——真正走后端推送并被拒绝的失败在 showToast 中提示，
-    // 二者语义不同，文案上以「推送校验失败」显式区分，避免用户误以为已经发送到服务器。
+    // 二者语义不同，文案上以「格式校验失败」显式区分，避免用户误以为已经发送到服务器。
     var rowNumTitle = '原始行号: ' + (ri + 1);
-    if (failReason) rowNumTitle += '\n推送校验失败：' + failReason;
+    if (failReason) rowNumTitle += '\n⚠️ 格式校验失败：' + failReason;
     if (isFailedDel) {
         rowNumTitle += '\n删除失败：' + (failedDelReason || '线上拒绝删除');
     } else if (isPendingDel) {
@@ -624,10 +624,32 @@ function _buildRowHtml(ri, tsIdColIdx) {
         var c = cells[ci2];
         var wrapStyleAttr = multilineClamp ? ' style="' + multilineClamp + '"' : '';
         var spanAttr = (expanded && ci2 === stepsCol) ? ' colspan="5"' : '';
-        // B3：若该单元格本身命中失败字段，侧写到 titleAttr 尾部（只在命中时埋因回原，
-        //   避免非失败单元格也弹 tooltip）。若 _buildCellInner 已给出 titleAttr（富文本内容提示），
-        //   不予覆盖。依靠行号 td 的 title 已能展现整行原因，此处 title 为错错看补充。
-        html += '<td class="xs-td xs-editable' + c.modCls + c.colSelCls2 + c.frozenCls2 + c.hiliCls + (c.failedCellCls || '') + (c.isDetail ? ' xs-detail-cell' : '') + c.arrCellCls + '" data-row="' + ri + '" data-col="' + ci2 + '"' + spanAttr + c.titleAttr + c.mkStyle + '>'
+        // B5 · hover 只显示该单元格自己的问题（而非行级合并 reason）：
+        //   若该单元格本身命中失败字段（c.failedCellCls 非空），则通过 HighlightModel.getFieldReasonOfCell
+        //   只取"归属于该列的字段"的 reason。若该列无命中字段（例如 tsId 列本身未失败，仅行内其它字段失败），
+        //   则不追加 tooltip — 保持 hover 该 cell 时只看到内容本身，不被其它列的问题干扰。
+        var cellTitleAttr = c.titleAttr;
+        if (c.failedCellCls) {
+            var _cellReason = '';
+            try {
+                _cellReason = (window.HighlightModel && HighlightModel.getFieldReasonOfCell)
+                    ? HighlightModel.getFieldReasonOfCell(S, String(rowTsId), ci2, headers)
+                    : '';
+            } catch (_e) { _cellReason = ''; }
+            if (_cellReason) {
+                // 前缀加 ⚠️ emoji：原生 title tooltip 内也能显示 emoji，
+                // 让"校验失败"部分与"cell 原内容"在视觉上分离；
+                // 同时右上角 CSS ::after 小角标（table-editor.css B3+）已在 hover 前即可见。
+                var _prefix = '⚠️ 格式校验失败：' + _cellReason;
+                if (cellTitleAttr) {
+                    // 已有 title（内容 tooltip）→ 追加分隔符 + 失败原因
+                    cellTitleAttr = cellTitleAttr.replace(/"$/, '\n' + escapeHtml(_prefix) + '"');
+                } else {
+                    cellTitleAttr = ' title="' + escapeHtml(_prefix) + '"';
+                }
+            }
+        }
+        html += '<td class="xs-td xs-editable' + c.modCls + c.colSelCls2 + c.frozenCls2 + c.hiliCls + (c.failedCellCls || '') + (c.isDetail ? ' xs-detail-cell' : '') + c.arrCellCls + '" data-row="' + ri + '" data-col="' + ci2 + '"' + spanAttr + cellTitleAttr + c.mkStyle + '>'
             + '<div class="xs-cell-wrap"' + wrapStyleAttr + '>' + c.inner + '</div></td>';
     }
     html += '</tr>';
@@ -1360,6 +1382,37 @@ function patchCell(ri, ci) {
     }
     // tooltip 同步：与 _buildRowHtml 一致，字面 "\n" 转换为真实换行符，
     // 使原生 tooltip 中的换行呈现与单元格展开后一致。
-    if (rawText) td.setAttribute('title', rawText.replace(/\\n/g, '\n')); else td.removeAttribute('title');
+    //
+    // B3 · 失败单元格 hover 显示原因：若该 cell 已经被打上 xs-td-failed-cell(-warn)（上方 td.classList.add）
+    //   B5 · 只取该单元格自己的 field 对应的 reason（而非行级合并 reason），
+    //   让 hover tooltip 只展示该单元格自己的问题，不受同行其它列的问题干扰。
+    //   修正内容后（该 cell 已不在失败集合）自然回落为纯 rawText。
+    var _failedNow = td.classList.contains('xs-td-failed-cell') || td.classList.contains('xs-td-failed-cell-warn');
+    var _failReasonForCell = '';
+    if (_failedNow && _rowFailTime > 0) {
+        try {
+            var _tsColT = (S.data && S.data.headers) ? S.data.headers.indexOf('testcase_id') : -1;
+            if (_tsColT >= 0) {
+                var _tidT = (S.data.rows[ri] || [])[_tsColT];
+                if (_tidT !== undefined && _tidT !== null && _tidT !== '') {
+                    if (window.HighlightModel && HighlightModel.getFieldReasonOfCell) {
+                        _failReasonForCell = HighlightModel.getFieldReasonOfCell(S, String(_tidT), ci, S.data.headers);
+                    } else if (S._pushFailedReasons) {
+                        // 回退：旧环境无 getFieldReasonOfCell 时用行级 reason
+                        var _rBak = S._pushFailedReasons.get(String(_tidT));
+                        if (_rBak) _failReasonForCell = String(_rBak);
+                    }
+                }
+            }
+        } catch (_e) { /* ignore */ }
+    }
+    var _titleText = rawText ? rawText.replace(/\\n/g, '\n') : '';
+    if (_failReasonForCell) {
+        // 前缀加 ⚠️ emoji：与首屏渲染路径（_buildRowHtml 内）保持一致，
+        // 让"校验失败"部分与"cell 原内容"在视觉上分离。
+        _titleText = _titleText ? (_titleText + '\n⚠️ 格式校验失败：' + _failReasonForCell)
+                                 : ('⚠️ 格式校验失败：' + _failReasonForCell);
+    }
+    if (_titleText) td.setAttribute('title', _titleText); else td.removeAttribute('title');
     // 注：detail-link click 已在 #tableContainer 上委托，无需在此重新绑定
 }

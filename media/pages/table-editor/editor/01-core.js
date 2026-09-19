@@ -186,6 +186,9 @@ var S = {
     //   Array<{stepIdx?, subField?}>。用于展开态子表格 sub-td / 明细弹窗 dv2 输入框精确高亮。
     //   元素为 {} 或未定义 → 无细粒度定位，前端回退到整列高亮。
     _pushFailedFieldCells: new Map(),
+    // B5 · 字段级独立 reason：推送失败 tsId -> 与 _pushFailedFields 一一对应的 string[]。
+    //   用于 hover 单元格时只显示该单元格自己的问题（而非行级合并 reason）。
+    _pushFailedFieldReasons: new Map(),
     // 步骤展开/折叠模式切换（默认非展开 → 点击明细链接弹窗编辑）
     _stepsExpanded: false
 };

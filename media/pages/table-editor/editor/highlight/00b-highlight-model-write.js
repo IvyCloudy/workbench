@@ -207,6 +207,7 @@
         S._pushFailedFields = new Map();
         S._pushFailedFieldSeverity = new Map();
         S._pushFailedFieldCells = new Map();
+        S._pushFailedFieldReasons = new Map();
         // 与 _lastPushBatchTsIds 成对清空，避免 pushDone/pushResult/pushError 兜底
         // 逻辑读到过期批次行号，误清与本次无关的 mods/detailMods/addedRowSet。
         S._lastPushBatchTsIds = new Set();
@@ -234,6 +235,7 @@
         S._pushFailedFields = new Map();
         S._pushFailedFieldSeverity = new Map();
         S._pushFailedFieldCells = new Map();
+        S._pushFailedFieldReasons = new Map();
         S._lastPushBatchTsIds = new Set();
         S._failedOnly = false;
         S._modifiedOnly = false;

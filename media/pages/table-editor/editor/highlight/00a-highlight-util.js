@@ -196,6 +196,63 @@
     }
 
     /**
+     * B5 · 单元格级失败 reason 查询（hover tooltip 专用）。
+     *
+     * 输入：行 tsId + 列 colIdx + headers（+ 可选 stepIdx/subField 用于 sub-td 级细粒度查询）
+     * 返回：该单元格自己命中的字段的 reason 字符串（处于 _pushFailedFieldReasons）；
+     *       未命中字段时返回 ''（由调用方自行判断是否需要展示）。
+     *
+     * 多命中优先级：
+     *   1) 若传入 stepIdx/subField，优先匹配相同三元组的那一条（最精确）；
+     *   2) 否则仅按 (field 归属于 colIdx) 匹配，同列多个命中按顸命中拼接，不重复（O(n)，n 为该行 fields 长度，实际 ≤ 10）；
+     *   3) 字段发现不到对应的 reason 时回退到 _pushFailedReasons（行级合并 reason，旧盘兼容）。
+     */
+    function getFieldReasonOfCell(S, tsId, colIdx, headers, stepIdx, subField) {
+        if (!tsId || !S || colIdx < 0) return '';
+        var idStr = String(tsId);
+        if (!S._pushFailedTsIds || !S._pushFailedTsIds.has(idStr)) return '';
+        var fieldsArr = (S._pushFailedFields && S._pushFailedFields.get(idStr)) || [];
+        var reasonsArr = (S._pushFailedFieldReasons && S._pushFailedFieldReasons.get(idStr)) || [];
+        var cellsArr = (S._pushFailedFieldCells && S._pushFailedFieldCells.get(idStr)) || [];
+        if (!Array.isArray(fieldsArr) || fieldsArr.length === 0) {
+            // 字段级盘为空（旧盘/推送失败无字段信息）→ 回退行级 reason
+            var _rowFallback = S._pushFailedReasons && S._pushFailedReasons.get(idStr);
+            return _rowFallback ? String(_rowFallback) : '';
+        }
+        // 优先匹配三元组（stepIdx/subField 均传入且存在于 cellsArr 中）
+        var reqStepIdx = (typeof stepIdx === 'number' && isFinite(stepIdx) && stepIdx >= 0) ? stepIdx : undefined;
+        var reqSubField = (typeof subField === 'string' && subField) ? subField : undefined;
+        if (reqStepIdx !== undefined || reqSubField !== undefined) {
+            for (var i = 0; i < fieldsArr.length; i++) {
+                var col = resolveFieldColumnIndex(fieldsArr[i], headers);
+                if (col !== colIdx) continue;
+                var c = cellsArr[i] || {};
+                var cStep = (typeof c.stepIdx === 'number' && c.stepIdx >= 0) ? c.stepIdx : undefined;
+                var cSub = (typeof c.subField === 'string' && c.subField) ? c.subField : undefined;
+                if (cStep === reqStepIdx && cSub === reqSubField) {
+                    return reasonsArr[i] ? String(reasonsArr[i]) : '';
+                }
+            }
+        }
+        // 列级匹配：同列多个命中拼接去重
+        var parts = [];
+        var seen = Object.create(null);
+        for (var j = 0; j < fieldsArr.length; j++) {
+            var col2 = resolveFieldColumnIndex(fieldsArr[j], headers);
+            if (col2 !== colIdx) continue;
+            var r = reasonsArr[j];
+            if (!r) continue;
+            var rs = String(r);
+            if (seen[rs]) continue;
+            seen[rs] = true;
+            parts.push(rs);
+        }
+        if (parts.length > 0) return parts.join('；');
+        // 本行本列无 field 命中（行仅由其它列命中——例如本列是 testcase_id，但失败字段在其它列）→ 返回 ''
+        return '';
+    }
+
+    /**
      * 查询某行→某列对应失败字段的 severity（B3 · 字段级独立染色）。
      */
     function getFieldSeverityOfColumn(S, tsId, colIdx, headers) {
@@ -342,6 +399,8 @@
         // B4 · 字段细粒度定位
         getFailedStepCellsOfRow: getFailedStepCellsOfRow,
         isRowColFullyGranular: isRowColFullyGranular,
+        // B5 · 单元格级 reason 查询 (hover tooltip 专用)
+        getFieldReasonOfCell: getFieldReasonOfCell,
         // 其余 setters / reset / snapshot 由 00b / 00c 追加
     };
 })();

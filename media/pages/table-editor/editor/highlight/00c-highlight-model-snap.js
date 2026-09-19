@@ -32,7 +32,9 @@
             fields: S._pushFailedFields ? Array.from(S._pushFailedFields) : [],       // [[k, ['description','expected']],...]
             fieldSeverities: S._pushFailedFieldSeverity ? Array.from(S._pushFailedFieldSeverity) : [], // [[k, ['error','warn']],...]
             // B4 · 字段细粒度定位数组（与 fields 平行）
-            fieldCells: S._pushFailedFieldCells ? Array.from(S._pushFailedFieldCells) : []            // [[k, [{stepIdx,subField},...]],...]
+            fieldCells: S._pushFailedFieldCells ? Array.from(S._pushFailedFieldCells) : [],            // [[k, [{stepIdx,subField},...]],...]
+            // B5 · 字段级独立 reason 数组（与 fields 平行）
+            fieldReasons: S._pushFailedFieldReasons ? Array.from(S._pushFailedFieldReasons) : []       // [[k, ['reason1','reason2',...]],...]
         };
     }
 
@@ -104,6 +106,8 @@
             S._pushFailedFieldSeverity = new Map(pf.fieldSeverities || []);
             // B4 · fieldCells：旧快照无时默认空 Map（前端渲染回退到整列高亮）
             S._pushFailedFieldCells = new Map(pf.fieldCells || []);
+            // B5 · fieldReasons：旧快照无时默认空 Map（前端 hover 回退到行级 reason）
+            S._pushFailedFieldReasons = new Map(pf.fieldReasons || []);
         } else {
             // 旧快照不含 pushFailures：保持「全清空」旧行为，避免索引错位污染
             S._pushFailedTsIds = new Set();
@@ -113,6 +117,7 @@
             S._pushFailedFields = new Map();
             S._pushFailedFieldSeverity = new Map();
             S._pushFailedFieldCells = new Map();
+            S._pushFailedFieldReasons = new Map();
         }
         // 失败集合清空 → UI 筛选联动复位
         if (S._failedOnly && (!S._pushFailedTsIds || S._pushFailedTsIds.size === 0)) S._failedOnly = false;
@@ -171,6 +176,9 @@
             // B4 · 字段细粒度定位：与 fields 一一对应的 Array<{stepIdx,subField}> Map
             if (!S._pushFailedFieldCells) S._pushFailedFieldCells = new Map();
             else S._pushFailedFieldCells.clear();
+            // B5 · 字段级独立 reason：与 fields 一一对应的 string[] Map
+            if (!S._pushFailedFieldReasons) S._pushFailedFieldReasons = new Map();
+            else S._pushFailedFieldReasons.clear();
             for (var k in payload) {
                 if (!Object.prototype.hasOwnProperty.call(payload, k)) continue;
                 var kStr = String(k);
@@ -193,10 +201,13 @@
                     if (Array.isArray(pv.fields) && pv.fields.length > 0) {
                         var _srcSev = Array.isArray(pv.fieldSeverities) ? pv.fieldSeverities : [];
                         var _srcCells = Array.isArray(pv.fieldCells) ? pv.fieldCells : [];
+                        var _srcReasons = Array.isArray(pv.fieldReasons) ? pv.fieldReasons : [];
                         var _rowSevFallback = (pv.severity === 'warn' || pv.severity === 'error') ? pv.severity : 'error';
+                        var _rowReasonFallback = pv.reason ? String(pv.reason) : '';
                         var _fArr = [];
                         var _fSevArr = [];
                         var _fCellArr = [];
+                        var _fReasonArr = [];
                         // 已入项的三元组集合，用于 (field, stepIdx, subField) 去重
                         var _seenTriples = Object.create(null);
                         for (var _fi = 0; _fi < pv.fields.length; _fi++) {
@@ -213,27 +224,35 @@
                             // 解析 severity
                             var _sevRaw = _srcSev[_fi];
                             var _sev = (_sevRaw === 'error' || _sevRaw === 'warn') ? _sevRaw : _rowSevFallback;
+                            // B5 · 解析字段级 reason：优先取 fieldReasons[i]，否则回退行级 reason
+                            var _rRaw = _srcReasons[_fi];
+                            var _fReason = (typeof _rRaw === 'string' && _rRaw) ? _rRaw : _rowReasonFallback;
                             if (_seenTriples[_tripleKey] !== undefined) {
-                                // 已存在相同三元组：只做 error 压 warn 提升
+                                // 已存在相同三元组：只做 error 压 warn 提升，reason 若新入非空则覆盖（以新为准）
                                 var _existIdx = _seenTriples[_tripleKey];
                                 if (_sev === 'error') _fSevArr[_existIdx] = 'error';
+                                if (_fReason) _fReasonArr[_existIdx] = _fReason;
                                 continue;
                             }
                             _seenTriples[_tripleKey] = _fArr.length;
                             _fArr.push(_fv);
                             _fSevArr.push(_sev);
                             _fCellArr.push({ stepIdx: _stepIdx, subField: _subField });
+                            _fReasonArr.push(_fReason);
                         }
                         if (_fArr.length > 0) {
                             S._pushFailedFields.set(kStr, _fArr);
                             S._pushFailedFieldSeverity.set(kStr, _fSevArr);
                             S._pushFailedFieldCells.set(kStr, _fCellArr);
+                            S._pushFailedFieldReasons.set(kStr, _fReasonArr);
                         }
                     } else if (pv.field && typeof pv.field === 'string') {
                         S._pushFailedFields.set(kStr, [pv.field]);
                         var _rowSevFallback2 = (pv.severity === 'warn' || pv.severity === 'error') ? pv.severity : 'error';
                         S._pushFailedFieldSeverity.set(kStr, [_rowSevFallback2]);
                         S._pushFailedFieldCells.set(kStr, [{}]);
+                        // B5 · 旧格式单 field：fieldReasons 也用行级 reason
+                        S._pushFailedFieldReasons.set(kStr, [pv.reason ? String(pv.reason) : '']);
                     }
                 } else if (typeof pv === 'string') {
                     // 兼容旧格式：纯字符串 reason，timestamp 视为 0
@@ -250,6 +269,7 @@
             if (S._pushFailedFields) S._pushFailedFields.clear(); else S._pushFailedFields = new Map();
             if (S._pushFailedFieldSeverity) S._pushFailedFieldSeverity.clear(); else S._pushFailedFieldSeverity = new Map();
             if (S._pushFailedFieldCells) S._pushFailedFieldCells.clear(); else S._pushFailedFieldCells = new Map();
+            if (S._pushFailedFieldReasons) S._pushFailedFieldReasons.clear(); else S._pushFailedFieldReasons = new Map();
             if (S._failedOnly) S._failedOnly = false;
         }
         // B3 · 字段级"失败恢复"清理：对每个旧失败字段，若在新 payload 中已不在失败集合，

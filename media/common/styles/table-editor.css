@@ -428,13 +428,48 @@ tbody tr.xs-tr-push-warn td.xs-td.xs-col-selected{background:#fce8b8}
        * xs-td-failed-cell 无条件基于 field 命中，两者并行，以后者为主。
      ☆ background 带 !important，防止被无标志的 td 基底背景吹飞。
    ========================================================== */
-.xs-td.xs-td-failed-cell{background:#fde8e8 !important;box-shadow:inset 3px 0 0 var(--d) !important}
+.xs-td.xs-td-failed-cell{background:#fde8e8 !important;box-shadow:inset 3px 0 0 var(--d) !important;position:relative}
 tbody tr:hover td.xs-td.xs-td-failed-cell{background:#fbd9d9 !important}
 tbody tr.selected td.xs-td.xs-td-failed-cell{background:#fde8e8 !important;box-shadow:inset 3px 0 0 var(--d),inset -2px 0 0 var(--p) !important}
 
-.xs-td.xs-td-failed-cell-warn{background:#fff3c4 !important;box-shadow:inset 3px 0 0 var(--w) !important}
+.xs-td.xs-td-failed-cell-warn{background:#fff3c4 !important;box-shadow:inset 3px 0 0 var(--w) !important;position:relative}
 tbody tr:hover td.xs-td.xs-td-failed-cell-warn{background:#ffe8a3 !important}
 tbody tr.selected td.xs-td.xs-td-failed-cell-warn{background:#fff3c4 !important;box-shadow:inset 3px 0 0 var(--w),inset -2px 0 0 var(--p) !important}
+
+/* ----------------------------------------------------------------------------
+ * B3+ · 失败单元格右上角小角标（⚠）— 与 cell 内容视觉区分
+ * ----------------------------------------------------------------------------
+ * 需求（2026-09-19）：hover 前用户就能通过右上角小图标一眼看出该单元格有校验问题，
+ *   并与单元格内容形成视觉区隔（避免只靠底色不够醒目）。
+ * 实现：
+ *   - 红：xs-td-failed-cell → ⚠ 红色（枚举/类型/结构/重复名称）
+ *   - 黄：xs-td-failed-cell-warn → ⚠ 橙色（待补充等质量类）
+ *   - pointer-events:none：不拦截 cell 点击/双击编辑
+ *   - z-index:2：压过 tbody hover 底色，保持角标始终可见
+ *   - 尺寸 12px，紧贴右上角内框（top/right 2px），不与 3px 左竖条冲突
+ * ============================================================================ */
+.xs-td.xs-td-failed-cell::after,
+.xs-td.xs-td-failed-cell-warn::after{
+    content:'⚠';
+    position:absolute;
+    top:1px;
+    right:3px;
+    font-size:11px;
+    line-height:1;
+    font-weight:700;
+    pointer-events:none;
+    z-index:2;
+    text-shadow:0 0 2px #fff, 0 0 2px #fff; /* 白描边避免与深色底/内容混淆 */
+}
+.xs-td.xs-td-failed-cell::after{color:#d93026}
+.xs-td.xs-td-failed-cell-warn::after{color:#b26a00}
+/* 展开态子表格 sub-td 内也支持角标（xse-td-* 同样为块级 td，需要 position 基点） */
+.xse-table .xse-td-desc.xs-td-failed-cell,
+.xse-table .xse-td-data.xs-td-failed-cell,
+.xse-table .xse-td-expected.xs-td-failed-cell,
+.xse-table .xse-td-desc.xs-td-failed-cell-warn,
+.xse-table .xse-td-data.xs-td-failed-cell-warn,
+.xse-table .xse-td-expected.xs-td-failed-cell-warn{position:relative}
 
 /* ============================================================================
  * B4 · 展开态子表格 sub-td 级失败高亮
@@ -967,13 +1002,13 @@ tbody tr.xs-tr-push-failed .xse-table .xse-td-id .xse-idx-dot,
 #preValidateGateModal .xs-pr-group.is-warn .xs-pr-group-head{background:#fff8ec;border-bottom-color:#f5d6a4}
 #preValidateGateModal .xs-pr-group-index{flex-shrink:0;color:#999;font-variant-numeric:tabular-nums;font-weight:500;min-width:28px}
 #preValidateGateModal .xs-pr-group-head .xs-pr-row{margin-right:4px}
+/* 2026-09-19 · 卡片头右侧「分类计数」样式：margin-left:auto 顶到右边缘；
+   内部 .xs-pr-num.is-failed/is-warn 复用顶部 summary 的颜色（红/黄），保持视觉一致。
+   历史上此处曾放过📋复制案例 ID 按钮，用户反馈可读性优先已移除，样式一并清理。 */
 #preValidateGateModal .xs-pr-group-count{margin-left:auto;color:#888;font-size:12px;font-variant-numeric:tabular-nums}
-/* P2（2026-09-19）复制案例 ID 按钮：右对齐、无边框圆角按钮；hover 与 active 走主色。 */
-#preValidateGateModal .xs-pr-copy-btn{flex-shrink:0;margin-left:auto;padding:2px 8px;border:1px solid transparent;border-radius:4px;background:transparent;color:#666;font-size:13px;line-height:1.4;cursor:pointer;transition:background .12s,color .12s,border-color .12s}
-#preValidateGateModal .xs-pr-copy-btn:hover{background:#eef4ff;color:#1a66ff;border-color:#c9dcff}
-#preValidateGateModal .xs-pr-copy-btn:active{background:#dbe9ff;color:#0d47a1}
-/* 复制按钮存在时，让 group-count 不再抢占 margin-left:auto，改为固定间距贴在复制按钮右侧 */
-#preValidateGateModal .xs-pr-copy-btn ~ .xs-pr-group-count{margin-left:8px}
+#preValidateGateModal .xs-pr-group-count .xs-pr-num{font-weight:600;font-variant-numeric:tabular-nums;margin:0 2px}
+#preValidateGateModal .xs-pr-group-count .xs-pr-num.is-failed{color:var(--d,#e5484d)}
+#preValidateGateModal .xs-pr-group-count .xs-pr-num.is-warn{color:var(--w,#f0a020)}
 #preValidateGateModal .xs-pr-group-body{padding:2px 0}
 #preValidateGateModal .xs-pr-item-inline{display:flex;align-items:flex-start;gap:8px;padding:6px 14px;border-bottom:1px dashed #f2f2f2;font-size:12.5px;line-height:1.55}
 #preValidateGateModal .xs-pr-item-inline:last-child{border-bottom:none}

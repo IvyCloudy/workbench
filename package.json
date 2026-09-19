@@ -359,6 +359,58 @@
           },
           "markdownDescription": "推送时**中→英**反向映射（中文表头还原为英文字段名）。\n\n- key 为 CSV 模板/examples/case_example.csv 中的中文表头名，value 为推送给后端接口时所使用的英文字段名。\n- 优先级（高 → 低）：**工作区设置 > 用户设置 > 插件内置默认值**。\n- 推送时若数据的 key 匹配到此映射，自动替换为对应英文 key；未匹配到的 key 保持原样。\n- 若 CSV 模板新增了中文表头，在此处补充一条映射即可，无需修改代码重编译。\n\n示例：\n```json\n{\n  \"优先级\": \"priority\",\n  \"前置条件\": \"preconditions\"\n}\n```"
         },
+        "testcaseViewer.enum.caseType": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "功能点类",
+            "流程类",
+            "界面类",
+            "批处理类",
+            "数据仓库类",
+            "报表统计类",
+            "算法类",
+            "安全类",
+            "可用性检查类",
+            "报文接口类",
+            "其他"
+          ],
+          "markdownDescription": "「案例类型」字段（YAML `type` / CSV「案例类型」）的合法取值清单。\n\n- 用于推送前置校验：**空值**或不在此清单内的取值会被硬拦截。\n- 该清单由插件维护，与后端系统支持的枚举保持一致；后端调整清单时随插件版本更新。"
+
+        },
+        "testcaseViewer.enum.testType": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "手工",
+            "UI自动化",
+            "接口自动化",
+            "自动化"
+          ],
+          "markdownDescription": "「执行方式」字段（YAML `test_type` / CSV「执行方式」）的合法取值清单。\n\n- 用于推送前置校验：**空值**或不在此清单内的取值会被硬拦截。\n- 除清单值外，插件内置别名归一化：`接口` → `接口自动化`、`界面` → `UI自动化`（大小写不敏感），别名无需在此清单中列出。"
+
+        },
+        "testcaseViewer.enum.priority": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "高",
+            "中",
+            "低"
+          ],
+          "markdownDescription": "「优先级」字段（YAML `priority` / CSV「优先级」）的合法取值清单。\n\n- 空值时回退到清单**最后一项**作为默认值；非空但不在清单内则硬拦截。"
+
+        },
+        "testcaseViewer.enum.keyFlag": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "是",
+            "否"
+          ],
+          "markdownDescription": "「关键案例」字段（YAML `key_flag` / CSV「关键案例」）的合法取值清单。\n\n- 空值时回退到清单**最后一项**作为默认值；非空但不在清单内则硬拦截。\n- 严格匹配，不支持 `Y/N`、`true/false` 等别名归一化。"
+
+        },
         "testcaseViewer.debug.yaml": {
           "type": "boolean",
           "default": false,

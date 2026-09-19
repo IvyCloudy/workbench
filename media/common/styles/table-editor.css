@@ -233,36 +233,35 @@ tbody tr.xs-tr-push-failed td.xs-td-cb .xs-rownum{color:var(--d)}
 tbody tr.selected td.xs-td-cb{background:#e3f2fd}
 tbody tr:hover td.xs-td-cb{background:#f0f6ff}
 
-/* 推送失败行：浅红色背景 + 左侧红条提示，便于一眼识别 */
-tbody tr.xs-tr-push-failed{background:#fde8e8}
-tbody tr.xs-tr-push-failed:hover{background:#fbd9d9}
-tbody tr.xs-tr-push-failed td.xs-td-cb{background:#fde8e8;box-shadow:inset 3px 0 0 var(--d)}
+/* 推送失败行（B3 · 单元格级高亮策略）：
+   ☆ 需求变更（2026-09-18）：不再对整行铺红底。tr 上仍打 xs-tr-push-failed 类，
+     用途：① 行号 td 颜色标记；② tsId 冻结列颜色兜底；③ hover title 承载失败原因；
+     ④ CSS 派生规则（如 xs-td-overrides-fail 决策 / xs-td-push-failed 单元格覆盖）依然生效。
+   真正的“哪些单元格失败”由 <td> 的 .xs-td-failed-cell / .xs-td-failed-cell-warn 表达，
+   由 02a-render.js 按 field → 列索引精准挂 class（默认兜底染 tsId 列一列）。 */
+tbody tr.xs-tr-push-failed{background:transparent}
+tbody tr.xs-tr-push-failed:hover{background:transparent}
+tbody tr.xs-tr-push-failed td.xs-td-cb{background:transparent;box-shadow:inset 3px 0 0 var(--d)}
 tbody tr.xs-tr-push-failed:hover td.xs-td-cb{background:#fbd9d9}
-/* 同时被选中时：保持失败红底（更重要的语义），仅以勾选框列的蓝条提示选中态 */
-tbody tr.xs-tr-push-failed.selected{background:#fde8e8}
-tbody tr.xs-tr-push-failed.selected td.xs-td-cb{background:#fde8e8;box-shadow:inset 3px 0 0 var(--d),inset -2px 0 0 var(--p)}
-/* 推送失败行：所有数据单元格统一红底，覆盖斑马纹(tbody tr:nth-child(even) td)
-   等 td 级默认背景（同等特异性下靠源码顺序胜出）。
-   更具体的 frozen / cb / push-updated / selected 组合覆盖规则不受影响。 */
-tbody tr.xs-tr-push-failed td{background:#fde8e8}
-tbody tr.xs-tr-push-failed:hover td{background:#fbd9d9}
+/* 同时被选中时：保持左侧红条（作为“该行有问题”的锚点），中央蓝条提示选中态 */
+tbody tr.xs-tr-push-failed.selected{background:transparent}
+tbody tr.xs-tr-push-failed.selected td.xs-td-cb{background:transparent;box-shadow:inset 3px 0 0 var(--d),inset -2px 0 0 var(--p)}
+/* 关键去噪：整行 td 背景不再统一红底 */
+tbody tr.xs-tr-push-failed td{background:inherit}
+tbody tr.xs-tr-push-failed:hover td{background:inherit}
 
 /* 逐格高亮（编辑保存后，精确定位变更单元格）：浅黄色 */
 .xs-td.xs-td-push-updated{background:#fff9c4 !important}
 tbody tr:hover td.xs-td.xs-td-push-updated{background:#fff176 !important}
 tbody tr.selected td.xs-td.xs-td-push-updated{background:#ffee58 !important}
-tbody tr.xs-tr-push-failed td.xs-td.xs-td-push-updated{background:#fde8e8 !important;box-shadow:inset 3px 0 0 #fdd835 !important}
-tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-push-updated{background:#fbd9d9 !important;box-shadow:inset 3px 0 0 #fdd835 !important}
-tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-push-updated{background:#fde8e8 !important;box-shadow:inset 3px 0 0 #fdd835 !important}
+/* ☆ 需求变更（2026-09-19）：失败行中已修改单元格 保持黄底原色（不再强刷红底），
+     红色只出现在 <td>.xs-td-failed-cell 真正命中失败字段的单元格上。*/
 
 /* 整行高亮（推送/外部变更后，行级变化）：浅橙色提醒，与逐格黄色/行选蓝色区分 */
 .xs-td.xs-td-push-updated-row{background:#fff3e0 !important}
 tbody tr:hover td.xs-td.xs-td-push-updated-row{background:#ffe0b2 !important}
 tbody tr.selected td.xs-td.xs-td-push-updated-row{background:#ffcc80 !important}
-tbody tr.xs-tr-push-failed td.xs-td.xs-td-push-updated-row{background:#fde8e8 !important;box-shadow:inset 3px 0 0 #ff9800 !important}
-tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-push-updated-row{background:#fbd9d9 !important;box-shadow:inset 3px 0 0 #ff9800 !important}
-tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-push-updated-row{background:#fbd9d9 !important;box-shadow:inset 3px 0 0 #ff9800 !important}
-tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-push-updated-row{background:#fde8e8 !important;box-shadow:inset 3px 0 0 #ff9800 !important}
+/* ☆ 需求变更（2026-09-19）：失败行中已推送变更单元格 保持橙底原色（不再强刷红底）*/
 
 /* CSS 兜底：同时挂了推送成功高亮 + modified 时（推送后再修改），让 modified 黄底赢 */
 /* 与 xs-td-push-updated(#fff9c4) / xs-td-push-updated-row(#fff3e0) 的浅黄/橙做区分：modified 用 #fffbe6 + 金色左边条 */
@@ -277,9 +276,7 @@ tbody tr.selected td.xs-td.xs-td-push-updated-row.modified{background:#fff9c4 !i
 .xs-td.xs-td-push-added{background:#e8f5e9 !important}
 tbody tr:hover td.xs-td.xs-td-push-added{background:#c8e6c9 !important}
 tbody tr.selected td.xs-td.xs-td-push-added{background:#a5d6a7 !important}
-tbody tr.xs-tr-push-failed td.xs-td.xs-td-push-added{background:#fde8e8 !important;box-shadow:inset 3px 0 0 #43a047 !important}
-tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-push-added{background:#fbd9d9 !important;box-shadow:inset 3px 0 0 #43a047 !important}
-tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-push-added{background:#fde8e8 !important;box-shadow:inset 3px 0 0 #43a047 !important}
+/* ☆ 需求变更（2026-09-19）：失败行中已新增单元格 保持绿底原色（不再强刷红底）*/
 
 /* Ghost 行（被删除的行占位）：淡红底 + 删除线 + 灰色文字 */
 .xs-ghost-sep td{background:#fce4e4;color:#c62828;font-weight:500;font-size:11px;padding:4px 8px;text-align:center;border-top:2px solid #ef9a9a}
@@ -296,9 +293,7 @@ tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-push-added{background:#fde8e8
 .xs-td.xs-td-user-marked{border:0;background:#e3f2fd}
 tbody tr:hover td.xs-td.xs-td-user-marked{background:#bbdefb}
 tbody tr.selected td.xs-td.xs-td-user-marked{background:#90caf9}
-tbody tr.xs-tr-push-failed td.xs-td.xs-td-user-marked{background:#f5d7e0;box-shadow:inset 3px 0 0 #1976d2}
-tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-user-marked{background:#f0c5d5;box-shadow:inset 3px 0 0 #1976d2}
-tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-user-marked{background:#f5d7e0;box-shadow:inset 3px 0 0 #1976d2}
+/* ☆ 需求变更（2026-09-19）：失败行中用户标记单元格 保持蓝底原色（不再强刷粉红）*/
 /* 标记格被单元格/列拖选时：取消四边内圈 box-shadow，避免每个单元格各自画圈导致视觉分割；
    例外：如果是矩形选区**最外圈**（xs-cs-* 方向类），仍需保留描边表现选区边界 */
 .xs-td.xs-td-user-marked.xs-cell-selected:not(.xs-cs-t):not(.xs-cs-r):not(.xs-cs-b):not(.xs-cs-l){box-shadow:none !important}
@@ -331,16 +326,19 @@ tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-overrides-fail.xs-td-push-upd
 tbody tr.xs-tr-push-failed td.xs-td.xs-td-overrides-fail.xs-td-push-added{background:#e8f5e9 !important;box-shadow:none !important}
 tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-overrides-fail.xs-td-push-added{background:#c8e6c9 !important}
 tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-overrides-fail.xs-td-push-added{background:#a5d6a7 !important}
-/* 推送失败后再修改：modified 黄底叠加，直观提示"改动已产生但尚未再次推送" */
-tbody tr.xs-tr-push-failed td.xs-td.xs-td-overrides-fail.modified{background:#fffbe6 !important;box-shadow:inset 3px 0 0 #fbc02d !important}
-tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-overrides-fail.modified{background:#fff59d !important;box-shadow:inset 3px 0 0 #fbc02d !important}
-tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-overrides-fail.modified{background:#fff9c4 !important;box-shadow:inset 3px 0 0 #fbc02d,inset -2px 0 0 var(--p) !important}
+/* 推送失败后再修改：modified 黄底叠加，直观提示"改动已产生但尚未再次推送"。
+   例外：字段级失败（xs-td-failed-cell / xs-td-failed-cell-warn）拥有更高语义优先级，
+   不能被 modified 黄底覆盖 —— 否则用户会看到"error 字段变成了黄底"的错觉。 */
+tbody tr.xs-tr-push-failed td.xs-td.xs-td-overrides-fail.modified:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn){background:#fffbe6 !important;box-shadow:inset 3px 0 0 #fbc02d !important}
+tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-overrides-fail.modified:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn){background:#fff59d !important;box-shadow:inset 3px 0 0 #fbc02d !important}
+tbody tr.xs-tr-push-failed.selected td.xs-td.xs-td-overrides-fail.modified:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn){background:#fff9c4 !important;box-shadow:inset 3px 0 0 #fbc02d,inset -2px 0 0 var(--p) !important}
 /* 展开态兜底：xs-detail-cell（步骤列展开为内嵌子表 .xse-table）失败行修改时，
    强制主 td 显示黄底金条；子表 td 由 617-660 透传规则透明化，从而透出主 td 黄底。
-   使用更高特异性 + !important 稳压任何默认色 / 斑马纹 / hover / focus。 */
-tbody tr.xs-tr-push-failed td.xs-td.xs-detail-cell.xs-td-overrides-fail.modified,
-tbody tr.xs-tr-push-failed:hover td.xs-td.xs-detail-cell.xs-td-overrides-fail.modified,
-tbody tr.xs-tr-push-failed.selected td.xs-td.xs-detail-cell.xs-td-overrides-fail.modified{
+   使用更高特异性 + !important 稳压任何默认色 / 斑马纹 / hover / focus。
+   例外：字段级失败（xs-td-failed-cell / xs-td-failed-cell-warn）语义优先级更高，不覆盖。 */
+tbody tr.xs-tr-push-failed td.xs-td.xs-detail-cell.xs-td-overrides-fail.modified:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn),
+tbody tr.xs-tr-push-failed:hover td.xs-td.xs-detail-cell.xs-td-overrides-fail.modified:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn),
+tbody tr.xs-tr-push-failed.selected td.xs-td.xs-detail-cell.xs-td-overrides-fail.modified:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn){
     background:#fffbe6 !important;
     background-color:#fffbe6 !important;
     box-shadow:inset 3px 0 0 #fbc02d !important;
@@ -350,14 +348,14 @@ tbody tr.xs-tr-push-failed.selected td.xs-td.xs-detail-cell.xs-td-overrides-fail
 .xs-th.xs-col-selected{background:#cfe4f8 !important;box-shadow:inset 0 3px 0 var(--p)}
 .xs-td.xs-col-selected{background:#eaf3fb}
 tbody tr.selected td.xs-td.xs-col-selected{background:#d3e6f7}
-tbody tr.xs-tr-push-failed td.xs-td.xs-col-selected{background:#f5dadc}
+/* ☆ 需求变更（2026-09-19）：失败行中列选中单元格 保持浅蓝原色 */
 
 /* 单元格矩形选区（Excel 风格）：拖动鼠标形成的矩形高亮，比单点 active 弱。
    为提升"矩形选区"的视觉层次（避免与行选 selected #e3f2fd 混淆），
    矩形内所有格用浅蓝底色，同时**矩形外沿**通过 4 条方向类拼接出 Excel 蓝色实线边框。 */
 .xs-td.xs-cell-selected{background:#eaf3fb;position:relative}
 tbody tr.selected td.xs-td.xs-cell-selected{background:#d3e6f7}
-tbody tr.xs-tr-push-failed td.xs-td.xs-cell-selected{background:#f5dadc}
+/* ☆ 需求变更（2026-09-19）：失败行中单元格选区 保持浅蓝原色 */
 .xs-td.xs-cell-selected.xs-col-selected{background:#cfe4f8}
 /* 矩形选区外沿（4 条边）：由 JS 在 updateCellSelClasses 中给最外圈格子加 xs-cs-t/r/b/l 类，
    利用 box-shadow inset 拼出连续蓝色边框，视觉上等同于 Excel 的选区框 */
@@ -384,9 +382,109 @@ tbody tr.selected td.xs-td-frozen{background:#dde7f3}
 /* 冻结列也参与单元格矩形选区（# 全选 / 跨列拖选）：保持冻结灰调，但加深以体现选中态 */
 .xs-td.xs-td-frozen.xs-cell-selected{background:#dde7f3}
 .xs-td.xs-td-frozen.xs-col-selected{background:#d3deeb}
-/* 失败行中的冻结列（tsId）：背景同步红底，文字保持冻结列默认灰色，确保高亮一致但不变红字 */
-tbody tr.xs-tr-push-failed td.xs-td.xs-td-frozen{background:#fde8e8}
-tbody tr.xs-tr-push-failed:hover td.xs-td.xs-td-frozen{background:#fbd9d9}
+/* 失败行中的冻结列（tsId）：不再整列铺红，仅保留极浅的粉红兜底作为“该行有问题”的视觉锚点
+   （由 02a-render.js 兜底把 tsId 列加入 failedColSet → 挂 xs-td-failed-cell，此处只处理
+   “failed-cell 类没挂上”的极端情况，避免整列彻底透明看不出问题）。 */
+/* ☆ 需求变更（2026-09-19）：失败行中的冻结列（tsId） 不再铺浅红底，保持灵要
+     行号 td 已有左侧红条（box-shadow inset 3px 0 0 var(--d)）作为“该行失败”的唯一视觉锚点；
+     tsId 本身如果恰已命中失败字段（如占位/格式非法），会由 xs-td-failed-cell 单独上红。*/
+
+/* ==========================================================
+   B3 · 编辑期软拦截高亮（黄行 xs-tr-push-warn）
+   ☆ 需求变更（2026-09-19）：warn 配色恢复为黄色系，与 error 红行对称，采用与推送失败同样的“底色 + 左竖条”风格；
+      与“用户修改/新增”黄色共存时依靠“行底透明 + 单元格级精确命中”避免混淆。
+     ☆ 需求变更（2026-09-18）：与红行保持一致 —— 不再对整行铺色底。
+     真正的黄色单元格由 <td>.xs-td-failed-cell-warn 控制，
+     行上的 xs-tr-push-warn 仅作为：
+       ① 行号 td 颜色标记（黄色条 + 黄色行号）；
+       ② tsId 冻结列不再兼底染黄（避免 tsId 合法时被误标）。
+   黄色调色板（B3 专用，复用既有 --w）：
+     深黄 var(--w) = #f29d39（左侧竖条 / 行号 / 单元格边条）
+     浅黄 #fff3c4（单元格底）
+     中黄 #ffe8a3（hover）
+     选中 #fce8b8（selected 强调）
+   ========================================================== */
+tbody tr.xs-tr-push-warn{background:transparent}
+tbody tr.xs-tr-push-warn:hover{background:transparent}
+tbody tr.xs-tr-push-warn td{background:inherit}
+tbody tr.xs-tr-push-warn:hover td{background:inherit}
+tbody tr.xs-tr-push-warn td.xs-td-cb{background:transparent;box-shadow:inset 3px 0 0 var(--w)}
+tbody tr.xs-tr-push-warn:hover td.xs-td-cb{background:#fff3c4}
+tbody tr.xs-tr-push-warn.selected{background:transparent}
+tbody tr.xs-tr-push-warn.selected td.xs-td-cb{background:transparent;box-shadow:inset 3px 0 0 var(--w),inset -2px 0 0 var(--p)}
+tbody tr.xs-tr-push-warn td.xs-td-cb .xs-rownum{color:var(--w)}
+/* B3 · 冻结列（tsId）本身合法，不再兼底染黄 —— 用户明确要求 tsId 列在合法时不应被标识。
+   识别“哪行有提醒”由行号格左侧竖条 + 行号数字色（上方规则）承担。 */
+/* 与用户标记 / 修改 / 新增等其他高亮叠加时，warn 让位（行底已透明）。*/
+tbody tr.xs-tr-push-warn td.xs-td.xs-cell-selected{background:#fce8b8}
+tbody tr.xs-tr-push-warn td.xs-td.xs-col-selected{background:#fce8b8}
+
+/* ==========================================================
+   B3 · 单元格级失败高亮（红：xs-td-failed-cell／黄：xs-td-failed-cell-warn）
+   由 02a-render.js 根据 failures[i].field → headers 列索引精确到具体列。
+   优先级：
+     ☆ 不与既有 xs-td-push-failed / xs-td-push-updated / xs-td-user-marked 同时存在“适用于同一单元格”：
+       * xs-td-push-failed 由 resolveHighlight 基于 modTime/rowFailTime 竞争决定（个别单元格失败时间胜出），
+       * xs-td-failed-cell 无条件基于 field 命中，两者并行，以后者为主。
+     ☆ background 带 !important，防止被无标志的 td 基底背景吹飞。
+   ========================================================== */
+.xs-td.xs-td-failed-cell{background:#fde8e8 !important;box-shadow:inset 3px 0 0 var(--d) !important}
+tbody tr:hover td.xs-td.xs-td-failed-cell{background:#fbd9d9 !important}
+tbody tr.selected td.xs-td.xs-td-failed-cell{background:#fde8e8 !important;box-shadow:inset 3px 0 0 var(--d),inset -2px 0 0 var(--p) !important}
+
+.xs-td.xs-td-failed-cell-warn{background:#fff3c4 !important;box-shadow:inset 3px 0 0 var(--w) !important}
+tbody tr:hover td.xs-td.xs-td-failed-cell-warn{background:#ffe8a3 !important}
+tbody tr.selected td.xs-td.xs-td-failed-cell-warn{background:#fff3c4 !important;box-shadow:inset 3px 0 0 var(--w),inset -2px 0 0 var(--p) !important}
+
+/* ============================================================================
+ * B4 · 展开态子表格 sub-td 级失败高亮
+ * ----------------------------------------------------------------------------
+ * 语义：外层 .xs-td 若非失败列，其内嵌 .xse-table 里的具体 sub-td
+ *   （.xse-td-desc / .xse-td-data / .xse-td-expected）可以单独命中失败。
+ *   典型场景：某行第 2 步的"步骤名称"含"待补充" → 只有第 2 步的 xse-td-desc 变黄，
+ *   其他步骤仍保持正常背景。
+ * 特异性：外层 .xs-td-overrides-fail 透传规则以 :not(.xs-td-failed-cell*)
+ *   排除了整列失败的场景；但 sub-td 单独失败时外层 .xs-td 并未打这些 class，
+ *   透传规则仍会强制清零 sub-td 背景 → 因此本块使用 !important 直接指定 sub-td
+ *   自身背景与竖条，压过外层透传规则。
+ * ============================================================================ */
+.xse-table .xse-td-desc.xs-td-failed-cell,
+.xse-table .xse-td-data.xs-td-failed-cell,
+.xse-table .xse-td-expected.xs-td-failed-cell{
+    /* 加深填充：由 #fde8e8 → #fbc7c7；同时叠加内框 + 加粗左竖条，避免"只染边"观感 */
+    background:#fbc7c7 !important;
+    box-shadow: inset 4px 0 0 var(--d), inset 0 0 0 1px var(--d) !important;
+}
+.xse-table .xse-td-desc.xs-td-failed-cell-warn,
+.xse-table .xse-td-data.xs-td-failed-cell-warn,
+.xse-table .xse-td-expected.xs-td-failed-cell-warn{
+    /* 加深填充：由 #fff3c4 → #ffe08a；同时叠加内框 + 加粗左竖条 */
+    background:#ffe08a !important;
+    box-shadow: inset 4px 0 0 var(--w), inset 0 0 0 1px var(--w) !important;
+}
+/* B4 · 预期结果列内 UI/接口/数据 三个子分组的独立高亮：
+ *   仅当命中 ui_expected / api_expected / db_expected 时，才只染对应 .xse-group 背景，
+ *   不影响其他子分组。若 xse-td-expected 本身已被打上 failed class（整列命中），
+ *   则由上面的规则统一染色，本组仅生效于"子分组精确命中"场景。
+ *   视觉与 sub-td 保持一致：填充 + 左竖条 + 淡边框。 */
+.xse-table .xse-group.xs-group-failed{
+    background:#fbc7c7 !important;
+    border-left:4px solid var(--d);
+    border-radius:2px;
+    box-shadow:inset 0 0 0 1px var(--d);
+    padding:2px 6px;
+    /* 与 border-left:4px 对齐，抵消其占位，避免视觉右移 */
+    margin-left:-4px;
+}
+.xse-table .xse-group.xs-group-failed-warn{
+    background:#ffe08a !important;
+    border-left:4px solid var(--w);
+    border-radius:2px;
+    box-shadow:inset 0 0 0 1px var(--w);
+    padding:2px 6px;
+    /* 与 border-left:4px 对齐，抵消其占位，避免视觉右移 */
+    margin-left:-4px;
+}
 
 /* 行冻结：样例数据行（testcase_id 为占位值「案例唯一标识，不可修改」等）整行只读。
    视觉与冻结列保持一致（浅灰底 + 灰字 + 禁止编辑光标），并在行号格加锁标记色提示。 */
@@ -719,15 +817,15 @@ tbody tr.xs-tr-push-failed .xse-table tbody td[contenteditable="true"]:focus-wit
  *       #fffbe6 / #fff59d / #fff9c4 稳定透出。
  * 特异性：(0,4,3+)（含 :focus / :hover 伪类时），配合 !important 稳压所有子表默认规则。
  * ============================================================================ */
-tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody td,
-tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody tr td,
-tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody tr:nth-child(even) td,
-tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody tr:hover td,
-tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody tr:nth-child(even):hover td,
-tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody td[contenteditable="true"],
-tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody td[contenteditable="true"]:hover,
-tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody td[contenteditable="true"]:focus,
-tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail .xse-table tbody td[contenteditable="true"]:focus-within{
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn) .xse-table tbody td,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn) .xse-table tbody tr td,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn) .xse-table tbody tr:nth-child(even) td,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn) .xse-table tbody tr:hover td,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn) .xse-table tbody tr:nth-child(even):hover td,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn) .xse-table tbody td[contenteditable="true"],
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn) .xse-table tbody td[contenteditable="true"]:hover,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn) .xse-table tbody td[contenteditable="true"]:focus,
+tbody tr.xs-tr-push-failed td.xs-td.modified.xs-td-overrides-fail:not(.xs-td-failed-cell):not(.xs-td-failed-cell-warn) .xse-table tbody td[contenteditable="true"]:focus-within{
     background:transparent !important;
     background-color:transparent !important;
     box-shadow:none !important;
@@ -832,18 +930,56 @@ tbody tr.xs-tr-push-failed .xse-table .xse-td-id .xse-idx-dot,
 .xs-pr-summary .xs-pr-num{font-weight:600;font-size:13px}
 .xs-pr-summary .xs-pr-num.is-success{color:var(--s)}
 .xs-pr-summary .xs-pr-num.is-failed{color:var(--d)}
+.xs-pr-summary .xs-pr-num.is-warn{color:var(--w,#f0a020)}
 .xs-pr-body{padding:0;min-height:80px}
 .xs-pr-empty{padding:32px 16px;text-align:center;color:#888;font-size:13px}
 .xs-pr-list{padding:6px 0}
+/* B4 推送结果分栏：硬拦截失败（红）+ 软拦截命中（黄）两段独立展示 */
+.xs-pr-section{margin:0;border-bottom:1px solid #eee}
+.xs-pr-section:last-child{border-bottom:none}
+.xs-pr-section-title{display:flex;align-items:center;gap:8px;padding:8px 16px;background:#fafafa;border-bottom:1px solid #eee;font-size:12px}
+.xs-pr-section.is-warn .xs-pr-section-title{background:#fff8ec}
+.xs-pr-section.is-error .xs-pr-section-title{background:#fdf3f3}
+.xs-pr-badge{display:inline-flex;align-items:center;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;line-height:1.5;color:#fff}
+.xs-pr-badge.is-error{background:var(--d,#dc3545)}
+.xs-pr-badge.is-warn{background:var(--w,#f0a020)}
+.xs-pr-section-desc{color:#666;font-size:12px}
 .xs-pr-item{display:flex;align-items:flex-start;gap:10px;padding:8px 16px;border-bottom:1px solid #f0f0f0;font-size:12.5px;line-height:1.5}
 .xs-pr-item:last-child{border-bottom:none}
 .xs-pr-item:hover{background:#fafbfc}
 .xs-pr-seq{flex-shrink:0;width:28px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums}
+.xs-pr-seq.is-warn{color:var(--w,#f0a020)}
 .xs-pr-row{flex-shrink:0;color:var(--p);font-weight:500;white-space:nowrap}
 .xs-pr-row.is-link{cursor:pointer;text-decoration:underline}
 .xs-pr-row.is-link:hover{color:#005a9e}
 .xs-pr-reason{flex:1;color:#444;word-break:break-word;white-space:pre-wrap}
 .xs-pr-truncated{padding:8px 16px;font-size:12px;color:#888;background:#fafafa;border-top:1px solid #eee}
+
+/* ===== 前置校验窗口（05g）：按行分组卡片 =====
+ * 语义：一张卡片 = 一行案例，卡片内列出该行的所有校验问题（error+warn 混排）。
+ * 作用域限定在 #preValidateGateModal，避免污染推送结果/删除结果弹窗的传统分栏样式。
+ */
+#preValidateGateModal .xs-pr-group{margin:8px 12px;border:1px solid #e5e5e5;border-radius:6px;background:#fff;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,0.03)}
+#preValidateGateModal .xs-pr-group.is-error{border-color:#f1c4c2}
+#preValidateGateModal .xs-pr-group.is-warn{border-color:#f5d6a4}
+#preValidateGateModal .xs-pr-group-head{display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:12.5px;border-bottom:1px solid #eee;background:#fafafa}
+#preValidateGateModal .xs-pr-group.is-error .xs-pr-group-head{background:#fdf3f3;border-bottom-color:#f1c4c2}
+#preValidateGateModal .xs-pr-group.is-warn .xs-pr-group-head{background:#fff8ec;border-bottom-color:#f5d6a4}
+#preValidateGateModal .xs-pr-group-index{flex-shrink:0;color:#999;font-variant-numeric:tabular-nums;font-weight:500;min-width:28px}
+#preValidateGateModal .xs-pr-group-head .xs-pr-row{margin-right:4px}
+#preValidateGateModal .xs-pr-group-count{margin-left:auto;color:#888;font-size:12px;font-variant-numeric:tabular-nums}
+#preValidateGateModal .xs-pr-group-body{padding:2px 0}
+#preValidateGateModal .xs-pr-item-inline{display:flex;align-items:flex-start;gap:8px;padding:6px 14px;border-bottom:1px dashed #f2f2f2;font-size:12.5px;line-height:1.55}
+#preValidateGateModal .xs-pr-item-inline:last-child{border-bottom:none}
+#preValidateGateModal .xs-pr-item-inline:hover{background:#fafbfc}
+#preValidateGateModal .xs-pr-dot{flex-shrink:0;width:6px;height:6px;border-radius:50%;margin-top:8px}
+#preValidateGateModal .xs-pr-dot.is-error{background:var(--d,#e5484d)}
+#preValidateGateModal .xs-pr-dot.is-warn{background:var(--w,#f0a020)}
+#preValidateGateModal .xs-pr-seq.is-error{color:var(--d,#e5484d)}
+#preValidateGateModal .xs-pr-summary-item.xs-pr-summary-sub{margin-left:auto;color:#888;font-size:12px}
+#preValidateGateModal .xs-pr-empty{padding:24px;text-align:center;color:#999;font-size:13px}
+/* 卡片内的行号链接更明显（复用主色但强化） */
+#preValidateGateModal .xs-pr-group-head .xs-pr-row.is-link{font-weight:600}
 
 /* ===== 删除结果弹窗：复用推送弹窗单行三列样式，仅放开长 tsId 的换行约束 ===== */
 #deleteResultModal .xs-pr-row{white-space:normal;word-break:break-all;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;max-width:none}
@@ -907,6 +1043,44 @@ tbody tr.xs-tr-push-failed .xse-table .xse-td-id .xse-idx-dot,
 .hl-number{color:#cf222e}
 .hl-bool{color:#8250df}
 .xs-dv2-field-body{padding:8px 12px}
+
+/* ============================================================================
+ * B4 · dv2 明细弹窗失败高亮（最小化视觉方案）
+ * ----------------------------------------------------------------------------
+ * 场景：steps / preconditions 明细弹窗打开后，若该 tsId 存在推送校验失败：
+ *   - 左栏步骤 chip：命中的步骤只打红/黄色左边条 + 序号方块变色；
+ *     chip 自身背景保持默认，避免与选中态/悬浮态叠加造成信息过载。
+ *   - 右栏字段卡片：命中的子字段（operation/data/ui_expected/api_expected/db_expected）
+ *     标题条保持默认样式；只在内容区（.xs-dv2-field-body）铺淡色底
+ *     + 内部标量输入框（.xs-dv2-scalar）边框呼应色。
+ *     modified 状态自身黄底优先，仅覆盖未修改时的默认背景与边框。
+ * 规则等级：与主表 severity 保持一致（error=红，warn=黄；同 tsId error 压 warn）
+ * ============================================================================ */
+/* 左栏步骤 chip：失败态最小化——只用左边条变色 + 序号方块变色，不铺整块背景，
+   避免与"选中态/悬浮态"背景叠加造成信息过载。 */
+.xs-dv2-step.xs-dv2-step-failed{
+    border-left-color:var(--d) !important;
+}
+.xs-dv2-step.xs-dv2-step-failed .xs-dv2-step-num{background:var(--d);color:#fff}
+.xs-dv2-step.xs-dv2-step-failed-warn{
+    border-left-color:var(--w) !important;
+}
+.xs-dv2-step.xs-dv2-step-failed-warn .xs-dv2-step-num{background:var(--w);color:#fff}
+/* 右栏字段卡片：失败态最小化——标题条保持默认样式，只在内容区（body）淡色底
+   + 内部输入框边框呼应，避免顶部大色块干扰阅读；modified 状态自身黄底仍保留，
+   此处只影响未修改时的默认背景。 */
+.xs-dv2-field.xs-dv2-field-failed > .xs-dv2-field-body{
+    background:#fef4f4;
+}
+.xs-dv2-field.xs-dv2-field-failed > .xs-dv2-field-body .xs-dv2-scalar{
+    border-color:var(--d);
+}
+.xs-dv2-field.xs-dv2-field-failed-warn > .xs-dv2-field-body{
+    background:#fffbea;
+}
+.xs-dv2-field.xs-dv2-field-failed-warn > .xs-dv2-field-body .xs-dv2-scalar{
+    border-color:var(--w);
+}
 
 /* 标量字段：默认单行可滚动，展开后自适应 */
 .xs-dv2-scalar{width:100%;padding:6px 8px;border:1px solid var(--bd);border-radius:3px;font:inherit;font-size:12px;outline:none;resize:vertical;min-height:32px;max-height:32px;overflow-y:auto;line-height:1.5;box-sizing:border-box;background:#fff;font-family:inherit;overscroll-behavior:contain}

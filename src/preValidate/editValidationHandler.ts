@@ -16,6 +16,7 @@
  * ============================================================================
  */
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import { runValidatorsOnRowsPure } from './validators';
 import type { RowLike } from '../handlers/pushCore.types';
 import type { PushFailureItem } from '../handlers/pushCore.types';
@@ -35,9 +36,50 @@ import { buildCsvRowLikes } from './csvRowAdapter';
 // 防抖配置（依 B3 需求最终定稿：yaml / json 500ms，csv 800ms）
 //   · yaml / json 是结构化文档，parse 廉价 → 短防抖，反馈更快
 //   · csv 需按 headers + rows 组装成对象，大文件稍重 → 长防抖，避免频繁抖动
+//
+// P5 · 大文件防抖升级（2026-09-19）：
+//   · 文件字节数 > BIG_FILE_BYTES 时，视为大文件 —— parse + validate + persist 单次成本明显
+//     偏高（1w 行以上的 CSV/YAML 单次 pipeline 约 200–500ms）。此时用户连续敲键盘会造成
+//     "每次编辑都全量重跑"的抖动，因此把防抖档拉到 1500ms，让键盘停顿后再执行一次即可。
+//   · 小文件保持原档位（500 / 800ms），反馈快。
+//   · size 通过 fs.statSync 拿 —— 单次调用 <1ms，且用 TTL 60s 的短命缓存避免每次编辑重复 IO。
 // ----------------------------------------------------------------------------
 const DEBOUNCE_MS_YAML = 500;
 const DEBOUNCE_MS_CSV = 800;
+const DEBOUNCE_MS_BIG = 1500;
+/** 大文件阈值（字节）。约对应 CSV 5000+ 行 / YAML 1.5w+ 行的量级。 */
+const BIG_FILE_BYTES = 512 * 1024; // 512 KB
+/** 文件字节数缓存 TTL（毫秒）。同一文件 60s 内不重复 stat。 */
+const SIZE_CACHE_TTL_MS = 60 * 1000;
+/** 文件字节数缓存条目上限（软保护）。达到后清最旧的一半，避免长会话下 Map 无限增长。 */
+const SIZE_CACHE_MAX = 500;
+
+// filePath -> { size, ts } 短命缓存（避免键盘连击时每次都 stat 磁盘）
+const _sizeCache: Map<string, { size: number; ts: number }> = new Map();
+
+function _getFileSizeCached(filePath: string): number {
+    const now = Date.now();
+    const hit = _sizeCache.get(filePath);
+    if (hit && now - hit.ts < SIZE_CACHE_TTL_MS) return hit.size;
+    let size = 0;
+    try {
+        const st = fs.statSync(filePath);
+        size = st?.size || 0;
+    } catch (_) {
+        size = 0;
+    }
+    // 缓存软保护：条目过多时清理最旧的一半（Map 按插入顺序遍历，靠前即最旧）
+    if (_sizeCache.size >= SIZE_CACHE_MAX) {
+        const dropCount = Math.floor(SIZE_CACHE_MAX / 2);
+        let dropped = 0;
+        for (const k of _sizeCache.keys()) {
+            if (dropped++ >= dropCount) break;
+            _sizeCache.delete(k);
+        }
+    }
+    _sizeCache.set(filePath, { size, ts: now });
+    return size;
+}
 
 // filePath -> 待执行的 timer；连续编辑时后一个 timer 会取消前一个
 const _pendingTimers: Map<string, NodeJS.Timeout> = new Map();
@@ -277,9 +319,20 @@ export function requestEditValidation(
         });
     }
 
-    // 防抖档位分流：yaml / json 是结构化文档（顶层键=字段名，parse 廉价），走 500ms 快档；
-    // csv 需要走整表 headers+rows 组装（大文件下更重），走 800ms 稳档。
-    const debounce = (type === 'yaml' || type === 'json') ? DEBOUNCE_MS_YAML : DEBOUNCE_MS_CSV;
+    // 防抖档位分流：
+    //   · yaml / json 是结构化文档（顶层键=字段名，parse 廉价），走 500ms 快档；
+    //   · csv 需要走整表 headers+rows 组装（大文件下更重），走 800ms 稳档；
+    //   · P5 · 文件字节 > BIG_FILE_BYTES（约 512 KB，对应 CSV 5000+ 行 / YAML 1.5w+ 行）
+    //     统一升级为 1500ms 大文件档 —— 单次 pipeline 成本高，靠更长防抖窗口降低"敲键盘时
+    //     每次都跑一遍全量校验"的抖动感。停顿后仍能及时刷新高亮，体验不劣化。
+    let debounce: number;
+    if (_getFileSizeCached(filePath) > BIG_FILE_BYTES) {
+        debounce = DEBOUNCE_MS_BIG;
+    } else if (type === 'yaml' || type === 'json') {
+        debounce = DEBOUNCE_MS_YAML;
+    } else {
+        debounce = DEBOUNCE_MS_CSV;
+    }
     const timer = setTimeout(() => {
         _pendingTimers.delete(filePath);
         // 防抖通路（用户正在编辑）永远不弹窗 —— 仅刷新行级高亮 / 失败盘。

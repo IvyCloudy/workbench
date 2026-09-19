@@ -297,10 +297,43 @@ export async function cleanupOrphanedFailures(): Promise<void> {
     if (changed) await saveStore(store);
 }
 
+/**
+ * P1 · 性能优化（2026-09-19）：
+ *   mergeFailures 允许在单条 failure 内附带 `_extraCells`，一次性携带同 tsId 的
+ *   多个字段位置（field/stepIdx/subField/severity/fieldReason 各自独立）。
+ *   这样 persistPushFailures 无需再通过 extraRounds 循环多次调用 mergeFailures，
+ *   全盘 JSON.stringify + writeFile 只发生一次，大文件（>1w 行）打开/保存耗时
+ *   可从秒级压回百 ms 级。
+ *
+ *   注意：`_extraCells` 为内部字段（下划线前缀），仅 persistPushFailures 传入，
+ *   外部调用方（如 pushHandler）无需感知；如未传则完全等价旧行为。
+ */
+interface MergeFailureInputExtraCell {
+    field: PushInterfaceField;
+    severity?: 'error' | 'warn';
+    stepIdx?: number;
+    subField?: PushSubField;
+    fieldReason?: string;
+}
+
+type MergeFailureInputValue =
+    | string
+    | {
+        reason: string;
+        category?: PushFailCategory;
+        field?: PushInterfaceField;
+        severity?: 'error' | 'warn';
+        stepIdx?: number;
+        subField?: PushSubField;
+        fieldReason?: string;
+        /** P1 · 额外字段位置数组（同 tsId 内除首字段外的字段），一次性合并 */
+        _extraCells?: MergeFailureInputExtraCell[];
+    };
+
 export async function mergeFailures(
     filePath: string,
     batchTsIds: string[],
-    failures: { [tsId: string]: string | { reason: string; category?: PushFailCategory; field?: PushInterfaceField; severity?: 'error' | 'warn'; stepIdx?: number; subField?: PushSubField; fieldReason?: string } },
+    failures: { [tsId: string]: MergeFailureInputValue },
     successTsIds?: string[]
 ): Promise<void> {
     // 行级 severity 提升辅助：error > warn > undefined
@@ -353,23 +386,56 @@ export async function mergeFailures(
                 ? undefined
                 : ((typeof raw.subField === 'string' && raw.subField) ? raw.subField : undefined);
             const inCell: PushFailureFieldCell = { stepIdx: inStepIdx, subField: inSubField };
-            // B5 · 字段级 reason：优先取显式 fieldReason（多字段合并时调用方传入单条 reason）；
+            // B5 · 字段级独立 reason：优先取显式 fieldReason（多字段合并时调用方传入单条 reason）；
             //   否则回退到 inReason（单字段命中时可直接当 fieldReason 使用）。
             const inFieldReason: string = (typeof raw === 'string')
                 ? inReason
                 : (typeof raw.fieldReason === 'string' && raw.fieldReason ? raw.fieldReason : inReason);
+            // P1 · 额外字段位置数组（persistPushFailures 传入，一次性合并同 tsId 剩余字段）
+            const inExtraCells: MergeFailureInputExtraCell[] = (typeof raw === 'string' || !Array.isArray(raw._extraCells))
+                ? []
+                : raw._extraCells.filter(x => x && !!x.field);
 
             const existing = entry[k];
             if (!existing) {
+                // P1 · 首字段 + _extraCells 一次性写入
+                const initFields: PushInterfaceField[] = inField ? [inField] : [];
+                const initSev: Array<'error' | 'warn'> = inField ? [inSeverity || 'error'] : [];
+                const initCells: PushFailureFieldCell[] = inField ? [inCell] : [];
+                const initReasons: string[] = inField ? [inFieldReason] : [];
+                let initRowSev: 'error' | 'warn' | undefined = inSeverity;
+                for (const ex of inExtraCells) {
+                    const exStepIdx = (typeof ex.stepIdx === 'number' && isFinite(ex.stepIdx) && ex.stepIdx >= 0) ? ex.stepIdx : undefined;
+                    const exSubField = (typeof ex.subField === 'string' && ex.subField) ? ex.subField : undefined;
+                    // 三元组去重（防同一 cell 重复传入）
+                    let hit = -1;
+                    for (let m = 0; m < initFields.length; m++) {
+                        if (initFields[m] !== ex.field) continue;
+                        const c = initCells[m] || {};
+                        if ((c.stepIdx ?? undefined) === exStepIdx && (c.subField ?? undefined) === exSubField) { hit = m; break; }
+                    }
+                    const exSev: 'error' | 'warn' = ex.severity === 'warn' ? 'warn' : (ex.severity === 'error' ? 'error' : 'error');
+                    const exReason: string = (typeof ex.fieldReason === 'string' && ex.fieldReason) ? ex.fieldReason : inFieldReason;
+                    if (hit < 0) {
+                        initFields.push(ex.field);
+                        initSev.push(exSev);
+                        initCells.push({ stepIdx: exStepIdx, subField: exSubField });
+                        initReasons.push(exReason);
+                    } else {
+                        if (exSev === 'error') initSev[hit] = 'error';
+                        if (exReason) initReasons[hit] = exReason;
+                    }
+                    initRowSev = bumpRowSeverity(initRowSev, exSev);
+                }
                 entry[k] = {
                     reason: inReason,
                     timestamp: now,
                     category: inCategory,
-                    fields: inField ? [inField] : undefined,
-                    fieldSeverities: inField ? [inSeverity || 'error'] : undefined,
-                    fieldCells: inField ? [inCell] : undefined,
-                    fieldReasons: inField ? [inFieldReason] : undefined,
-                    severity: inSeverity,
+                    fields: initFields.length > 0 ? initFields : undefined,
+                    fieldSeverities: initFields.length > 0 ? initSev : undefined,
+                    fieldCells: initFields.length > 0 ? initCells : undefined,
+                    fieldReasons: initFields.length > 0 ? initReasons : undefined,
+                    severity: initRowSev,
                 };
                 continue;
             }
@@ -394,27 +460,42 @@ export async function mergeFailures(
             while (mergedFieldSev.length < mergedFields.length) mergedFieldSev.push(existing.severity || 'error');
             while (mergedFieldCells.length < mergedFields.length) mergedFieldCells.push({});
             while (mergedFieldReasons.length < mergedFields.length) mergedFieldReasons.push(existing.reason || '');
-            if (inField) {
-                // 以 (field, stepIdx, subField) 三元组定位现有位（nullish 相等也视为同一个，避免同一 cell 重复写入）
+            // P1 · 首字段 + _extraCells 一次性合并（拆到统一函数避免重复代码）
+            const upsertOne = (
+                fld: PushInterfaceField | undefined,
+                sev: 'error' | 'warn' | undefined,
+                sIdx: number | undefined,
+                sub: PushSubField | undefined,
+                reasonText: string,
+            ) => {
+                if (!fld) return;
                 let fi = -1;
                 for (let m = 0; m < mergedFields.length; m++) {
-                    if (mergedFields[m] !== inField) continue;
+                    if (mergedFields[m] !== fld) continue;
                     const c = mergedFieldCells[m] || {};
-                    if ((c.stepIdx ?? undefined) === inStepIdx && (c.subField ?? undefined) === inSubField) { fi = m; break; }
+                    if ((c.stepIdx ?? undefined) === sIdx && (c.subField ?? undefined) === sub) { fi = m; break; }
                 }
                 if (fi < 0) {
-                    mergedFields.push(inField);
-                    mergedFieldSev.push(inSeverity || 'error');
-                    mergedFieldCells.push(inCell);
-                    mergedFieldReasons.push(inFieldReason);
+                    mergedFields.push(fld);
+                    mergedFieldSev.push(sev || 'error');
+                    mergedFieldCells.push({ stepIdx: sIdx, subField: sub });
+                    mergedFieldReasons.push(reasonText);
                 } else {
-                    // 同三元组再次命中：severity 取更严重
-                    const bumped = bumpRowSeverity(mergedFieldSev[fi], inSeverity) || mergedFieldSev[fi];
+                    const bumped = bumpRowSeverity(mergedFieldSev[fi], sev) || mergedFieldSev[fi];
                     if (bumped === 'error' || bumped === 'warn') mergedFieldSev[fi] = bumped;
-                    // B5 · reason：同位新入若非空则覆盖（error 压 warn 时同步拿新原因；
-                    //   相同 severity 重复命中时也以新原因为准，旧日志无需保留）。
-                    if (inFieldReason) mergedFieldReasons[fi] = inFieldReason;
+                    if (reasonText) mergedFieldReasons[fi] = reasonText;
                 }
+            };
+            upsertOne(inField, inSeverity, inStepIdx, inSubField, inFieldReason);
+            // P1 · 处理额外字段位置：一次全量合并进 mergedFields
+            let mergedRowSeverityWithExtras = mergedRowSeverity;
+            for (const ex of inExtraCells) {
+                const exStepIdx = (typeof ex.stepIdx === 'number' && isFinite(ex.stepIdx) && ex.stepIdx >= 0) ? ex.stepIdx : undefined;
+                const exSubField = (typeof ex.subField === 'string' && ex.subField) ? ex.subField : undefined;
+                const exSev: 'error' | 'warn' = ex.severity === 'warn' ? 'warn' : (ex.severity === 'error' ? 'error' : 'error');
+                const exReason: string = (typeof ex.fieldReason === 'string' && ex.fieldReason) ? ex.fieldReason : inFieldReason;
+                upsertOne(ex.field, exSev, exStepIdx, exSubField, exReason);
+                mergedRowSeverityWithExtras = bumpRowSeverity(mergedRowSeverityWithExtras, exSev);
             }
             // 合并：reason 拼接去重
             const parts = existing.reason ? existing.reason.split('；') : [];
@@ -428,7 +509,7 @@ export async function mergeFailures(
                 fieldSeverities: mergedFields.length > 0 ? mergedFieldSev : undefined,
                 fieldCells: mergedFields.length > 0 ? mergedFieldCells : undefined,
                 fieldReasons: mergedFields.length > 0 ? mergedFieldReasons : undefined,
-                severity: mergedRowSeverity,
+                severity: mergedRowSeverityWithExtras,
             };
         }
     }
@@ -527,18 +608,28 @@ export async function persistPushFailures(
         if (f.severity === 'error' || bucket.severity === 'error') bucket.severity = 'error';
         else if (f.severity === 'warn' || bucket.severity === 'warn') bucket.severity = 'warn';
     });
-    // 转成 mergeFailures 期望的入参形态（每 tsId 单条，字段仍走 field 单值传递；
-    //   多字段时先通过循环调用 mergeFailures 二次合并 —— 或者在下面直接分批传）。
-    // 为简化实现：把 fields 数组"逐条"注入 failuresMap，通过多次 mergeFailures 调用
-    //   触发内部 severity/fields/fieldCells 合并逻辑。
-    const failuresMap: { [tsId: string]: { reason: string; category?: PushFailCategory; field?: PushInterfaceField; severity?: 'error' | 'warn'; stepIdx?: number; subField?: PushSubField; fieldReason?: string } } = {};
+    // 转成 mergeFailures 期望的入参形态：**一次性**把首字段 + 剩余字段（_extraCells）一并下传，
+    //   由 mergeFailures 内部按 (field, stepIdx, subField) 三元组去重、合并 severity / reason，
+    //   避免旧实现"每字段一次 mergeFailures → 每次都 loadStore + JSON.stringify + writeFile"的
+    //   O(F) 次全盘写。大文件（>1 万行、同 tsId 多字段）下磁盘 I/O 从数百 ms 压回单次约几十 ms。
+    const failuresMap: { [tsId: string]: { reason: string; category?: PushFailCategory; field?: PushInterfaceField; severity?: 'error' | 'warn'; stepIdx?: number; subField?: PushSubField; fieldReason?: string; _extraCells?: MergeFailureInputExtraCell[] } } = {};
     Object.keys(agg).forEach(tsId => {
         const b = agg[tsId];
+        // 首字段 → mergeFailures 的顶层 field/severity/stepIdx/subField/fieldReason
+        // 其余字段 → _extraCells 数组一次性合并
+        const extras: MergeFailureInputExtraCell[] = [];
+        for (let i = 1; i < b.fields.length; i++) {
+            extras.push({
+                field: b.fields[i],
+                severity: b.fieldSeverities[i] || 'error',
+                stepIdx: b.fieldCells[i]?.stepIdx,
+                subField: b.fieldCells[i]?.subField,
+                fieldReason: b.fieldReasons[i] || '',
+            });
+        }
         failuresMap[tsId] = {
             reason: b.reasons.join('；'),
             category: b.categoryFirst,
-            // 首字段作为 field 传入（保持 mergeFailures 原有单值签名不破坏），
-            //   多余字段稍后通过增量 merge 补齐
             field: b.fields[0],
             // 关键：字段级 severity —— 首字段用自己的 severity 而非行级 severity，
             //   保证前端按字段独立染色时 error/warn 语义准确
@@ -548,6 +639,8 @@ export async function persistPushFailures(
             subField: b.fieldCells[0]?.subField,
             // B5 · 字段级独立 reason：首字段携带自己的 reason（而非合并后的 reasons.join）
             fieldReason: b.fieldReasons[0] || b.reasons[0] || '',
+            // P1 · 一次性合并同 tsId 剩余字段位置，避免额外的 mergeFailures 轮次
+            _extraCells: extras.length > 0 ? extras : undefined,
         };
     });
     const successTsIds: string[] = successMappings
@@ -555,37 +648,7 @@ export async function persistPushFailures(
         .filter((t: any) => t !== undefined && t !== null && t !== '')
         .map((t: any) => String(t));
     await mergeFailures(filePath, batchTsIds, failuresMap, successTsIds);
-
-    // 补齐多字段：mergeFailures 内部按"新入 field/stepIdx/subField 与已存 fields 合并去重"，
-    //   所以对同 tsId 剩余字段进行二次以上的 merge 调用即可把 fields 累积起来。
-    //   注意：这里的 batchTsIds 传空数组，避免再次清盘；successTsIds 也传空避免误清。
-    const extraRounds: Array<{ [tsId: string]: { reason: string; field: PushInterfaceField; severity: 'error' | 'warn'; stepIdx?: number; subField?: PushSubField; fieldReason?: string } }> = [];
-    Object.keys(agg).forEach(tsId => {
-        const b = agg[tsId];
-        const restFields = b.fields.slice(1);
-        const restSev = b.fieldSeverities.slice(1);
-        const restCells = b.fieldCells.slice(1);
-        const restReasons = b.fieldReasons.slice(1);
-        for (let i = 0; i < restFields.length; i++) {
-            if (!extraRounds[i]) extraRounds[i] = {};
-            extraRounds[i][tsId] = {
-                reason: '',
-                field: restFields[i],
-                // 关键：每个补齐字段带自己的 severity（error/warn），mergeFailures 内会更新对应位置
-                severity: restSev[i] || 'error',
-                // B4 · 同时携带细粒度定位，以 (field, stepIdx, subField) 三元组去重
-                stepIdx: restCells[i]?.stepIdx,
-                subField: restCells[i]?.subField,
-                // B5 · 字段级独立 reason：每个补齐字段带自己的 reason
-                fieldReason: restReasons[i] || '',
-            };
-        }
-    });
-    for (const round of extraRounds) {
-        if (round && Object.keys(round).length > 0) {
-            await mergeFailures(filePath, [], round, []);
-        }
-    }
+    // P1 · extraRounds 已被 _extraCells 取代，一次 mergeFailures 即可覆盖所有字段位置。
 }
 
 /**

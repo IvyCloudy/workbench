@@ -147,23 +147,39 @@ const FORMAT_VALIDATOR: RowValidator = {
 /** 「待补充」子串关键字：极简模式，出现即命中（覆盖 `「待补充」`、`【待补充】`、裸文本 `待补充` 等所有写法）。 */
 const TODO_PLACEHOLDER_LITERAL = '待补充';
 
-/** 判断一个任意值（字符串 / 数组 / 对象）中是否存在「待补充」字面量。 */
+/**
+ * 判断一个值（字符串 / 字符串数组）中是否存在「待补充」字面量。
+ *
+ * 性能优化（P2 · 2026-09-19）：
+ *   · 早期版本对 `typeof === 'object'` 做 Object.keys 深度递归兜底，
+ *     以便对"未知形态"数据也能扫到「待补充」。
+ *   · 但 scanTodoPlaceholderFields 内的 CHECKS 已**穷举列出**所有关心的字段路径
+ *     （steps[i].operation/data/ui_expected/api_expected/db_expected、
+ *      preconditions[i]、description/案例描述、以及 CSV 列 步骤描述/预期结果/前置条件），
+ *     每个字段都是 string 或 string[] 类型，永远不会走到"深度递归"分支。
+ *   · 保留递归反而会在 steps[i] 对象中把 testcase_id/pre/post/remark 等无关字段
+ *     全遍历一遍——大文件（1 万行 × 20 步 × 8 key）会产生 160w+ 次冗余 indexOf。
+ *   · 因此本次退化为"仅处理 string / string[] 两种类型"，其它类型直接返回 false。
+ */
 function containsTodoPlaceholder(v: any): boolean {
     if (v == null) return false;
     if (typeof v === 'string') return v.indexOf(TODO_PLACEHOLDER_LITERAL) !== -1;
     if (Array.isArray(v)) {
-        for (const item of v) {
-            if (containsTodoPlaceholder(item)) return true;
+        for (let i = 0; i < v.length; i++) {
+            const item = v[i];
+            if (item == null) continue;
+            if (typeof item === 'string') {
+                if (item.indexOf(TODO_PLACEHOLDER_LITERAL) !== -1) return true;
+            }
+            // 非 string 元素（object / number / boolean 等）跳过：
+            //   CHECKS 中的字段位置均为 string 或 string[]，不会出现嵌套对象数组。
         }
         return false;
     }
-    if (typeof v === 'object') {
-        for (const key of Object.keys(v)) {
-            if (containsTodoPlaceholder((v as any)[key])) return true;
-        }
-        return false;
-    }
-    // number/boolean 等原始类型不可能含中文字面量，直接跳过
+    // number / boolean / object 等类型不参与「待补充」判定：
+    //   · 原始类型不可能含中文字面量；
+    //   · object 类型场景已被 scanTodoPlaceholderFields 显式路径覆盖，
+    //     深度递归属于冗余的历史兜底，被 P2 优化移除。
     return false;
 }
 

@@ -83,6 +83,21 @@
     };
 
     /**
+     * P3 · headers → (field → colIdx) 记忆化缓存。
+     *   · resolveFieldColumnIndex 本身是纯函数（同一 headers + field 恒等映射），
+     *     hover 场景每次划过单元格都会触发 O(K·H) 次 indexOf（K=候选名个数，H=headers 长度）。
+     *   · 用 WeakMap<headers, {sig, map}> 建二级缓存：
+     *       - 快路径：headers 数组引用相同 + 内容签名（join 1 次）相同 → O(1) Map.get；
+     *       - 慢路径：headers 引用相同但内容被原地 mutate（见 03f-col-ops.js
+     *         `headers.splice(...)` 增删列场景）→ 签名变化，缓存自动失效重建。
+     *   · headers 数组被整体替换 → 旧 WeakMap key 自动回收，无需手工清理。
+     *   · 内容签名成本：一次 `headers.join('\u0001')`，表头通常 ≤ 20 列，字节数百字符，
+     *     每次 hover 也只需常量时间开销，远小于原 O(K·H) 线性扫描。
+     *   · 无侧作用、无破坏性；不改变纯函数语义。
+     */
+    var _fieldColIdxCache = typeof WeakMap === 'function' ? new WeakMap() : null;
+
+    /**
      * 把 PushInterfaceField 英文码解析为当前 headers 中的列索引。
      * @param {string} field    英文字段码（如 'description' / 'testCaseName'）
      * @param {string[]} headers 当前表格 headers 数组
@@ -90,12 +105,33 @@
      */
     function resolveFieldColumnIndex(field, headers) {
         if (!field || !Array.isArray(headers) || headers.length === 0) return -1;
+        // P3 · 优先查 memo：同一 headers 引用 + 相同内容签名下的所有 field→colIdx 常驻缓存
+        var perHeaders = null;
+        if (_fieldColIdxCache) {
+            var sig = headers.join('\u0001');
+            var slot = _fieldColIdxCache.get(headers);
+            if (slot && slot.sig === sig) {
+                perHeaders = slot.map;
+                var cached = perHeaders.get(field);
+                if (cached !== undefined) return cached;
+            } else {
+                perHeaders = new Map();
+                _fieldColIdxCache.set(headers, { sig: sig, map: perHeaders });
+            }
+        }
         var keys = FIELD_TO_HEADER_KEYS[field];
-        if (!keys || keys.length === 0) return -1;
+        if (!keys || keys.length === 0) {
+            if (perHeaders) perHeaders.set(field, -1);
+            return -1;
+        }
         for (var i = 0; i < keys.length; i++) {
             var idx = headers.indexOf(keys[i]);
-            if (idx >= 0) return idx;
+            if (idx >= 0) {
+                if (perHeaders) perHeaders.set(field, idx);
+                return idx;
+            }
         }
+        if (perHeaders) perHeaders.set(field, -1);
         return -1;
     }
 

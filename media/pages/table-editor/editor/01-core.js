@@ -174,6 +174,18 @@ var S = {
     _addedRowTime: 0,     // _addedRowSet 最近一次更新的时间
     // 推送失败 tsId -> 失败时间戳（ms）；用于和用户标记/推送高亮按时间戳竞争优先级
     _pushFailedTime: new Map(),
+    // B3：推送失败 tsId -> severity（'error' | 'warn'）；error → 红行号色条，warn → 黄行号色条。
+    //   行级 severity 由字段级 fieldSeverities 中的最严重值决定，缺省视为 'error'。
+    _pushFailedSeverity: new Map(),
+    // B3 · 单元格级：推送失败 tsId -> field 字符串数组（同一行可能多字段失败）
+    _pushFailedFields: new Map(),
+    // B3 · 单元格级：推送失败 tsId -> 与 _pushFailedFields 数组一一对应的 severity 数组
+    //   ('error'|'warn')[]，用于按具体字段独立取色（error 列红 / warn 列黄）。
+    _pushFailedFieldSeverity: new Map(),
+    // B4 · 字段级细粒度定位：推送失败 tsId -> 与 _pushFailedFields 一一对应的
+    //   Array<{stepIdx?, subField?}>。用于展开态子表格 sub-td / 明细弹窗 dv2 输入框精确高亮。
+    //   元素为 {} 或未定义 → 无细粒度定位，前端回退到整列高亮。
+    _pushFailedFieldCells: new Map(),
     // 步骤展开/折叠模式切换（默认非展开 → 点击明细链接弹窗编辑）
     _stepsExpanded: false
 };
@@ -860,6 +872,12 @@ window.addEventListener('message', function (e) {
             } else if ('userMarks' in m && (_skipReason0 || _inGuard0)) {
                 dbg('⏭ skip userMarks override (skip-data) reason=' + (m.reason || '') + ' inGuard=' + !!_inGuard0 + ' incoming=' + ((m.userMarks && m.userMarks.length) || 0) + ' local=' + ((S._userMarks && S._userMarks.rects && S._userMarks.rects.length) || 0));
             }
+            // B3：编辑期主动校验（reason='editValidation'）等场景下的 pushFailures 更新
+            //   —— 即便处于 skip-data 分支，也要让失败盘刷新生效，否则用户改好后仍显示旧红/黄。
+            //   走 HighlightModel.applyPushFailuresPayload 顺带写 severity Map。
+            if ('pushFailures' in m) {
+                HighlightModel.applyPushFailuresPayload(S, m.pushFailures);
+            }
             renderTable();
             return;
         }
@@ -1070,9 +1088,27 @@ window.addEventListener('message', function (e) {
         HighlightModel.applyUserMarksPayload(S, m.userMarks);
         dbg('🖍 userMarksUpdated applied len=' + _incomingLen + ' inGuard=' + !!_inGuard2);
         try { renderTable(); } catch (_) { /* ignore */ }
+    } else if (m.type === 'preValidateGate') {
+        // 推送前置校验窗口（B5）：由扩展端在 stepPreValidate 之后、剔除之前触发。
+        // 展示 error/warn 分栏，等待用户点击「取消」或「忽略并继续」。
+        // 用户决策通过 preValidateGateResponse 消息回传给扩展端，最终 resolve runPush 的阻塞点。
+        console.log('[推送诊断][webview] 收到 preValidateGate | gateId=' + (m.gateId || '(空)') + ' failures=' + (Array.isArray(m.failures) ? m.failures.length : 0));
+        // 清除"推送中…"toast 延迟计时器：既然要弹前置校验窗口，就不能再抢跑弹 toast，
+        // 否则用户点"取消"后会看到闪现的推送中提示，破坏"取消 = 什么都没发生"的心智契约。
+        if (S._pushToastTimer) { try { clearTimeout(S._pushToastTimer); } catch (_) {} S._pushToastTimer = null; }
+        if (typeof showPreValidateGateModal === 'function') {
+            showPreValidateGateModal(m);
+        } else {
+            // 兜底：脚本未加载 → 直接回复 continue，避免推送悬挂
+            if (m.gateId && S.vscode) {
+                S.vscode.postMessage({ type: 'preValidateGateResponse', gateId: m.gateId, decision: 'continue' });
+            }
+        }
     } else if (m.type === 'pushDone') {
         // 推送流程结束钩子（隐藏 loading 等）。
         S._pushing = false;
+        // 清理延迟 toast 计时器：即便推送极快返回，也不再补弹「推送中…」
+        if (S._pushToastTimer) { try { clearTimeout(S._pushToastTimer); } catch (_) {} S._pushToastTimer = null; }
         if (typeof updatePushBtn === 'function') updatePushBtn();
         // 安全网：pushDone 到达时主动清理本批修改高亮。
         // pushResult 中也有相同逻辑，此处作为兜底确保所有推送完成路径都清理。
@@ -1130,6 +1166,8 @@ window.addEventListener('message', function (e) {
         }
         S._lastPushResultRecvAt = _prNow;
         S._lastPushResultFailuresCnt = (m.failures ? m.failures.length : 0);
+        // 清理延迟 toast 计时器：结果已到，不再补弹「推送中…」
+        if (S._pushToastTimer) { try { clearTimeout(S._pushToastTimer); } catch (_) {} S._pushToastTimer = null; }
         console.log('[推送诊断][webview] 收到 pushResult | successCount=' + (m.successCount || 0) + ' total=' + (m.total != null ? m.total : '?') + ' failures.length=' + (m.failures ? m.failures.length : 0) + ' failures.tsIds=' + (m.failures ? m.failures.map(function (f) { return f.tsId; }).join(',') : ''));
         console.log('[推送诊断][webview] pushResult 前置状态 | _lastPushBatchTsIds=' + (S._lastPushBatchTsIds ? Array.from(S._lastPushBatchTsIds).join(',') : '(null)')
             + ' | _lastPushBatchRowIndices=' + (S._lastPushBatchRowIndices ? '[' + S._lastPushBatchRowIndices.join(',') + ']' : '(null)')
@@ -1161,6 +1199,8 @@ window.addEventListener('message', function (e) {
         } catch (_e) { /* ignore */ }
     } else if (m.type === 'pushError') {
         S._pushing = false;
+        // 清理延迟 toast 计时器：错误已到达，不再补弹「推送中…」
+        if (S._pushToastTimer) { try { clearTimeout(S._pushToastTimer); } catch (_) {} S._pushToastTimer = null; }
         if (typeof updatePushBtn === 'function') updatePushBtn();
         // pushError 同样属于推送完成，清理本批修改高亮
         var peRowIndices = S._lastPushBatchRowIndices;

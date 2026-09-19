@@ -5,14 +5,41 @@
  *   showPushResultModal / closePushResultModal / bindPushResultModal
  *   - 失败行高亮联动主表（tsId 等列变红）、点击行号跳转、复制失败明细
  *   - jumpToRowByDisplayIndex：按显示行号滚动到目标行
+ *
+ * 2026-09-19 拆分：失败集合的数据管理层（初始化 / 增量合并 / 4 层兜底反查行号）
+ * 已抽至 05h-push-failures-store.js（window.PushFailuresStore），本文件专注 UI 编排。
  * ========================================================================== */
 
 // ==================== 推送结果弹窗 ====================
-// 展示推送结果（成功 / 部分成功 / 全部失败）
-// payload: { fileName, successCount, failures:[{rowIndex, tsId, reason}], total, skipped }
+// 展示推送结果（成功 / 部分成功 / 全部失败 / 含软拦截警告）
+// payload: { fileName, successCount, failures:[{rowIndex, tsId, reason, severity?}], total, skipped }
 //   skipped：本次推送内"样例/模板占位行"被静默过滤的行数，不计入 success/fail。
 //   仅 skipped > 0 时弹窗会额外展示"跳过 N"与"其中 N 行样例数据已跳过"文案，避免总计/成功/失败三数字相加不等于总计的视觉失调。
+//   severity：'error'（缺省）=硬拦截失败；'warn'=软拦截命中（如「待补充」），行已被后端接收，仅事后知情。
+//   前端按 severity 将 failures 拆成两栏（红色 error / 黄色 warn），并在头部状态、汇总维度与失败标记联动中分别处理。
 var __PR_MAX_INLINE = 200; // 列表最多渲染条数，超出折叠
+
+/**
+ * 渲染一条失败/警告明细行。
+ * @param f      PushFailure 项 { tsId, reason, rowIndex?, severity? }
+ * @param seq    显示序号（在本段列表内的 1-based 序号）
+ * @param kind   'error' | 'warn'，控制序号徽标样式（红/黄）
+ * @return {string} HTML 片段
+ */
+function _renderFailureItem(f, seq, kind) {
+    var item = f || {};
+    var hasRow = (item.rowIndex != null && item.rowIndex > 0);
+    var rowText = hasRow ? ('第 ' + item.rowIndex + ' 行') : ('testcase_id ' + (item.tsId ? String(item.tsId).slice(0, 8) + '…' : '(无)'));
+    var rowCls = 'xs-pr-row' + (hasRow ? ' is-link' : '');
+    var rowAttr = hasRow ? (' data-row="' + item.rowIndex + '" title="点击定位到该行"') : '';
+    var seqCls = 'xs-pr-seq' + (kind === 'warn' ? ' is-warn' : '');
+    return '<div class="xs-pr-item">'
+        +    '<span class="' + seqCls + '">' + seq + '.</span>'
+        +    '<span class="' + rowCls + '"' + rowAttr + '>' + escapeHtml(rowText) + '</span>'
+        +    '<span class="xs-pr-reason">' + escapeHtml(String(item.reason || '')) + '</span>'
+        + '</div>';
+}
+
 function showPushResultModal(payload) {
     console.log('[推送诊断][webview] showPushResultModal 渲染 | failures.length=' + (payload && payload.failures ? payload.failures.length : 0) + ' successCount=' + (payload ? payload.successCount || 0 : 0) + ' total=' + (payload && payload.total != null ? payload.total : '?') + ' skipped=' + (payload && payload.skipped != null ? payload.skipped : 0));
     var modal = document.getElementById('pushResultModal');
@@ -23,7 +50,18 @@ function showPushResultModal(payload) {
     var successCount = p.successCount || 0;
     var failures = Array.isArray(p.failures) ? p.failures : [];
     var skipped = (p.skipped != null && p.skipped > 0) ? Number(p.skipped) : 0;
-    var total = (p.total != null) ? p.total : (successCount + failures.length + skipped);
+
+    // B4：按 severity 拆分 —— 老数据缺省视为 error 保持向后兼容
+    var errorFailures = [];
+    var warnFailures = [];
+    failures.forEach(function (f) {
+        if (f && f.severity === 'warn') warnFailures.push(f);
+        else errorFailures.push(f);
+    });
+    var errorCount = errorFailures.length;
+    var warnCount = warnFailures.length;
+
+    var total = (p.total != null) ? p.total : (successCount + errorCount + skipped);
 
     var header = document.getElementById('pushResultHeader');
     var iconEl = document.getElementById('pushResultIcon');
@@ -54,35 +92,58 @@ function showPushResultModal(payload) {
         return;
     }
 
-    var allFailed = (failures.length > 0 && successCount === 0);
-    var allSuccess = (failures.length === 0);
-    var status = allSuccess ? 'success' : (allFailed ? 'error' : 'warning');
+    var allFailed = (errorCount > 0 && successCount === 0);
+    var allSuccessNoWarn = (errorCount === 0 && warnCount === 0);
+    // 状态判定优先级：
+    //   1. 有 error（硬拦截）→ 部分成功 / 全部失败（红色调）
+    //   2. 无 error 但有 warn（软拦截命中，行已推送）→ warning（黄色调，标题仍显示成功但带提示）
+    //   3. 全绿 → success
+    var status;
+    if (errorCount > 0) {
+        status = allFailed ? 'error' : 'warning';
+    } else if (warnCount > 0) {
+        status = 'warning';
+    } else {
+        status = 'success';
+    }
 
     // 头部状态
     if (header) header.className = 'xs-modal-header xs-pr-header is-' + status;
     if (iconEl) iconEl.textContent = (status === 'success') ? '✓' : (status === 'error' ? '✕' : '!');
     if (titleEl) {
-        var titleText = (status === 'success') ? '推送成功' : (status === 'error' ? '推送失败' : '推送部分成功');
+        // 无 error 且有 warn 时视为"推送成功（含提示）"——行已被后端接收
+        var titleText;
+        if (status === 'success') {
+            titleText = '推送成功';
+        } else if (status === 'error') {
+            titleText = '推送失败';
+        } else if (errorCount === 0 && warnCount > 0) {
+            titleText = '推送成功（含 ' + warnCount + ' 条待完善提示）';
+        } else {
+            titleText = '推送部分成功';
+        }
         titleEl.textContent = titleText + (fileName ? ('：' + fileName) : '');
     }
 
-    // 概要：总计 / 成功 / 失败 / 跳过（skipped>0 时才显示）
+    // 概要：总计 / 成功 / 失败 / 警告 / 跳过（后二者按 > 0 条件显示）
     if (summaryEl) {
         var summaryHtml =
             '<span class="xs-pr-summary-item">总计 <span class="xs-pr-num">' + total + '</span></span>' +
             '<span class="xs-pr-summary-item">成功 <span class="xs-pr-num is-success">' + successCount + '</span></span>' +
-            '<span class="xs-pr-summary-item">失败 <span class="xs-pr-num is-failed">' + failures.length + '</span></span>';
+            '<span class="xs-pr-summary-item">失败 <span class="xs-pr-num is-failed">' + errorCount + '</span></span>';
+        if (warnCount > 0) {
+            // 软拦截命中：行已推送，作为独立维度显示。与"失败"不同色以避免用户误解为需修正才能推送。
+            summaryHtml += '<span class="xs-pr-summary-item">警告 <span class="xs-pr-num is-warn">' + warnCount + '</span></span>';
+        }
         if (skipped > 0) {
-            // 静默跳过的样例行不算失败也不算成功，作为第 4 个维度展示；
-            // 重要：避免以前"总计 13 / 成功 12 / 失败 0"与底部"全部 13 条推送成功"矛盾的就是它。
             summaryHtml += '<span class="xs-pr-summary-item">跳过 <span class="xs-pr-num">' + skipped + '</span></span>';
         }
         summaryEl.innerHTML = summaryHtml;
     }
 
-    // 失败明细列表
+    // 失败明细列表：按 severity 分栏（error 红色 → warn 黄色），空则显示成功文案
     if (listEl) {
-        if (failures.length === 0) {
+        if (errorCount === 0 && warnCount === 0) {
             // 纯成功（可能伴随 skipped）—— 文案要照应 skipped，否则多出的行数会让用户困惑。
             var succCount = successCount;
             var successText = '全部 ' + succCount + ' 条推送成功 🎉';
@@ -91,26 +152,42 @@ function showPushResultModal(payload) {
             }
             listEl.innerHTML = '<div class="xs-pr-empty">' + successText + '</div>';
         } else {
-            var renderCount = Math.min(failures.length, __PR_MAX_INLINE);
             var html = '';
-            for (var i = 0; i < renderCount; i++) {
-                var f = failures[i] || {};
-                var hasRow = (f.rowIndex != null && f.rowIndex > 0);
-                var rowText = hasRow ? ('第 ' + f.rowIndex + ' 行') : ('testcase_id ' + (f.tsId ? String(f.tsId).slice(0, 8) + '…' : '(无)'));
-                var rowCls = 'xs-pr-row' + (hasRow ? ' is-link' : '');
-                var rowAttr = hasRow ? (' data-row="' + f.rowIndex + '" title="点击定位到该行"') : '';
-                html += '<div class="xs-pr-item">'
-                    +    '<span class="xs-pr-seq">' + (i + 1) + '.</span>'
-                    +    '<span class="' + rowCls + '"' + rowAttr + '>' + escapeHtml(rowText) + '</span>'
-                    +    '<span class="xs-pr-reason">' + escapeHtml(String(f.reason || '')) + '</span>'
-                    + '</div>';
+            // ---- 硬拦截失败区（红色）----
+            if (errorCount > 0) {
+                var errRender = Math.min(errorCount, __PR_MAX_INLINE);
+                html += '<div class="xs-pr-section is-error">'
+                    +   '<div class="xs-pr-section-title">'
+                    +     '<span class="xs-pr-badge is-error">失败</span>'
+                    +     '<span class="xs-pr-section-desc">共 ' + errorCount + ' 条硬拦截失败（需修正后重新推送）</span>'
+                    +   '</div>';
+                for (var i = 0; i < errRender; i++) {
+                    html += _renderFailureItem(errorFailures[i], i + 1, 'error');
+                }
+                if (errorCount > __PR_MAX_INLINE) {
+                    html += '<div class="xs-pr-truncated">…另有 ' + (errorCount - __PR_MAX_INLINE) + ' 条失败未展示，请点击「复制明细」获取完整列表。</div>';
+                }
+                html += '</div>';
             }
-            if (failures.length > __PR_MAX_INLINE) {
-                html += '<div class="xs-pr-truncated">…另有 ' + (failures.length - __PR_MAX_INLINE) + ' 条失败未展示，请点击「复制失败明细」获取完整列表。</div>';
+            // ---- 软拦截命中区（黄色，行已推送）----
+            if (warnCount > 0) {
+                var warnRender = Math.min(warnCount, __PR_MAX_INLINE);
+                html += '<div class="xs-pr-section is-warn">'
+                    +   '<div class="xs-pr-section-title">'
+                    +     '<span class="xs-pr-badge is-warn">待完善</span>'
+                    +     '<span class="xs-pr-section-desc">共 ' + warnCount + ' 条软拦截命中（行已推送成功，建议尽快完善）</span>'
+                    +   '</div>';
+                for (var j = 0; j < warnRender; j++) {
+                    html += _renderFailureItem(warnFailures[j], j + 1, 'warn');
+                }
+                if (warnCount > __PR_MAX_INLINE) {
+                    html += '<div class="xs-pr-truncated">…另有 ' + (warnCount - __PR_MAX_INLINE) + ' 条提示未展示，请点击「复制明细」获取完整列表。</div>';
+                }
+                html += '</div>';
             }
             listEl.innerHTML = html;
 
-            // 绑定行号点击 -> 滚动并高亮主表对应行
+            // 绑定行号点击 → 滚动并高亮主表对应行（error/warn 均可跳转）
             var links = listEl.querySelectorAll('.xs-pr-row.is-link');
             for (var k = 0; k < links.length; k++) {
                 links[k].addEventListener('click', function (ev) {
@@ -121,72 +198,42 @@ function showPushResultModal(payload) {
         }
     }
 
-    if (hintEl) hintEl.textContent = (failures.length > 0) ? '点击行号可定位到表格对应行；失败行已在表格中高亮标记' : '';
-    if (copyBtn) copyBtn.style.display = (failures.length > 0) ? '' : 'none';
+    // hint 与复制按钮：只要有任一类失败即显示
+    var hasAny = (errorCount + warnCount) > 0;
+    if (hintEl) {
+        if (errorCount > 0 && warnCount > 0) {
+            hintEl.textContent = '红色为硬拦截失败（需修正），黄色为软拦截提示（已推送）；点击行号可定位表格对应行';
+        } else if (errorCount > 0) {
+            hintEl.textContent = '点击行号可定位到表格对应行；失败行已在表格中高亮标记';
+        } else if (warnCount > 0) {
+            hintEl.textContent = '行已推送成功；点击行号可定位到表格对应行并尽快完善';
+        } else {
+            hintEl.textContent = '';
+        }
+    }
+    if (copyBtn) copyBtn.style.display = hasAny ? '' : 'none';
 
     // 按 tsId 标记失败行，重绘表格以高亮展示。
     // 累积合并策略（不再整体覆盖）：
     //   1) 保留所有未参与本批推送的历史失败行（仍高亮、仍带原因）
     //   2) 本批中已成功的 tsId（= 本批 tsId 集合 − 本次失败 tsId 集合）从失败集合中移除
     //   3) 本批中失败的 tsId 写入/更新到失败集合，并刷新原因
-    if (!S._pushFailedTsIds) S._pushFailedTsIds = new Set();
-    if (!S._pushFailedReasons) S._pushFailedReasons = new Map();
-    if (!S._pushFailedTime) S._pushFailedTime = new Map();
-
-    // 收集本次失败 tsId
-    var nowFailedSet = new Set();
-    failures.forEach(function (f) {
-        if (f && f.tsId !== undefined && f.tsId !== null && f.tsId !== '') {
-            nowFailedSet.add(String(f.tsId));
-        }
-    });
-
-    // 本批参与的 tsId（pushChanges 时缓存）。若缺失则退化为：本次失败 tsId 集合，
-    // 即此次结果不会清除任何历史标记，只会追加本次失败。
+    // ★ B3（P1 决策，2026-09-18）：warn 项也进入 _pushFailedTsIds 但标 severity='warn'，
+    //   由 02a-render.js 按 severity 打黄行（xs-tr-push-warn）而非红行。
+    //   这样"推送刚完成 → 关闭重开 → 编辑期"始终一致的黄色视觉。
+    //   历史 warn 不进集合的做法会导致"推送成功那一瞬间黄色消失，接下来编辑期又出现"的诡异跳变。
+    //
+    // 具体数据合并逻辑已抽至 05h-push-failures-store.js（window.PushFailuresStore），
+    // 本文件只做 UI 编排与消息透传。
     var batchSet = (S._lastPushBatchTsIds instanceof Set) ? S._lastPushBatchTsIds : null;
-    var clearedCount = 0;
-    if (batchSet) {
-        // 计算本批中已成功的 tsId（本批 − 本次失败），并从失败集合中清除
-        batchSet.forEach(function (ts) {
-            if (!nowFailedSet.has(ts)) {
-                if (S._pushFailedTsIds.delete(ts)) clearedCount++;
-                S._pushFailedReasons.delete(ts);
-                if (S._pushFailedTime) S._pushFailedTime.delete(ts);
-            }
-        });
-    }
-    // 兼容：若扩展端额外回传 successTsIds（明确成功列表），同样清除其失败标记，
-    // 兜底"本批缓存丢失"或"本批 ts 与扩展端口径不一致"等异常情形
-    var succArr = Array.isArray(p.successTsIds) ? p.successTsIds : [];
-    succArr.forEach(function (t) {
-        if (t === undefined || t === null || t === '') return;
-        var k = String(t);
-        if (S._pushFailedTsIds.delete(k)) clearedCount++;
-        S._pushFailedReasons.delete(k);
-        if (S._pushFailedTime) S._pushFailedTime.delete(k);
-    });
+    var _mergeResult = window.PushFailuresStore.mergePushFailures(S, p, batchSet);
+    var nowFailedSet = _mergeResult.nowFailedSet;
+    var clearedCount = _mergeResult.clearedCount;
 
-    // 写入/更新本次失败 tsId 与原因，并打上当前时间戳供后续渲染按时间优先级比较
-    var _failNow = Date.now();
-    // 快照旧的 _pushFailedTime，便于诊断"时间戳被重刷"（双发 bug 现象）
-    var _oldFailTimeSnap = null;
-    if (S._pushFailedTime && S._pushFailedTime.size > 0) {
-        _oldFailTimeSnap = [];
-        S._pushFailedTime.forEach(function (v, k) { _oldFailTimeSnap.push(k + '=' + v); });
-    }
-    failures.forEach(function (f) {
-        if (f && f.tsId !== undefined && f.tsId !== null && f.tsId !== '') {
-            var key = String(f.tsId);
-            S._pushFailedTsIds.add(key);
-            if (f.reason) S._pushFailedReasons.set(key, String(f.reason));
-            else S._pushFailedReasons.delete(key); // 无原因则清掉旧原因，避免误导
-            if (S._pushFailedTime) S._pushFailedTime.set(key, _failNow);
-        }
-    });
     // 诊断日志：若同一 tsId 出现在旧快照且时间戳被更新，说明存在重刷（配合 01-core.js 双发检测）
-    if (_oldFailTimeSnap && _oldFailTimeSnap.length > 0) {
-        console.log('[推送诊断][webview] pushResult 合并 | _failNow=' + _failNow
-            + ' | 旧 _pushFailedTime=[' + _oldFailTimeSnap.join(', ') + ']'
+    if (_mergeResult.oldFailTimeSnap && _mergeResult.oldFailTimeSnap.length > 0) {
+        console.log('[推送诊断][webview] pushResult 合并 | _failNow=' + _mergeResult.failNow
+            + ' | 旧 _pushFailedTime=[' + _mergeResult.oldFailTimeSnap.join(', ') + ']'
             + ' | 本次写入 tsIds=' + Array.from(nowFailedSet).join(','));
     }
 
@@ -200,56 +247,9 @@ function showPushResultModal(payload) {
 
     // 清除本批推送行的 S.mods 修改高亮（推送完成 = 修改已提交）
     // 失败行由 S._pushFailedTsIds 提供红色高亮，不再需要黄色 modified 标记
-    // 05a 自身负责"从哪几个渠道兜底反查行号"，门面只接收最终 rowIndices
-    // 兜底 1：_lastPushBatchRowIndices（pushChanges / pushFromContextMenu 缓存）
-    var pushRowIndices = S._lastPushBatchRowIndices;
-    // 兜底 2：若行索引缺失，从 _lastPushBatchTsIds 反推
-    if ((!pushRowIndices || pushRowIndices.length === 0) && batchSet && batchSet.size > 0) {
-        var tsColFallback = (S.data && S.data.headers ? S.data.headers.indexOf('testcase_id') : -1);
-        if (tsColFallback >= 0) {
-            pushRowIndices = [];
-            for (var ri2 = 0; ri2 < (S.data.rows && S.data.rows.length || 0); ri2++) {
-                var tid2 = (S.data.rows[ri2] || [])[tsColFallback];
-                if (tid2 !== undefined && tid2 !== null && tid2 !== '' && batchSet.has(String(tid2))) {
-                    pushRowIndices.push(ri2);
-                }
-            }
-        }
-    }
-    // 兜底 3：若仍无行索引，从 failures 中的 rowIndex（1-based）转换
-    if (!pushRowIndices || pushRowIndices.length === 0) {
-        pushRowIndices = [];
-        failures.forEach(function (f) {
-            if (f && f.rowIndex != null && f.rowIndex > 0) {
-                pushRowIndices.push(f.rowIndex - 1);
-            }
-        });
-        // 去重
-        var uniq = {};
-        pushRowIndices = pushRowIndices.filter(function (v) {
-            var s = String(v);
-            if (uniq[s]) return false;
-            uniq[s] = true;
-            return true;
-        });
-    }
-    // 兜底 4：若仍无行索引，用失败项 tsId 逐行匹配 testcase_id 列
-    if ((!pushRowIndices || pushRowIndices.length === 0) && failures.length > 0) {
-        var tsCol4 = S.data && S.data.headers ? S.data.headers.indexOf('testcase_id') : -1;
-        if (tsCol4 >= 0) {
-            var failedTsSet = {};
-            failures.forEach(function (f) {
-                if (f && f.tsId != null && f.tsId !== '') failedTsSet[String(f.tsId)] = true;
-            });
-            if (Object.keys(failedTsSet).length > 0) {
-                pushRowIndices = [];
-                for (var ri4 = 0; ri4 < (S.data.rows && S.data.rows.length || 0); ri4++) {
-                    var tid4 = String((S.data.rows[ri4] || [])[tsCol4] ?? '');
-                    if (tid4 && failedTsSet[tid4]) pushRowIndices.push(ri4);
-                }
-            }
-        }
-    }
+    // 05a 自身负责"从哪几个渠道兜底反查行号"，门面只接收最终 rowIndices。
+    // 4 层兜底反查逻辑已抽至 05h-push-failures-store.js（window.PushFailuresStore）。
+    var pushRowIndices = window.PushFailuresStore.resolvePushRowIndices(S, p, batchSet, failures);
     // 交由门面统一收敛清理动作：S.mods / _detailModCellKeys / _addedRowSet /
     // _lastPushBatchRowIndices / _lastPushBatchTsIds（一次推送结果消费完毕）
     HighlightModel.clearByPushBatch(S, {
@@ -271,11 +271,22 @@ function showPushResultModal(payload) {
 
     try { renderTable(); } catch (_) { /* ignore */ }
 
-    // 缓存全量明细文本，便于复制
-    S._pushResultDetailText = failures.map(function (f, i) {
+    // 缓存全量明细文本，便于复制（按 error / warn 分节，方便用户区分）
+    var _fmtItem = function (f, i) {
         var rowPart = (f.rowIndex != null && f.rowIndex > 0) ? ('第 ' + f.rowIndex + ' 行') : ('testcase_id ' + (f.tsId || '(无)'));
         return (i + 1) + '. ' + rowPart + '：' + (f.reason || '');
-    }).join('\n');
+    };
+    var _detailParts = [];
+    if (errorCount > 0) {
+        _detailParts.push('【硬拦截失败（需修正后重新推送）】');
+        _detailParts.push(errorFailures.map(_fmtItem).join('\n'));
+    }
+    if (warnCount > 0) {
+        if (_detailParts.length > 0) _detailParts.push('');
+        _detailParts.push('【软拦截命中（行已推送，建议尽快完善）】');
+        _detailParts.push(warnFailures.map(_fmtItem).join('\n'));
+    }
+    S._pushResultDetailText = _detailParts.join('\n');
 
     bindPushResultModal();
     modal.classList.add('show');
@@ -306,9 +317,9 @@ function bindPushResultModal() {
     if (ok) ok.addEventListener('click', closePushResultModal);
     if (copy) copy.addEventListener('click', function () {
         var text = S._pushResultDetailText || '';
-        if (!text) { showToast('无失败明细可复制', 'error'); return; }
+        if (!text) { showToast('无明细可复制', 'error'); return; }
         if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).then(function () { showToast('失败明细已复制', 'success'); },
+            navigator.clipboard.writeText(text).then(function () { showToast('明细已复制', 'success'); },
                 function () { fallbackCopy(text); });
         } else {
             fallbackCopy(text);
@@ -335,7 +346,7 @@ function fallbackCopy(text) {
         ta.focus(); ta.select();
         document.execCommand('copy');
         document.body.removeChild(ta);
-        showToast('失败明细已复制', 'success');
+        showToast('明细已复制', 'success');
     } catch (_) {
         showToast('复制失败', 'error');
     }

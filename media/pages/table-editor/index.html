@@ -185,7 +185,7 @@
             </div>
             <div class="xs-modal-footer">
                 <span id="pushResultHint" style="flex:1;font-size:12px;color:#888"></span>
-                <button class="xs-btn" id="pushResultCopyBtn" title="复制全部失败明细">复制失败明细</button>
+                    <button class="xs-btn" id="pushResultCopyBtn" title="复制全部失败/警告明细">复制明细</button>
                 <button class="xs-btn xs-btn-p" id="pushResultOkBtn">确定</button>
             </div>
         </div>
@@ -206,6 +206,25 @@
                 <span id="deleteResultHint" style="flex:1;font-size:12px;color:#888"></span>
                 <button class="xs-btn" id="deleteResultCopyBtn" title="复制全部失败明细">复制失败明细</button>
                 <button class="xs-btn xs-btn-p" id="deleteResultOkBtn">确定</button>
+            </div>
+        </div>
+    </div>
+    <!-- 推送前置校验窗口（B5）：由 05g-pre-validate-gate.js 控制显隐 -->
+    <div class="xs-modal-overlay xs-pr-overlay" id="preValidateGateModal">
+        <div class="xs-modal-dialog xs-pr-dialog">
+            <div class="xs-modal-header xs-pr-header" id="preValidateGateHeader">
+                <span class="xs-pr-icon" id="preValidateGateIcon"></span>
+                <span class="xs-modal-title" id="preValidateGateTitle">推送前检查</span>
+                <button class="xs-modal-close" id="preValidateGateClose" title="关闭">✕</button>
+            </div>
+            <div class="xs-pr-summary" id="preValidateGateSummary"></div>
+            <div class="xs-modal-body xs-pr-body">
+                <div class="xs-pr-list" id="preValidateGateList"></div>
+            </div>
+            <div class="xs-modal-footer">
+                <span id="preValidateGateHint" style="flex:1;font-size:12px;color:#888"></span>
+                <button class="xs-btn" id="preValidateGateCancelBtn">取消</button>
+                <button class="xs-btn xs-btn-p" id="preValidateGateContinueBtn">忽略并继续</button>
             </div>
         </div>
     </div>

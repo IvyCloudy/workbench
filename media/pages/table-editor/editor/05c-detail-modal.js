@@ -268,6 +268,81 @@ function renderDetailV2() {
         S._dv2ActiveStep = stepCount > 0 ? 0 : -1;
     }
 
+    // ============================================================
+    // B4 · dv2 弹窗失败高亮预计算
+    // ------------------------------------------------------------
+    // 目标：从当前主表行的 _pushFailedFieldCells 中，读取属于本 detailField
+    //   的失败项，按 stepIdx 归组，供左栏 chip 与右栏字段卡片各自查询。
+    // 约束：
+    //   1) detailField='steps' 时，只关注 subField ∈ {operation, data,
+    //      ui_expected, api_expected, db_expected} 的项；
+    //   2) detailField='preconditions' 时，只关注 field='preCondition'
+    //      且 stepIdx 有效的项（subField 通常为空）；
+    //   3) 无 stepIdx 的行级失败一律忽略（属于外层单元格 not 明细弹窗）。
+    // ============================================================
+    var _dv2StepFail = Object.create(null); // stepIdx -> { severity, subs: {subField: severity} }
+    try {
+        var _tsCol = (S.data && S.data.headers) ? S.data.headers.indexOf('testcase_id') : -1;
+        var _mainRow = (S.data && S.data.rows && S.data.rows[ri]) ? S.data.rows[ri] : null;
+        var _tsId = (_tsCol >= 0 && _mainRow) ? _mainRow[_tsCol] : null;
+        if (_tsId !== undefined && _tsId !== null && _tsId !== ''
+            && S._pushFailedFields && S._pushFailedFieldCells) {
+            var _kStr = String(_tsId);
+            var _fields = S._pushFailedFields.get(_kStr) || [];
+            var _sevs = (S._pushFailedFieldSeverity && S._pushFailedFieldSeverity.get(_kStr)) || [];
+            var _cells = S._pushFailedFieldCells.get(_kStr) || [];
+            var _detailField = S._detailField || '';
+            // 允许的 subField 集合（依据当前 detailField）
+            var _allowedSubs = null;
+            if (_detailField === 'steps') {
+                _allowedSubs = { operation: 1, data: 1, ui_expected: 1, api_expected: 1, db_expected: 1 };
+            }
+            for (var _ii = 0; _ii < _fields.length; _ii++) {
+                var _fName = _fields[_ii];
+                var _cell = _cells[_ii] || {};
+                var _sev = (_sevs[_ii] === 'warn' || _sevs[_ii] === 'error') ? _sevs[_ii] : 'error';
+                var _sIdx = (typeof _cell.stepIdx === 'number' && _cell.stepIdx >= 0) ? _cell.stepIdx : null;
+                if (_sIdx === null) continue; // 无 stepIdx：非明细弹窗关心的目标
+                // detailField 过滤：steps 弹窗看 field=description(或 expected/stepSeq)，
+                //   preconditions 弹窗看 field=preCondition
+                var _match = false;
+                if (_detailField === 'steps') {
+                    // 主表 steps 列的失败 field 可能是 description / expected / stepSeq
+                    if (_fName === 'description' || _fName === 'expected' || _fName === 'stepSeq') _match = true;
+                } else if (_detailField === 'preconditions') {
+                    if (_fName === 'preCondition') _match = true;
+                }
+                if (!_match) continue;
+                // 若属于 steps 且带 subField，则要求 subField 在允许集合内
+                var _sub = (typeof _cell.subField === 'string' && _cell.subField) ? _cell.subField : '';
+                if (_allowedSubs && _sub && !_allowedSubs[_sub]) continue;
+                var _slot = _dv2StepFail[_sIdx];
+                if (!_slot) { _slot = { severity: _sev, subs: Object.create(null) }; _dv2StepFail[_sIdx] = _slot; }
+                // step 级 severity：error 压 warn
+                if (_sev === 'error') _slot.severity = 'error';
+                if (_sub) {
+                    var _prev = _slot.subs[_sub];
+                    _slot.subs[_sub] = (_prev === 'error' || _sev === 'error') ? 'error' : _sev;
+                }
+            }
+        }
+    } catch (_e) { _dv2StepFail = Object.create(null); }
+    // 【诊断日志·dv2 高亮不生效】仅当 _pushFailedFieldCells 命中当前行时输出，避免刷屏。
+    //   若日志显示 fields/cells 为空，则问题在数据链路（未透传/未持久化）；
+    //   若日志显示 _dv2StepFail 非空但 DOM 无 xs-dv2-step-failed，则问题在 CSS 或渲染合并顺序。
+    function _dv2StepFailCls(di) {
+        var slot = _dv2StepFail[di];
+        if (!slot) return '';
+        return slot.severity === 'warn' ? ' xs-dv2-step-failed-warn' : ' xs-dv2-step-failed';
+    }
+    function _dv2FieldFailCls(field) {
+        var slot = _dv2StepFail[S._dv2ActiveStep];
+        if (!slot) return '';
+        var sev = slot.subs[field];
+        if (!sev) return '';
+        return sev === 'warn' ? ' xs-dv2-field-failed-warn' : ' xs-dv2-field-failed';
+    }
+
     var html = '';
     // ===== 左栏：步骤列表 =====
     html += '<div class="xs-dv2-left">';
@@ -284,7 +359,9 @@ function renderDetailV2() {
             var sub = dv2StepSubLabel(row);
             var modCls = (S._dv2StepMods && S._dv2StepMods.has(di)) ? ' modified' : '';
             var actCls = (di === S._dv2ActiveStep) ? ' active' : '';
-            html += '<div class="xs-dv2-step' + actCls + modCls + '" data-di="' + di + '">'
+            // B4 · 失败 chip 高亮：命中时追加 xs-dv2-step-failed(-warn)
+            var failCls = _dv2StepFailCls(di);
+            html += '<div class="xs-dv2-step' + actCls + modCls + failCls + '" data-di="' + di + '">'
                 +     '<span class="xs-dv2-step-num">' + (di + 1) + '</span>'
                 +     '<span class="xs-dv2-step-text" title="' + escapeHtml(label) + '">' + escapeHtml(label)
                 +       (sub ? ' <span class="xs-dv2-step-id">(' + escapeHtml(sub) + ')</span>' : '')
@@ -317,8 +394,10 @@ function renderDetailV2() {
         var rawObj = rawRows[di] || {};
         var fields = dv2FieldOrder(rawObj, dt.headers);
         fields.forEach(function (field) {
+            // B4 · 传递当前字段的失败 class 到 renderDv2FieldCard
+            var _fieldFailCls = _dv2FieldFailCls(field);
             var kind = dv2DetectKind(rawObj, field);
-            // 嵌套对象：以 JSON 文本域展示，支持格式化 + 语法高亮
+            // 嵌套对象类型：以 JSON 文本域展示，支持格式化 + 语法高亮
             if (kind === 'object') {
                 var jsonStr = '';
                 try { jsonStr = JSON.stringify(rawObj[field], null, 2); } catch (_) { jsonStr = String(rawObj[field] || ''); }
@@ -326,7 +405,7 @@ function renderDetailV2() {
                     '<div class="xs-dv2-obj-wrap">'
                     +   '<textarea class="xs-dv2-scalar" data-field="' + escapeHtml(field) + '" data-kind="object" rows="4">' + escapeHtml(jsonStr) + '</textarea>'
                     +   '<pre class="xs-dv2-obj-hl" data-field="' + escapeHtml(field) + '" style="display:none"><code></code></pre>'
-                    + '</div>');
+                    + '</div>', false, _fieldFailCls);
                 return;
             }
             if (kind === 'array') {
@@ -346,7 +425,7 @@ function renderDetailV2() {
                                 +    '</div>';
                         });
                 }
-                html += renderDv2FieldCard(field, 'array', inner, true);
+                html += renderDv2FieldCard(field, 'array', inner, true, _fieldFailCls);
                 return;
             }
             // scalar
@@ -354,7 +433,7 @@ function renderDetailV2() {
             var text = (v == null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
             html += renderDv2FieldCard(field, 'scalar',
                 '<textarea class="xs-dv2-scalar" data-field="' + escapeHtml(field) + '" data-kind="scalar" rows="1">' + escapeHtml(text) + '</textarea>',
-                false
+                false, _fieldFailCls
             );
         });
     }
@@ -364,7 +443,7 @@ function renderDetailV2() {
     bindDv2Events();
 }
 
-function renderDv2FieldCard(field, kind, innerHtml, withAddBtn) {
+function renderDv2FieldCard(field, kind, innerHtml, withAddBtn, failCls) {
     var typeLabel = (kind === 'array') ? '数组' : (kind === 'object' ? '对象' : '文本');
     var typeCls = (kind === 'array') ? 'is-array' : '';
     var actions = '';
@@ -397,7 +476,7 @@ function renderDv2FieldCard(field, kind, innerHtml, withAddBtn) {
     } else {
         nameHtml = '<span class="xs-dv2-field-name" title="' + escapeHtml(titleAttr) + '">' + escapeHtml(field) + '</span>';
     }
-    return '<div class="xs-dv2-field" data-field="' + escapeHtml(field) + '">'
+    return '<div class="xs-dv2-field' + (failCls || '') + '" data-field="' + escapeHtml(field) + '">'
         +    '<div class="xs-dv2-field-hd">'
         +      nameHtml
         +      '<span class="xs-dv2-field-type ' + typeCls + '">' + typeLabel + '</span>'

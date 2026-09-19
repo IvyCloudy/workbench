@@ -880,7 +880,15 @@ function pushFromContextMenu() {
             });
         }
     }, 300000);
-    if (typeof showToast === 'function') showToast('推送中，请耐心等待…', 'info');
+    // 「推送中…」toast 延迟弹出：500ms 内若收到 preValidateGate 消息则不弹，
+    // 忽略并继续时由 05g 手动补弹。详见 04-push-find.js pushChanges() 同段说明。
+    if (S._pushToastTimer) { try { clearTimeout(S._pushToastTimer); } catch (_) {} }
+    S._pushToastTimer = setTimeout(function () {
+        S._pushToastTimer = null;
+        if (S._pushing && typeof showToast === 'function') {
+            showToast('推送中，请耐心等待…', 'info');
+        }
+    }, 500);
     S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap, pushIndexToRow: pushIndexToRow });
 }
 

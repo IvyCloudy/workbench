@@ -449,10 +449,22 @@ function _buildRowHtml(ri, tsIdColIdx) {
     var failCls = '';
     var failReason = '';
     var rowFailTime = 0;  // 该行的推送失败时间戳；若不在失败集合中则为 0
+    // B3 · 单元格级失败高亮：命中的列集合 + 级别（error/warn），供 cells 循环时判定
+    var failedColSet = null;   // Set<number> | null（null 表示本行无失败）
+    var failedSeverity = 'error';
     if (S._pushFailedTsIds && S._pushFailedTsIds.size > 0 && tsIdColIdx >= 0) {
         var rowTsId = row[tsIdColIdx];
         if (rowTsId !== undefined && rowTsId !== null && rowTsId !== '' && S._pushFailedTsIds.has(String(rowTsId))) {
-            failCls = ' xs-tr-push-failed';
+            // B3：按 severity 打红/黄 —— warn 走 xs-tr-push-warn（软拦截，仅提醒），
+            //   error 及缺省保持 xs-tr-push-failed（硬拦截，需修复）。
+            //   severity Map 由 pushFailureStore 与编辑期 handler 共同维护，未命中即视为 'error'。
+            //   ☆ 行级 tr class 仍保留：
+            //     ① 用于依靠 tr.xs-tr-push-failed 选择子的行号格红条 / tooltip / 背景兼容 CSS；
+            //     ② 行级背景红/黄底已在 CSS 中变为透明（仅保留行号 td 的颜色条），
+            //     以避免“整行铺底”的视觉噪声。真正的失败单元格染色由下方 failedColSet 控制。
+            var _sev = (S._pushFailedSeverity && S._pushFailedSeverity.get(String(rowTsId))) || 'error';
+            failedSeverity = _sev;
+            failCls = (_sev === 'warn') ? ' xs-tr-push-warn' : ' xs-tr-push-failed';
             if (S._pushFailedReasons) {
                 var _r = S._pushFailedReasons.get(String(rowTsId));
                 if (_r) failReason = String(_r);
@@ -465,6 +477,14 @@ function _buildRowHtml(ri, tsIdColIdx) {
             //   否则 rowFailTime==0 会导致后续失败红底竞争永远不胜出 → 红底丢失。
             //   历史快照遗漏 time 的情况（旧版本升级 / 数据损坏）会命中。
             if (rowFailTime === 0) rowFailTime = 1;
+            // B3 · 单元格级：按 field → 列索引解析需要染色的具体列（同行可能多字段失败）。
+            //   无 field / field 无法定位到列 → 内部兜底至少染 tsId 列作为视觉锚点，
+            //   避免“整行都不亮→用户看不到哪行失败”的体验黑洞。
+            try {
+                failedColSet = HighlightModel.getFailedColumnsOfRow(S, String(rowTsId), headers);
+            } catch (_e) {
+                failedColSet = null;
+            }
         }
     }
     // 待删除行（已发删除请求、接口尚未返回）：不再做置灰+删除线高亮（与正常行视觉一致）
@@ -487,10 +507,12 @@ function _buildRowHtml(ri, tsIdColIdx) {
             }
         }
     }
-    // 行号格 title：失败行显示「原始行号: N」与「推送失败/删除失败」等信息，
+    // 行号格 title：失败行显示「原始行号: N」与「推送校验失败/删除失败」等信息，
     // 各段使用换行符分隔，浏览器原生 tooltip 会自动分行展示，便于阅读长原因。
+    // 此处的失败均为「前置校验拦截」——真正走后端推送并被拒绝的失败在 showToast 中提示，
+    // 二者语义不同，文案上以「推送校验失败」显式区分，避免用户误以为已经发送到服务器。
     var rowNumTitle = '原始行号: ' + (ri + 1);
-    if (failReason) rowNumTitle += '\n推送失败：' + failReason;
+    if (failReason) rowNumTitle += '\n推送校验失败：' + failReason;
     if (isFailedDel) {
         rowNumTitle += '\n删除失败：' + (failedDelReason || '线上拒绝删除');
     } else if (isPendingDel) {
@@ -512,6 +534,13 @@ function _buildRowHtml(ri, tsIdColIdx) {
         }
         var modCls = _hasMod ? ' modified' : '';
         var _modTime = _hasMod ? ((S._modsTime && S._modsTime[_modKey]) || 0) : 0;
+        // 【推送校验失败·修改不高亮】：需求（2026-09-19）——
+        //   校验失败的行（rowFailTime>0，即命中 _pushFailedTsIds）
+        //   即便用户改动了单元格，也不再显示 modified 黄底。
+        //   只有真正走过推送流程的行（非失败态）才保留 modified 语义。
+        //   注：仅视觉层清 class，不清 S.mods / _modsTime 内部状态，
+        //   一旦该行的失败记录消失（改成合法值 → 编辑期校验清盘），modified 会自然显现。
+        if (rowFailTime > 0) modCls = '';
         // 时间戳竞争决策：统一入口，见 00-highlight-util.js / docs/specs/高亮逻辑说明.md 第 2 节。
         // 输出的 bestClass 不带前导空格，本处拼接时补上；modCls 交给下方 clearModified 决定是否置空。
         var _res = HighlightUtil.resolveHighlight({
@@ -540,6 +569,30 @@ function _buildRowHtml(ri, tsIdColIdx) {
         }
         var colSelCls2 = S.colSel.has(ci) ? ' xs-col-selected' : '';
         var frozenCls2 = (String(headers[ci]) === 'testcase_id' || rowFrozen) ? ' xs-td-frozen' : '';
+        // B3 · 单元格级失败高亮：若当前 ci 命中 failedColSet → 根据该字段自己的 severity 取色：
+            //   error → xs-td-failed-cell（红），warn → xs-td-failed-cell-warn（黄）。
+            //   行内 error/warn 字段可共存，列与列之间颜色独立。与行级 tr class 共存：tr class 用于
+            //   tooltip / 行号标志，td class 控制真正的背景染色。
+        // B4 · 展开态外层让位：若当前 ci = steps 复合列 && 处于展开态 && 该行所有 steps 列失败字段
+        //   都具备细粒度定位（stepIdx + subField）→ 外层 <td> 不铺 fail 色，让内层 sub-td 独立呈现
+        //   精准染色（否则外层整格黄/红会盖掉子 td 视觉）。
+        //   若命中失败字段中含缺细粒度定位的（如 stepSeq），保守回退到整列染色。
+        var failedCellCls = '';
+        if (failedColSet && failedColSet.size > 0 && failedColSet.has(ci)) {
+            var _skipOuterFail = false;
+            if (expanded && stepsCol >= 0 && ci === stepsCol) {
+                try {
+                    _skipOuterFail = HighlightModel.isRowColFullyGranular(S, String(row[tsIdColIdx]), ci, headers);
+                } catch (_e) { _skipOuterFail = false; }
+            }
+            if (!_skipOuterFail) {
+                var _colSev = 'error';
+                try {
+                    _colSev = HighlightModel.getFieldSeverityOfColumn(S, String(row[tsIdColIdx]), ci, headers);
+                } catch (_e) { _colSev = failedSeverity; }
+                failedCellCls = (_colSev === 'warn') ? ' xs-td-failed-cell-warn' : ' xs-td-failed-cell';
+            }
+        }
         // 单元格内部 HTML 与相关 cls/title 由 _buildCellInner 统一产出，与 patchCell 复用。
         var _ci = _buildCellInner(ri, ci, v);
         var inner = _ci.inner;
@@ -547,7 +600,7 @@ function _buildRowHtml(ri, tsIdColIdx) {
         var arrCellCls = _ci.arrCellCls;
         var titleAttr = _ci.titleAttr;
         if (inner.indexOf('\n') >= 0) hasBr = true;
-        cells.push({ inner: inner, modCls: modCls, colSelCls2: colSelCls2, frozenCls2: frozenCls2, hiliCls: hiliCls, isDetail: isDetail, arrCellCls: arrCellCls, titleAttr: titleAttr, mkStyle: mkStyle });
+        cells.push({ inner: inner, modCls: modCls, colSelCls2: colSelCls2, frozenCls2: frozenCls2, hiliCls: hiliCls, isDetail: isDetail, arrCellCls: arrCellCls, titleAttr: titleAttr, mkStyle: mkStyle, failedCellCls: failedCellCls });
     }
     // 内容中的换行符 \n 由 CSS white-space 控制：
     //   - 单行模式（nowrap）下 \n 被视为空格，不会撑高
@@ -567,38 +620,14 @@ function _buildRowHtml(ri, tsIdColIdx) {
         +   '<span class="xs-rownum">' + (ri + 1) + '</span>'
         +   '<div class="xs-row-resizer" data-row="' + ri + '" title="拖动调整行高；双击自适应内容"></div>'
         + '</td>';
-    // 【诊断·失败行黄底追查】仅当 tsId 命中失败集合时输出，避免刷屏。
-    // 打印 tr 的 failCls、每个 cell 的 modCls / hiliCls，以及关键源字段快照：
-    //   S.mods.size / S._modsTime keys / rowFailTime，用来判断
-    //   "modified 类的来源是 S.mods 还是 CSS 兜底 / patchCell 后加"。
-    if (failCls) {
-        var _diagCells = cells.map(function (c, idx) {
-            return idx + ':{mod=' + (c.modCls ? 'Y' : '_') + ' hili=' + (c.hiliCls || '_').trim() + '}';
-        }).join(' ');
-        var _modKeysForRow = [];
-        var _modTimeKeysForRow = [];
-        try {
-            S.mods.forEach(function (k) { if (k.indexOf(ri + ',') === 0) _modKeysForRow.push(k); });
-            if (S._modsTime) {
-                for (var _mtk in S._modsTime) {
-                    if (Object.prototype.hasOwnProperty.call(S._modsTime, _mtk) && _mtk.indexOf(ri + ',') === 0) {
-                        _modTimeKeysForRow.push(_mtk + '=' + S._modsTime[_mtk]);
-                    }
-                }
-            }
-        } catch (_e) { /* ignore */ }
-        console.log('[渲染诊断][失败行] ri=' + ri
-            + ' | tsId=' + (row[tsIdColIdx] || '(空)')
-            + ' | failCls="' + failCls.trim() + '" rowFailTime=' + rowFailTime
-            + ' | S.mods 本行 keys=[' + _modKeysForRow.join(',') + ']'
-            + ' | S._modsTime 本行 keys=[' + _modTimeKeysForRow.join(',') + ']'
-            + ' | cells: ' + _diagCells);
-    }
     for (var ci2 = 0; ci2 < cells.length; ci2++) {
         var c = cells[ci2];
         var wrapStyleAttr = multilineClamp ? ' style="' + multilineClamp + '"' : '';
         var spanAttr = (expanded && ci2 === stepsCol) ? ' colspan="5"' : '';
-        html += '<td class="xs-td xs-editable' + c.modCls + c.colSelCls2 + c.frozenCls2 + c.hiliCls + (c.isDetail ? ' xs-detail-cell' : '') + c.arrCellCls + '" data-row="' + ri + '" data-col="' + ci2 + '"' + spanAttr + c.titleAttr + c.mkStyle + '>'
+        // B3：若该单元格本身命中失败字段，侧写到 titleAttr 尾部（只在命中时埋因回原，
+        //   避免非失败单元格也弹 tooltip）。若 _buildCellInner 已给出 titleAttr（富文本内容提示），
+        //   不予覆盖。依靠行号 td 的 title 已能展现整行原因，此处 title 为错错看补充。
+        html += '<td class="xs-td xs-editable' + c.modCls + c.colSelCls2 + c.frozenCls2 + c.hiliCls + (c.failedCellCls || '') + (c.isDetail ? ' xs-detail-cell' : '') + c.arrCellCls + '" data-row="' + ri + '" data-col="' + ci2 + '"' + spanAttr + c.titleAttr + c.mkStyle + '>'
             + '<div class="xs-cell-wrap"' + wrapStyleAttr + '>' + c.inner + '</div></td>';
     }
     html += '</tr>';
@@ -649,7 +678,20 @@ function _buildCellInner(ri, ci, v) {
             // 样例数据行：展开态下 steps 子表也应只读（与 isFrozenRow/isFrozenCell 保护一致）
             var _rowFrozenForExpand = (typeof isFrozenRow === 'function') && isFrozenRow(ri);
             var _frozenCls = _rowFrozenForExpand ? ' xs-step-expanded-frozen' : '';
-            inner = '<div class="xs-step-expanded' + _frozenCls + '" data-detail-row="' + ri + '" data-detail-col="' + ci + '"' + (_rowFrozenForExpand ? ' data-xse-frozen="1"' : '') + '>' + _buildStepExpandedHtml(rawText, _rowFrozenForExpand) + '</div>';
+            // B4 · 展开态子表格 sub-td 精确高亮：查询当前行的失败 stepCells（{stepIdx,subField,section,severity}[]）
+            //   传给 _buildStepExpandedHtml 用于给对应 <td> 打 xs-td-failed-cell(-warn) class
+            var _stepCells = [];
+            try {
+                var _tsColForExpand = (S.data && S.data.headers) ? S.data.headers.indexOf('testcase_id') : -1;
+                if (_tsColForExpand >= 0 && S.data.rows[ri]) {
+                    var _tsIdForExpand = S.data.rows[ri][_tsColForExpand];
+                    if (_tsIdForExpand !== undefined && _tsIdForExpand !== null && _tsIdForExpand !== ''
+                        && window.HighlightModel && typeof HighlightModel.getFailedStepCellsOfRow === 'function') {
+                        _stepCells = HighlightModel.getFailedStepCellsOfRow(S, String(_tsIdForExpand)) || [];
+                    }
+                }
+            } catch (_e) { _stepCells = []; }
+            inner = '<div class="xs-step-expanded' + _frozenCls + '" data-detail-row="' + ri + '" data-detail-col="' + ci + '"' + (_rowFrozenForExpand ? ' data-xse-frozen="1"' : '') + '>' + _buildStepExpandedHtml(rawText, _rowFrozenForExpand, _stepCells) + '</div>';
         } else {
             var detailLinkCls = isEmptyDetail ? 'xs-detail-link xs-detail-empty' : 'xs-detail-link';
             // 展开态空明细：加号图标，点击在内联展开表格中直接新增一条步骤；其余显示 rawText（'[]' 等）
@@ -709,7 +751,10 @@ function _buildTcMaskBadge(kind, value) {
 
 // 将已展开的步骤合并文本解析为四列表格：序号 | 步骤描述 | 数据 | 预期结果
 // frozen=true 时（样例数据行）：只读呈现 —— 三个 contenteditable 列改为 false，隐藏操作按钮与“添加分组”按钮
-function _buildStepExpandedHtml(text, frozen) {
+// stepCells=Array<{stepIdx,subField,section,severity}>（可选）：B4 —— 为 sub-td 打失败 class
+//   当 subField 属于 ui_expected/api_expected/db_expected 时，将预期结果列内部的对应 .xse-group[data-kind]
+//   也打上失败 class，实现“只高亮子分组”而非整个预期结果列。
+function _buildStepExpandedHtml(text, frozen, stepCells) {
     if (!text) return '';
     var _editable = frozen ? 'false' : 'true';
     var lines = text.replace(/\\n/g, '\n').split(/\r?\n/);
@@ -821,12 +866,37 @@ function _buildStepExpandedHtml(text, frozen) {
     for (var s = 0; s < visibleSteps.length; s++) {
         var step = visibleSteps[s];
         var _origIdx = step.origIdx;
+        // B4 · 根据 stepCells 预计算当前步 3 个 sub-td 的 severity（以及 expected 列内部 3 个子分组的 severity）
+        //   —— severity 为 null 表示无失败，不打 class；'error'/'warn' 则打对应的失败 class。
+        //   同一 sub-td 多命中时 error 压 warn。
+        var _descSev = null, _dataSev = null, _expectedSev = null;
+        var _expGroupSev = { ui: null, api: null, data: null };
+        if (Array.isArray(stepCells) && stepCells.length > 0) {
+            for (var _sci = 0; _sci < stepCells.length; _sci++) {
+                var _sc = stepCells[_sci];
+                if (!_sc || _sc.stepIdx !== _origIdx) continue;
+                var _sev = (_sc.severity === 'error' || _sc.severity === 'warn') ? _sc.severity : 'error';
+                var _sub = _sc.subField;
+                function _bump(cur) { return (cur === 'error' || _sev === 'error') ? 'error' : _sev; }
+                if (_sub === 'operation') _descSev = _bump(_descSev);
+                else if (_sub === 'data') _dataSev = _bump(_dataSev);
+                else if (_sub === 'ui_expected') { _expGroupSev.ui = _bump(_expGroupSev.ui); _expectedSev = _bump(_expectedSev); }
+                else if (_sub === 'api_expected') { _expGroupSev.api = _bump(_expGroupSev.api); _expectedSev = _bump(_expectedSev); }
+                else if (_sub === 'db_expected') { _expGroupSev.data = _bump(_expGroupSev.data); _expectedSev = _bump(_expectedSev); }
+            }
+        }
+        function _failCls(sev) {
+            if (sev === 'error') return ' xs-td-failed-cell';
+            if (sev === 'warn') return ' xs-td-failed-cell-warn';
+            return '';
+        }
         html += '<tr>';
         // 序号（不可编辑）：小圆点风格，与列头序号位置一致
         html += '<td class="xse-td-id"><span class="xse-idx-dot">' + escapeHtml(step.id || '-') + '</span></td>';
         // 步骤描述（可编辑）：data-xse-step 使用原始索引，保证编辑映射到源文本正确位置
         // frozen 行（样例）：contenteditable="false"，只读展示
-        html += '<td class="xse-td-desc" contenteditable="' + _editable + '" data-xse-step="' + _origIdx + '" data-xse-section="desc">' + escapeHtml(step.desc || '') + '</td>';
+        // B4：命中失败时追加 xs-td-failed-cell / xs-td-failed-cell-warn
+        html += '<td class="xse-td-desc' + _failCls(_descSev) + '" contenteditable="' + _editable + '" data-xse-step="' + _origIdx + '" data-xse-section="desc">' + escapeHtml(step.desc || '') + '</td>';
         // 预期结果（可编辑）
         // 交互优化（方案 A + 分组标题优化）：
         //   1) 全空 → 仅显示一行"+ 添加分组"按钮组（UI/接口/数据），占 1 行而非原来的 6 行
@@ -834,7 +904,7 @@ function _buildStepExpandedHtml(text, frozen) {
         //   3) 全填 → 保持三个 chip + 内容行原有布局
         // 数据层无破坏：_handleSubTableCellEdit 依据 DOM 中存在的 .xse-group + .xse-sub 识别分组，
         // 未渲染的分组会自然回写为空数组（并被清理为 delete step.xxx_expected），符合"未填"语义。
-        html += '<td class="xse-td-expected" contenteditable="' + _editable + '" data-xse-step="' + _origIdx + '" data-xse-section="expected">';
+        html += '<td class="xse-td-expected' + _failCls(_expectedSev) + '" contenteditable="' + _editable + '" data-xse-step="' + _origIdx + '" data-xse-section="expected">';
         // 解析 step.expected 到三个具名分组
         var _groupMap = { 'ui': null, 'api': null, 'data': null };
         var _titleMap = { 'ui': '【UI检查】', 'api': '【接口调用】', 'data': '【数据检查】' };
@@ -877,7 +947,10 @@ function _buildStepExpandedHtml(text, frozen) {
         for (var _fi = 0; _fi < _filledKinds.length; _fi++) {
             var _fk = _filledKinds[_fi];
             var _flines = _groupMap[_fk] || [];
-            html += '<div class="xse-group">';
+            // B4 · 子分组级失败高亮：若 _expGroupSev[_fk] 命中，给 .xse-group 打 xs-group-failed / xs-group-failed-warn
+            var _gSev = _expGroupSev[_fk];
+            var _gCls = (_gSev === 'error') ? ' xs-group-failed' : (_gSev === 'warn' ? ' xs-group-failed-warn' : '');
+            html += '<div class="xse-group' + _gCls + '">';
             html += '<div class="xse-sub" contenteditable="false" data-kind="' + _fk + '">' + escapeHtml(_titleMap[_fk]) + '</div>';
             if (_flines.length > 0) {
                 for (var _li = 0; _li < _flines.length; _li++) {
@@ -904,7 +977,7 @@ function _buildStepExpandedHtml(text, frozen) {
         }
         html += '</td>';
         // 数据（可编辑）
-        html += '<td class="xse-td-data" contenteditable="' + _editable + '" data-xse-step="' + _origIdx + '" data-xse-section="data">';
+        html += '<td class="xse-td-data' + _failCls(_dataSev) + '" contenteditable="' + _editable + '" data-xse-step="' + _origIdx + '" data-xse-section="data">';
         if (step.data.length) {
             for (var di = 0; di < step.data.length; di++) {
                 html += '<div class="xse-line">' + escapeHtml(step.data[di]) + '</div>';
@@ -1194,11 +1267,6 @@ function patchCell(ri, ci) {
         S._modsTime[_mKey2] = Date.now();
     }
     var _modTime2 = _hasMod2 ? ((S._modsTime && S._modsTime[_mKey2]) || 0) : 0;
-    if (_hasMod2) td.classList.add('modified'); else td.classList.remove('modified');
-    if (isDetail) td.classList.add('xs-detail-cell'); else td.classList.remove('xs-detail-cell');
-    if (isArrCol) td.classList.add('xs-arr-cell'); else td.classList.remove('xs-arr-cell');
-    var frozen = (String(headers[ci]) === 'testcase_id');
-    if (frozen) td.classList.add('xs-td-frozen'); else td.classList.remove('xs-td-frozen');
     // 5) 推送失败行级失败时间（先算好交给统一决策器）
     var _rowFailTime = 0;
     if (S._pushFailedTsIds && S._pushFailedTsIds.size > 0) {
@@ -1215,6 +1283,19 @@ function patchCell(ri, ci) {
             }
         }
     }
+    // 【推送校验失败·修改不高亮】：与 _buildRowHtml 对齐 ——
+    //   失败行的用户修改不再显示 modified 黄底；一旦失败清除，modified 自然显现。
+    if (_rowFailTime > 0) {
+        td.classList.remove('modified');
+    } else if (_hasMod2) {
+        td.classList.add('modified');
+    } else {
+        td.classList.remove('modified');
+    }
+    if (isDetail) td.classList.add('xs-detail-cell'); else td.classList.remove('xs-detail-cell');
+    if (isArrCol) td.classList.add('xs-arr-cell'); else td.classList.remove('xs-arr-cell');
+    var frozen = (String(headers[ci]) === 'testcase_id');
+    if (frozen) td.classList.add('xs-td-frozen'); else td.classList.remove('xs-td-frozen');
     // 时间戳竞争决策：统一入口，见 00-highlight-util.js / docs/specs/高亮逻辑说明.md 第 2 节
     var _res2 = HighlightUtil.resolveHighlight({
         ri: ri, ci: ci,
@@ -1231,10 +1312,41 @@ function patchCell(ri, ci) {
     var _failOverridden = _res2.failOverridden;
     if (_res2.clearModified) td.classList.remove('modified');
 
-    // 清除所有高亮 class
-    td.classList.remove('xs-td-push-updated', 'xs-td-push-updated-row', 'xs-td-push-added', 'xs-td-user-marked', 'xs-td-push-failed', 'xs-td-overrides-fail');
+    // 清除所有高亮 class（B3：含单元格级红/黄）
+    td.classList.remove('xs-td-push-updated', 'xs-td-push-updated-row', 'xs-td-push-added', 'xs-td-user-marked', 'xs-td-push-failed', 'xs-td-overrides-fail', 'xs-td-failed-cell', 'xs-td-failed-cell-warn');
     if (_bestClass) td.classList.add(_bestClass);
     if (_failOverridden) td.classList.add('xs-td-overrides-fail');
+    // B3 · 单元格级失败高亮同步：patchCell 单格更新时也要根据 field 判定是否染色，
+    //   并按字段级 severity 独立取色（error 列红 / warn 列黄）。
+    // B4 · 展开态外层让位：与 _buildRowHtml 逻辑对齐——若当前 ci 是 steps 复合列 && 展开态 &&
+    //   所有该列失败字段都具备细粒度定位，则外层 <td> 跳过染色，让内层 sub-td 独立呈现。
+    if (S._pushFailedTsIds && S._pushFailedTsIds.size > 0) {
+        var _tsIdColIdxP = (S.data && S.data.headers) ? S.data.headers.indexOf('testcase_id') : -1;
+        if (_tsIdColIdxP >= 0) {
+            var _tidP = (S.data.rows[ri] || [])[_tsIdColIdxP];
+            if (_tidP !== undefined && _tidP !== null && _tidP !== '' && S._pushFailedTsIds.has(String(_tidP))) {
+                var _cols = null;
+                try { _cols = HighlightModel.getFailedColumnsOfRow(S, String(_tidP), headers); } catch (_e) { _cols = null; }
+                if (_cols && _cols.has(ci)) {
+                    var _stepsColP = headers.indexOf('steps');
+                    var _expandedP = !!(S._stepsExpanded && _stepsColP >= 0 && (typeof supportsStepsExpansion !== 'function' || supportsStepsExpansion()));
+                    var _skipOuterFailP = false;
+                    if (_expandedP && ci === _stepsColP) {
+                        try {
+                            _skipOuterFailP = HighlightModel.isRowColFullyGranular(S, String(_tidP), ci, headers);
+                        } catch (_e) { _skipOuterFailP = false; }
+                    }
+                    if (!_skipOuterFailP) {
+                        var _colSevP = 'error';
+                        try {
+                            _colSevP = HighlightModel.getFieldSeverityOfColumn(S, String(_tidP), ci, headers);
+                        } catch (_e) { _colSevP = 'error'; }
+                        td.classList.add(_colSevP === 'warn' ? 'xs-td-failed-cell-warn' : 'xs-td-failed-cell');
+                    }
+                }
+            }
+        }
+    }
     // 【诊断日志·失败行不变黄】只在失败行触发时输出，便于对齐子表落盘日志
     // 应用标记颜色（仅当标记是最新操作时）
     if (_bestMkInfo) {

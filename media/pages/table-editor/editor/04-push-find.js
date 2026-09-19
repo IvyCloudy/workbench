@@ -89,7 +89,16 @@ function pushChanges() {
             });
         }
     }, 300000);
-    if (typeof showToast === 'function') showToast('推送中，请耐心等待…', 'info');
+    // 「推送中…」toast 延迟弹出：500ms 内若收到 preValidateGate（前置校验窗口）消息，
+    // 则清除计时器不弹（避免"点了取消却看到闪现的推送中"）；
+    // 若用户点"忽略并继续"，则由 05g-pre-validate-gate.js 在 continue 决策时手动弹一次。
+    if (S._pushToastTimer) { try { clearTimeout(S._pushToastTimer); } catch (_) {} }
+    S._pushToastTimer = setTimeout(function () {
+        S._pushToastTimer = null;
+        if (S._pushing && typeof showToast === 'function') {
+            showToast('推送中，请耐心等待…', 'info');
+        }
+    }, 500);
     S.vscode.postMessage({ type: 'pushTestCase', data: payload, rowIndexMap: rowIndexMap, pushIndexToRow: pushIndexToRow });
 }
 

@@ -8,7 +8,7 @@
  *      · 案例类型   type       ↔ csv「案例类型」  ：功能点类 / 流程类 / 界面类 / …
  *      · 执行方式   test_type  ↔ csv「执行方式」  ：手工 / 自动化
  *      · 优先级     priority   ↔ csv「优先级」    ：高 / 中 / 低
- *      · 关键标识   key_flag   ↔ csv「关键标识」  ：是 / 否 / 0 / 1
+ *      · 关键案例   key_flag   ↔ csv「关键案例」  ：是 / 否 / 0 / 1
  *   2. PLAN_EXEC_NUM_VALIDATOR —— 数据类型字段（计划执行次数 plan_exec_num）
  *      · 必须为非负整数（含 0）；空 / 文本 / 负数 / 小数 均判为不合法
  *
@@ -41,7 +41,7 @@ import type { PushInterfaceField } from '../utils/pushFailureCategory';
 import { getEnumValues } from '../utils/caseEnumValues';
 
 /**
- * 从配置中拉取「关键标识」合法取值，并保留 0/1 兜底以兼容历史 CSV。
+ * 从配置中拉取「关键案例」合法取值，并保留 0/1 兜底以兼容历史 CSV。
  * 单独抽出方法便于测试注入 & 与 pushDataMapper 行为一致。
  */
 function readKeyFlagValues(): readonly string[] {
@@ -66,16 +66,16 @@ export const TEST_TYPE_VALUES: readonly string[] = getEnumValues('testType');
 /** 优先级（`priority` / 「优先级」）合法取值 —— @deprecated 请优先使用 getEnumValues('priority')。 */
 export const PRIORITY_VALUES: readonly string[] = getEnumValues('priority');
 
-/** 关键标识（`key_flag` / 「关键标识」）合法取值（兼容中文与 0/1 双写法）—— @deprecated 请优先使用 readKeyFlagValues()。 */
+/** 关键案例（`key_flag` / 「关键案例」）合法取值（兼容中文与 0/1 双写法）—— @deprecated 请优先使用 readKeyFlagValues()。 */
 export const KEY_FLAG_VALUES: readonly string[] = readKeyFlagValues();
 
 /** 单个枚举字段的校验规则条目。 */
 interface EnumFieldRule {
     /** YAML 键名（英文），如 `type` / `test_type` / `priority` / `key_flag` */
     yamlKey: string;
-    /** CSV 列名（中文），主用列名（与需求文档 §2.3.1 对齐） */
+    /** CSV 列名（中文），主用列名（与 package.json headerLabels 及现网 CSV 模板对齐） */
     csvKey: string;
-    /** CSV 兼容旧列名（可选）；例如 keyFlag 曾用「关键案例」。识别时优先 csvKey，缺失兜底 csvKeyAlt。 */
+    /** CSV 兼容列名（可选，保留扩展点，当前无差异） */
     csvKeyAlt?: string;
     /** 中文字段名，用于 reason 文案 */
     label: string;
@@ -88,13 +88,14 @@ interface EnumFieldRule {
 /**
  * 4 项枚举字段规则表 —— 顺序即 reason 拼装顺序（同行多字段命中时按此顺序汇总）。
  * P0 修复（2026-09-19）：allowed 改为 readAllowed 惰性求值，与 pushDataMapper 共用同一份配置源。
- * P1 兼容（2026-09-19）：keyFlag 的 CSV 列名统一为「关键标识」，同时兼容旧列名「关键案例」。
+ * 注意：4 个中文列名与 package.json 的 headerLabels 及 media/pages/table-editor 现网列头保持严格一致；
+ *       其中 keyFlag 的中文名以代码/CSV 现实为准 = 「关键案例」（需求文档的「关键标识」为历史草稿用词）。
  */
 const ENUM_RULES: readonly EnumFieldRule[] = [
     { yamlKey: 'type',       csvKey: '案例类型',   label: '案例类型',   readAllowed: () => getEnumValues('caseType'),  field: 'type'    },
     { yamlKey: 'test_type',  csvKey: '执行方式',   label: '执行方式',   readAllowed: () => getEnumValues('testType'),  field: 'testType'},
     { yamlKey: 'priority',   csvKey: '优先级',     label: '优先级',     readAllowed: () => getEnumValues('priority'),  field: 'priority'},
-    { yamlKey: 'key_flag',   csvKey: '关键标识',   csvKeyAlt: '关键案例', label: '关键标识', readAllowed: readKeyFlagValues, field: 'keyFlag' },
+    { yamlKey: 'key_flag',   csvKey: '关键案例',   label: '关键案例',   readAllowed: readKeyFlagValues,                field: 'keyFlag' },
 ];
 
 /**

@@ -105,12 +105,12 @@ describe('B2 枚举字段校验（ENUM_VALIDATOR · error）', () => {
         // 不应误报其他缺省字段
         expect(hit!.reason).not.toContain('案例类型');
         expect(hit!.reason).not.toContain('执行方式');
-        expect(hit!.reason).not.toContain('关键标识');
+        expect(hit!.reason).not.toContain('关键案例');
     });
 
-    it('CSV 中文列名（「案例类型」/「执行方式」/「优先级」/「关键标识」）也被识别', () => {
+    it('CSV 中文列名（「案例类型」/「执行方式」/「优先级」/「关键案例」）也被识别', () => {
         const hit = ENUM_VALIDATOR.check(
-            { '案例类型': '功能点类', '执行方式': '手工', '优先级': '中', '关键标识': '0' } as any,
+            { '案例类型': '功能点类', '执行方式': '手工', '优先级': '中', '关键案例': '0' } as any,
             VALID_TSID_1,
         );
         expect(hit).toBeNull(); // 全合法 → 不命中
@@ -135,7 +135,7 @@ describe('B2 枚举字段校验（ENUM_VALIDATOR · error）', () => {
         expect(hit!.reason).toContain('案例类型');
         expect(hit!.reason).toContain('执行方式');
         expect(hit!.reason).toContain('优先级');
-        expect(hit!.reason).toContain('关键标识');
+        expect(hit!.reason).toContain('关键案例');
         // primaryField 取第一个命中字段（type → 'type'）
         expect(hit!.field).toBe('type');
     });
@@ -150,7 +150,7 @@ describe('B2 枚举字段校验（ENUM_VALIDATOR · error）', () => {
     });
 });
 
-describe('B2 关键标识（key_flag）—— 4 种合法写法都支持', () => {
+describe('B2 关键案例（key_flag）—— 4 种合法写法都支持', () => {
     it.each(KEY_FLAG_VALUES.map(v => [v]))('key_flag="%s" → 合法', (val) => {
         const hit = ENUM_VALIDATOR.check({ key_flag: val } as any, VALID_TSID_1);
         expect(hit).toBeNull();

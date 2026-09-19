@@ -457,8 +457,7 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
         preCondition: nl2br(unescapeCsvCell(row['前置条件'])),
         description,
         expected,
-        // P1 兼容（2026-09-19）：CSV 列名以「关键标识」为准（需求文档 §2.3.1），同时兼容旧列名「关键案例」
-        keyFlag: resolveKeyFlag(row['关键标识'] ?? row['关键案例'], caseTag, rowIndex),
+        keyFlag: resolveKeyFlag(row['关键案例'], caseTag, rowIndex),
         projectDes: fieldOrDefault(row, '项目说明', ''),
         planExecNum: fieldOrDefault(row, '计划执行次数', 1)
     };

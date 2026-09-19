@@ -7,7 +7,7 @@
  *    - caseType  ← YAML `type`      / CSV「案例类型」
  *    - testType  ← YAML `test_type` / CSV「执行方式」
  *    - priority  ← YAML `priority`  / CSV「优先级」
- *    - keyFlag   ← YAML `key_flag`  / CSV「关键标识」（兼容旧列名「关键案例」）
+ *    - keyFlag   ← YAML `key_flag`  / CSV「关键案例」
  *
  *  取值来源（高 → 低）：
  *    1. VSCode 配置系统 `testcaseViewer.enum.<field>`

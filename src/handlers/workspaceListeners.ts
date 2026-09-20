@@ -642,12 +642,15 @@ async function handleCaseFilesDidDelete(
             hardDeleteOnly: true,
             localRowCount: c.stage === 'hardDelete' ? c.rowCount : 0,
         })),
-        ...needConfirmCtxs.map(c => ({
+        ...needConfirmCtxs
+            .filter((c): c is Extract<CaseFileDecisionContext, { stage: 'needConfirm' }> =>
+                c.stage === 'needConfirm' && !c.skipConfirm)
+            .map(c => ({
             filePath: c.entry.filePath,
             fileName: c.entry.fileName,
-            caseCount: c.stage === 'needConfirm' ? c.caseCountForConfirm : 0,
-            items: c.stage === 'needConfirm' ? c.confirmItems : [],
-            unbound: c.stage === 'needConfirm' ? !!c.unbound : false,
+            caseCount: c.caseCountForConfirm,
+            items: c.confirmItems,
+            unbound: !!c.unbound,
         })),
         ...precheckFailedCtxs.map(c => ({
             filePath: c.entry.filePath,
@@ -662,13 +665,16 @@ async function handleCaseFilesDidDelete(
     // 直接走到 Step 10+11 用汇总面板展示所有跳过原因（与部分失败/全部成功走同款 panel）
     // 之前的实现：直接 showModal 弹阻断提示后 return，会造成"仅有此场景不走 panel"的 UI 割裂。
     const allPrecheckFailed = hardDeleteCtxs.length === 0 && needConfirmCtxs.length === 0;
+    // 仅 type=3（从未推送）的文件不进入聚合确认弹窗（skipConfirm），若因此导致
+    // 弹窗内无任何需确认文件，则跳过弹窗直接走删除（confirmed 保持 true）。
+    const needConfirmModal = batchEntries.length > 0;
     let confirmed = true;
     if (allPrecheckFailed) {
         // 全部预检失败：reopen 所有文件，跳过 Step 6-9（无需确认、无需真删/线上删除）
         for (const c of precheckFailedCtxs) {
             if (c.entry.wasOpen) await reopenCaseFile(c.entry.filePath);
         }
-    } else {
+    } else if (needConfirmModal) {
         // Step 6: 弹聚合确认弹窗
         console.log('[workspaceListeners] 即将打开批量确认弹窗，batchEntries=', batchEntries.length,
             'items=', batchEntries.map(e => `${e.fileName}(cases=${e.caseCount},linked=${(e.items||[]).length},fail=${e.precheckError?'Y':'N'})`).join(' | '));
@@ -983,11 +989,15 @@ async function decideAndFinalizeCaseFileDelete(
 
     // 需要用户确认
     const { confirmItems, caseCountForConfirm, unbound } = ctx;
-    const userConfirmed = confirmItems.length > 0
-        ? await confirmCaseFileDeleteWithDetails(
-            { filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, items: confirmItems, unbound },
-        )
-        : await showDeleteConfirmSimpleModal({ filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, unbound });
+    // 确认接口仅返回 type=3（案例从未推送过）→ 跳过案例确认界面，直接删除（结果界面照常展示）
+    let userConfirmed = true;
+    if (!ctx.skipConfirm) {
+        userConfirmed = confirmItems.length > 0
+            ? await confirmCaseFileDeleteWithDetails(
+                { filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, items: confirmItems, unbound },
+            )
+            : await showDeleteConfirmSimpleModal({ filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, unbound });
+    }
 
     if (!userConfirmed) {
         if (entry.wasOpen) await reopenCaseFile(entry.filePath);
@@ -1028,6 +1038,8 @@ type CaseFileDecisionContext =
         caseCountForConfirm: number;
         /** 未绑定测试任务：跳过线上预检，仅本地删除 */
         unbound?: boolean;
+        /** 确认接口仅返回 type=3（案例从未推送过），跳过案例确认界面直接删除 */
+        skipConfirm?: boolean;
     }
     | {
         stage: 'precheckFailed';
@@ -1138,6 +1150,9 @@ async function prepareCaseFileDecisionContext(
     // 校验 2：线上预检
     let confirmItems: DeleteConfirmItem[] = [];
     let caseCountForConfirm = nonEmptyIds.length;
+    // 确认接口仅返回 type=3（案例从未推送过 TMS，无任何线上记录/关联）时，
+    // 无需展示案例确认界面，直接删除（删除结果界面照常展示）。
+    let allType3 = false;
     try {
         const resp = await confirmDeleteTestCase(extContext, taskInfoResult.taskInfo, nonEmptyIds);
         if (resp.returnCode === 'SUC0000' && Array.isArray(resp.body)) {
@@ -1160,6 +1175,7 @@ async function prepareCaseFileDecisionContext(
                 })
                 .filter((it: DeleteConfirmItem) => !!it.sourceId);
             caseCountForConfirm = deletableCount;
+            allType3 = resp.body.length > 0 && resp.body.every((it: any) => Number(it?.type) === 3);
         } else {
             const rcPart = resp.returnCode
                 ? `返回码：${resp.returnCode}，错误信息：${resp.errorMsg || '请稍后重试或联系管理员'}`
@@ -1181,6 +1197,7 @@ async function prepareCaseFileDecisionContext(
         nonEmptyIds,
         confirmItems,
         caseCountForConfirm,
+        skipConfirm: allType3,
     };
 }
 

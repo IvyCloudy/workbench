@@ -1020,6 +1020,8 @@ window.addEventListener('message', function (e) {
         }
     } else if (m.type === 'confirmDeleteRowsResult') {
         // 删除前的线上预检回包：存在「执行/缺陷」关联的案例走表格二次确认；
+        // 确认接口仅返回 type=3（案例从未推送过 TMS，无任何线上记录/关联）→ skipConfirm:true，
+        //   前端**不展示**案例确认界面，直接执行删除，删除结果界面照常展示（与案例文件删除路径一致）；
         // 预检「无结论」时由 requestDeleteConfirm 内部降级为简单确认；
         // 预检「等待超时」时 requestDeleteConfirm 已清空 S._deleteConfirmCb 并弹出
         //   「获取确认结果超时」提示（重试/取消），此处迟到的回包因 cb 为空而安全跳过；
@@ -1028,8 +1030,9 @@ window.addEventListener('message', function (e) {
         var _ok = !!m.ok;
         var _items = Array.isArray(m.items) ? m.items : [];
         var _blocked = !!m.blocked;
+        var _skipConfirm = !!m.skipConfirm;
         console.log('[recv confirmDeleteRowsResult] ok=', _ok, 'items=', _items.length,
-            'blocked=', _blocked, 'errorMessage=', m.errorMessage || '');
+            'blocked=', _blocked, 'skipConfirm=', _skipConfirm, 'errorMessage=', m.errorMessage || '');
         if (typeof S._deleteConfirmCb === 'function') {
             S._deleteConfirmCb({
                 ok: _ok,
@@ -1037,6 +1040,7 @@ window.addEventListener('message', function (e) {
                 errorMessage: m.errorMessage || '',
                 blocked: _blocked,
                 unbound: !!m.unbound,
+                skipConfirm: _skipConfirm,
             });
         }
     } else if (m.type === 'deleteRowsResult') {
@@ -1368,6 +1372,7 @@ function showToast(msg, type) {
     t.textContent = msg;
     t.className = 'xs-toast ' + (type || '');
     t.style.display = 'block';
+
     // 同时只有一个隐藏定时器，避免上一条 toast 的定时器把后一条提前关掉。
     if (S._toastTimer) { try { clearTimeout(S._toastTimer); } catch (_) {} }
     S._toastTimer = setTimeout(function () {

@@ -424,8 +424,11 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
                 // 有 data 数组则按 data 行数累加；否则按一条 sourceId 计一行（兼容后端可能的两种返回结构）
                 return sum + (list ? list.length : 1);
             }, 0);
+        // 确认接口仅返回 type=3（案例从未推送过 TMS，无任何线上记录/关联）→ 无需展示
+        // 案例确认界面，前端直接执行删除，删除结果界面照常展示。
+        const allType3 = raw.length > 0 && raw.every((it: any) => Number(it?.type) === 3);
         ctx.webviewPanel.webview.postMessage({
-            type: 'confirmDeleteRowsResult', ok: true, items, onlineDeleteCount,
+            type: 'confirmDeleteRowsResult', ok: true, items, onlineDeleteCount, skipConfirm: allType3,
         });
     } catch (err: any) {
         // 预检异常（网络 / 解析 / 后端 5xx）：同样**阻断删除**并弹插件封装的模态框，

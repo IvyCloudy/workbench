@@ -209,6 +209,13 @@ function requestDeleteConfirm(tsIds, onProceed) {
             _rollbackPendingDelete(ids);
             return;
         }
+        if (result && result.skipConfirm) {
+            // 确认接口仅返回 type=3（案例从未推送过 TMS）：无需展示案例确认界面，
+            // 直接执行删除，删除结果界面照常展示。
+            console.log('[requestDeleteConfirm] 仅 type=3，跳过案例确认界面，直接删除');
+            onProceed();
+            return;
+        }
         if (result && result.ok && Array.isArray(result.items) && result.items.length > 0) {
             // 存在「需要确认」的案例 → 渲染带关联表格的确认弹窗
             // onlineDeleteCount：后端计算的「实际会同步删除到 TMS 的行数」（type=1 + type=2 合计），

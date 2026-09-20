@@ -216,19 +216,20 @@ function requestDeleteConfirm(tsIds, onProceed) {
             onProceed();
             return;
         }
+        // onlineDeleteCount：后端计算的「实际会同步删除到 TMS 的行数」（type=1 + type=2 合计，不含 type=3），
+        // 用于首段红色大数字。不使用 ids.length，因为本次勾选行数可能包含本地新增（无 testCaseNo）
+        // 或线上已不存在（type=3）的行，与「真实线上删除数」口径不一致。
+        // 表格确认弹窗与简单确认弹窗共用同一口径，确保文案「同步删除 TMS 平台上的 x 条案例」与实际一致。
+        var _onlineDelCnt = (typeof result.onlineDeleteCount === 'number' && result.onlineDeleteCount >= 0)
+            ? result.onlineDeleteCount
+            : (Array.isArray(ids) ? ids.length : 0); // 兜底：老后端未返回该字段时退回旧口径
         if (result && result.ok && Array.isArray(result.items) && result.items.length > 0) {
             // 存在「需要确认」的案例 → 渲染带关联表格的确认弹窗
-            // onlineDeleteCount：后端计算的「实际会同步删除到 TMS 的行数」（type=1 + type=2 合计），
-            // 用于首段红色大数字。不使用 ids.length，因为本次勾选行数可能包含本地新增（无 testCaseNo）
-            // 或线上已不存在（type=3）的行，与「真实线上删除数」口径不一致。
-            var _onlineDelCnt = (typeof result.onlineDeleteCount === 'number' && result.onlineDeleteCount >= 0)
-                ? result.onlineDeleteCount
-                : (Array.isArray(ids) ? ids.length : 0); // 兜底：老后端未返回该字段时退回旧口径
             _showDeleteConfirmDialog(result.items, onProceed, ids, _onlineDelCnt);
         } else {
-            // 无需额外确认 / 预检无结论降级 → 走原有简单确认
+            // 无需额外确认 / 预检无结论降级 → 走简单确认（同样使用 onlineDeleteCount 口径）
             // 携带 result.unbound：未绑定测试任务时前端提示「仅本地删除、不会同步 TMS」
-            _showPlainDeleteConfirm(onProceed, ids, result && result.unbound);
+            _showPlainDeleteConfirm(onProceed, ids, result && result.unbound, _onlineDelCnt);
         }
     };
     if (ids.length === 0 || typeof S.vscode === 'undefined' || !S.vscode) {
@@ -304,9 +305,13 @@ function _showPrecheckTimeoutFallback(ids, onProceed) {
  * @param tsIds     本次涉及的 testcase_id；用户点「取消」/关闭时据此回滚 pending 态
  * @param unbound   是否未绑定测试任务：true 时提示「仅本地删除、不会同步 TMS」
  */
-function _showPlainDeleteConfirm(onProceed, tsIds, unbound) {
+function _showPlainDeleteConfirm(onProceed, tsIds, unbound, onlineDeleteCount) {
     if (typeof xsConfirm === 'function') {
-        var _count = Array.isArray(tsIds) ? tsIds.length : 0;
+        // 与表格确认弹窗口径一致：优先用后端精确统计的 onlineDeleteCount（type=1 + type=2 合计，不含 type=3），
+        // 兜底才退回 tsIds.length（老后端未返回该字段时）。
+        var _count = (typeof onlineDeleteCount === 'number' && onlineDeleteCount >= 0)
+            ? onlineDeleteCount
+            : (Array.isArray(tsIds) ? tsIds.length : 0);
         var _html;
         if (unbound) {
             _html = '<div class="xs-dc-lead">当前案例文件未绑定测试任务，删除案例仅影响本地，'

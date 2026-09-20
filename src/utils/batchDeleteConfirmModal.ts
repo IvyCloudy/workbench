@@ -54,6 +54,12 @@ export interface BatchDeleteFileEntry {
      * 弹窗话术与统计口径（计入「仅本地删除」而非「同步 TMS」）均按本地删除处理。
      */
     unbound?: boolean;
+    /**
+     * 是否全部为 type=3（从未推送 TMS，平台已不存在）：true 时本文件仍展示在弹窗中
+     * （让用户看清"该文件已被包含、将直接清理本地"）；其案例平台侧已不存在，删除执行接口对这批 id 为无操作、仅做本地清理，
+     * 且 caseCount 计 0、不计入「同步 TMS 案例数」，也不归入 hardDeleteOnly 语义。
+     */
+    allType3?: boolean;
 }
 
 /**
@@ -85,12 +91,15 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
 
     const ok = entries.filter(e => !e.precheckError);
     const failed = entries.filter(e => !!e.precheckError);
-    // 「需同步 TMS」= 预检通过 且 非 hardDeleteOnly 且 非 unbound 的文件
-    const needTms = ok.filter(e => !e.hardDeleteOnly && !e.unbound);
-    // 「仅本地删除」= 预检通过 且 hardDeleteOnly 的文件
+    // 「需同步 TMS」= 预检通过 且 非 hardDeleteOnly 且 非 unbound 且 非全 type=3 的文件
+    const needTms = ok.filter(e => !e.hardDeleteOnly && !e.unbound && !e.allType3);
+    // 「仅本地删除（hardDeleteOnly）」= 预检通过 且 hardDeleteOnly 的文件
     const hardOnly = ok.filter(e => !!e.hardDeleteOnly);
+    // 「全部 type=3（从未推送 TMS）」= 预检通过 且 allType3 的文件：仍展示在弹窗中，
+    // 但既不占 TMS 同步口径，也不计入 hardDeleteOnly（其语义是"无 testcase_id"，与 type=3 不同）。
+    const type3Only = ok.filter(e => !!e.allType3);
     // 累加口径：只统计 needTms 的 caseCount（真正会调 TMS 的行数），
-    // hardDeleteOnly 的本地行数（localRowCount）不计入 header 的「同步删除 TMS X 条案例」。
+    // hardDeleteOnly 的本地行数（localRowCount）与 type=3 文件均不计入 header 的「同步删除 TMS X 条案例」。
     const totalCases = needTms.reduce((sum, e) => sum + (e.caseCount || 0), 0);
     // 有执行/缺陷关联的案例总数（跨全部预检通过的文件汇总）
     const totalLinkedCases = ok.reduce((sum, e) => sum + (Array.isArray(e.items) ? e.items.length : 0), 0);
@@ -102,6 +111,7 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
     const needTmsCount = needTms.length;
     const hardOnlyCount = hardOnly.length;
     const unboundCount = ok.filter(e => !!e.unbound).length;
+    const type3OnlyCount = type3Only.length;
 
     // 倒计时秒数（可调）；okCount=0 时按钮直接 disabled，不进入倒计时
     const COUNTDOWN_SECS = 3;
@@ -109,10 +119,13 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
     // Tab 数据：按 entries 原顺序展示（预检失败 / 有关联案例 / 无关联案例不做排序）
     const tabsHtml = entries.map((e, idx) => {
         const isFail = !!e.precheckError;
+        const isType3 = !isFail && !!e.allType3;
         const linkedCount = isFail ? 0 : (Array.isArray(e.items) ? e.items.length : 0);
-        const icon = isFail ? '⊘' : (linkedCount > 0 ? '⚠' : '📄');
-        const cls = isFail ? 'xs-bd-tab xs-bd-tab-fail' : (linkedCount > 0 ? 'xs-bd-tab xs-bd-tab-warn' : 'xs-bd-tab');
-        const badge = linkedCount > 0 ? `<span class="xs-bd-tab-badge">${linkedCount}</span>` : '';
+        const icon = isFail ? '⊘' : (isType3 ? '🧹' : (linkedCount > 0 ? '⚠' : '📄'));
+        const cls = isFail ? 'xs-bd-tab xs-bd-tab-fail' : (isType3 ? 'xs-bd-tab xs-bd-tab-type3' : (linkedCount > 0 ? 'xs-bd-tab xs-bd-tab-warn' : 'xs-bd-tab'));
+        const badge = isType3
+            ? `<span class="xs-bd-tab-badge xs-bd-tab-badge-type3">type3</span>`
+            : (linkedCount > 0 ? `<span class="xs-bd-tab-badge">${linkedCount}</span>` : '');
         return `<button type="button" class="${cls}" role="tab" data-idx="${idx}" aria-selected="${idx === 0 ? 'true' : 'false'}" tabindex="${idx === 0 ? '0' : '-1'}" title="${escapeHtml_(e.filePath || e.fileName)}">`
             + `<span class="xs-bd-tab-icon">${icon}</span>`
             + `<span class="xs-bd-tab-name">${escapeHtml_(e.fileName)}</span>`
@@ -161,11 +174,13 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
                </div>`
             : `<div class="xs-bd-empty">该文件下无需二次确认的执行/缺陷关联案例。</div>`;
         // pane meta 文案：区分「同步 TMS」与「仅本地删除」两种语义，避免将本地行数当线上行数展示。
-        const paneMeta = e.unbound
-            ? `<div class="xs-bd-pane-meta">当前文件未绑定测试任务，删除仅清理本地，不会同步删除 TMS 平台上的案例。</div>`
-            : (e.hardDeleteOnly
-                ? `<div class="xs-bd-pane-meta">仅删除本地文件（共 <b class="xs-bd-count">${e.localRowCount || 0}</b> 行），不涉及 TMS 平台。</div>`
-                : `<div class="xs-bd-pane-meta">删除本文件将同步删除 TMS 平台上的 <b class="xs-bd-count">${e.caseCount}</b> 条案例，以及这些案例的执行记录和缺陷关联。</div>`);
+        const paneMeta = e.allType3
+            ? `<div class="xs-bd-pane-meta">该文件所有案例均未推送 TMS（<b>type=3</b>，平台已不存在）；删除将直接清理本地。</div>`
+            : (e.unbound
+                ? `<div class="xs-bd-pane-meta">当前文件未绑定测试任务，删除仅清理本地，不会同步删除 TMS 平台上的案例。</div>`
+                : (e.hardDeleteOnly
+                    ? `<div class="xs-bd-pane-meta">仅删除本地文件（共 <b class="xs-bd-count">${e.localRowCount || 0}</b> 行），不涉及 TMS 平台。</div>`
+                    : `<div class="xs-bd-pane-meta">删除本文件将同步删除 TMS 平台上的 <b class="xs-bd-count">${e.caseCount}</b> 条案例，以及这些案例的执行记录和缺陷关联。</div>`));
         return `<div class="xs-bd-pane${idx === 0 ? ' xs-bd-pane-active' : ''}" role="tabpanel" data-idx="${idx}">
             <div class="xs-bd-file-path" title="${escapeHtml_(e.filePath || e.fileName)}">${escapeHtml_(e.filePath || e.fileName)}</div>
             ${paneMeta}
@@ -185,6 +200,9 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
     if (unboundCount > 0) {
         riskLines.push(`<b>${unboundCount}</b> 个文件未绑定测试任务，仅本地删除、不同步 TMS`);
     }
+    if (type3OnlyCount > 0) {
+        riskLines.push(`<b>${type3OnlyCount}</b> 个文件所有案例均未推送 TMS（type=3，平台已不存在），将直接清理本地`);
+    }
     if (failedCount > 0) {
         riskLines.push(`<b>${failedCount}</b> 个文件预检失败，将被跳过、不会删除`);
     }
@@ -201,6 +219,7 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
     if (needTmsCount > 0) headerParts.push(`${needTmsCount} 需同步 TMS·${totalCases} 案例`);
     if (hardOnlyCount > 0) headerParts.push(`${hardOnlyCount} 仅本地`);
     if (unboundCount > 0) headerParts.push(`${unboundCount} 未绑定`);
+    if (type3OnlyCount > 0) headerParts.push(`${type3OnlyCount} 仅本地清理(type=3)`);
     if (failedCount > 0) headerParts.push(`${failedCount} 跳过`);
     const headerSuffix = headerParts.length > 0 ? `（${headerParts.join(' / ')}）` : '';
     const headerTitleHtml = `删除案例 — 共 ${fileCount} 个文件${headerSuffix}`;
@@ -263,6 +282,8 @@ ${baseModalCss_(headerBg, color, '')}
     .xs-bd-tab-badge{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 5px;font-size:10px;font-weight:700;color:#fff;background:#f5222d;border-radius:8px;box-sizing:border-box;flex-shrink:0}
     .xs-bd-tab-warn{color:#d46b08}
     .xs-bd-tab-fail{color:#cf1322}
+    .xs-bd-tab-type3{color:#8c8c8c}
+    .xs-bd-tab-badge-type3{background:#8c8c8c}
     /* 未查看小圆点 */
     .xs-bd-tab-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#1890ff;flex-shrink:0}
     .xs-bd-tab.xs-bd-seen .xs-bd-tab-dot{display:none}

@@ -630,7 +630,29 @@ async function handleCaseFilesDidDelete(
         'precheckFailed=', precheckFailedCtxs.length,
         'files=', entries.map(e => e.fileName).join(','));
 
-    // Step 5: 构造聚合弹窗 entries（hardDelete 也一并展示，让用户知道这些文件会被直接删除）
+    // Step 5: 构造聚合弹窗 entries
+    // 弹窗触发条件（needModal）：本批存在「需同步 TMS 的非 type=3 文件」或「预检失败文件」；
+    // 二者任一存在才弹确认窗（让用户确认同步删除 / 知晓将被跳过的文件）。
+    // hardDeleteOnly（纯本地删除）与 type=3（平台已不存在）本身不触发弹窗——
+    // 若整批仅由这两者构成（无任何需同步 / 预检失败文件）→ 整批跳过确认窗、直接删除，
+    // 与编辑器内 / 单文件删除的 skipConfirm 行为一致；
+    // 但若本批存在上述需确认文件，则 hardDeleteOnly 与 type=3 文件仍纳入弹窗逐个说明（每个文件去向说清楚）。
+    const hasSyncFile = needConfirmCtxs.some(c => c.stage === 'needConfirm' && !c.skipConfirm);
+    const hasPrecheckFailed = precheckFailedCtxs.length > 0;
+    const needModal = hasSyncFile || hasPrecheckFailed;
+    const type3Entries: BatchDeleteFileEntry[] = needModal
+        ? needConfirmCtxs
+            .filter((c): c is Extract<CaseFileDecisionContext, { stage: 'needConfirm' }> =>
+                c.stage === 'needConfirm' && !!c.skipConfirm)
+            .map(c => ({
+            filePath: c.entry.filePath,
+            fileName: c.entry.fileName,
+            caseCount: 0,
+            items: [] as DeleteConfirmItem[],
+            allType3: true,
+            unbound: false,
+        }))
+        : [];
     const batchEntries: BatchDeleteFileEntry[] = [
         ...hardDeleteCtxs.map(c => ({
             filePath: c.entry.filePath,
@@ -652,6 +674,9 @@ async function handleCaseFilesDidDelete(
             items: c.confirmItems,
             unbound: !!c.unbound,
         })),
+        // 全部 type=3（从未推送 TMS）的文件：仅在混合批量中纳入弹窗展示（每个文件说清楚"直接清理本地"），
+        // 其 caseCount 计 0、不占 TMS 同步口径；整批全 type=3 时 type3Entries 为空、不入弹窗。
+        ...type3Entries,
         ...precheckFailedCtxs.map(c => ({
             filePath: c.entry.filePath,
             fileName: c.entry.fileName,
@@ -665,9 +690,10 @@ async function handleCaseFilesDidDelete(
     // 直接走到 Step 10+11 用汇总面板展示所有跳过原因（与部分失败/全部成功走同款 panel）
     // 之前的实现：直接 showModal 弹阻断提示后 return，会造成"仅有此场景不走 panel"的 UI 割裂。
     const allPrecheckFailed = hardDeleteCtxs.length === 0 && needConfirmCtxs.length === 0;
-    // 仅 type=3（从未推送）的文件不进入聚合确认弹窗（skipConfirm），若因此导致
-    // 弹窗内无任何需确认文件，则跳过弹窗直接走删除（confirmed 保持 true）。
-    const needConfirmModal = batchEntries.length > 0;
+    // 弹窗仅由「需同步 TMS 的非 type=3 文件」或「预检失败文件」触发（needModal）；
+    // hardDeleteOnly / type=3 文件本身不触发弹窗——整批仅含这两者时跳过弹窗、直接删除；
+    // 混合批量（含需同步 / 预检失败文件）时二者仍在 batchEntries 中、弹窗逐个说清楚。
+    const needConfirmModal = needModal;
     let confirmed = true;
     if (allPrecheckFailed) {
         // 全部预检失败：reopen 所有文件，跳过 Step 6-9（无需确认、无需真删/线上删除）

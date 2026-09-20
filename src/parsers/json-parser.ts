@@ -13,6 +13,12 @@ import * as fs from 'fs';
 import type { TableData, DetailTableData } from '../types';
 import type { FileParser, FileParseResult } from './file-parser';
 import { getDetailFieldDisplay } from './yaml-parser';
+import { createLogger } from '../utils/logger';
+import * as path from 'path';
+import { TelemetryService } from '../utils/telemetry';
+import { buildErrorProps, extractErrorLocation, detectParseSource } from '../services/utils';
+
+const log = createLogger('JSON');
 
 // ============================================
 // JSON 解析器
@@ -20,8 +26,9 @@ import { getDetailFieldDisplay } from './yaml-parser';
 
 export class JsonFileParser implements FileParser {
     async parse(filePath: string): Promise<FileParseResult> {
+        let content = '';
         try {
-            const content = await fs.promises.readFile(filePath, 'utf-8');
+            content = await fs.promises.readFile(filePath, 'utf-8');
             const data = JSON.parse(content);
 
             const isTopArray = Array.isArray(data);
@@ -93,6 +100,15 @@ export class JsonFileParser implements FileParser {
                 sourceData
             };
         } catch (e: any) {
+            log.error('JSON 解析失败:', filePath, '|', e?.message, e?.stack ? '\n' + e.stack : '');
+            const { line, column } = extractErrorLocation(e, content);
+            TelemetryService.sendTelemetryErrorEvent('parser.parseFailed', buildErrorProps(e, {
+                fileFormat: 'json',
+                fileName: path.basename(filePath),
+                line,
+                column,
+                source: detectParseSource(),
+            }));
             throw new Error(`JSON 解析失败: ${e.message}`);
         }
     }

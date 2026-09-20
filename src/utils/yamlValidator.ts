@@ -27,20 +27,16 @@ import {
     generateFixForParseError,
     truncateYamlMessage,
     isQuotedBlockScalarLine,
+    YAML_TO_JS_OPTIONS,
 } from './yamlRules';
+import { buildErrorProps } from '../services/utils';
 
 // 类型再导出，保持外部导入路径兼容
 export type { YamlIssue } from './yamlTypes';
 
 const log = createLogger('YAML');
 
-// YAML 解析选项：放宽别名（anchor / alias）数量上限。
-// 见 src/parsers/yaml-parser.ts 的同名常量说明；此处同步放宽，
-// 放宽别名（anchor / alias）数量上限，避免校验器在别名过多时误报 "Excessive alias count"，
-// 进而导致合法文件被前置拦截器误判为不可解析而切回文本编辑器。
-// maxAliasCount 属于 toJS 选项，作用于高层 YAML.parse()（兜底取行号）；
-// parseAllDocuments 仅做语法组合、不校验别名数，故不向其传该选项。
-const YAML_TO_JS_OPTIONS = { maxAliasCount: 100_000 } as const;
+// 见 src/utils/yamlRules.ts：YAML_TO_JS_OPTIONS 已抽出为共享常量（统一别名上限）。
 
 // ============================================
 // 破坏性 fix 识别
@@ -138,7 +134,7 @@ export function clearYamlValidationCache(): void {
  * @param content YAML 文件原文
  * @returns 格式问题列表（可能同一行有多条）
  */
-export function validateYamlContent(content: string): YamlIssue[] {
+export function validateYamlContent(content: string, filePath?: string): YamlIssue[] {
     // ── 缓存快速路径：相同内容直接返回缓存的 issue 列表 ──
     // 大文件不参与缓存（也不做 hash 计算，避免额外 CPU 消耗）
     const cacheable = content.length <= VALIDATION_CACHE_CONTENT_MAX;
@@ -195,6 +191,9 @@ export function validateYamlContent(content: string): YamlIssue[] {
     }
 
     // ── 3. yaml 库解析错误捕获 ──
+    let firstParseErr: any = null;
+    let firstParseLine = 1;
+    let firstParseCol = 1;
     try {
         const docs = YAML.parseAllDocuments(content);
         for (const doc of docs) {
@@ -204,6 +203,7 @@ export function validateYamlContent(content: string): YamlIssue[] {
             for (const err of errors) {
                 const errLine = err?.linePos?.[0]?.line || 1;
                 const errCol = err?.linePos?.[0]?.col || 1;
+                if (firstParseErr === null) { firstParseErr = err; firstParseLine = errLine; firstParseCol = errCol; }
                 const alreadyReported = issues.some(
                     (iss) => iss.line === errLine && iss.severity === 'error',
                 );
@@ -259,6 +259,7 @@ export function validateYamlContent(content: string): YamlIssue[] {
         } catch (parseErr: any) {
             const errLine = parseErr?.linePos?.[0]?.line || 1;
             const errCol = parseErr?.linePos?.[0]?.col || 1;
+            if (firstParseErr === null) { firstParseErr = parseErr; firstParseLine = errLine; firstParseCol = errCol; }
             const alreadyReported = issues.some(
                 (iss) => iss.line === errLine && iss.severity === 'error',
             );
@@ -287,6 +288,16 @@ export function validateYamlContent(content: string): YamlIssue[] {
         }
     }
 
+    if (firstParseErr) {
+        TelemetryService.sendTelemetryErrorEvent('parser.parseFailed', buildErrorProps(firstParseErr, {
+            fileFormat: 'yaml',
+            fileName: filePath ? path.basename(filePath) : '',
+            line: String(firstParseLine),
+            column: String(firstParseCol),
+            source: 'validate',
+        }));
+    }
+
     cachePut(content, issues, cacheable ? cacheKey : undefined);
     return issues;
 }
@@ -301,7 +312,7 @@ export async function validateYamlFile(filePath: string): Promise<YamlIssue[]> {
     } catch {
         return [];
     }
-    return validateYamlContent(content);
+    return validateYamlContent(content, filePath);
 }
 
 // ============================================

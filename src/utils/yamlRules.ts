@@ -27,6 +27,26 @@ import {
 } from './yamlConstants';
 
 // ============================================
+// YAML 解析 / 转换共享选项（单一来源）
+// ============================================
+/**
+ * 放宽别名（anchor / alias）数量上限到 10 万：
+ *   yaml 库默认 maxAliasCount=100，当文件用 *alias 引用超过 100 次
+ *   （如大量用例共用同一 tags 锚点 &id001 / *id001）会抛
+ *   "Excessive alias count indicates a resource exhaustion attack" 安全防护，
+ *   别名上限放宽到 10 万，兼容大批量用例共用同一锚点的合法文件。
+ *
+ * 关键点：yaml 库的 maxAliasCount 属于 **toJS 选项**（在 YAML → JS 转换阶段做别名炸弹防护），
+ *   因此作用于 doc.toJS() 与高层 YAML.parse()；parseAllDocuments 仅做语法组合、不校验别名数，
+ *   向其传该选项既类型不合法也不生效（别名上限检查发生在转换时）。
+ *
+ * 集中定义，确保「打开 / 校验 / 推送」全链路使用同一阈值，
+ * 避免 src/parsers/yaml-parser.ts、src/utils/yamlValidator.ts、
+ * src/parsers/yaml-parse-check.ts、src/utils/commands.ts 散落硬编码漂移。
+ */
+export const YAML_TO_JS_OPTIONS = { maxAliasCount: 100_000 } as const;
+
+// ============================================
 // 上下文（每行入循环前一次性预计算）
 // ============================================
 

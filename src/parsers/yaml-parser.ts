@@ -14,17 +14,17 @@
  */
 import * as fs from 'fs';
 import * as YAML from 'yaml';
+import { YAML_TO_JS_OPTIONS } from '../utils/yamlRules';
 import type { TableData, DetailTableData, SheetData, SheetRow } from '../types';
 import type { FileParser, FileParseResult } from './file-parser';
+import { createLogger } from '../utils/logger';
+import * as path from 'path';
+import { TelemetryService } from '../utils/telemetry';
+import { buildErrorProps, extractErrorLocation, detectParseSource } from '../services/utils';
 
-// YAML 解析选项：放宽别名（anchor / alias）数量上限。
-// yaml 库默认 maxAliasCount=100，当文件用 *alias 引用超过 100 次
-// （如大量用例共用同一 tags 锚点 &id001 / *id001）会抛
-// "Excessive alias count indicates a resource exhaustion attack" 安全防护，
-// 别名（anchor / alias）数量上限放宽到 10 万，兼容大批量用例共用同一锚点的合法文件。
-// 注意：yaml 库的 maxAliasCount 属于 toJS 选项（在 YAML -> JS 转换阶段做别名炸弹防护），
-// 因此作用于 doc.toJS() 与高层 YAML.parse()；parseAllDocuments 仅做语法组合、不校验别名数。
-const YAML_TO_JS_OPTIONS = { maxAliasCount: 100_000 } as const;
+const log = createLogger('YAML');
+
+// YAML 解析选项见 src/utils/yamlRules.ts（YAML_TO_JS_OPTIONS，统一别名上限）。
 
 // ============================================
 // 内部 YAML 数据结构
@@ -270,10 +270,10 @@ export class YamlFileParser implements FileParser {
 
     private async loadYamlFromFile(filePath: string): Promise<YamlData> {
         const content = await fs.promises.readFile(filePath, 'utf-8');
-        return this.loadYamlFromContent(content);
+        return this.loadYamlFromContent(content, filePath);
     }
 
-    private loadYamlFromContent(content: string): YamlData {
+    private loadYamlFromContent(content: string, filePath: string): YamlData {
         if (content.charCodeAt(0) === 0xFEFF) content = content.slice(1);
         const cleanContent = this.cleanYamlContent(content);
         if (!cleanContent.trim()) {
@@ -296,12 +296,27 @@ export class YamlFileParser implements FileParser {
                     if (parsed) break;
                 }
             }
-        } catch {
-            sourceData = YAML.parse(cleanContent, YAML_TO_JS_OPTIONS);
-            if (topLevelIsArray === undefined) {
-                topLevelIsArray = Array.isArray(sourceData);
+        } catch (toJsErr: any) {
+            // toJS 阶段抛错（如别名超过上限），回退到高层 YAML.parse 再解析一次
+            log.warn('YAML 转 JS 失败，回退 YAML.parse:', filePath, '|', toJsErr?.message);
+            try {
+                sourceData = YAML.parse(cleanContent, YAML_TO_JS_OPTIONS);
+                if (topLevelIsArray === undefined) {
+                    topLevelIsArray = Array.isArray(sourceData);
+                }
+                parsed = this.findArrayData(sourceData);
+            } catch (parseErr: any) {
+                log.error('YAML 解析失败:', filePath, '|', parseErr?.message, parseErr?.stack ? '\n' + parseErr.stack : '');
+                const { line, column } = extractErrorLocation(parseErr, cleanContent);
+                TelemetryService.sendTelemetryErrorEvent('parser.parseFailed', buildErrorProps(parseErr, {
+                    fileFormat: 'yaml',
+                    fileName: path.basename(filePath),
+                    line,
+                    column,
+                    source: detectParseSource(),
+                }));
+                throw parseErr;
             }
-            parsed = this.findArrayData(sourceData);
         }
 
         if (!parsed) {

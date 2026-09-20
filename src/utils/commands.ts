@@ -177,8 +177,9 @@ function fromYaml(content: string): string {
     try {
         const YAML = require('yaml');
         // 放宽别名上限，兼容大量用例共用同一锚点的合法文件
-        // （与 src/parsers/yaml-parser.ts 的 YAML_TO_JS_OPTIONS 保持一致）
-        const parsed = YAML.parse(content, { maxAliasCount: 100_000 });
+        // 统一引用 src/utils/yamlRules.ts 的共享常量 YAML_TO_JS_OPTIONS
+        const { YAML_TO_JS_OPTIONS } = require('../utils/yamlRules');
+        const parsed = YAML.parse(content, YAML_TO_JS_OPTIONS);
         const records = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
         return records.length > 0 ? searchKey(records[0], 'testPhaseName') : '';
     } catch {

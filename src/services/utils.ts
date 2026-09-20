@@ -239,6 +239,70 @@ export function buildErrorProps(err: any, extra?: Record<string, string>): Recor
     return { errorMessage, stackHead: stackHead(err), ...(extra || {}) };
 }
 
+/**
+ * 依据调用栈自动判定「当前文件解析」的来源，供 parser.parseFailed 遥测作为 source 维度，
+ * 区分同一文件在 editor / push / preValidate / watch / validate 链路被解析失败。
+ *
+ * 设计取舍：不在每个 parse() 调用方手动传 source（否则要改动十几处调用点），
+ * 而是在解析失败触发遥测时由栈反推，调用方零感知、零改动。
+ * 命中规则取「栈中第一个已知入口标记」，未命中（如通用解析 helper、表格浏览器）回退为空串。
+ */
+const PARSE_SOURCE_MARKERS: ReadonlyArray<readonly [string, string]> = [
+    ['pushCore.stages', 'push'],
+    ['batchPreValidate', 'preValidate'],
+    ['stepPreValidate', 'preValidate'],
+    ['editValidationHandler', 'preValidate'],
+    ['BaseEditorProvider', 'editor'],
+    ['webviewDataPusher', 'editor'],
+    ['editorMessageHandlers', 'editor'],
+    ['deletedRowsHandler', 'editor'],
+    ['pointCaseDeleter', 'editor'],
+    ['workspaceListeners', 'watch'],
+    ['yamlValidator', 'validate'],
+];
+
+export function detectParseSource(): string {
+    const stack = new Error().stack || '';
+    for (const [marker, source] of PARSE_SOURCE_MARKERS) {
+        if (stack.includes(marker)) return source;
+    }
+    return '';
+}
+
+/**
+ * 从解析异常中提取「行 / 列」位置，用于埋点上报，便于定位具体出错位置。
+ *   - YAML：错误文案通常含 "on line X, col Y" 或 "(X:Y)"，优先正则提取。
+ *   - JSON：新版 V8 含 "(line X column Y)"；旧版含 "at position N"，
+ *           若有原始内容则按 position 反算行号（近似，按字符索引估算）。
+ *   - 其它（如 CSV 文件读取错误）：返回空串。
+ * @param err     异常对象
+ * @param content 解析用的原始文本（JSON position 反算行号需要；可选）
+ */
+export function extractErrorLocation(err: any, content?: string): { line: string; column: string } {
+    const msg = String(err?.message || '');
+    // YAML: "(12:3)" 形式
+    const yamlColon = msg.match(/\((\d+):(\d+)\)/);
+    if (yamlColon) return { line: yamlColon[1], column: yamlColon[2] };
+    // JSON 新版: "(line 4 column 5)"（空格分隔、无逗号，须先于 yamlLine 检测，
+    // 否则会被 yamlLine 的 "line \d+" 提前匹配而漏掉列号）
+    const jsonLC = msg.match(/line\s+(\d+)\s+column\s+(\d+)/i);
+    if (jsonLC) return { line: jsonLC[1], column: jsonLC[2] };
+    // YAML: "on line 3, col 5" / "line 12" 形式（逗号分隔或仅行号）
+    const yamlLine = msg.match(/line\s+(\d+)(?:\s*,\s*col(?:umn)?\s*(\d+))?/i);
+    if (yamlLine) return { line: yamlLine[1], column: yamlLine[2] || '' };
+    // JSON 旧版: "at position 12345" → 用内容反算
+    const pos = msg.match(/position\s+(\d+)/i);
+    if (pos && typeof content === 'string') {
+        const p = parseInt(pos[1], 10);
+        const before = content.slice(0, p);
+        const line = before.split('\n').length;
+        const lastNl = before.lastIndexOf('\n');
+        const column = lastNl >= 0 ? p - lastNl : p + 1;
+        return { line: String(line), column: String(column) };
+    }
+    return { line: '', column: '' };
+}
+
 // ============================================
 // 日志时间戳
 // ============================================

@@ -11,6 +11,12 @@
 import * as fs from 'fs';
 import type { TableData } from '../types';
 import type { FileParser, FileParseResult } from './file-parser';
+import { createLogger } from '../utils/logger';
+import * as path from 'path';
+import { TelemetryService } from '../utils/telemetry';
+import { buildErrorProps, extractErrorLocation, detectParseSource } from '../services/utils';
+
+const log = createLogger('CSV');
 
 // ============================================
 // CSV 解析器
@@ -27,6 +33,15 @@ export class CsvFileParser implements FileParser {
                 sourceData: null
             };
         } catch (e: any) {
+            log.error('CSV 解析失败:', filePath, '|', e?.message, e?.stack ? '\n' + e.stack : '');
+            const { line, column } = extractErrorLocation(e);
+            TelemetryService.sendTelemetryErrorEvent('parser.parseFailed', buildErrorProps(e, {
+                fileFormat: 'csv',
+                fileName: path.basename(filePath),
+                line,
+                column,
+                source: detectParseSource(),
+            }));
             throw new Error(`CSV 解析失败: ${e.message}`);
         }
     }

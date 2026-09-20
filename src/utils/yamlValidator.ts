@@ -34,6 +34,14 @@ export type { YamlIssue } from './yamlTypes';
 
 const log = createLogger('YAML');
 
+// YAML 解析选项：放宽别名（anchor / alias）数量上限。
+// 见 src/parsers/yaml-parser.ts 的同名常量说明；此处同步放宽，
+// 放宽别名（anchor / alias）数量上限，避免校验器在别名过多时误报 "Excessive alias count"，
+// 进而导致合法文件被前置拦截器误判为不可解析而切回文本编辑器。
+// maxAliasCount 属于 toJS 选项，作用于高层 YAML.parse()（兜底取行号）；
+// parseAllDocuments 仅做语法组合、不校验别名数，故不向其传该选项。
+const YAML_TO_JS_OPTIONS = { maxAliasCount: 100_000 } as const;
+
 // ============================================
 // 破坏性 fix 识别
 // ============================================
@@ -247,7 +255,7 @@ export function validateYamlContent(content: string): YamlIssue[] {
     } catch {
         // parseAllDocuments 失败，尝试用 parse 拿错误行号
         try {
-            YAML.parse(content);
+            YAML.parse(content, YAML_TO_JS_OPTIONS);
         } catch (parseErr: any) {
             const errLine = parseErr?.linePos?.[0]?.line || 1;
             const errCol = parseErr?.linePos?.[0]?.col || 1;

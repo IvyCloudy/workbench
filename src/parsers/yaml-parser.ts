@@ -17,6 +17,15 @@ import * as YAML from 'yaml';
 import type { TableData, DetailTableData, SheetData, SheetRow } from '../types';
 import type { FileParser, FileParseResult } from './file-parser';
 
+// YAML 解析选项：放宽别名（anchor / alias）数量上限。
+// yaml 库默认 maxAliasCount=100，当文件用 *alias 引用超过 100 次
+// （如大量用例共用同一 tags 锚点 &id001 / *id001）会抛
+// "Excessive alias count indicates a resource exhaustion attack" 安全防护，
+// 别名（anchor / alias）数量上限放宽到 10 万，兼容大批量用例共用同一锚点的合法文件。
+// 注意：yaml 库的 maxAliasCount 属于 toJS 选项（在 YAML -> JS 转换阶段做别名炸弹防护），
+// 因此作用于 doc.toJS() 与高层 YAML.parse()；parseAllDocuments 仅做语法组合、不校验别名数。
+const YAML_TO_JS_OPTIONS = { maxAliasCount: 100_000 } as const;
+
 // ============================================
 // 内部 YAML 数据结构
 // ============================================
@@ -277,7 +286,7 @@ export class YamlFileParser implements FileParser {
         try {
             const docs = YAML.parseAllDocuments(cleanContent);
             for (const doc of docs) {
-                const value = doc.toJSON();
+                const value = doc.toJS(YAML_TO_JS_OPTIONS);
                 if (value !== null && value !== undefined) {
                     sourceData = value;
                     if (topLevelIsArray === undefined) {
@@ -288,7 +297,7 @@ export class YamlFileParser implements FileParser {
                 }
             }
         } catch {
-            sourceData = YAML.parse(cleanContent);
+            sourceData = YAML.parse(cleanContent, YAML_TO_JS_OPTIONS);
             if (topLevelIsArray === undefined) {
                 topLevelIsArray = Array.isArray(sourceData);
             }

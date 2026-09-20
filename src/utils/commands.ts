@@ -176,7 +176,9 @@ function fromCsv(content: string): string {
 function fromYaml(content: string): string {
     try {
         const YAML = require('yaml');
-        const parsed = YAML.parse(content);
+        // 放宽别名上限，兼容大量用例共用同一锚点的合法文件
+        // （与 src/parsers/yaml-parser.ts 的 YAML_TO_JS_OPTIONS 保持一致）
+        const parsed = YAML.parse(content, { maxAliasCount: 100_000 });
         const records = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
         return records.length > 0 ? searchKey(records[0], 'testPhaseName') : '';
     } catch {

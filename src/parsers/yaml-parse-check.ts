@@ -20,6 +20,12 @@
  */
 import * as YAML from 'yaml';
 
+// 放宽别名（anchor / alias）数量上限，兼容大量用例共用同一锚点的合法文件。
+// maxAliasCount 属于 toJS 选项，作用于高层 YAML.parse()（兜底取行号）；
+// parseAllDocuments 仅做语法组合、不校验别名数，故不向其传该选项。
+// 详见 src/parsers/yaml-parser.ts 的同名常量说明。
+const YAML_TO_JS_OPTIONS = { maxAliasCount: 100_000 } as const;
+
 export interface YamlParseCheckResult {
     /** 是否可被 YAML 库合法解析 */
     ok: boolean;
@@ -58,7 +64,7 @@ export function checkYamlParseable(content: string): YamlParseCheckResult {
     } catch (err: any) {
         // parseAllDocuments 抛错场景较少，但存在极端结构崩坏时会命中；再用 parse 兜一次尝试拿到行号
         try {
-            YAML.parse(content);
+            YAML.parse(content, YAML_TO_JS_OPTIONS);
             // 到这说明 parse 成功但 parseAllDocuments 抛了 —— 罕见但视为可解析（走原逻辑最稳）
             return { ok: true };
         } catch (parseErr: any) {

@@ -1369,7 +1369,6 @@ function patchCell(ri, ci) {
             }
         }
     }
-    // 【诊断日志·失败行不变黄】只在失败行触发时输出，便于对齐子表落盘日志
     // 应用标记颜色（仅当标记是最新操作时）
     if (_bestMkInfo) {
         if (_bestMkInfo.bgColor) td.style.setProperty('background', _bestMkInfo.bgColor, 'important');

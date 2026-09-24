@@ -1057,7 +1057,6 @@ window.addEventListener('message', function (e) {
         dbg('📨 recv saved curRows=' + ((S.data && S.data.rows && S.data.rows.length) || 0)
             + ' mods=' + (S.mods ? S.mods.size : 0)
             + ' history=' + (S._history ? S._history.length : 0));
-        // 【诊断日志·失败行不变黄】saved 到达瞬间快照
         showToast('保存成功', 'success');
         // 【修复：折叠态/主表编辑后黄底消失】（方案 A：S.mods 与 _detailModCellKeys 对齐语义）
         //   旧实现在此处 S.mods.clear()，导致：

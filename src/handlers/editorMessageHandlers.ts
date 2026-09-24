@@ -35,7 +35,7 @@ import { TelemetryService } from '../utils/telemetry';
 import { buildErrorProps } from '../services/utils';
 import { syncDeletedResultTelemetryProps } from '../utils/extensionHelpers';
 import { resolveTaskInfoOrNull } from '../handlers/pushCore.stages';
-import { resolvePreValidateGate } from '../utils/preValidateGate';
+import { resolvePreValidateGate } from '../preValidate';
 import { requestEditValidation, type EditValidationResult } from '../preValidate/editValidationHandler';
 import { TS_ID_COLUMN } from '../services/utils';
 import { detectFileType, createParser } from '../parsers';

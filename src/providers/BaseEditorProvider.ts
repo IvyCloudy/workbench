@@ -22,7 +22,7 @@ import * as path from 'path';
 import { getNonce, isInQualifiedDir, buildErrorHtml, FILE_PATTERNS, TS_ID_COLUMN, escapeHtml, formatLogTime, isInTempFolder } from '../services/utils';
 import { getCurrentTaskInfo, type CurrentTask } from '../utils/commands';
 import { showPushErrorModal, showPushResult, showPushDone, showModal } from '../utils/message';
-import { openPreValidateGate } from '../utils/preValidateGate';
+import { openPreValidateGate } from '../preValidate';
 import { clearHighlight } from '../utils/highlightStore';
 import { createParser, ensureTrackingColumns, type FileType } from '../parsers';
 import { TelemetryService } from '../utils/telemetry';
@@ -599,7 +599,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         //      拿到的即为最新失败盘 → webview 首帧就能带上红/黄单元格高亮，
         //      避免出现「先无高亮 → 后异步刷新才上色」的短暂错觉。
         try {
-            const { triggerEditValidationOnWebviewOpen } = await import('../handlers/editValidationHandler');
+            const { triggerEditValidationOnWebviewOpen } = await import('../preValidate/editValidationHandler');
             await triggerEditValidationOnWebviewOpen(filePath);
         } catch (e: any) {
             console.warn('[BaseEditorProvider] 触发编辑期校验失败（已忽略）:', e?.message || e);

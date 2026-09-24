@@ -43,7 +43,7 @@ import { openOrCreateHeaderLabelsSettings } from './utils/headerLabels';
 import { initYamlDiagnostics } from './utils/yamlValidator';
 import { registerYamlValidation, disposeYamlValidation } from './handlers/yamlValidationHandler';
 import { registerYamlPreOpenInterceptor } from './handlers/yamlPreOpenInterceptor';
-import { registerEditValidation } from './handlers/editValidationHandler';
+import { registerEditValidation } from './preValidate';
 import { handleLinkerDiagnostic } from './handlers/linkerDiagnosticCommand';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';

@@ -20,6 +20,11 @@ function updateExpandStepsBtnVisibility() {
 function bindToolbar() {
     var pushBtn = document.getElementById('pushBtn');
     if (pushBtn) pushBtn.addEventListener('click', pushChanges);
+    var validateBtn = document.getElementById('validateBtn');
+    if (validateBtn) validateBtn.addEventListener('click', function () {
+        // 触发扩展侧「格式校验」：复用打开文件时的校验弹窗（缺列 + 行级问题），校验结果由扩展侧回弹提示
+        if (S.vscode) S.vscode.postMessage({ type: 'runFormatValidation' });
+    });
     var failedFilterBtn = document.getElementById('failedFilterBtn');
     if (failedFilterBtn) {
         failedFilterBtn.addEventListener('click', function () {

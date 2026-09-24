@@ -17,8 +17,10 @@
  *   · 同一行内的 error/warn 排序仍是"先 error 后 warn"，只影响组内条目 seq。
  *
  * 消息契约：
- *   ext → webview：{ type:'preValidateGate', gateId, fileName,
+ *   ext → webview：{ type:'preValidateGate', gateId, fileName, allowContinue,
  *                    failures:[{tsId, reason, rowIndex?, severity, field?}] }
+ *   · allowContinue=true（推送门控）：warn 级可显示「忽略并继续」；
+ *   · allowContinue=false（打开文件 / 格式校验按钮）：纯查看问题，无"继续"动作，只显示「关闭」。
  *   webview → ext：{ type:'preValidateGateResponse', gateId, decision:'continue'|'cancel' }
  *
  * DOM 前置要求：index.html 中需存在 #preValidateGateModal 及以下子元素：
@@ -198,7 +200,9 @@ function showPreValidateGateModal(payload) {
         // 无 DOM 兜底：直接回复 continue，避免推送流程悬挂（60s 后扩展端也会超时兜底）。
         try {
             if (payload && payload.gateId && S.vscode) {
-                S.vscode.postMessage({ type: 'preValidateGateResponse', gateId: payload.gateId, decision: 'continue' });
+                // 纯校验弹窗（allowContinue=false）无"继续"语义，兜底按 cancel 处理
+                var _fallbackDecision = (payload.allowContinue === false) ? 'cancel' : 'continue';
+                S.vscode.postMessage({ type: 'preValidateGateResponse', gateId: payload.gateId, decision: _fallbackDecision });
             }
         } catch (_) { /* ignore */ }
         return;
@@ -311,9 +315,17 @@ function showPreValidateGateModal(payload) {
         // _pvgCopyToClipboard / _pvgFallbackCopy 保留在下方，供其它入口（若将来需要）复用。
     }
 
-    // 底部提示 + 按钮显隐（Q2=A：有 error 时隐藏「忽略并继续」）
+    // 底部提示 + 按钮显隐
+    //  · 有 error 时：隐藏「忽略并继续」（Q2=A），仅"关闭"
+    //  · 纯校验弹窗（打开文件 / 格式校验按钮，allowContinue=false）：不是推送流程，
+    //    没有"继续"动作可触发，"忽略并继续"语义不成立 → 同样只显示"关闭"
+    var allowContinue = payload && payload.allowContinue !== false;
     if (hintEl) {
-        if (hasError && warnCount > 0) {
+        if (!allowContinue) {
+            hintEl.textContent = hasError
+                ? '请先修复上述阻断问题后保存（重新打开或点击「格式校验」复查）'
+                : '可关闭后继续编辑；修复后再次点击「格式校验」复查';
+        } else if (hasError && warnCount > 0) {
             hintEl.textContent = '请先修复"阻断"类问题；"提醒"类可修复后一并推送';
         } else if (hasError) {
             hintEl.textContent = '请修复上述阻断问题后重新推送';
@@ -321,8 +333,8 @@ function showPreValidateGateModal(payload) {
             hintEl.textContent = '点击"忽略并继续"将推送包含"待补充"的案例，可稍后完善';
         }
     }
-    if (cancelBtn) cancelBtn.textContent = hasError ? '关闭' : '取消';
-    if (continueBtn) continueBtn.style.display = hasError ? 'none' : '';
+    if (cancelBtn) cancelBtn.textContent = (hasError || !allowContinue) ? '关闭' : '取消';
+    if (continueBtn) continueBtn.style.display = (hasError || !allowContinue) ? 'none' : '';
 
     _bindPreValidateGateModal();
     modal.classList.add('show');

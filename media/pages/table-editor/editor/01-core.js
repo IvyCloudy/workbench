@@ -1110,6 +1110,9 @@ window.addEventListener('message', function (e) {
                 S.vscode.postMessage({ type: 'preValidateGateResponse', gateId: m.gateId, decision: 'continue' });
             }
         }
+    } else if (m.type === 'toast') {
+        // 扩展侧轻量提示（如「格式校验通过」），直接复用前端 showToast
+        if (typeof showToast === 'function') showToast(m.text, m.level);
     } else if (m.type === 'pushDone') {
         // 推送流程结束钩子（隐藏 loading 等）。
         S._pushing = false;

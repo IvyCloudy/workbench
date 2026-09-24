@@ -95,7 +95,7 @@ async function detectMissingColumnFailures(ctx: PushContext): Promise<PushFailur
             reason,
             // rowIndex 有意留空 —— 前端据此走"文件级"渲染分支
             category: classifyFailure({ reason, validatorKind: 'missingColumn' }),
-            severity: 'error' as const,
+            severity: hit.severity,
         } as PushFailureItem;
     });
 }
@@ -120,9 +120,14 @@ export async function stepPreValidate(ctx: PushContext, rows: RowLike[]): Promis
         });
     }
     const { failuresByKind, droppedIndex } = runValidators(rows, ctx.opts.resolveRowIndex);
-    // 结构性错误：所有行加入 droppedIndex（本文件推送短路）
-    if (missingColumnFailures.length > 0) {
+    // 结构性缺失列：
+    //   · error（必填）缺失 → 所有行加入 droppedIndex，本文件推送短路；
+    //   · warn（非必填，如 description / type / preconditions）缺失 → 仅进入 failures 展示，不阻断。
+    const hasErrorMissing = missingColumnFailures.some(f => f.severity !== 'warn');
+    if (hasErrorMissing) {
         for (let i = 0; i < rows.length; i++) droppedIndex.add(i);
+    }
+    if (missingColumnFailures.length > 0) {
         failuresByKind['missingColumn'] = missingColumnFailures;
     }
     const placeholderFailures = failuresByKind['placeholder'] || [];

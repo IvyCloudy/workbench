@@ -204,7 +204,7 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
                     tsId: '__FILE_LEVEL__',
                     reason,
                     category: classifyFailure({ reason, validatorKind: 'missingColumn' }),
-                    severity: 'error' as const,
+                    severity: hit.severity,
                 } as PushFailureItem;
             });
             missingLabelsForTelemetry = missingResult.missing.map(m => m.label);

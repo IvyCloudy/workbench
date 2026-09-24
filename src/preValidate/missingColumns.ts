@@ -6,7 +6,8 @@
  * 需求：《案例推送前置校验-待补充拦截需求文档》§2.3.5
  *   · 校验目标：文件级结构性错误 —— 缺少任一必备列（CSV）/ 必备字段（YAML/JSON）
  *     会导致本文件所有案例都无法被正确解析或推送。
- *   · 严重级：error 硬拦截；不允许"忽略并继续"。
+ *   · 严重级：必备列分必填（error，硬拦截）与非必填（warn，仅提示不阻断）；
+ *     目前 description / type / preconditions 为非必填（warn），其余为必填（error）。
  *   · 判定规则：
  *       - CSV：以表头行为准，检查必备列是否全部存在（主列名 csvHeader 或别名
  *         csvAliases 任一命中即视为存在，兼容英文字段名 / 中文变体表头）；缺任一即命中。
@@ -62,10 +63,17 @@ export interface RequiredFieldSpec {
     csvAliases?: string[];
     /** 命中位置 —— 决定 YAML / JSON 的扫描策略：'top' 扫顶层键，'step' 扫 steps[] */
     location: 'top' | 'step';
+    /**
+     * 缺失列/字段的严重级：'error'=必填（硬拦截）；'warn'=非必填（仅提示、不阻断）。
+     * 未显式声明的项默认 'error'（必填）；目前 description / type / preconditions 显式为 'warn'。
+     */
+    severity?: 'error' | 'warn';
 }
 
 /**
  * 必备列/字段清单（需求 §2.3.5 表格；顺序决定弹窗中缺失项的展示顺序）。
+ * severity 分级：description / type / preconditions 为非必填（warn，仅提示不阻断），
+ * 其余为必填（error，硬拦截）。severity 未声明的项默认 'error'。
  *
  * 命名说明：
  *   · path / name / description / preconditions / type / test_type / priority
@@ -84,15 +92,15 @@ export const REQUIRED_FIELDS: RequiredFieldSpec[] = [
         csvAliases: ['path', 'testCasePath', '案例路径', '用例路径'],
     },
     {
-        label: '案例描述', yamlKey: 'description', csvHeader: '案例描述', location: 'top',
+        label: '案例描述', yamlKey: 'description', csvHeader: '案例描述', location: 'top', severity: 'warn',
         csvAliases: ['description', 'testCaseDesc', '用例描述', '测试描述'],
     },
     {
-        label: '前置条件', yamlKey: 'preconditions', csvHeader: '前置条件', location: 'top',
+        label: '前置条件', yamlKey: 'preconditions', csvHeader: '前置条件', location: 'top', severity: 'warn',
         csvAliases: ['preconditions', '前置'],
     },
     {
-        label: '案例类型', yamlKey: 'type', csvHeader: '案例类型', location: 'top',
+        label: '案例类型', yamlKey: 'type', csvHeader: '案例类型', location: 'top', severity: 'warn',
         csvAliases: ['type', '用例类型'],
     },
     {
@@ -123,6 +131,8 @@ export interface MissingColumnHit {
     yamlKeys: string[];
     /** 命中位置：'top' | 'step'，供上层区分展示或分类 */
     location: 'top' | 'step';
+    /** 严重级：'error'=必填（硬拦截）；'warn'=非必填（仅提示、不阻断） */
+    severity: 'error' | 'warn';
 }
 
 /** 检测结果：命中数组 + 便捷 ok 标记。 */
@@ -150,6 +160,7 @@ function toHit(spec: RequiredFieldSpec): MissingColumnHit {
         csvHeader: spec.csvHeader,
         yamlKeys: keys,
         location: spec.location,
+        severity: spec.severity || 'error',
     };
 }
 

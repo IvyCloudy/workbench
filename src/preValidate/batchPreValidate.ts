@@ -19,7 +19,7 @@
  *    · 只产出 failures 清单，不做行剔除 / 短路 / 后端调用
  *
  *  校验规则完全一致（复用同一套 detectMissingColumns + runValidatorsOnRowsPure）：
- *    · 结构性检查（缺必备列/字段）→ 一条 file-level failure，severity=error
+ *    · 结构性检查（缺必备列/字段）→ 一条 file-level failure，severity 依必填/非必填分级（error/warn）
  *    · 行级校验（占位/空/格式/枚举/待补充/…）→ 每行按规则产出 failure
  * ============================================================================
  */
@@ -127,7 +127,7 @@ export async function validateFileForPush(
                     tsId: '__FILE_LEVEL__',
                     reason,
                     category: classifyFailure({ reason, validatorKind: 'missingColumn' }),
-                    severity: 'error' as const,
+                    severity: hit.severity,
                 } as PushFailureItem;
             });
         }

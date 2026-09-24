@@ -8,7 +8,8 @@
  *     会导致本文件所有案例都无法被正确解析或推送。
  *   · 严重级：error 硬拦截；不允许"忽略并继续"。
  *   · 判定规则：
- *       - CSV：以表头行为准，检查中文必备列名是否全部存在；缺任一即命中。
+ *       - CSV：以表头行为准，检查必备列是否全部存在（主列名 csvHeader 或别名
+ *         csvAliases 任一命中即视为存在，兼容英文字段名 / 中文变体表头）；缺任一即命中。
  *       - YAML / JSON：以整个文件所有案例为整体判定 —— 若"全文件所有案例"
  *         均未出现某必备键，则该键命中缺失（只要文件里至少有一条案例包含该键，
  *         该键即视为存在，不命中）。
@@ -45,6 +46,20 @@ export interface RequiredFieldSpec {
     atLeastOneOfStepKeys?: string[];
     /** CSV 中文列名（表头行判定） */
     csvHeader: string;
+    /**
+     * CSV 表头别名集合（可选）：表头命中 csvHeader 或任一别名即视为该必备列存在。
+     *
+     * 背景（2026-09-24）：现网 CSV 表头存在两类"语义等价但字面不同"的写法——
+     *   · 英文字段名（name / path / description …）：编辑器经「表头中英文映射」
+     *     显示为中文（如 name → 案例名称），推送映射也能正确还原为英文字段；
+     *   · 中文变体（案例名称 / 测试名称 / 用例名称 …）：与界面显示名、
+     *     linkerDiagnosticHandler / pushFailure/fieldMapping 等既有别名口径一致。
+     * 若仅按 csvHeader 精确匹配，会把上述文件误判为"缺列"；且这些列多为受保护列
+     * （PROTECTED_COLS 禁止重命名/删除），用户在编辑器内无法改成 csvHeader 字面值，
+     * 只能新增中文列——新增时若按界面显示名填写（如"案例名称"）仍被判缺，
+     * 形成"改了还是缺列"的死循环。故此处按"主名 + 别名"集合判定。
+     */
+    csvAliases?: string[];
     /** 命中位置 —— 决定 YAML / JSON 的扫描策略：'top' 扫顶层键，'step' 扫 steps[] */
     location: 'top' | 'step';
 }
@@ -59,15 +74,43 @@ export interface RequiredFieldSpec {
  *   · steps.*_expected → ui/api/db_expected 三选一；任一在任一 step 中出现即通过。
  */
 export const REQUIRED_FIELDS: RequiredFieldSpec[] = [
-    { label: '名称',       yamlKey: 'name',          csvHeader: '名称',       location: 'top' },
-    { label: '路径',       yamlKey: 'path',          csvHeader: '路径',       location: 'top' },
-    { label: '案例描述',   yamlKey: 'description',   csvHeader: '案例描述',   location: 'top' },
-    { label: '前置条件',   yamlKey: 'preconditions', csvHeader: '前置条件',   location: 'top' },
-    { label: '案例类型',   yamlKey: 'type',          csvHeader: '案例类型',   location: 'top' },
-    { label: '执行方式',   yamlKey: 'test_type',     csvHeader: '执行方式',   location: 'top' },
-    { label: '优先级',     yamlKey: 'priority',      csvHeader: '优先级',     location: 'top' },
-    { label: '步骤描述',   atLeastOneOfStepKeys: ['operation'],                       csvHeader: '步骤描述', location: 'step' },
-    { label: '预期结果',   atLeastOneOfStepKeys: ['ui_expected', 'api_expected', 'db_expected'], csvHeader: '预期结果', location: 'step' },
+    {
+        label: '名称', yamlKey: 'name', csvHeader: '名称', location: 'top',
+        // 别名与 highlight-util / linkerDiagnosticHandler.caseNameField / pushFailure.fieldMapping 口径一致
+        csvAliases: ['name', 'testCaseName', '案例名称', '测试名称', '用例名称', '测试案例名称'],
+    },
+    {
+        label: '路径', yamlKey: 'path', csvHeader: '路径', location: 'top',
+        csvAliases: ['path', 'testCasePath', '案例路径', '用例路径'],
+    },
+    {
+        label: '案例描述', yamlKey: 'description', csvHeader: '案例描述', location: 'top',
+        csvAliases: ['description', 'testCaseDesc', '用例描述', '测试描述'],
+    },
+    {
+        label: '前置条件', yamlKey: 'preconditions', csvHeader: '前置条件', location: 'top',
+        csvAliases: ['preconditions', '前置'],
+    },
+    {
+        label: '案例类型', yamlKey: 'type', csvHeader: '案例类型', location: 'top',
+        csvAliases: ['type', '用例类型'],
+    },
+    {
+        label: '执行方式', yamlKey: 'test_type', csvHeader: '执行方式', location: 'top',
+        csvAliases: ['test_type', 'testType', '执行类型'],
+    },
+    {
+        label: '优先级', yamlKey: 'priority', csvHeader: '优先级', location: 'top',
+        csvAliases: ['priority'],
+    },
+    {
+        label: '步骤描述', atLeastOneOfStepKeys: ['operation'], csvHeader: '步骤描述', location: 'step',
+        csvAliases: ['operation', 'steps', '操作步骤'],
+    },
+    {
+        label: '预期结果', atLeastOneOfStepKeys: ['ui_expected', 'api_expected', 'db_expected'], csvHeader: '预期结果', location: 'step',
+        csvAliases: ['expected', 'ui_expected', 'api_expected', 'db_expected'],
+    },
 ];
 
 /** 单条命中项：给上层弹窗与推送失败列表消费。 */
@@ -122,9 +165,16 @@ export function detectMissingColumnsForCsv(headers: string[] | undefined | null)
     for (const h of headers) {
         if (typeof h === 'string') headerSet.add(h.trim());
     }
+    // 命中判定：表头 == csvHeader 或 == 任一 csvAliases（trim 后精确比较）。
+    // 见 RequiredFieldSpec.csvAliases 注释 —— 英文字段名 / 中文变体均视为该必备列存在。
+    const hasHeader = (spec: RequiredFieldSpec): boolean => {
+        if (headerSet.has(spec.csvHeader)) return true;
+        if (spec.csvAliases && spec.csvAliases.some(a => headerSet.has(a))) return true;
+        return false;
+    };
     const missing: MissingColumnHit[] = [];
     for (const spec of REQUIRED_FIELDS) {
-        if (!headerSet.has(spec.csvHeader)) missing.push(toHit(spec));
+        if (!hasHeader(spec)) missing.push(toHit(spec));
     }
     return { missing, ok: missing.length === 0 };
 }

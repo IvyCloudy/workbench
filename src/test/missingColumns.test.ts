@@ -65,6 +65,35 @@ describe('missingColumns · CSV 表头判定', () => {
         const r = detectMissingColumnsForCsv(headers);
         expect(r.ok).toBe(true);
     });
+
+    // ---- csvAliases 别名判定（2026-09-24 修复：英文字段名 / 中文变体表头不再误判缺列）----
+    it('英文表头（name/path/...）→ 视为齐全，不再判缺列（回归 #英文字段名）', () => {
+        const headers = ['name', 'path', 'description', 'preconditions', 'type', 'test_type', 'priority', 'operation', 'ui_expected'];
+        const r = detectMissingColumnsForCsv(headers);
+        expect(r.ok).toBe(true);
+        expect(r.missing).toEqual([]);
+    });
+
+    it('中文变体表头（案例名称/用例路径/...）→ 视为齐全，不再判缺列', () => {
+        const headers = ['案例名称', '案例路径', '用例描述', '前置', '用例类型', '执行类型', '优先级', '操作步骤', 'api_expected'];
+        const r = detectMissingColumnsForCsv(headers);
+        expect(r.ok).toBe(true);
+        expect(r.missing).toEqual([]);
+    });
+
+    it('中英混排表头（部分英文 + 部分中文变体）→ 视为齐全', () => {
+        const headers = ['name', '案例路径', 'description', '前置', 'type', 'test_type', 'priority', 'operation', 'db_expected'];
+        const r = detectMissingColumnsForCsv(headers);
+        expect(r.ok).toBe(true);
+        expect(r.missing).toEqual([]);
+    });
+
+    it('别名集合未覆盖的表头（如 caseName）→ 仍判缺失"名称"（严格性保留）', () => {
+        const headers = ['caseName', 'path', 'description', 'preconditions', 'type', 'test_type', 'priority', 'operation', 'ui_expected'];
+        const r = detectMissingColumnsForCsv(headers);
+        expect(r.ok).toBe(false);
+        expect(r.missing.map(m => m.label)).toContain('名称');
+    });
 });
 
 /**

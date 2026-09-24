@@ -87,6 +87,14 @@ const _pendingTimers: Map<string, NodeJS.Timeout> = new Map();
 // filePath -> 最近一次 validate 序列号；用于异步竞态时丢弃过期结果
 const _seqMap: Map<string, number> = new Map();
 
+// 删除流程（案例文件删除 / 删除结果详情重开编辑器）重开编辑器时，临时抑制
+// 「案例格式校验」弹窗——删除按需求不做格式校验，重开仅用于展示删除结果，
+// 不应再弹出格式校验窗口。该标志为短时开关：在重开前置 true，重开后置 false。
+let _suppressValidationPrompt = false;
+export function setSuppressEditValidationPrompt(value: boolean): void {
+    _suppressValidationPrompt = value;
+}
+
 // 说明：2026-09-19 后策略调整为「仅『打开文件』时弹窗，保存/编辑一律不弹」。
 // 因此打开通路每次都强制弹（用户如果没改就再打开，理应再看到提示），无需再做
 // 指纹去重。保留常量位仅用于必要时的调试观察，不参与逻辑判断。
@@ -129,12 +137,23 @@ function resolveTargetType(filePath: string): FileType | null {
  *                        无论 true/false，结构性检测本身都会跑（用于给行级高亮/持久化提供数据基础，
  *                        以及给推送前 stepPreValidate 共用同一份判定）。
  */
-async function _doValidate(filePath: string, promptOnMissing: boolean = false): Promise<void> {
+/**
+ * 单次编辑期校验结论（结构化）：
+ *   · aborted     —— 被竞态 / 持久化异常中断，结果不可信，调用方不应据此弹"通过"；
+ *   · hasFailures —— 是否存在问题（文件级缺列 + 行级失败任一存在）；
+ *   · counts      —— 按 category 聚合的问题个数（含文件级 'missingColumn' 与行级各类）。
+ */
+export interface EditValidationResult {
+    aborted: boolean;
+    hasFailures: boolean;
+    counts: Record<string, number>;
+}
+async function _doValidate(filePath: string, promptOnMissing: boolean = false): Promise<EditValidationResult> {
     const seq = (_seqMap.get(filePath) || 0) + 1;
     _seqMap.set(filePath, seq);
 
     const fileType = detectFileType(filePath);
-    if (!fileType) return;
+    if (!fileType) return { aborted: true, hasFailures: false, counts: {} };
 
     const parser = createParser(fileType);
     let sourceRows: RowLike[] = [];
@@ -193,7 +212,7 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
     }
 
     // 异步竞态保护：慢 parse 已被后续 fast parse 覆盖，不再写盘
-    if (_seqMap.get(filePath) !== seq) return;
+    if (_seqMap.get(filePath) !== seq) return { aborted: true, hasFailures: false, counts: {} };
 
     // 编辑期视图：源数据的 1-based 索引即行号（parse 后已按文件顺序）
     const failures = runValidatorsOnRowsPure(sourceRows, i => i + 1);
@@ -201,7 +220,7 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
     // §2.3.5 · 打开文件通路：把文件级（缺列）+ 行级（枚举/待补充/名称空/计划执行次数等）合并成
     //   一份 failures 一次弹出，与推送前拦截共用同一个 05g 弹窗（openPreValidateGate）。
     //   顺序：文件级置顶（tsId='__FILE_LEVEL__'）→ 行级按行号；前端渲染时天然按此顺序显示。
-    if (promptOnMissing && (fileLevelFailures.length > 0 || failures.length > 0)) {
+    if (promptOnMissing && !_suppressValidationPrompt && (fileLevelFailures.length > 0 || failures.length > 0)) {
         const combined: PushFailureItem[] = [
             ...fileLevelFailures,
             ...failures.map(f => ({
@@ -264,7 +283,7 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
         }
     } catch (err: any) {
         console.warn('[EditValidation] 持久化失败盘失败:', err?.message || err);
-        return;
+        return { aborted: true, hasFailures: false, counts: {} };
     }
 
     // 通知已打开的 webview：让它拉一次新的失败盘并重绘
@@ -282,6 +301,16 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
             warnCount: String(warnCount),
         });
     }
+
+    // 返回本次校验结论（结构化）：aborted=被竞态/持久化异常中断；
+    // hasFailures=文件级缺列或行级失败任一存在；counts=按 category 聚合的问题个数。
+    const allFailures = [...fileLevelFailures, ...failures];
+    const counts: Record<string, number> = {};
+    for (const f of allFailures) {
+        const c = f.category || 'unknown';
+        counts[c] = (counts[c] || 0) + 1;
+    }
+    return { aborted: false, hasFailures: allFailures.length > 0, counts };
 }
 
 /**
@@ -293,17 +322,17 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
  *                               一次性展示；仅"打开文件"通路应传 true。
  *                               保存 / 编辑防抖通路默认 false —— 只静默跑校验、不弹窗，
  *                               对齐用户诉求「文件修改保存无需触发弹窗」。
- * @returns Promise<void>        · immediate=true 时可 await 等待「校验+写盘+refresh」全部完成，
- *                                 用于 webview 打开场景避免首帧 init 早于 pushFailures 写盘导致漏染色；
- *                               · immediate=false（防抖通路）时立即返回 resolved Promise，仅登记 timer。
+ * @returns Promise<EditValidationResult | undefined>
+ *                               · 正常完成返回结构化结论（aborted=false，含 hasFailures / counts）；
+ *                               · immediate=false（防抖通路）或异常时返回 undefined，仅登记 timer / 不消费结果。
  */
 export function requestEditValidation(
     filePath: string,
     opts?: { immediate?: boolean; promptOnMissing?: boolean },
-): Promise<void> {
-    if (!filePath) return Promise.resolve();
+): Promise<EditValidationResult | undefined> {
+    if (!filePath) return Promise.resolve(undefined);
     const type = resolveTargetType(filePath);
-    if (!type) return Promise.resolve();
+    if (!type) return Promise.resolve(undefined);
 
     const existing = _pendingTimers.get(filePath);
     if (existing) {
@@ -316,6 +345,7 @@ export function requestEditValidation(
     if (opts?.immediate) {
         return _doValidate(filePath, promptOnMissing).catch(err => {
             console.warn('[EditValidation] immediate validate 异常:', err?.message || err);
+            return undefined;
         });
     }
 
@@ -341,7 +371,8 @@ export function requestEditValidation(
         });
     }, debounce);
     _pendingTimers.set(filePath, timer);
-    return Promise.resolve();
+    // 防抖通路不返回具体结果，仅登记 timer；调用方据此得到 undefined。
+    return Promise.resolve(undefined);
 }
 
 /**
@@ -384,10 +415,11 @@ export function registerEditValidation(): vscode.Disposable[] {
  * BaseEditorProvider 打开 webview（CustomEditor）时调用：
  * 确保该文件"打开即刻校验一次" + 弹结构性缺列窗（如有）。
  *
- * 返回值为 Promise<void>：调用方可 await 等待「校验 + 写盘 + refresh」全部完成，
+ * 返回值为 Promise<void>：调用方仅 await 等待「校验 + 写盘 + refresh」全部完成，
  * 让 webview 首帧 init 之后必然带上最新的 pushFailures 用于红/黄单元格上色，
  * 避免出现「打开文件后瞬间还看不到高亮，稍后才染色」的抖动体验。
  */
 export function triggerEditValidationOnWebviewOpen(filePath: string): Promise<void> {
-    return requestEditValidation(filePath, { immediate: true, promptOnMissing: true });
+    // 结果由内部消费（决定是否弹窗），对外只保证"校验+写盘+refresh 已完成"
+    return requestEditValidation(filePath, { immediate: true, promptOnMissing: true }).then(() => undefined);
 }

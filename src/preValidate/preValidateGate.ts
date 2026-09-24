@@ -16,7 +16,9 @@
  *
  *  语义（Q1/Q2/Q3 决策）：
  *    - Q1=A：只要有 warn/error 均触发窗口，一次入口覆盖所有前置问题；
- *    - Q2=A：有 error 时窗口不显示「忽略并继续」按钮，用户只能取消；
+ *    - Q2=A：「忽略并继续」按钮仅当 (allowContinue=true 且 仅有 warn) 时出现；
+ *            allowContinue=false（打开文件 / 格式校验按钮，纯查看问题）或 有 error 时，
+ *            窗口只显示「关闭」，用户只能取消；
  *    - Q3=B：cancel 后 runPush 短路走 onComplete（failures 完整回传），
  *            由完成态弹窗展示同一份清单，语义一致。
  * ============================================================================
@@ -49,6 +51,13 @@ export function openPreValidateGate(
     panel: vscode.WebviewPanel | undefined,
     fileName: string,
     failures: PushFailureItem[],
+    /**
+     * 是否允许"忽略并继续"按钮：
+     *   · 推送前置门控（pushStrategy 调用）→ true：warn 级问题时用户可"忽略并继续"推送；
+     *   · 打开文件 / 格式校验按钮（postFileLevelPreValidateGate）→ false：
+     *     纯查看问题、无"继续"动作可触发，"忽略并继续"语义不成立，始终只显示"关闭"。
+     */
+    allowContinue: boolean = true,
 ): Promise<'continue' | 'cancel'> {
     if (!panel) {
         return Promise.resolve('continue');
@@ -79,6 +88,7 @@ export function openPreValidateGate(
                 type: 'preValidateGate',
                 gateId,
                 fileName,
+                allowContinue,
                 failures: failures.map(f => ({
                     tsId: f.tsId,
                     reason: f.reason,

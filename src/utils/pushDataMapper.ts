@@ -21,7 +21,7 @@
  *    testCaseName      ← name              （案例名称）
  *    testCaseDes       ← description       （案例描述）
  *    testType          ← test_type / 执行方式（口语化输入自动归一化：'接口'→'接口自动化'、'界面'→'UI自动化'；其余命中白名单值保留，未填写或其它取值一律抛错，无默认值。白名单来自 testcaseViewer.enum.testType 配置）
- *    type              ← type 字段（严格白名单，来自 testcaseViewer.enum.caseType；空/非法一律抛错，无默认值）
+ *    type              ← type 字段（2026-09-24：不再拦截 —— 空值省略该字段由后端默认值兜底，非空原样透传）
  *    priority          ← priority（严格白名单，来自 testcaseViewer.enum.priority；空值回退清单最后一项，非空非法抛错）
  *    preCondition      ← preconditions     （数组按 \n 拼为字符串）
  *    description(接口) ← 每个 step 拼为 operation + <br> + data
@@ -38,7 +38,7 @@
  *    testCaseName      ← 名称
  *    testCaseDes       ← 案例描述
  *    testType          ← 执行方式（口语化输入自动归一化：'接口'→'接口自动化'、'界面'→'UI自动化'；其余命中白名单值保留，未填写或其它取值一律抛错，无默认值。白名单来自 testcaseViewer.enum.testType 配置）
- *    type              ← 案例类型（严格白名单，来自 testcaseViewer.enum.caseType；空/非法一律抛错，无默认值）
+ *    type              ← 案例类型（2026-09-24：不再拦截 —— 空值省略该字段由后端默认值兜底，非空原样透传）
  *    priority          ← 优先级（严格白名单，来自 testcaseViewer.enum.priority；空值回退清单最后一项，非空非法抛错）
  *    preCondition      ← 前置条件
  *    description(接口) ← 步骤描述（解析「步骤x[:：]\n内容」结构，按步骤号提取）
@@ -213,25 +213,14 @@ function resolveTestType(raw: any, caseTag: string, rowIndex?: number): string {
 }
 
 /**
- * 校验「案例类型 / type」→ 接口 type（严格白名单，无默认值）：
- *   - 未填写 / 空值 / 仅空白 → 抛结构化映射错误（invalidCaseType）
- *   - 非空但不在 testcaseViewer.enum.caseType 清单 → 抛结构化映射错误（invalidCaseType）
- *   - 命中清单 → 去空格后原样返回
+ * 「案例类型 / type」→ 接口 type（2026-09-24 需求调整：不再做推送硬拦截）：
+ *   - 未填写 / 空值 / 仅空白 → 返回 undefined，载荷中省略 type 字段，由后端默认值兜底
+ *     （caseList 经 JSON.stringify 序列化，undefined 键自动剔除）；
+ *   - 非空 → 去空格后原样透传，取值合法性由行级 warn 软提示 + 后端最终判定兜底。
  */
-function resolveCaseType(raw: any, caseTag: string, rowIndex?: number): string {
-    const values = getEnumValues('caseType');
+function resolveCaseType(raw: any): string | undefined {
     const v = toStr(raw).trim();
-    if (v === '') {
-        throw makeMapError(
-            `案例 [${caseTag}] 的「案例类型」未填写，仅支持：${values.join(' / ')}。`,
-            { caseTag, reason: 'invalidCaseType', rowIndex }
-        );
-    }
-    if (values.indexOf(v) !== -1) return v;
-    throw makeMapError(
-        `案例 [${caseTag}] 的「案例类型」取值 "${v}" 不合法，仅支持：${values.join(' / ')}。`,
-        { caseTag, reason: 'invalidCaseType', rowIndex }
-    );
+    return v === '' ? undefined : v;
 }
 
 /**
@@ -452,7 +441,7 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
         testCaseName: fieldOrDefault(row, '名称', ''),
         testCaseDes:  unescapeCsvCell(row['案例描述']),
         testType,
-        type:         resolveCaseType(row['案例类型'], caseTag, rowIndex),
+        type:         resolveCaseType(row['案例类型']),
         priority:     resolvePriority(row['优先级'], caseTag, rowIndex),
         preCondition: nl2br(unescapeCsvCell(row['前置条件'])),
         description,
@@ -547,7 +536,7 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
         testCaseName: fieldOrDefault(row, 'name', ''),
         testCaseDes:  fieldOrDefault(row, 'description', ''),
         testType,
-        type:         resolveCaseType(row['type'], caseTag, rowIndex),
+        type:         resolveCaseType(row['type']),
         priority:     resolvePriority(row['priority'], caseTag, rowIndex),
         preCondition: nl2br(joinLines(row['preconditions'])),
         description,

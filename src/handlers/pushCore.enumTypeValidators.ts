@@ -15,11 +15,10 @@
  * 设计决策：
  *   · 双键名兼容：YAML 用英文键、CSV 用中文列名，两套都要扫（stepPreValidate 早于
  *     normalizePushData，row 仍保持源文件原始键名）。
- *   · 空值容忍：需求 2.3.3 明确"字段为空视为不合法"，因此空串/undefined/null 也命中；
- *     但需支持"未填写该字段的旧文件推送"这类兼容性场景 —— 由 requireEnums 开关控制，
- *     当前默认 requireEnums=true，与需求 2.3.3 一致。
- *   · 命中即 break：这两个 validator 都是 error 级，与已有的 tsId 硬拦截行为一致；
- *     与 warn 级「待补充」互斥（同一行仅暴露最严重的问题），跨行仍可共存。
+ *   · 空值容忍：需求 2.3.3 明确"字段为空视为不合法"，因此空串/undefined/null 也命中。
+ *   · 分级（2026-09-24 调整）：按字段声明 severity ——
+ *     type（案例类型）为 warn 级软拦截：缺失/非法仅提示、不阻断推送（后端有默认值/最终判定）；
+ *     test_type / priority / key_flag 仍为 error 级硬拦截（命中行从 payload 剔除）。
  *   · reason 文案模板：`案例{字段中文名}取值不合法：{当前值}，应为 {合法集合/类型}`，
  *     与"待补充"文案风格保持一致，便于前端 05g 列表统一渲染。
  *
@@ -77,6 +76,11 @@ interface EnumFieldRule {
     readAllowed: () => readonly string[];
     /** 归一化到的接口字段码（用于埋点下钻 & 前端字段级高亮） */
     field: PushInterfaceField;
+    /**
+     * 命中该字段时的严重级：默认 'error'（硬拦截剔除该行）。
+     * type（案例类型）为 'warn'：缺失/非法仅软提示，不阻断推送（2026-09-24 需求）。
+     */
+    severity?: 'error' | 'warn';
 }
 
 /**
@@ -86,7 +90,7 @@ interface EnumFieldRule {
  *       其中 keyFlag 的中文名以代码/CSV 现实为准 = 「关键案例」（需求文档的「关键标识」为历史草稿用词）。
  */
 const ENUM_RULES: readonly EnumFieldRule[] = [
-    { yamlKey: 'type',       csvKey: '案例类型',   label: '案例类型',   readAllowed: () => getEnumValues('caseType'),  field: 'type'    },
+    { yamlKey: 'type',       csvKey: '案例类型',   label: '案例类型',   readAllowed: () => getEnumValues('caseType'),  field: 'type',    severity: 'warn' },
     { yamlKey: 'test_type',  csvKey: '执行方式',   label: '执行方式',   readAllowed: () => getEnumValues('testType'),  field: 'testType'},
     { yamlKey: 'priority',   csvKey: '优先级',     label: '优先级',     readAllowed: () => getEnumValues('priority'),  field: 'priority'},
     { yamlKey: 'key_flag',   csvKey: '关键案例',   label: '关键案例',   readAllowed: readKeyFlagValues,                field: 'keyFlag' },
@@ -129,7 +133,7 @@ function isAllowedEnum(val: string, allowed: readonly string[]): boolean {
 }
 
 /**
- * 枚举字段校验器（B2 · error 级）。
+ * 枚举字段校验器（B2 · 按字段分级：error 硬拦截 / warn 软提示）。
  *
  * 兼容策略（字段缺省时跳过）：
  *   - 若某枚举字段在源文件中"完全没有"（YAML 键 & CSV 列都 undefined）→ 跳过该字段，
@@ -146,9 +150,10 @@ function isAllowedEnum(val: string, allowed: readonly string[]): boolean {
  *   · hitLabels ：用于 reason 汇总话术（保持"命中即列全部"的旧口径）
  *   · hitFields ：每个命中字段的 PushInterfaceField，供 checkMulti 展开为多条 hit
  */
-function scanEnumFields(row: RowLike): { hitLabels: string[]; hitFields: PushInterfaceField[] } {
+function scanEnumFields(row: RowLike): { hitLabels: string[]; hitFields: PushInterfaceField[]; hitSeverities: Array<'error' | 'warn'> } {
     const hitLabels: string[] = [];
     const hitFields: PushInterfaceField[] = [];
+    const hitSeverities: Array<'error' | 'warn'> = [];
     for (const rule of ENUM_RULES) {
         if (isEnumFieldAbsent(row, rule)) continue; // 完全缺省 → 跳过（兼容旧文件）
         const val = readEnumRaw(row, rule);
@@ -157,16 +162,17 @@ function scanEnumFields(row: RowLike): { hitLabels: string[]; hitFields: PushInt
             const shown = val === '' ? '空' : `"${val}"`;
             hitLabels.push(`${rule.label}=${shown}（应为 ${allowed.join('/')})`);
             hitFields.push(rule.field);
+            hitSeverities.push(rule.severity ?? 'error');
         }
     }
-    return { hitLabels, hitFields };
+    return { hitLabels, hitFields, hitSeverities };
 }
 
 export const ENUM_VALIDATOR: RowValidator = {
     kind: 'enumInvalid',
     severity: 'error',
     check(row, tsId) {
-        const { hitLabels, hitFields } = scanEnumFields(row);
+        const { hitLabels, hitFields, hitSeverities } = scanEnumFields(row);
         if (hitLabels.length === 0) return null;
         return {
             tsId,
@@ -174,6 +180,8 @@ export const ENUM_VALIDATOR: RowValidator = {
             // 严重级与行为指引已由 05g 弹窗组头承载，bullet 只保留"字段错在哪"的事实。
             reason: hitLabels.join('；'),
             field: hitFields[0], // 兼容单值口径：primaryField = 第一个命中字段
+            // 按字段分级：全部命中均为 warn（如仅 type 非法）→ 整条 warn 软拦截；含任一 error 则保持 error
+            severity: hitSeverities.some(s => s === 'error') ? 'error' : 'warn',
         };
     },
     /**
@@ -189,7 +197,7 @@ export const ENUM_VALIDATOR: RowValidator = {
      *   顶层 failure.reason 仍保留完整汇总句（用于埋点/落盘等旧口径消费方）。
      */
     checkMulti(row, tsId) {
-        const { hitLabels, hitFields } = scanEnumFields(row);
+        const { hitLabels, hitFields, hitSeverities } = scanEnumFields(row);
         if (hitLabels.length === 0) return [];
         // 文案精简（2026-09-19）：所有 reason / singleReason 去掉"案例存在枚举字段取值不合法，将导致推送校验失败："冗余前缀。
         // 汇总句仅保留字段级 label 用分号拼接（供顶层 failure.reason / 埋点消费）；单条 hit 只讲自身字段。
@@ -198,6 +206,8 @@ export const ENUM_VALIDATOR: RowValidator = {
             tsId,
             reason: i === 0 ? summary : hitLabels[i],
             field,
+            // 按字段分级：type 命中为 warn（不剔除该行），其余字段为 error（runValidators 逐 hit 消费）
+            severity: hitSeverities[i],
             // singleReason：与 reason 语义解耦 —— 无论 i 是否为 0，都提供一条"只讲自己"的话术，
             // 前端渲染 bullet 时优先取 singleReason，保证第一条 bullet 也不会显示成汇总句。
             singleReason: hitLabels[i],

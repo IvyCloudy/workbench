@@ -227,13 +227,14 @@ describe('B2 端到端：runValidators / stepPreValidate 集成', () => {
     });
 
     it('runValidators：非法枚举 → severity=error 且加入 droppedIndex（行被剔除）', () => {
+        // 用 priority（仍为 error 级）演示通用枚举拦截规则；type 自 2026-09-24 起为 warn 级（见下一条用例）
         const rows = [
-            { [TS_ID_COLUMN]: VALID_TSID_1, type: '错误取值' },
+            { [TS_ID_COLUMN]: VALID_TSID_1, priority: '错误取值' },
         ];
         const { failuresByKind, droppedIndex } = runValidators(rows as any, i => i + 1);
         expect(failuresByKind['enumInvalid']).toHaveLength(1);
         expect(failuresByKind['enumInvalid']![0].severity).toBe('error');
-        expect(failuresByKind['enumInvalid']![0].field).toBe('type');
+        expect(failuresByKind['enumInvalid']![0].field).toBe('priority');
         expect(droppedIndex.has(0)).toBe(true);
     });
 
@@ -280,8 +281,8 @@ describe('B2 端到端：runValidators / stepPreValidate 集成', () => {
 
     it('跨行：error 行（枚举非法）与 warn 行（「待补充」）共存', () => {
         const rows = [
-            // 行 1：枚举非法（error 级，剔除）
-            { [TS_ID_COLUMN]: VALID_TSID_1, type: '错' },
+            // 行 1：枚举非法（error 级，剔除）—— 用 priority（仍为 error 级）演示；type 自 2026-09-24 起为 warn 级
+            { [TS_ID_COLUMN]: VALID_TSID_1, priority: '错' },
             // 行 2：仅「待补充」（warn 级，保留）
             { [TS_ID_COLUMN]: VALID_TSID_2, description: '这里「待补充」' },
         ];
@@ -293,12 +294,33 @@ describe('B2 端到端：runValidators / stepPreValidate 集成', () => {
         expect(droppedIndex.has(1)).toBe(false);
     });
 
+    it('type（案例类型）枚举非法 / 缺失 → warn 级软提示，不剔除该行', () => {
+        // 2026-09-24 需求：案例类型不再做推送硬拦截。空值或非法取值仅产生 warn 级
+        // enumInvalid 失败项，不进入 droppedIndex，该行仍进入 payload（空值省略字段由后端默认值兜底）。
+        const rowsWarn = [
+            { [TS_ID_COLUMN]: VALID_TSID_1, type: '错' },
+        ];
+        const { failuresByKind: fw, droppedIndex: dw } = runValidators(rowsWarn as any, i => i + 1);
+        expect(fw['enumInvalid']).toHaveLength(1);
+        expect(fw['enumInvalid']![0].severity).toBe('warn');
+        expect(fw['enumInvalid']![0].field).toBe('type');
+        expect(dw.has(0)).toBe(false);
+
+        // 缺失（字段完全不填）同样不拦截：字段缺省 → ENUM_VALIDATOR 跳过，无失败项
+        const rowsAbsent = [
+            { [TS_ID_COLUMN]: VALID_TSID_1 },
+        ];
+        const { failuresByKind: fa, droppedIndex: da } = runValidators(rowsAbsent as any, i => i + 1);
+        expect(fa['enumInvalid'] ?? []).toHaveLength(0);
+        expect(da.has(0)).toBe(false);
+    });
+
     it('同一行叠加：error（枚举）+ warn（「待补充」）都被完整收集', () => {
         // v2 语义（多问题暴露）：非 tsId 硬失败的 validator 不再 break，
         // 因此同一行的 enumInvalid + todoPlaceholder 都会进入 failuresByKind。
         // 该行仍属被剔除（因为有 error），但两条问题都会展示给用户，方便一次性修复。
         const rows = [
-            { [TS_ID_COLUMN]: VALID_TSID_1, type: '错', description: '「待补充」' },
+            { [TS_ID_COLUMN]: VALID_TSID_1, priority: '错', description: '「待补充」' },
         ];
         const { failuresByKind, droppedIndex } = runValidators(rows as any, i => i + 1);
         expect(failuresByKind['enumInvalid']).toHaveLength(1);
@@ -312,7 +334,7 @@ describe('B2 端到端：runValidators / stepPreValidate 集成', () => {
         // 该行同时命中枚举字段非法 + 计划执行次数非法，二者都是 error 级；
         // 期望：两个 kind 各出一条 failure；该行被剔除但 droppedIndex 只加一次。
         const rows = [
-            { [TS_ID_COLUMN]: VALID_TSID_1, type: '错', plan_exec_num: 'abc' },
+            { [TS_ID_COLUMN]: VALID_TSID_1, priority: '错', plan_exec_num: 'abc' },
         ];
         const { failuresByKind, droppedIndex } = runValidators(rows as any, i => i + 1);
         expect(failuresByKind['enumInvalid']).toHaveLength(1);
@@ -353,7 +375,7 @@ describe('B2 端到端：runValidators / stepPreValidate 集成', () => {
         // `highlightFailures = [...formatFailures, ...enumInvalidFailures, ...planExecNumFailures, ...]`
         // 静态代码保证，无需在测试中再重复验证 IO 副作用。
         const rows = [
-            { [TS_ID_COLUMN]: VALID_TSID_1, type: '错' },
+            { [TS_ID_COLUMN]: VALID_TSID_1, priority: '错' },
             { [TS_ID_COLUMN]: VALID_TSID_2, plan_exec_num: 'abc' },
         ];
         const res = await stepPreValidate(ctx(), rows as any);

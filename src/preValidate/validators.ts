@@ -501,10 +501,16 @@ export function runValidators(
             if (hits.length === 0) continue;
 
             const rowIndex = resolveRowIndex(i);
-            const severity: 'error' | 'warn' = v.severity === 'warn' ? 'warn' : 'error';
+            const validatorSeverity: 'error' | 'warn' = v.severity === 'warn' ? 'warn' : 'error';
+            // 支持命中项级 severity 覆盖（如 ENUM_VALIDATOR 的 type 字段为 warn 级）：
+            //   check/checkMulti 返回的 hit 若显式带 severity 则优先，否则回退 validator 级别。
+            const hitSeverity = (h: Omit<PushFailureItem, 'rowIndex'>): 'error' | 'warn' =>
+                h.severity ?? validatorSeverity;
             const usedMulti = typeof v.checkMulti === 'function' && hits.length > 1;
             if (usedMulti) {
                 const primary = hits[0];
+                // 合并条目取最严重级：任一命中为 error → 整条 error（该行剔除）
+                const severity: 'error' | 'warn' = hits.some(h => hitSeverity(h) === 'error') ? 'error' : 'warn';
                 const item: PushFailureItem = {
                     tsId: v.kind === 'empty' ? `__EMPTY_TSID_ROW_${rowIndex}__` : primary.tsId,
                     reason: primary.reason,
@@ -517,8 +523,15 @@ export function runValidators(
                     hits: hits.map(h => ({ field: h.field, stepIdx: h.stepIdx, subField: h.subField, singleReason: (h as any).singleReason })),
                 };
                 (failuresByKind[v.kind] ||= []).push(item);
+                if (severity === 'error') {
+                    droppedIndex.add(i);
+                    if (TSID_HARD_KINDS.has(v.kind)) {
+                        tsIdHardHit = true;
+                    }
+                }
             } else {
                 for (const hit of hits) {
+                    const severity = hitSeverity(hit);
                     const item: PushFailureItem = {
                         tsId: v.kind === 'empty' ? `__EMPTY_TSID_ROW_${rowIndex}__` : hit.tsId,
                         reason: hit.reason,
@@ -530,13 +543,12 @@ export function runValidators(
                         subField: hit.subField,
                     };
                     (failuresByKind[v.kind] ||= []).push(item);
-                }
-            }
-
-            if (severity === 'error') {
-                droppedIndex.add(i);
-                if (TSID_HARD_KINDS.has(v.kind)) {
-                    tsIdHardHit = true;
+                    if (severity === 'error') {
+                        droppedIndex.add(i);
+                        if (TSID_HARD_KINDS.has(v.kind)) {
+                            tsIdHardHit = true;
+                        }
+                    }
                 }
             }
         }

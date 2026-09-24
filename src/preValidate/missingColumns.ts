@@ -101,6 +101,7 @@ export const REQUIRED_FIELDS: RequiredFieldSpec[] = [
     },
     {
         label: '案例类型', yamlKey: 'type', csvHeader: '案例类型', location: 'top', severity: 'warn',
+        // 2026-09-24：type 缺失/取值非法均为 warn 软提示，不做推送拦截（映射层空值省略字段，由后端默认值兜底）
         csvAliases: ['type', '用例类型'],
     },
     {

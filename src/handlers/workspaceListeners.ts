@@ -66,6 +66,8 @@ import { showDeleteConfirmSimpleModal, showBatchDeleteConfirmModal } from '../ut
 import type { PushFailure, DeleteConfirmItem } from '../utils/deleteFeedback';
 import type { BatchDeleteFileEntry } from '../utils/messageExtras';
 import { confirmDeleteTestCase } from '../services/http';
+// 删除流程重开编辑器时抑制「案例格式校验」弹窗（删除不强制做格式校验）
+import { setSuppressEditValidationPrompt } from '../preValidate/editValidationHandler';
 // 批量删除结果汇总面板：复用批量推送的 pushUI（同一 webview 组件，onOpenFile 点击才打开文件）
 import { showPushSummary } from '../utils/pushUI';
 import type { PushFileResult } from '../utils/pushUI';
@@ -845,9 +847,14 @@ async function handleCaseFilesDidDelete(
             //   3) presentDeleteResult 弹详情弹窗（内部 getPanel 已就绪，不会重复打开）
             const payload = detailPayloadSink.get(fp);
             if (payload) {
+                // 删除结果详情重开编辑器：抑制「案例格式校验」弹窗
+                setSuppressEditValidationPrompt(true);
                 try {
                     await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(fp), TESTCASE_EDITOR_VIEWTYPE);
                 } catch (_) { /* ignore */ }
+                finally {
+                    setSuppressEditValidationPrompt(false);
+                }
                 let panel = BaseEditorProvider.getPanel(fp);
                 for (let i = 0; !panel && i < 30; i++) {
                     await new Promise(res => setTimeout(res, 100));
@@ -874,9 +881,13 @@ async function handleCaseFilesDidDelete(
             }
 
             // 情况 4：兜底 —— 无 payload 但文件仍存在（理论上不会走到）→ 直接打开
+            setSuppressEditValidationPrompt(true);
             try {
                 await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(fp), TESTCASE_EDITOR_VIEWTYPE);
             } catch (_) { /* ignore */ }
+            finally {
+                setSuppressEditValidationPrompt(false);
+            }
         };
 
         // P1-C2：文件数为 1 时（极端场景，如 batchMode 走到单文件），标题去掉「批量」字样
@@ -1669,6 +1680,8 @@ async function restoreCaseFile(entry: WillBackupEntry): Promise<void> {
  * 非阻塞、失败静默。
  */
 async function reopenCaseFile(filePath: string): Promise<void> {
+    // 删除流程重开编辑器仅用于展示"保留原状"结果，不应再弹「案例格式校验」窗口
+    setSuppressEditValidationPrompt(true);
     try {
         const uri = vscode.Uri.file(filePath);
         await vscode.commands.executeCommand('vscode.openWith', uri, TESTCASE_EDITOR_VIEWTYPE);
@@ -1677,6 +1690,8 @@ async function reopenCaseFile(filePath: string): Promise<void> {
         });
     } catch (err: any) {
         console.warn('[workspaceListeners] 重建后重开文件失败（已忽略）:', err?.message || err);
+    } finally {
+        setSuppressEditValidationPrompt(false);
     }
 }
 
@@ -1701,10 +1716,14 @@ async function presentDeleteResult(r: {
     try {
         let panel = BaseEditorProvider.getPanel(r.filePath);
         if (!panel && r.needRestore) {
-            // panel 尚未注册 → 再试一次打开
+            // panel 尚未注册 → 再试一次打开（删除结果展示，抑制校验弹窗）
+            setSuppressEditValidationPrompt(true);
             try {
                 await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(r.filePath), TESTCASE_EDITOR_VIEWTYPE);
             } catch (_) { /* ignore */ }
+            finally {
+                setSuppressEditValidationPrompt(false);
+            }
             for (let i = 0; i < 30; i++) {
                 await new Promise(res => setTimeout(res, 100));
                 panel = BaseEditorProvider.getPanel(r.filePath);

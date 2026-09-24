@@ -403,6 +403,27 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
     }
 
     /**
+     * 向指定文件的 webview 推送一条轻量 toast 提示（前端 showToast）。
+     *
+     * 用途：编辑期校验「显式格式校验按钮」场景 —— 校验完全通过时给出一个
+     * 非打断式"通过"反馈（有问题时走 05g 弹窗，不重复 toast）。
+     *   · 面板未打开时 no-op；
+     *   · 等待 panelEntry.ready 后再 postMessage，避免早期消息丢失。
+     */
+    static async postToast(filePath: string, text: string, level: string): Promise<void> {
+        const entry = BaseEditorProvider.panelMap.get(filePath);
+        if (!entry) return;
+        try {
+            await entry.ready;
+        } catch (_) { /* ready 内部不抛，兜底忽略 */ }
+        try {
+            entry.panel.webview.postMessage({ type: 'toast', text, level });
+        } catch (e: any) {
+            console.warn('[postToast] postMessage failed:', e?.message || e);
+        }
+    }
+
+    /**
      * §2.3.5 · 打开文件时的合并弹窗：把「文件级（缺列）+ 行级（枚举非法 / 待补充 / 名称空 /
      *   计划执行次数非法 …）」所有校验问题合并成一份 failures，通过已注册的 webview 面板
      *   复用 openPreValidateGate 的自定义弹窗（05g），与推送前拦截共用同一份 UI，避免走
@@ -413,8 +434,8 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
      *   · 等待 panelEntry.ready 后再 postMessage，避免早期消息丢失；
      *   · 用户点"关闭/取消/Esc"→ decision='cancel'；此处不关心 decision，
      *     仅用于承接 openPreValidateGate 的 Promise，避免 pending 泄漏；
-     *   · failures 中如含任意 error → 05g 只显示"关闭"按钮，无"忽略并继续"；
-     *   · failures 全为 warn → 05g 显示"关闭 + 忽略并继续"，此入口不关心用户的选择结果。
+     *   · 本入口固定 allowContinue=false（纯查看问题、非推送流程），05g 不论
+     *     error / warn 都只显示"关闭"，不再出现"忽略并继续"（那是推送门控专用）。
      *
      * 与推送前拦截共用同一份 failures 结构：
      *   · 文件级 → tsId='__FILE_LEVEL__'（05g 内部走文件级渲染分支）；
@@ -434,7 +455,9 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         } catch (_) { /* ready 内部不抛，兜底忽略 */ }
         try {
             // 结果 Promise 用后即弃：本入口不关心用户是否点了"关闭"（都视为已知悉）。
-            void openPreValidateGate(entry.panel, fileName, failures);
+            // allowContinue=false：打开文件 / 格式校验按钮是纯查看问题，不是推送流程，
+            // "忽略并继续"无意义，弹窗仅提供"关闭"（见 05g 按钮显隐逻辑）。
+            void openPreValidateGate(entry.panel, fileName, failures, false);
         } catch (e: any) {
             console.warn('[postFileLevelPreValidateGate] postMessage failed:', e?.message || e);
         }

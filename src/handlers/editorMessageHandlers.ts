@@ -36,7 +36,7 @@ import { buildErrorProps } from '../services/utils';
 import { syncDeletedResultTelemetryProps } from '../utils/extensionHelpers';
 import { resolveTaskInfoOrNull } from '../handlers/pushCore.stages';
 import { resolvePreValidateGate } from '../utils/preValidateGate';
-import { requestEditValidation } from '../handlers/editValidationHandler';
+import { requestEditValidation, type EditValidationResult } from '../preValidate/editValidationHandler';
 import { TS_ID_COLUMN } from '../services/utils';
 import { detectFileType, createParser } from '../parsers';
 import type { PushStrategy, PushContext } from '../providers/BaseEditorProvider';
@@ -84,6 +84,7 @@ function buildHandlers(): Record<string, Handler> {
         deleteRows: handleDeleteRows,
         confirmDeleteRows: handleConfirmDeleteRows,
         preValidateGateResponse: handlePreValidateGateResponse,
+        runFormatValidation: handleRunFormatValidation,
         telemetry: handleTelemetry,
     };
 }
@@ -446,6 +447,51 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
             `本次删除已取消。\n\n错误信息：${_errTxt}`,
         );
     }
+}
+
+/**
+ * 工具栏「格式校验」按钮：复用打开文件时的校验逻辑（缺列 + 行级枚举/待补充/名称空/
+ * 计划执行次数非法 …），把结果交给 05g 自定义弹窗统一展示；完全无问题时通过
+ * 扩展侧回弹 toast 给一个轻量"通过"反馈（clean 反馈改为由本 handler 据 requestEditValidation
+ * 返回值决策，不再走扩展侧副作用）。与推送前拦截共用 detectMissingColumns /
+ * runValidatorsOnRowsPure，避免两套口径分裂。
+ */
+async function handleRunFormatValidation(_msg: any, ctx: EditorMsgCtx): Promise<void> {
+    const filePath = ctx.getFilePath();
+    ctx.log('📨 runFormatValidation from webview');
+    // 非 csv/yaml/json 文件（理论上不会出现在本编辑器，但兜底避免静默无响应）
+    if (!detectFileType(filePath)) {
+        ctx.webviewPanel.webview.postMessage({ type: 'toast', text: '当前文件类型不支持格式校验', level: 'info' });
+        return;
+    }
+    let result: EditValidationResult | undefined;
+    try {
+        result = await requestEditValidation(filePath, { immediate: true, promptOnMissing: true });
+    } catch (err: any) {
+        ctx.log('⚠ runFormatValidation failed:', err?.message || err);
+        return;
+    }
+    // 校验无问题（非中断且完全无失败）→ 轻量"通过"提示；有问题则已由 05g 弹窗展示，不重复提示。
+    // 注：clean 反馈由本 handler 据 requestEditValidation 返回值决策，不再走扩展侧副作用。
+    if (result && !result.aborted && !result.hasFailures) {
+        try {
+            ctx.webviewPanel.webview.postMessage({ type: 'toast', text: '格式校验通过，未发现问题', level: 'success' });
+        } catch (_) { /* ignore */ }
+    }
+
+    // 埋点：带上校验结论（pass / fail / aborted）+ 各问题类别个数（cnt_<category>，仅非零）。
+    const resultLabel = !result ? 'aborted' : (result.hasFailures ? 'fail' : 'pass');
+    const countFields: Record<string, string> = {};
+    if (result) {
+        for (const [cat, n] of Object.entries(result.counts)) {
+            if (n > 0) countFields[`cnt_${cat}`] = String(n);
+        }
+    }
+    TelemetryService.sendTelemetryEvent('editor.formatValidation', {
+        fileFormat: ctx.session.type,
+        result: resultLabel,
+        ...countFields,
+    });
 }
 
 /**

@@ -25,6 +25,11 @@ import { telemetryTsIdListProps } from '../utils/telemetryProps';
 import { mapRowToCaseItem } from '../utils/pushDataMapper';
 import type { AppConfig, ApiResponse, QueryOptions } from '../types';
 
+// 日志时间戳（ISO8601 含毫秒），用于删除接口等链路日志对齐时序
+function _ts(): string {
+    return new Date().toISOString();
+}
+
 // ============================================
 // 类型
 // ============================================
@@ -225,7 +230,7 @@ function makeRequest<T = any>(
             res.on('end', async () => {
                 // 诊断日志：对删除接口打印原始字节流，便于定位 body 为空/被中间层改写的问题
                 if (urlObj.pathname && urlObj.pathname.indexOf('/delete-testcase') >= 0) {
-                    console.log('[makeRequest][delete-testcase][原始响应] status=%d bytes=%d chunks=%d headers=%s raw=%s',
+                    console.log('[makeRequest][delete-testcase][原始响应] ' + _ts() + ' status=%d bytes=%d chunks=%d headers=%s raw=%s',
                         res.statusCode || 0,
                         Buffer.byteLength(data, 'utf8'),
                         chunkCount,
@@ -244,7 +249,7 @@ function makeRequest<T = any>(
                     try {
                         const curlResp = await curlRequest(method, url, finalHeaders, body, timeoutMs);
                         if (urlObj.pathname && urlObj.pathname.indexOf('/delete-testcase') >= 0) {
-                            console.log('[makeRequest][delete-testcase][curl兜底] status=%d bytes=%d raw=%s',
+                            console.log('[makeRequest][delete-testcase][curl兜底] ' + _ts() + ' status=%d bytes=%d raw=%s',
                                 curlResp.status,
                                 Buffer.byteLength(curlResp.bodyText, 'utf8'),
                                 curlResp.bodyText.slice(0, 500));
@@ -608,6 +613,7 @@ export async function deleteTestCase(
     const headers = await buildHeaders(context);
     const safeHeaders = maskSensitiveHeaders(headers);
     console.log('[删除案例][请求] ───────────────────────────────');
+    console.log('[删除案例][请求] 时间:', _ts());
     console.log('[删除案例][请求] DELETE', url);
     console.log('[删除案例][请求] headers:', JSON.stringify(safeHeaders, null, 2));
     console.log('[删除案例][请求] body  :', JSON.stringify(body, null, 2));
@@ -619,14 +625,14 @@ export async function deleteTestCase(
         // 从而降低"后端已删除但客户端判定超时失败"的不一致风险。
         const deleteTimeout = Math.max(DELETE_CASE_DEFAULT_TIMEOUT, appConfig?.requestTimeoutMs || 0);
         const response = await makeRequest<ApiResponse>('DELETE', url, headers, JSON.stringify(body), deleteTimeout);
-        console.log('[删除案例][响应] status=', response.status,
+        const _costMs = String(Date.now() - _apiStart);
+        console.log('[删除案例][响应] 时间:', _ts(), 'status=', response.status,
             'returnCode=', (response.data as any)?.returnCode,
-            'errorMsg=', (response.data as any)?.errorMsg || '');
+            'errorMsg=', (response.data as any)?.errorMsg || '', '耗时(ms):', _costMs);
         console.log('[删除案例][响应] body  :', JSON.stringify(response.data, null, 2));
 
         maybeReportAuthFailure(response.status, 'deleteTestCase');
         const _rc = (response.data as any)?.returnCode || '';
-        const _costMs = String(Date.now() - _apiStart);
         if (_rc === 'SUC0000') {
             TelemetryService.sendTelemetryEvent('api.deleteTestCase.ok', {
                 httpStatus: String(response.status),
@@ -645,6 +651,7 @@ export async function deleteTestCase(
         }
         return response.data;
     } catch (err: any) {
+        console.error('[删除案例][异常] 时间:', _ts(), 'error=', String(err?.message || String(err)), err);
         TelemetryService.sendTelemetryErrorEvent('api.deleteTestCase.exception', {
             totalRows: String(sourceIds.length),
             errorMessage: String(err?.message || String(err)).slice(0, 500),
@@ -708,7 +715,7 @@ export async function confirmDeleteTestCase(
     };
 
     const headers = await buildHeaders(context);
-    console.log('[删除确认][请求] POST', url, 'sourceIds=', JSON.stringify(body.sourceIds));
+    console.log('[删除确认][请求] 时间:', _ts(), 'POST', url, 'sourceIds=', JSON.stringify(body.sourceIds));
 
     const _apiStart = Date.now();
     try {
@@ -716,13 +723,13 @@ export async function confirmDeleteTestCase(
         // 取 max(90s, app-config 配置值)，避免被较小的通用 requestTimeoutMs 覆盖。
         const confirmTimeout = Math.max(CONFIRM_DELETE_DEFAULT_TIMEOUT, appConfig?.requestTimeoutMs || 0);
         const response = await makeRequest<ApiResponse>('POST', url, headers, JSON.stringify(body), confirmTimeout);
-        console.log('[删除确认][响应] status=', response.status,
+        const _costMs = String(Date.now() - _apiStart);
+        console.log('[删除确认][响应] 时间:', _ts(), 'status=', response.status,
             'returnCode=', (response.data as any)?.returnCode,
-            'errorMsg=', (response.data as any)?.errorMsg || '');
+            'errorMsg=', (response.data as any)?.errorMsg || '', '耗时(ms):', _costMs);
         console.log('[删除确认][响应] body  :', JSON.stringify(response.data, null, 2));
         maybeReportAuthFailure(response.status, 'confirmDeleteTestCase');
         const _rc = (response.data as any)?.returnCode || '';
-        const _costMs = String(Date.now() - _apiStart);
         if (_rc === 'SUC0000') {
             TelemetryService.sendTelemetryEvent('api.confirmDeleteTestCase.ok', {
                 httpStatus: String(response.status),
@@ -739,6 +746,7 @@ export async function confirmDeleteTestCase(
         }
         return response.data;
     } catch (err: any) {
+        console.error('[删除确认][异常] 时间:', _ts(), 'error=', String(err?.message || String(err)), err);
         TelemetryService.sendTelemetryErrorEvent('api.confirmDeleteTestCase.exception', {
             totalRows: String(sourceIds.length),
             errorMessage: String(err?.message || String(err)).slice(0, 500),

@@ -27,7 +27,7 @@ import { isSampleTsId } from '../utils/fileIdentifier';
 import { isTestAgentUuid, isTestFlowUuid } from '../utils/testcaseId';
 import { TS_ID_COLUMN } from '../services/utils';
 import type { PushFailureItem, RowLike, PushSubField } from '../handlers/pushCore.types';
-import { B2_ERROR_VALIDATORS } from '../handlers/pushCore.enumTypeValidators';
+import { B2_ERROR_VALIDATORS, makeEnumValidator, isTypeColumnPresent, isKeyFlagColumnPresent } from '../handlers/pushCore.enumTypeValidators';
 
 // =============================================================
 // 行级小工具
@@ -480,15 +480,24 @@ export function runValidators(
     //   跨行判定必须在整批粒度做，因此从单行 validator 剥离，改由 runValidators 统一注入 failure。
     //   仅在 DEFAULT_VALIDATORS 走全量模式（含此 kind）时执行；测试/工具函数指定单 validator 时跳过。
     const enableDuplicateCheck = validators === DEFAULT_VALIDATORS
-        || validators.some(v => v && v.kind === 'duplicateName');
+        || validators.some(v => v && (v.kind === 'duplicateName' || v.kind === 'enumInvalid'));
     const duplicateRowSet = enableDuplicateCheck ? scanDuplicateNameRows(rows) : new Set<number>();
+
+    // 两档字段（type / key_flag）列是否在整个文件中存在 → 驱动 ENUM_VALIDATOR 的两档分级
+    // （列缺失→warn / 列存在→严格 error）。CSV 与 YAML 统一以"行对象是否含对应键"判定。
+    // 推送期与编辑期（runValidatorsOnRowsPure）传入的都是全量文件行，故判定口径一致。
+    const colPresent: Record<string, boolean> = {
+        type: isTypeColumnPresent(rows),
+        keyFlag: isKeyFlagColumnPresent(rows),
+    };
+    const effectiveValidators = validators.map(v => v.kind === 'enumInvalid' ? makeEnumValidator(colPresent) : v);
 
     for (let i = 0; i < rows.length; i++) {
         const rec = rows[i];
         const tsId = readTsId(rec);
         if (isSampleTsId(tsId)) continue;
         let tsIdHardHit = false;
-        for (const v of validators) {
+        for (const v of effectiveValidators) {
             if (tsIdHardHit) break;
             const hits: Array<Omit<PushFailureItem, 'rowIndex'>> = [];
             if (typeof v.checkMulti === 'function') {

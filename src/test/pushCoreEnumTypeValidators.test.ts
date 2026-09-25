@@ -23,6 +23,7 @@ import { TS_ID_COLUMN } from '../services/utils';
 import {
     ENUM_VALIDATOR,
     PLAN_EXEC_NUM_VALIDATOR,
+    makeEnumValidator,
     TYPE_VALUES,
     TEST_TYPE_VALUES,
     PRIORITY_VALUES,
@@ -80,8 +81,9 @@ describe('B2 枚举字段校验（ENUM_VALIDATOR · error）', () => {
         TYPE_VALUES.forEach(v => expect(hit!.reason).toContain(v));
     });
 
-    it('空串值（`type: ""` 场景）→ 判为不合法（需求 2.3.3）', () => {
-        const hit = ENUM_VALIDATOR.check(
+    it('空串值（`type: ""` 场景，列存在档）→ 判为不合法（需求 2.3.3）', () => {
+        // 列存在（colPresent.type=true）→ 严格校验：空串即不合法（error 拦截）
+        const hit = (makeEnumValidator({ type: true }) as any).check(
             { type: '', test_type: '手工', priority: '高', key_flag: '是' } as any,
             VALID_TSID_1,
         );
@@ -294,25 +296,111 @@ describe('B2 端到端：runValidators / stepPreValidate 集成', () => {
         expect(droppedIndex.has(1)).toBe(false);
     });
 
-    it('type（案例类型）枚举非法 / 缺失 → warn 级软提示，不剔除该行', () => {
-        // 2026-09-24 需求：案例类型不再做推送硬拦截。空值或非法取值仅产生 warn 级
-        // enumInvalid 失败项，不进入 droppedIndex，该行仍进入 payload（空值省略字段由后端默认值兜底）。
-        const rowsWarn = [
-            { [TS_ID_COLUMN]: VALID_TSID_1, type: '错' },
-        ];
-        const { failuresByKind: fw, droppedIndex: dw } = runValidators(rowsWarn as any, i => i + 1);
-        expect(fw['enumInvalid']).toHaveLength(1);
-        expect(fw['enumInvalid']![0].severity).toBe('warn');
-        expect(fw['enumInvalid']![0].field).toBe('type');
-        expect(dw.has(0)).toBe(false);
+    it('type（案例类型）：列缺失→warn/不校验；列存在→严格（空/缺失/非法 一律 error 剔除）', () => {
+        // 两档分级（按"type 列在文件中是否存在"判定，CSV / YAML 同原则）：
+        //   · 列缺失（整个文件都没有 type 字段）→ 行级跳过，无 per-row failure、不剔除
+        //     （文件级缺列提示由 missingColumns 以 warn 单独产出，本处不重复）
+        //   · 列存在 → 严格：空值 / 缺失 / 非空非法 均 error 硬拦截、剔除该行
 
-        // 缺失（字段完全不填）同样不拦截：字段缺省 → ENUM_VALIDATOR 跳过，无失败项
-        const rowsAbsent = [
-            { [TS_ID_COLUMN]: VALID_TSID_1 },
+        // 完全缺省（整文件无 type 列）→ 行级跳过
+        const absent = [{ [TS_ID_COLUMN]: VALID_TSID_1 }];
+        const ra = runValidators(absent as any, i => i + 1);
+        expect(ra.failuresByKind['enumInvalid'] ?? []).toHaveLength(0);
+        expect(ra.droppedIndex.has(0)).toBe(false);
+
+        // 列存在 + 空值 → error，剔除
+        const empty = [{ [TS_ID_COLUMN]: VALID_TSID_1, type: '' }];
+        const re = runValidators(empty as any, i => i + 1);
+        expect(re.failuresByKind['enumInvalid']).toHaveLength(1);
+        expect(re.failuresByKind['enumInvalid']![0].severity).toBe('error');
+        expect(re.failuresByKind['enumInvalid']![0].field).toBe('type');
+        expect(re.droppedIndex.has(0)).toBe(true);
+
+        // 列存在 + 非空非法值 → error，剔除
+        const bad = [{ [TS_ID_COLUMN]: VALID_TSID_1, type: '错' }];
+        const rb = runValidators(bad as any, i => i + 1);
+        expect(rb.failuresByKind['enumInvalid']).toHaveLength(1);
+        expect(rb.failuresByKind['enumInvalid']![0].severity).toBe('error');
+        expect(rb.failuresByKind['enumInvalid']![0].field).toBe('type');
+        expect(rb.droppedIndex.has(0)).toBe(true);
+
+        // 列存在（同文件有 type 字段）+ YAML 某行缺 type 键 → 缺失也 error，剔除该行
+        const missingKey = [
+            { [TS_ID_COLUMN]: VALID_TSID_1, type: '功能点类' },
+            { [TS_ID_COLUMN]: VALID_TSID_2 }, // 缺 type 键，但列存在
         ];
-        const { failuresByKind: fa, droppedIndex: da } = runValidators(rowsAbsent as any, i => i + 1);
-        expect(fa['enumInvalid'] ?? []).toHaveLength(0);
-        expect(da.has(0)).toBe(false);
+        const rm = runValidators(missingKey as any, i => i + 1);
+        expect(rm.failuresByKind['enumInvalid']).toHaveLength(1);
+        expect(rm.failuresByKind['enumInvalid']![0].field).toBe('type');
+        expect(rm.failuresByKind['enumInvalid']![0].severity).toBe('error');
+        expect(rm.droppedIndex.has(0)).toBe(false); // 第一行合法 type，不剔除
+        expect(rm.droppedIndex.has(1)).toBe(true);  // 第二行缺失 type，剔除
+    });
+
+    it('key_flag（关键案例）：列缺失→warn/不校验；列存在→严格（空/缺失/非法 一律 error 剔除），同 type 原则', () => {
+        // 与 type 相同的两档分级（列缺失→行级跳过；列存在→缺失/空/非法 均 error 剔除）。
+        // 完全缺省（整文件无 key_flag 列）→ 行级跳过
+        const absent = [{ [TS_ID_COLUMN]: VALID_TSID_1 }];
+        const ra = runValidators(absent as any, i => i + 1);
+        expect(ra.failuresByKind['enumInvalid'] ?? []).toHaveLength(0);
+        expect(ra.droppedIndex.has(0)).toBe(false);
+
+        // 列存在 + 空值 → error，剔除
+        const empty = [{ [TS_ID_COLUMN]: VALID_TSID_1, key_flag: '' }];
+        const re = runValidators(empty as any, i => i + 1);
+        expect(re.failuresByKind['enumInvalid']).toHaveLength(1);
+        expect(re.failuresByKind['enumInvalid']![0].severity).toBe('error');
+        expect(re.failuresByKind['enumInvalid']![0].field).toBe('keyFlag');
+        expect(re.droppedIndex.has(0)).toBe(true);
+
+        // 列存在 + 非空非法值（如历史 "1"，0/1 兜底已移除）→ error，剔除
+        const bad = [{ [TS_ID_COLUMN]: VALID_TSID_1, key_flag: '1' }];
+        const rb = runValidators(bad as any, i => i + 1);
+        expect(rb.failuresByKind['enumInvalid']).toHaveLength(1);
+        expect(rb.failuresByKind['enumInvalid']![0].severity).toBe('error');
+        expect(rb.failuresByKind['enumInvalid']![0].field).toBe('keyFlag');
+        expect(rb.droppedIndex.has(0)).toBe(true);
+
+        // 列存在（同文件有 key_flag 字段）+ YAML 某行缺 key_flag 键 → 缺失也 error，剔除该行
+        const missingKey = [
+            { [TS_ID_COLUMN]: VALID_TSID_1, key_flag: '是' },
+            { [TS_ID_COLUMN]: VALID_TSID_2 }, // 缺 key_flag 键，但列存在
+        ];
+        const rm = runValidators(missingKey as any, i => i + 1);
+        expect(rm.failuresByKind['enumInvalid']).toHaveLength(1);
+        expect(rm.failuresByKind['enumInvalid']![0].field).toBe('keyFlag');
+        expect(rm.failuresByKind['enumInvalid']![0].severity).toBe('error');
+        expect(rm.droppedIndex.has(0)).toBe(false); // 第一行合法 key_flag，不剔除
+        expect(rm.droppedIndex.has(1)).toBe(true);  // 第二行缺失 key_flag，剔除
+    });
+
+    it('变体表头（用例类型 / testType / 关键标识）不再被识别为枚举字段，按"列缺失"处理（线上无遗留变体表头文件，仅认规范键）', () => {
+        // 线上不存在遗留变体表头文件，枚举校验器仅以规范键（type/案例类型、test_type/执行方式、
+        // key_flag/关键案例）判定取值与列存在性。变体表头视为"列缺失"→ 默认值兜底、不校验、不阻断。
+
+        // 仅存在变体表头「用例类型」，无规范「案例类型」→ 视为列缺失，整列被忽略（不校验、不剔除）
+        const variantType = [{ [TS_ID_COLUMN]: VALID_TSID_1, '用例类型': '功能点类111' }];
+        const rv = runValidators(variantType as any, i => i + 1);
+        expect(rv.failuresByKind['enumInvalid'] ?? []).toHaveLength(0);
+        expect(rv.droppedIndex.has(0)).toBe(false);
+
+        // testType 变体表头同样被忽略（不触发 test_type 的 error 拦截）
+        const variantTt = [{ [TS_ID_COLUMN]: VALID_TSID_1, 'testType': '半自动' }];
+        const rtt = runValidators(variantTt as any, i => i + 1);
+        expect(rtt.failuresByKind['enumInvalid'] ?? []).toHaveLength(0);
+        expect(rtt.droppedIndex.has(0)).toBe(false);
+
+        // 关键标识 变体表头同样被忽略
+        const variantKf = [{ [TS_ID_COLUMN]: VALID_TSID_1, '关键标识': '也许' }];
+        const rkf = runValidators(variantKf as any, i => i + 1);
+        expect(rkf.failuresByKind['enumInvalid'] ?? []).toHaveLength(0);
+        expect(rkf.droppedIndex.has(0)).toBe(false);
+
+        // 对照：规范键「案例类型」缺失（整文件无 type/案例类型）→ 不校验、不剔除（缺失列靠默认值兜底，零回归）
+        const missingCol = [{ [TS_ID_COLUMN]: VALID_TSID_1 }];
+        const rm = runValidators(missingCol as any, i => i + 1);
+        expect(rm.failuresByKind['enumInvalid'] ?? []).toHaveLength(0);
+        expect(rm.droppedIndex.has(0)).toBe(false);
     });
 
     it('同一行叠加：error（枚举）+ warn（「待补充」）都被完整收集', () => {

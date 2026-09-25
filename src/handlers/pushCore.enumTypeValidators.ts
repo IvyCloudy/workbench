@@ -16,10 +16,12 @@
  *   · 双键名兼容：YAML 用英文键、CSV 用中文列名，两套都要扫（stepPreValidate 早于
  *     normalizePushData，row 仍保持源文件原始键名）。
  *   · 空值容忍：需求 2.3.3 明确"字段为空视为不合法"，因此空串/undefined/null 也命中。
- *   · 分级（2026-09-24 调整）：按字段声明 severity ——
- *     type（案例类型）为 warn 级软拦截：缺失/非法仅提示、不阻断推送（后端有默认值/最终判定）；
- *     test_type / priority / key_flag 仍为 error 级硬拦截（命中行从 payload 剔除）。
- *   · reason 文案模板：`案例{字段中文名}取值不合法：{当前值}，应为 {合法集合/类型}`，
+ *   · 分级（两档字段：type / key_flag）：按"该列在文件中是否存在"分两档 ——
+ *       列缺失（文件级无该列）→ warn 软提示、不阻断（由 missingColumns 报文件级 warn，行级跳过）；
+ *       列存在 → 严格校验：缺失 / 空值 / 取值非法 一律 error 硬拦截、剔除该行。
+ *     test_type / priority 始终为 error 级硬拦截（命中行从 payload 剔除）；
+ *     以上 CSV（中文列名）与 YAML（英文键）同原则，type / key_flag 一致。
+ *   · reason 文案模板：`案例{字段中文名}取值不合法：{当前值}，应为 {合法集合/类型}}`，
  *     与"待补充"文案风格保持一致，便于前端 05g 列表统一渲染。
  *
  * 允许取值集合（2026-09-19 P0 修复）：
@@ -68,8 +70,6 @@ interface EnumFieldRule {
     yamlKey: string;
     /** CSV 列名（中文），主用列名（与 package.json headerLabels 及现网 CSV 模板对齐） */
     csvKey: string;
-    /** CSV 兼容列名（可选，保留扩展点，当前无差异） */
-    csvKeyAlt?: string;
     /** 中文字段名，用于 reason 文案 */
     label: string;
     /** 合法取值集合读取器（运行时读取，保证 settings.json 变更实时生效） */
@@ -77,10 +77,18 @@ interface EnumFieldRule {
     /** 归一化到的接口字段码（用于埋点下钻 & 前端字段级高亮） */
     field: PushInterfaceField;
     /**
-     * 命中该字段时的严重级：默认 'error'（硬拦截剔除该行）。
-     * type（案例类型）为 'warn'：缺失/非法仅软提示，不阻断推送（2026-09-24 需求）。
+     * 命中该字段时的严重级（非空取值命中时）：默认 'error'（硬拦截剔除该行）。
+     * type（案例类型）置 'error'，但其空值是否降级由 emptySeverity 与
+     * "type 列是否存在"共同决定（runValidators 注入 typeColPresent，列存在时空值强制 error）。
      */
     severity?: 'error' | 'warn';
+    /**
+     * 字段存在但值为空串（CSV 单元格留空 / 字段为空）时的严重级。
+     *   · 默认缺省：沿用 severity（多数字段空值即非法 → error）。
+     *   · type（案例类型）/ key_flag（关键案例）置 'warn'：仅当该列在"整个文件中缺失"时生效；
+     *     若列存在（colPresent[field]=true），空值会被强制升为 error（严格校验，与 type 同原则）。
+     */
+    emptySeverity?: 'error' | 'warn';
 }
 
 /**
@@ -90,28 +98,33 @@ interface EnumFieldRule {
  *       其中 keyFlag 的中文名以代码/CSV 现实为准 = 「关键案例」（需求文档的「关键标识」为历史草稿用词）。
  */
 const ENUM_RULES: readonly EnumFieldRule[] = [
-    { yamlKey: 'type',       csvKey: '案例类型',   label: '案例类型',   readAllowed: () => getEnumValues('caseType'),  field: 'type',    severity: 'warn' },
-    { yamlKey: 'test_type',  csvKey: '执行方式',   label: '执行方式',   readAllowed: () => getEnumValues('testType'),  field: 'testType'},
-    { yamlKey: 'priority',   csvKey: '优先级',     label: '优先级',     readAllowed: () => getEnumValues('priority'),  field: 'priority'},
-    { yamlKey: 'key_flag',   csvKey: '关键案例',   label: '关键案例',   readAllowed: readKeyFlagValues,                field: 'keyFlag' },
+    { yamlKey: 'type',       csvKey: '案例类型', label: '案例类型', readAllowed: () => getEnumValues('caseType'), field: 'type',    severity: 'error', emptySeverity: 'warn' },
+    { yamlKey: 'test_type',  csvKey: '执行方式', label: '执行方式', readAllowed: () => getEnumValues('testType'), field: 'testType'},
+    { yamlKey: 'priority',   csvKey: '优先级',   label: '优先级',   readAllowed: () => getEnumValues('priority'), field: 'priority'},
+    { yamlKey: 'key_flag',   csvKey: '关键案例', label: '关键案例', readAllowed: readKeyFlagValues,               field: 'keyFlag' },
 ];
 
 /**
- * 从行对象读取"某枚举字段"的原始值（YAML 键优先，CSV 主列名兜底，兼容旧列名 csvKeyAlt）。
+ * 从行对象读取"某枚举字段"的原始值（YAML 键优先，CSV 主列名兜底）。
  * 值经过 trim；空值/undefined/null 返回空串（由调用方决定是否算命中）。
  */
 function readEnumRaw(row: RowLike, rule: EnumFieldRule): string {
-    const y = (row as any)?.[rule.yamlKey];
-    const c = (row as any)?.[rule.csvKey];
-    const cAlt = rule.csvKeyAlt ? (row as any)?.[rule.csvKeyAlt] : undefined;
-    // 优先级：YAML 英文键 > CSV 主列名 > CSV 兼容旧列名
-    let raw: any;
-    if (y !== undefined && y !== null && y !== '') raw = y;
-    else if (c !== undefined && c !== null && c !== '') raw = c;
-    else if (cAlt !== undefined && cAlt !== null && cAlt !== '') raw = cAlt;
-    else raw = (y !== undefined ? y : (c !== undefined ? c : cAlt));
-    if (raw === undefined || raw === null) return '';
-    return String(raw).trim();
+    // 候选键优先级：YAML 英文键 > CSV 主列名（规范键，线上无遗留变体表头文件，不再兼容别名列）
+    const keys: (string | undefined)[] = [
+        rule.yamlKey,
+        rule.csvKey,
+    ];
+    let lastDefined: any = undefined;
+    for (const k of keys) {
+        if (k == null) continue;
+        const v = (row as any)?.[k];
+        if (v !== undefined) {
+            lastDefined = v;
+            if (v !== null && v !== '') return String(v).trim();
+        }
+    }
+    if (lastDefined === undefined || lastDefined === null) return '';
+    return String(lastDefined).trim();
 }
 
 /**
@@ -120,10 +133,11 @@ function readEnumRaw(row: RowLike, rule: EnumFieldRule): string {
  * 而"字段存在但值为空串（`type: ""`）"仍会判为不合法，符合需求 2.3.3 语义。
  */
 function isEnumFieldAbsent(row: RowLike, rule: EnumFieldRule): boolean {
-    const y = (row as any)?.[rule.yamlKey];
-    const c = (row as any)?.[rule.csvKey];
-    const cAlt = rule.csvKeyAlt ? (row as any)?.[rule.csvKeyAlt] : undefined;
-    return y === undefined && c === undefined && cAlt === undefined;
+    const keys: (string | undefined)[] = [
+        rule.yamlKey,
+        rule.csvKey,
+    ];
+    return keys.every(k => k == null || (row as any)?.[k] === undefined);
 }
 
 /** 判断字符串值是否落在 allowed 集合内（严格相等，不做同义词/别名归一化）。 */
@@ -149,71 +163,135 @@ function isAllowedEnum(val: string, allowed: readonly string[]): boolean {
  * 与 check / checkMulti 共用，保证两条通路的判定逻辑严格一致。
  *   · hitLabels ：用于 reason 汇总话术（保持"命中即列全部"的旧口径）
  *   · hitFields ：每个命中字段的 PushInterfaceField，供 checkMulti 展开为多条 hit
+ *
+ * @param colPresent 各"两档字段"（type / key_flag）在文件中是否存在的标志表（key=接口字段码）。
+ *        某字段列存在（colPresent[field]===true）→ 严格校验：缺失 / 空串 / 取值非法 一律 error；
+ *        字段列缺失（colPresent[field] 缺省/false）→ 完全缺省的行跳过、空值按 emptySeverity 降级，
+ *        不阻断推送（与 missingColumns 的"文件级列缺失 warn"呼应，避免重复弹窗）。
+ *        test_type / priority 不受此标志影响，始终按各自 severity 处理。
  */
-function scanEnumFields(row: RowLike): { hitLabels: string[]; hitFields: PushInterfaceField[]; hitSeverities: Array<'error' | 'warn'> } {
+function scanEnumFields(row: RowLike, colPresent: Record<string, boolean>): { hitLabels: string[]; hitFields: PushInterfaceField[]; hitSeverities: Array<'error' | 'warn'> } {
     const hitLabels: string[] = [];
     const hitFields: PushInterfaceField[] = [];
     const hitSeverities: Array<'error' | 'warn'> = [];
     for (const rule of ENUM_RULES) {
-        if (isEnumFieldAbsent(row, rule)) continue; // 完全缺省 → 跳过（兼容旧文件）
-        const val = readEnumRaw(row, rule);
         const allowed = rule.readAllowed();
+        const isAbsent = isEnumFieldAbsent(row, rule);
+        // 两档分级字段（type / key_flag）：列存在即严格 —— 缺失 / 空 / 非法 全部 error。
+        if ((rule.field === 'type' || rule.field === 'keyFlag') && colPresent[rule.field]) {
+            const val = readEnumRaw(row, rule);
+            if (isAbsent || !isAllowedEnum(val, allowed)) {
+                const shown = isAbsent ? '缺失' : (val === '' ? '空' : `"${val}"`);
+                hitLabels.push(`${rule.label}=${shown}（应为 ${allowed.join('/')})`);
+                hitFields.push(rule.field);
+                hitSeverities.push('error');
+            }
+            continue;
+        }
+        // 其余字段 / type·keyFlag 列缺失场景：
+        //   · test_type / priority：始终按各自 severity（error，命中即剔除该行，无默认值）；
+        //   · type / keyFlag 在"列缺失"档下（规范列文件级缺失）：
+        //       - 空值 → 推送时按默认值兜底，完全跳过（不新增告警/失败，保护已有成功推送零回归）；
+        //       - 非空非法 → 仅 warn 提示、不阻断推送（让问题可见，但不影响原有推送结果）。
+        if (isAbsent) continue;
+        const val = readEnumRaw(row, rule);
         if (!isAllowedEnum(val, allowed)) {
+            const isTwoTier = rule.field === 'type' || rule.field === 'keyFlag';
+            // 两档字段别名列的空值：走默认值，完全跳过（保持已有推送行为）
+            if (isTwoTier && val === '') continue;
             const shown = val === '' ? '空' : `"${val}"`;
             hitLabels.push(`${rule.label}=${shown}（应为 ${allowed.join('/')})`);
             hitFields.push(rule.field);
-            hitSeverities.push(rule.severity ?? 'error');
+            // 两档字段别名列非法 → warn（非阻断）；test_type / priority → error（阻断，无默认值）
+            const sev = isTwoTier ? 'warn' : (rule.severity ?? 'error');
+            hitSeverities.push(sev);
         }
     }
     return { hitLabels, hitFields, hitSeverities };
 }
 
-export const ENUM_VALIDATOR: RowValidator = {
-    kind: 'enumInvalid',
-    severity: 'error',
-    check(row, tsId) {
-        const { hitLabels, hitFields, hitSeverities } = scanEnumFields(row);
-        if (hitLabels.length === 0) return null;
-        return {
-            tsId,
-            // 文案精简（2026-09-19）：去掉"案例存在枚举字段取值不合法，将导致推送校验失败："冗余前缀，
-            // 严重级与行为指引已由 05g 弹窗组头承载，bullet 只保留"字段错在哪"的事实。
-            reason: hitLabels.join('；'),
-            field: hitFields[0], // 兼容单值口径：primaryField = 第一个命中字段
-            // 按字段分级：全部命中均为 warn（如仅 type 非法）→ 整条 warn 软拦截；含任一 error 则保持 error
-            severity: hitSeverities.some(s => s === 'error') ? 'error' : 'warn',
-        };
-    },
-    /**
-     * B4 升级（2026-09-19 修复）：同行多个枚举字段命中时，为每个字段各产出一条 hit，
-     * 交由 runValidators 汇总为一条 failure + hits 数组，让前端能对每一列独立标红。
-     *
-     * 修复现象：CSV 表格中 `type` 和 `test_type` 同时非法时，此前仅取 primaryField='type'
-     *   导致只有「案例类型」列标红，「执行方式」列被吞掉。checkMulti 覆盖后两列均标红。
-     *
-     * 2026-09-19 · R2 增强："每一项各占一条 bullet" —— 除了 field 定位外，
-     *   还为每个 hit 附一条**只讲自身字段**的独立 reason（如「执行方式=... 应为 ...」），
-     *   前端 05g 弹窗按 hits[i].reason 逐条渲染 bullet，行号只在卡片头显示一次。
-     *   顶层 failure.reason 仍保留完整汇总句（用于埋点/落盘等旧口径消费方）。
-     */
-    checkMulti(row, tsId) {
-        const { hitLabels, hitFields, hitSeverities } = scanEnumFields(row);
-        if (hitLabels.length === 0) return [];
-        // 文案精简（2026-09-19）：所有 reason / singleReason 去掉"案例存在枚举字段取值不合法，将导致推送校验失败："冗余前缀。
-        // 汇总句仅保留字段级 label 用分号拼接（供顶层 failure.reason / 埋点消费）；单条 hit 只讲自身字段。
-        const summary = hitLabels.join('；');
-        return hitFields.map((field, i) => ({
-            tsId,
-            reason: i === 0 ? summary : hitLabels[i],
-            field,
-            // 按字段分级：type 命中为 warn（不剔除该行），其余字段为 error（runValidators 逐 hit 消费）
-            severity: hitSeverities[i],
-            // singleReason：与 reason 语义解耦 —— 无论 i 是否为 0，都提供一条"只讲自己"的话术，
-            // 前端渲染 bullet 时优先取 singleReason，保证第一条 bullet 也不会显示成汇总句。
-            singleReason: hitLabels[i],
-        }));
-    },
-};
+/**
+ * 构造枚举校验器。colPresent 由 runValidators 依据"整个文件是否含两档字段列"注入，
+ * 从而实现"列缺失→warn、列存在→严格 error"的两档分级（type / key_flag，CSV / YAML 同原则）。
+ */
+export function makeEnumValidator(colPresent: Record<string, boolean>): RowValidator {
+    return {
+        kind: 'enumInvalid',
+        severity: 'error',
+        check(row, tsId) {
+            const { hitLabels, hitFields, hitSeverities } = scanEnumFields(row, colPresent);
+            if (hitLabels.length === 0) return null;
+            return {
+                tsId,
+                // 文案精简（2026-09-19）：去掉"案例存在枚举字段取值不合法，将导致推送校验失败："冗余前缀，
+                // 严重级与行为指引已由 05g 弹窗组头承载，bullet 只保留"字段错在哪"的事实。
+                reason: hitLabels.join('；'),
+                field: hitFields[0], // 兼容单值口径：primaryField = 第一个命中字段
+                // 按字段分级：全部命中均为 warn（如仅 type 空值）→ 整条 warn 软拦截；含任一 error 则保持 error
+                severity: hitSeverities.some(s => s === 'error') ? 'error' : 'warn',
+            };
+        },
+        /**
+         * B4 升级（2026-09-19 修复）：同行多个枚举字段命中时，为每个字段各产出一条 hit，
+         * 交由 runValidators 汇总为一条 failure + hits 数组，让前端能对每一列独立标红。
+         *
+         * 2026-09-19 · R2 增强：为每个 hit 附一条"只讲自身字段"的独立 reason（singleReason），
+         *   前端 05g 弹窗按 hits[i].reason 逐条渲染 bullet，行号只在卡片头显示一次。
+         */
+        checkMulti(row, tsId) {
+            const { hitLabels, hitFields, hitSeverities } = scanEnumFields(row, colPresent);
+            if (hitLabels.length === 0) return [];
+            // 汇总句仅保留字段级 label 用分号拼接（供顶层 failure.reason / 埋点消费）；单条 hit 只讲自身字段。
+            const summary = hitLabels.join('；');
+            return hitFields.map((field, i) => ({
+                tsId,
+                reason: i === 0 ? summary : hitLabels[i],
+                field,
+                severity: hitSeverities[i],
+                // singleReason：与 reason 语义解耦 —— 无论 i 是否为 0，都提供一条"只讲自己"的话术，
+                // 前端渲染 bullet 时优先取 singleReason，保证第一条 bullet 也不会显示成汇总句。
+                singleReason: hitLabels[i],
+            }));
+        },
+    };
+}
+
+/**
+ * 整个文件中 type（案例类型）列是否"存在"。
+ *   · YAML：任一行含 `type` 键（值可空，只要键存在即视为列存在）；
+ *   · CSV ：任一行含「案例类型」列（parser 已把中文列名作为行对象 key）。
+ * 该判定只依赖行对象本身，无需 headers，便于 runValidators 在推送期 / 编辑期复用同一口径。
+ *
+ * 注意：此处只认规范键（type / 案例类型）。线上无遗留变体表头文件，仅以规范键判定列存在性。
+ */
+export function isTypeColumnPresent(rows: readonly RowLike[]): boolean {
+    for (const r of rows) {
+        if (r && typeof r === 'object') {
+            if ((r as any)['type'] !== undefined || (r as any)['案例类型'] !== undefined) return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * 整个文件中 key_flag（关键案例）列是否"存在"。判定口径同 isTypeColumnPresent：
+ *   · YAML：任一行含 `key_flag` 键；
+ *   · CSV ：任一行含「关键案例」列。
+ */
+export function isKeyFlagColumnPresent(rows: readonly RowLike[]): boolean {
+    for (const r of rows) {
+        if (r && typeof r === 'object') {
+            if ((r as any)['key_flag'] !== undefined || (r as any)['关键案例'] !== undefined) return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * 默认导出（colPresent 空表的宽容口径）—— 供单测直接调用 ENUM_VALIDATOR.check 时
+ * 保持"列缺失→跳过、空值→warn"的旧语义；真正的推/编辑期分级由 runValidators 注入。
+ */
+export const ENUM_VALIDATOR: RowValidator = makeEnumValidator({});
 
 // -----------------------------------------------------------------------------
 // 计划执行次数（plan_exec_num）—— 数据类型校验（B2 · error 级）

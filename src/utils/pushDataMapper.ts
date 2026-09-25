@@ -20,9 +20,9 @@
  *    testCasePath      ← path
  *    testCaseName      ← name              （案例名称）
  *    testCaseDes       ← description       （案例描述）
- *    testType          ← test_type / 执行方式（口语化输入自动归一化：'接口'→'接口自动化'、'界面'→'UI自动化'；其余命中白名单值保留，未填写或其它取值一律抛错，无默认值。白名单来自 testcaseViewer.enum.testType 配置）
- *    type              ← type 字段（2026-09-24：不再拦截 —— 空值省略该字段由后端默认值兜底，非空原样透传）
- *    priority          ← priority（严格白名单，来自 testcaseViewer.enum.priority；空值回退清单最后一项，非空非法抛错）
+ *    testType          ← test_type / 执行方式（口语化输入自动归一化：'接口'→'接口自动化'、'界面'→'UI自动化'；其余命中白名单值保留，未填写或其它取值一律抛错，无默认值）
+ *    type              ← type 字段（空 → '功能点类'；否则用用户传入值）
+ *    priority          ← priority
  *    preCondition      ← preconditions     （数组按 \n 拼为字符串）
  *    description(接口) ← 每个 step 拼为 operation + <br> + data
  *                        （data 多行用 <br> 连接，data 为空时仅输出 operation）
@@ -37,9 +37,9 @@
  *    testCasePath      ← 路径
  *    testCaseName      ← 名称
  *    testCaseDes       ← 案例描述
- *    testType          ← 执行方式（口语化输入自动归一化：'接口'→'接口自动化'、'界面'→'UI自动化'；其余命中白名单值保留，未填写或其它取值一律抛错，无默认值。白名单来自 testcaseViewer.enum.testType 配置）
- *    type              ← 案例类型（2026-09-24：不再拦截 —— 空值省略该字段由后端默认值兜底，非空原样透传）
- *    priority          ← 优先级（严格白名单，来自 testcaseViewer.enum.priority；空值回退清单最后一项，非空非法抛错）
+ *    testType          ← 执行方式（口语化输入自动归一化：'接口'→'接口自动化'、'界面'→'UI自动化'；其余命中白名单值保留，未填写或其它取值一律抛错，无默认值）
+ *    type              ← 案例类型（空 → '功能点类'）
+ *    priority          ← 优先级
  *    preCondition      ← 前置条件
  *    description(接口) ← 步骤描述（解析「步骤x[:：]\n内容」结构，按步骤号提取）
  *                        若文本不含「步骤N:」但非空，整段作为步骤1
@@ -57,7 +57,6 @@
  *       使用方需注意。
  * ============================================================================
  */
-import { getEnumValues } from './caseEnumValues';
 
 // ============================================================================
 // 结构化映射错误
@@ -79,7 +78,7 @@ import { getEnumValues } from './caseEnumValues';
 // ============================================================================
 export interface MapErrorFields {
     caseTag: string;
-    reason: 'missingTestcaseId' | 'missingOperation' | 'missingStepDesc' | 'missingExpected' | 'invalidPath' | 'invalidTestType' | 'invalidCaseType' | 'invalidPriority' | 'invalidKeyFlag';
+    reason: 'missingTestcaseId' | 'missingOperation' | 'missingStepDesc' | 'missingExpected' | 'invalidPath' | 'invalidTestType';
     stepIdx?: number;
     rowIndex?: number;
 }
@@ -163,8 +162,8 @@ export function joinLines(v: any): string {
     return toLines(v).join('\n');
 }
 
-// 「执行方式 / test_type」合法取值白名单：已迁移到 VSCode 配置 testcaseViewer.enum.testType，
-// 由 caseEnumValues.getEnumValues('testType') 动态读取（详见 utils/caseEnumValues.ts）。
+/** 「执行方式 / test_type」合法取值白名单 */
+const TEST_TYPE_VALUES = ['手工', 'UI自动化', '接口自动化', '自动化'];
 
 /**
  * 「执行方式 / test_type」口语化输入 → 标准值 的别名归一化。
@@ -202,58 +201,12 @@ function normalizeTestTypeInput(raw: any): string {
  * 即：所有不符合白名单的取值（含空）一律报错，不再有默认回退。
  */
 function resolveTestType(raw: any, caseTag: string, rowIndex?: number): string {
-    const values = getEnumValues('testType');
     const v = normalizeTestTypeInput(raw);
-    if (values.indexOf(v) !== -1) return v;
+    if (TEST_TYPE_VALUES.indexOf(v) !== -1) return v;
     const detail = v === '' ? '未填写' : `取值 "${v}" 不合法`;
     throw makeMapError(
-        `案例 [${caseTag}] 的「执行方式」${detail}，仅支持：${values.join(' / ')}（也可简写为「接口」/「界面」）。`,
+        `案例 [${caseTag}] 的「执行方式」${detail}，仅支持：${TEST_TYPE_VALUES.join(' / ')}（也可简写为「接口」/「界面」）。`,
         { caseTag, reason: 'invalidTestType', rowIndex }
-    );
-}
-
-/**
- * 「案例类型 / type」→ 接口 type（2026-09-24 需求调整：不再做推送硬拦截）：
- *   - 未填写 / 空值 / 仅空白 → 返回 undefined，载荷中省略 type 字段，由后端默认值兜底
- *     （caseList 经 JSON.stringify 序列化，undefined 键自动剔除）；
- *   - 非空 → 去空格后原样透传，取值合法性由行级 warn 软提示 + 后端最终判定兜底。
- */
-function resolveCaseType(raw: any): string | undefined {
-    const v = toStr(raw).trim();
-    return v === '' ? undefined : v;
-}
-
-/**
- * 校验「优先级 / priority」→ 接口 priority：
- *   - 空值 → 回退清单最后一项（默认「低」）
- *   - 非空但不在 testcaseViewer.enum.priority 清单 → 抛错（invalidPriority）
- *   - 命中清单 → 去空格后原样返回
- */
-function resolvePriority(raw: any, caseTag: string, rowIndex?: number): string {
-    const values = getEnumValues('priority');
-    const v = toStr(raw).trim();
-    if (v === '') return values[values.length - 1];
-    if (values.indexOf(v) !== -1) return v;
-    throw makeMapError(
-        `案例 [${caseTag}] 的「优先级」取值 "${v}" 不合法，仅支持：${values.join(' / ')}。`,
-        { caseTag, reason: 'invalidPriority', rowIndex }
-    );
-}
-
-/**
- * 校验「关键案例 / key_flag」→ 接口 keyFlag：
- *   - 空值 → 回退清单最后一项（默认「否」）
- *   - 非空但不在 testcaseViewer.enum.keyFlag 清单 → 抛错（invalidKeyFlag）
- *   - 命中清单 → 去空格后原样返回；严格匹配，不做 Y/N、true/false 别名归一化
- */
-function resolveKeyFlag(raw: any, caseTag: string, rowIndex?: number): string {
-    const values = getEnumValues('keyFlag');
-    const v = toStr(raw).trim();
-    if (v === '') return values[values.length - 1];
-    if (values.indexOf(v) !== -1) return v;
-    throw makeMapError(
-        `案例 [${caseTag}] 的「关键案例」取值 "${v}" 不合法，仅支持：${values.join(' / ')}。`,
-        { caseTag, reason: 'invalidKeyFlag', rowIndex }
     );
 }
 
@@ -441,12 +394,12 @@ function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> 
         testCaseName: fieldOrDefault(row, '名称', ''),
         testCaseDes:  unescapeCsvCell(row['案例描述']),
         testType,
-        type:         resolveCaseType(row['案例类型']),
-        priority:     resolvePriority(row['优先级'], caseTag, rowIndex),
+        type:         fieldOrDefault(row, '案例类型', '功能点类'),
+        priority:     fieldOrDefault(row, '优先级', '低'),
         preCondition: nl2br(unescapeCsvCell(row['前置条件'])),
         description,
         expected,
-        keyFlag: resolveKeyFlag(row['关键案例'], caseTag, rowIndex),
+        keyFlag: fieldOrDefault(row, '关键案例', '否'),
         projectDes: fieldOrDefault(row, '项目说明', ''),
         planExecNum: fieldOrDefault(row, '计划执行次数', 1)
     };
@@ -536,12 +489,12 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
         testCaseName: fieldOrDefault(row, 'name', ''),
         testCaseDes:  fieldOrDefault(row, 'description', ''),
         testType,
-        type:         resolveCaseType(row['type']),
-        priority:     resolvePriority(row['priority'], caseTag, rowIndex),
+        type:         fieldOrDefault(row, 'type', '功能点类'),
+        priority:     fieldOrDefault(row, 'priority', '低'),
         preCondition: nl2br(joinLines(row['preconditions'])),
         description,
         expected,
-        keyFlag: resolveKeyFlag(row['key_flag'], caseTag, rowIndex),
+        keyFlag: fieldOrDefault(row, 'key_flag', '否'),
         projectDes: fieldOrDefault(row, 'project_des', ''),
         planExecNum: fieldOrDefault(row, 'plan_exec_num', 1)
     };

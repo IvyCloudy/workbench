@@ -101,7 +101,7 @@ export const REQUIRED_FIELDS: RequiredFieldSpec[] = [
     },
     {
         label: '案例类型', yamlKey: 'type', csvHeader: '案例类型', location: 'top', severity: 'warn',
-        // 2026-09-24：type 缺失/取值非法均为 warn 软提示，不做推送拦截（映射层空值省略字段，由后端默认值兜底）
+        // 2026-09-24：type 列缺失 → warn 软提示（文件级，不阻断推送）；行内非空非法取值由枚举校验器按 error 硬拦截，空值按 warn 处理。映射层空值回退默认值「功能点类」。
         csvAliases: ['type', '用例类型'],
     },
     {

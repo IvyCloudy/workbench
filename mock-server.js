@@ -383,18 +383,24 @@ function handleRequest(req, res) {
                 console.log('  模拟失败: %d / %d 条 (DELETE_BODY_FAIL_RATIO=%s)', failCount, data.length, FAIL_RATIO);
             }
 
-            res.writeHead(200, {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'POST, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type'
-            });
             var responseBody = {
                 returnCode: 'SUC0000',
                 errorMsg: '',
                 body: resultBody
             };
-            res.end(JSON.stringify(responseBody));
+            // 显式写 Content-Length：VSCode 扩展宿主的 Node http 偶发 socket 劫持会丢 data 事件；
+            // 前端 makeRequest 依赖 Content-Length>0 才能触发 curl 兜底，否则会误解析为空对象 {}。
+            var _respStr = JSON.stringify(responseBody);
+            res.writeHead(200, {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Length': Buffer.byteLength(_respStr, 'utf8'),
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type'
+            });
+            res.end(_respStr);
+            console.log('  返回推送结果 ok=%d fail=%d 共 %d 条 bytes=%d',
+                data.length - failCount, failCount, data.length, Buffer.byteLength(_respStr, 'utf8'));
         });
     } else if ((req.method === 'DELETE' && req.url === '/api/v1/delete-testAgent-case') ||
                (req.method === 'POST' && req.url === '/test-task/delete-testcase')) {

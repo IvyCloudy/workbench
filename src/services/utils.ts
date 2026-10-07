@@ -145,7 +145,8 @@ document.querySelectorAll('button[data-act]').forEach(b => {
  */
 export function isInTempFolder(filePath: string): boolean {
     if (!filePath) return false;
-    const parts = filePath.split(path.sep);
+    // 同时兼容正斜杠（工作区相对路径）与平台分隔符（绝对路径），避免 Windows 下漏判。
+    const parts = filePath.split(/[\\/]/);
     // 末位是文件名，目录段为 parts[0..len-2]
     for (let i = 0; i < parts.length - 1; i++) {
         if (parts[i] === '临时文件') return true;
@@ -155,9 +156,13 @@ export function isInTempFolder(filePath: string): boolean {
 
 /**
  * 检查文件是否在合格目录下：
- *   .../测试任务/<任务目录>/测试案例/[...]/<file>
- * 任务目录只要是文件夹即可，不强制要求 <编号>_<名称> 格式。
- * 文件可直接放在 测试案例/ 目录下，也可放在其子目录中。
+ *   测试任务/<任务目录>/测试案例/[...]/<file>
+ * 层级严格从【打开的工作区文件夹】起算：
+ *   - 第 1 层必须是「测试任务」；
+ *   - 第 2 层是测试任务名称（任意文件夹名，不强制 <编号>_<名称> 格式）；
+ *   - 第 3 层必须是「测试案例」；
+ *   - 案例文件可直接放在「测试案例」目录下，也可放在其子目录中。
+ * 即入参 filePath 应为「相对工作区文件夹」的路径，且 parts[0]==='测试任务'、parts[2]==='测试案例'。
  *
  * 注意：位于「临时文件」文件夹（目录段精确等于「临时文件」）内的文件一律返回 false，
  *       不识别为测试案例（见 isInTempFolder 注释）。
@@ -170,31 +175,67 @@ export function isInQualifiedDir(filePath: string, filePattern: RegExp): boolean
     // 临时文件夹内的文件不识别为测试案例（编辑器 / 推送 / 批量推送均据此排除）。
     if (isInTempFolder(filePath)) return false;
 
-    const parts = filePath.split(path.sep);
+    // 兼容 mac/Windows 分隔符（与右键菜单 when 正则使用的 [\\/] 一致），并去掉可能的首部空段
+    // （绝对路径以分隔符开头会产生空段，但本函数期望接收「相对工作区文件夹」的路径）。
+    const parts = filePath.split(/[\\/]/).filter(Boolean);
     const len = parts.length;
     if (len < 4) return false;
 
-    // 动态查找 "测试任务" 的位置（不在固定倒数层级）
-    let rootIdx = -1;
-    for (let i = 0; i < len - 3; i++) {
-        if (parts[i] === '测试任务') {
-            rootIdx = i;
-            break;
-        }
-    }
-    if (rootIdx === -1) return false;
-
-    // rootIdx + 1 必须是任务目录（任意文件夹名）
-    const taskDir = parts[rootIdx + 1];
-    if (!taskDir) return false;
-
-    // rootIdx + 2 必须是 "测试案例"
-    const caseDir = parts[rootIdx + 2];
-    if (caseDir !== '测试案例') return false;
+    // 第 1 层必须是「测试任务」
+    if (parts[0] !== '测试任务') return false;
+    // 第 2 层是任务目录（任意名称）
+    if (!parts[1]) return false;
+    // 第 3 层必须是「测试案例」（不是则即使更深层存在合格三元组也不算，避免误判）
+    if (parts[2] !== '测试案例') return false;
 
     // 文件名匹配（文件可在 测试案例/ 目录或其子目录下）
     const lastPart = parts[len - 1];
     return filePattern.test(lastPart);
+}
+
+/**
+ * 为「不在合格目录下」的文件生成清晰的中文排查说明。
+ * @param relPath  相对打开的工作区根目录的路径（parts[0] 即第 1 层）。
+ * @param typeName 文件类型友好名（如 JSON / YAML / CSV），用于措辞。
+ *
+ * 说明会指出：要求的目录结构、当前文件相对工作区的完整路径、具体哪一层不合规，
+ * 以及常见误嵌套（路径中存在多个「测试任务」）提示，帮助用户自行定位问题。
+ */
+export function explainUnqualified(relPath: string, typeName: string): string {
+    const parts = relPath.split(/[\\/]/).filter(Boolean);
+    const currentPath = parts.length ? parts.join(' / ') : '(无法解析相对路径)';
+    const expected = '测试任务 / <任务文件夹> / 测试案例 / … / <文件>';
+
+    const issues: string[] = [];
+    if (parts.length < 4) {
+        issues.push(
+            `· 路径层级不足：至少需要「测试任务 / 任务文件夹 / 测试案例 / 文件」四层，当前只有 ${parts.length} 层。`
+        );
+    } else {
+        if (parts[0] !== '测试任务') {
+            issues.push(`· 第 1 层应为「测试任务」，当前为「${parts[0]}」。`);
+        }
+        if (parts[2] !== '测试案例') {
+            issues.push(`· 第 3 层应为「测试案例」，当前为「${parts[2]}」。`);
+        }
+    }
+    // 多个「测试任务」目录通常是文件夹被重复嵌套了一层，最容易被忽略
+    const dupTask = parts.filter(p => p === '测试任务').length > 1;
+    if (dupTask) {
+        issues.push('· 路径中存在多个「测试任务」目录，可能是文件夹被重复嵌套了一层。');
+    }
+
+    const header = `该 ${typeName} 文件不在案例目录规则内，无法用「测试案例编辑器」打开。`;
+    const structure = `要求的路径结构（相对打开的工作区根目录）：\n  ${expected}`;
+    const current = `当前文件相对工作区的路径：\n  ${currentPath}`;
+    const why = issues.length
+        ? '问题定位：\n' + issues.join('\n')
+        : '问题定位：\n  · 不符合「测试任务 / <任务文件夹> / 测试案例」层级。';
+    const hint = '排查建议：\n'
+        + '  · 将该文件移动到「测试任务 / 某任务 / 测试案例」目录下；\n'
+        + '  · 或在资源浏览器中右键文件，确认其处于正确目录后再「用测试案例编辑器打开」。';
+
+    return [header, '', structure, '', current, '', why, '', hint].join('\n');
 }
 
 // ============================================

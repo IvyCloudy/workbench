@@ -34,6 +34,17 @@ async function collectPushableFiles(dirOrFiles: vscode.Uri[]): Promise<{ uri: vs
     const result: { uri: vscode.Uri; relativePath: string }[] = [];
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 
+    // 严格的层级合规过滤：批量递归扫描时跳过层级错位文件（如 测试任务/测试任务/<任务>/测试案例/*.csv），
+    // 与右键菜单 when 子句 / FileTypeChecker.isQualifiedFile 的锚定口径保持一致。
+    // 单文件直接传入时也走同一过滤：由用户显式选择，不合格的在上游还会由 pushSingleFile 校验兜底。
+    const isQualified = (fullPath: string): boolean => {
+        try {
+            return FileTypeChecker.isQualifiedFile(vscode.Uri.file(fullPath)).qualified;
+        } catch (_) {
+            return false;
+        }
+    };
+
     for (const target of dirOrFiles) {
         const stats = await fs.promises.stat(target.fsPath);
         if (stats.isDirectory()) {
@@ -47,6 +58,9 @@ async function collectPushableFiles(dirOrFiles: vscode.Uri[]): Promise<{ uri: vs
                     const fullPath = path.join(target.fsPath, entry.name);
                     // 临时文件夹内的文件不识别为案例，批量推送时直接跳过（不作为失败项）。
                     if (isInTempFolder(fullPath)) continue;
+                    // 层级错位文件：同样当作"不识别为案例"直接跳过，而非作为失败项上报，
+                    // 避免用户选中外层文件夹时把嵌套错位目录下的文件混入批量结果。
+                    if (!isQualified(fullPath)) continue;
                     result.push({
                         uri: vscode.Uri.file(fullPath),
                         relativePath: workspaceRoot ? path.relative(workspaceRoot, fullPath) : entry.name,
@@ -61,6 +75,8 @@ async function collectPushableFiles(dirOrFiles: vscode.Uri[]): Promise<{ uri: vs
             const filePath = target.fsPath;
             // 临时文件夹内的文件不识别为案例，批量推送时直接跳过（不作为失败项）。
             if (isInTempFolder(filePath)) continue;
+            // 层级错位文件同样跳过，口径对齐递归分支。
+            if (!isQualified(filePath)) continue;
             result.push({
                 uri: target,
                 relativePath: workspaceRoot ? path.relative(workspaceRoot, filePath) : path.basename(filePath),

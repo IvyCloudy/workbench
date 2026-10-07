@@ -5,6 +5,7 @@ import { markAsCreatedByCommand } from '../utils/fileIdentifier';
 import { TelemetryService } from '../utils/telemetry';
 import { telemetryErrProps } from '../utils/extensionHelpers';
 import { showToast } from '../utils/message';
+import { FileTypeChecker } from '../providers/UnifiedEditorProvider';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
@@ -88,8 +89,15 @@ export async function handleCreateNewTestCase(
         baseDir = path.dirname(targetPath);
     }
 
-    if (!baseDir.includes('测试案例')) {
-        showToast(undefined, 'warning', '只能在测试案例目录或其子文件夹中创建新测试案例');
+    // 严格的层级合规校验：复用 FileTypeChecker.isQualifiedFile（锚定工作区根的
+    // 测试任务/<任务>/测试案例/ 三元组），避免历史 includes('测试案例') 的字符串匹配
+    // 把嵌套错位路径（如 测试任务/测试任务/<任务>/测试案例/）误判为合格。
+    // 构造探测 Uri：拼一个尚不存在的 .csv 假名喂给校验器，仅参与路径层级判断，不落盘。
+    const probeUri = vscode.Uri.file(path.join(baseDir, '__probe__.csv'));
+    const probe = FileTypeChecker.isQualifiedFile(probeUri);
+    if (!probe.qualified) {
+        showToast(undefined, 'warning', '只能在 测试任务/<任务文件夹>/测试案例/ 目录（或其子目录）下创建新测试案例');
+        TelemetryService.sendTelemetryEvent('createNewTestCase.aborted', { reason: 'dirNotQualified' });
         return;
     }
 

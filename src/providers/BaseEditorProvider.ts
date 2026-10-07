@@ -19,7 +19,7 @@
  */
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { getNonce, isInQualifiedDir, buildErrorHtml, FILE_PATTERNS, TS_ID_COLUMN, escapeHtml, formatLogTime, isInTempFolder } from '../services/utils';
+import { getNonce, isInQualifiedDir, FILE_PATTERNS, TS_ID_COLUMN, escapeHtml, formatLogTime, isInTempFolder } from '../services/utils';
 import { getCurrentTaskInfo, type CurrentTask } from '../utils/commands';
 import { showPushErrorModal, showPushResult, showPushDone, showModal } from '../utils/message';
 import { clearHighlight } from '../utils/highlightStore';
@@ -433,31 +433,14 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 this.redirectToTextEditor(document, webviewPanel, fileName, log);
                 return;
             }
-            // 其余不合格文件（含嵌套 测试任务、路径层级不对等）：渲染清晰报错页指出问题
-            // （哪一层不对 / 完整相对路径 / 排查建议，见 FileTypeChecker.getErrorMessage）。
-            // 说明：本扩展的 custom editor glob 仅匹配合格结构（测试任务/*/测试案例），
-            // 所以「双击」不满足要求的文件根本不会进入本编辑器（由 VS Code 默认文本打开）；
-            // 能到达这里的都是用户「显式 Open With > 测试案例编辑器」，应明确告知路径不满足要求。
-            TelemetryService.sendTelemetryEvent('editor.opened.unqualified', { targetFile: fileName });
-            log('⚠ unqualified, render error page');
-            webviewPanel.webview.html = buildErrorHtml(
-                this.getErrorMessage(resolved.type, relPath),
-                '不支持的文件',
-                [
-                    { label: '用文本编辑器打开', action: 'openTextEditor', primary: true }
-                ]
-            );
-            webviewPanel.webview.onDidReceiveMessage(async (m: any) => {
-                if (m?.type === 'openTextEditor') {
-                    TelemetryService.sendTelemetryEvent('editor.unqualified.openText', { targetFile: fileName });
-                    try { webviewPanel.dispose(); } catch (_) { /* ignore */ }
-                    try {
-                        const doc = await vscode.workspace.openTextDocument(document.uri);
-                        await vscode.window.showTextDocument(doc);
-                    } catch (_) { /* ignore */ }
-                }
-            });
-            webviewPanel.onDidDispose(() => log('🗑 disposed (error page)'));
+            // 其余不合格文件（含嵌套 测试任务、路径层级不对等）：静默切换到系统文本编辑器打开。
+            // 原因：custom editor 的 glob 匹配不够精细（如 `测试任务/测试任务/<任务>/测试案例/*.csv`
+            // 这类嵌套错位路径也会命中 glob），双击时会进入本 provider；若渲染错误页会让用户困惑。
+            // 这里直接复用 redirectToTextEditor，与「临时文件夹」路径一致，静默切换到默认文本编辑器，
+            // 不弹错误页、不打扰用户。
+            TelemetryService.sendTelemetryEvent('editor.opened.unqualified', { targetFile: fileName, relPath });
+            log('⚠ unqualified, redirect to default text editor | relPath=', relPath);
+            this.redirectToTextEditor(document, webviewPanel, fileName, log);
             return;
         }
 

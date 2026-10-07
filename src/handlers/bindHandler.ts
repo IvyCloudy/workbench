@@ -15,6 +15,8 @@ import {
     getPointOfCase,
 } from '../utils/pointCaseBindingStore';
 import { TelemetryService } from '../utils/telemetry';
+// 复用全链路同口径的层级判定（R6 严格锚定工作区根）
+import { FileTypeChecker } from '../providers/UnifiedEditorProvider';
 
 /**
  * 校验源文件是否符合规则并推断绑定方向。
@@ -43,9 +45,12 @@ function inferDirection(uri: vscode.Uri, expected: BindDirection): BindDirection
         }
         return 'point-to-cases';
     } else {
-        // case-to-points：要求 .csv/.yaml/.yml/.json 且在"测试案例"目录
-        if (!/\/测试任务\/[^\/]+\/测试案例\//.test(p)) {
-            showToast(undefined, 'warning', '"绑定测试要点"只能用于 测试案例 目录下的文件');
+        // case-to-points：要求 .csv/.yaml/.yml/.json 且在严格合规的「测试任务/<任务>/测试案例/」目录
+        // 口径对齐（2026-10-07 修复）：用 FileTypeChecker.isQualifiedFile 替代子串正则，
+        // 与推送、编辑器、新增案例、右键菜单 when 子句（R6 修复）完全同口径，
+        // 避免嵌套错位路径（如 测试任务/测试任务/<任务>/测试案例/x.csv）从命令面板漏入。
+        if (!FileTypeChecker.isQualifiedFile(uri).qualified) {
+            showToast(undefined, 'warning', '"绑定测试要点"只能用于合规的 测试任务/<任务>/测试案例/ 目录下的 .csv/.yaml/.json 文件');
             return null;
         }
         if (!['.csv', '.yaml', '.yml', '.json'].includes(ext)) {

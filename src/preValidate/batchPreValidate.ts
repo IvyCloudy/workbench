@@ -24,6 +24,7 @@
  * ============================================================================
  */
 import { classifyFailure } from '../utils/pushFailure/categoryClassify';
+import * as vscode from 'vscode';
 import { detectFileType, createParser } from '../parsers';
 import { FILE_PATTERNS, isInQualifiedDir } from '../services/utils';
 import { runValidatorsOnRowsPure } from './validators';
@@ -55,14 +56,19 @@ export interface BatchPreValidateFileResult {
  */
 function resolveTargetType(filePath: string): 'csv' | 'yaml' | 'json' | null {
     const lower = filePath.toLowerCase();
+    // 口径对齐（2026-10-07 修复）：isInQualifiedDir 要求 parts[0]==='测试任务'，
+    // 必须传"相对工作区根"的路径，不能是绝对路径；与 FileTypeChecker /
+    // editValidationHandler.resolveTargetType 共用同一转换，避免批量推送前
+    // 校验把合规文件误判为"不合规→skip"。
+    const relPath = vscode.workspace.asRelativePath(filePath, false);
     if (lower.endsWith('.yaml') || lower.endsWith('.yml')) {
-        return isInQualifiedDir(filePath, FILE_PATTERNS.YAML) ? 'yaml' : null;
+        return isInQualifiedDir(relPath, FILE_PATTERNS.YAML) ? 'yaml' : null;
     }
     if (lower.endsWith('.csv')) {
-        return isInQualifiedDir(filePath, FILE_PATTERNS.CSV) ? 'csv' : null;
+        return isInQualifiedDir(relPath, FILE_PATTERNS.CSV) ? 'csv' : null;
     }
     if (lower.endsWith('.json')) {
-        return isInQualifiedDir(filePath, FILE_PATTERNS.JSON) ? 'json' : null;
+        return isInQualifiedDir(relPath, FILE_PATTERNS.JSON) ? 'json' : null;
     }
     return null;
 }

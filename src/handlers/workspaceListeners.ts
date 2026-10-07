@@ -52,7 +52,7 @@ import {
 } from '../utils/pointCaseBindingStore';
 import { detectFileType, createParser } from '../parsers';
 import { syncDeletedRows } from '../utils/deletedRowsStore';
-import { TS_ID_COLUMN, isInTempFolder } from '../services/utils';
+import { TS_ID_COLUMN, isInTempFolder, isInQualifiedDir, FILE_PATTERNS } from '../services/utils';
 import { resolveTaskInfoOrNull } from './pushCore.stages';
 import { TelemetryService } from '../utils/telemetry';
 import { caseDeletionTelemetryProps } from '../utils/extensionHelpers';
@@ -89,17 +89,30 @@ function isBindingRelevant(fp: string): boolean {
 /**
  * 是否位于「测试任务/xxx/测试案例/」下且可解析为案例文件（csv/yaml/json）。
  *
- * 排除规则（与 services/utils.ts 的 isInQualifiedDir 对齐）：
+ * 排除规则（2026-10-07 修复：全链路口径统一）：
+ *   - **严格锚定工作区根**：复用 services/utils.ts 的 isInQualifiedDir，要求相对工作区根
+ *     的 parts[0]==='测试任务'、parts[2]==='测试案例'，与 FileTypeChecker.isQualifiedFile /
+ *     editValidationHandler.resolveTargetType / batchPreValidate.resolveTargetType / 右键菜单
+ *     when 子句（R6 修复）保持完全一致的口径。嵌套错位路径（如
+ *     「测试任务/测试任务/TT005/测试案例/x.csv」）不再被当作案例文件参与删除拦截/备份/TMS 同步。
  *   - 位于「临时文件」文件夹内的文件一律返回 false，不识别为测试案例；
  *   - 因此删除单个/批量/文件夹（含临时文件夹）都不会触发本插件的删除拦截确认，
  *     交给 VSCode 按普通文件正常删除，避免出现「临时文件误弹 TMS 同步确认」。
  */
 function isCaseFile(fp: string): boolean {
     if (!fp) return false;
-    const norm = fp.replace(/\\/g, '/');
-    if (!/\/测试任务\/[^/]+\/测试案例\//.test(norm)) return false;
+    const type = detectFileType(fp);
+    if (type === null) return false;
     if (isInTempFolder(fp)) return false;
-    return detectFileType(fp) !== null;
+    // 按文件类型选用对应的 FILE_PATTERNS，与 isInQualifiedDir 的 pattern 参数语义一致
+    const pattern = type === 'csv' ? FILE_PATTERNS.CSV
+        : type === 'yaml' ? FILE_PATTERNS.YAML
+        : type === 'json' ? FILE_PATTERNS.JSON
+        : null;
+    if (!pattern) return false;
+    // 必须传"相对工作区根"的路径；绝对路径会使 parts[0]='Users'/'home' 等 → 永远不合规
+    const relPath = vscode.workspace.asRelativePath(fp, false);
+    return isInQualifiedDir(relPath, pattern);
 }
 
 /**

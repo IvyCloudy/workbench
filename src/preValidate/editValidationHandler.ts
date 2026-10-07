@@ -107,17 +107,23 @@ export function setSuppressEditValidationPrompt(value: boolean): void {
  *   · .csv         → 'csv'
  *   · .json        → 'json'（2026-09-19 补齐 P1：需求 §2.2.1 / §3 明确 csv/json/yaml 三类均要参与）
  * 三类文件均要求位于「测试任务/<任务>/测试案例/」合规目录内，且不在「临时文件」文件夹下。
+ *
+ * 口径对齐（2026-10-07 修复）：isInQualifiedDir 自 R6 修复起要求 parts[0]==='测试任务'
+ * （严格锚定工作区根），因此传入必须是「相对工作区根」的路径，不能是绝对路径。
+ * 与 FileTypeChecker.isQualifiedFile 使用同一套 `asRelativePath(filePath, false)`
+ * 转换，保证"打开弹窗 / 编辑期高亮 / 右键菜单 / 推送前校验"全链路口径一致。
  */
 function resolveTargetType(filePath: string): FileType | null {
     const lower = filePath.toLowerCase();
+    const relPath = vscode.workspace.asRelativePath(filePath, false);
     if (lower.endsWith('.yaml') || lower.endsWith('.yml')) {
-        return isInQualifiedDir(filePath, FILE_PATTERNS.YAML) ? 'yaml' : null;
+        return isInQualifiedDir(relPath, FILE_PATTERNS.YAML) ? 'yaml' : null;
     }
     if (lower.endsWith('.csv')) {
-        return isInQualifiedDir(filePath, FILE_PATTERNS.CSV) ? 'csv' : null;
+        return isInQualifiedDir(relPath, FILE_PATTERNS.CSV) ? 'csv' : null;
     }
     if (lower.endsWith('.json')) {
-        return isInQualifiedDir(filePath, FILE_PATTERNS.JSON) ? 'json' : null;
+        return isInQualifiedDir(relPath, FILE_PATTERNS.JSON) ? 'json' : null;
     }
     return null;
 }

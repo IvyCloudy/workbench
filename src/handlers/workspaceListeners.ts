@@ -42,7 +42,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { isCreatedByCommand, markAsCreatedByCommand, unmarkAsCreatedByCommand } from '../utils/fileIdentifier';
+import { isCreatedByCommand, markAsCreatedByCommand, unmarkAsCreatedByCommand, isPlaceholderTsId } from '../utils/fileIdentifier';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { removeHighlightFile } from '../utils/highlightStore';
 import { cleanupCaseFileTraces } from '../utils/caseFileCleanup';
@@ -1149,7 +1149,9 @@ async function prepareCaseFileDecisionContext(
     }
 
     const rowTsIds: string[] = rows.map(r => (r[tsIdx] == null ? '' : String(r[tsIdx]).trim()));
-    const nonEmptyIds = rowTsIds.filter(Boolean);
+    // 排除样例占位：样例行的 testcase_id 是占位文案（如"案例唯一标识，不可修改"/"TESTCASE_ID"），
+    // 并非真实线上标识，不应触发线上删除/预检；仅含样例占位行（或全空）的文件视为"无需线上操作"，直接本地删除。
+    const nonEmptyIds = rowTsIds.filter(Boolean).filter(id => !isPlaceholderTsId(id));
 
     // 拉取测试任务信息（用于埋点 & 预检）
     const taskInfoResult = await resolveTaskInfoOrNull(filePath);

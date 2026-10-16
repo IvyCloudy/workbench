@@ -28,6 +28,7 @@ import * as path from 'path';
 import { getDeletedSnapshotIds, clearDeletedSnapshots, type DeletedRowInfo } from './pushSnapshotStore';
 import { deleteTestCase } from '../services/http';
 import { resolveTaskInfoOrNull } from '../handlers/pushCore.stages';
+import type { ResolveTaskInfoResult } from '../handlers/pushCore.types';
 import { TelemetryService } from './telemetry';
 
 // ============================================
@@ -233,6 +234,7 @@ export function refreshAndGetDeletedRows(
 export async function syncDeletedRows(
     filePath: string,
     tsIds?: string[],
+    options?: { isUnbound?: boolean },
 ): Promise<SyncDeletedResult> {
     if (!filePath) return { synced: [], failed: [], deletedSuccess: [], deletedSourceMissing: [] };
 
@@ -267,7 +269,11 @@ export async function syncDeletedRows(
         if (!cachedContext) {
             throw new Error('已删除行存储尚未初始化（请确认扩展已激活）');
         }
-        const taskInfo = await resolveTaskInfoOrNull(filePath);
+        // 透传优化：调用方已明确判定为「未绑定测试任务」（如批量删除时已知的 unbound 文件），
+        // 则跳过任务信息探查，直接进入本地清理分支，避免重复 resolveTaskInfoOrNull。
+        const taskInfo: ResolveTaskInfoResult = options?.isUnbound === true
+            ? { status: 'unbound' }
+            : await resolveTaskInfoOrNull(filePath);
         let resp: any = null;
         if (taskInfo.status === 'unbound') {
             // 未绑定测试任务：无线上接口可同步，按"本地清理"处理 ——

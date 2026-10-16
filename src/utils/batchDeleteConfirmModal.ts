@@ -63,6 +63,33 @@ export interface BatchDeleteFileEntry {
 }
 
 /**
+ * 批量删除确认弹窗两种形态（聚合 Tab / 整批本地删除）共用的「去弹窗化外壳」CSS。
+ *
+ * 两种形态都铺满整个 webview panel（不再浮在遮罩上的居中卡片），且 header 视觉规格
+ * 对齐 pushUI.ts 的 .summary-bar，故把这段完全相同的样式抽出来复用，避免两处重复维护。
+ * 各形态的差异样式（Tab 列表 / 文件清单等）在其 builder 内自行追加。
+ */
+function batchConfirmShellCss_(headerBg: string, color: string): string {
+    return `${baseModalCss_(headerBg, color, '')}
+    html,body{margin:0;padding:0;height:100%;background:var(--bg,#fff)}
+    .xs-modal-overlay{position:static;display:flex;flex-direction:column;background:transparent;align-items:stretch;justify-content:flex-start;height:100vh;min-height:100vh}
+    .xs-modal-dialog{width:100% !important;min-width:0 !important;max-width:none !important;height:100vh !important;max-height:100vh !important;border-radius:0;box-shadow:none;flex:1 1 auto}
+    .xs-modal-header{padding:16px 20px}
+    .xs-pr-icon{width:28px;height:28px;font-size:16px}
+    .xs-modal-title{font-size:15px}
+    .xs-bd-top{padding:12px 16px 8px;flex-shrink:0}
+    .xs-bd-risk{border:1px solid #ffd591;background:#fffbe6;border-radius:4px;padding:8px 12px}
+    .xs-bd-risk-strong{border-color:#ff7875;background:#fff1f0}
+    .xs-bd-risk-title{font-size:13px;font-weight:600;color:#d4380d;margin-bottom:4px}
+    .xs-bd-risk-list{margin:0;padding-left:20px;font-size:12px;color:#555;line-height:1.8}
+    .xs-bd-risk-list b{color:#d4380d;font-weight:700;font-size:15px;padding:0 2px}
+    .xs-bd-footer-hint{flex:1;font-size:12px;color:#888;line-height:1.6}
+    .xs-bd-footer-hint b{color:#d46b08}
+    .xs-btn[disabled]{opacity:.5;cursor:not-allowed;pointer-events:auto}
+    .xs-btn[disabled]:hover{background:${color};color:#fff}`;
+}
+
+/**
  * 构建「批量删除案例·聚合确认」独立 webview 弹窗 HTML。
  *
  * 布局（自适应）：
@@ -231,42 +258,12 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>批量删除案例</title>
 <style>
-${baseModalCss_(headerBg, color, '')}
-    /* ------------------------------------------------------------------ *
-     * 去弹窗化覆盖（本页专用）：与「批量删除结果」汇总面板一致，直接铺
-     * 满整个 webview panel，不再呈现"浮在遮罩上的居中卡片"。
-     * 因此上方 baseModalCss_ 的 dialogExtra 故意传空串——本页对 .xs-modal-dialog
-     * 的宽高会被下方规则以 !important 全量覆盖为 100%，再传任何尺寸约束都是无效字面量。
-     * 只覆盖 overlay/dialog 的定位与外观，保留 header/body/footer 的
-     * 内部布局与滚动逻辑；HTML 结构与 JS 交互（强制查看 + 倒计时 +
-     * postMessage）完全不变。
-     * ------------------------------------------------------------------ */
-    html,body{margin:0;padding:0;height:100%;background:var(--bg,#fff)}
-    .xs-modal-overlay{position:static;display:flex;flex-direction:column;background:transparent;align-items:stretch;justify-content:flex-start;height:100vh;min-height:100vh}
-    .xs-modal-dialog{width:100% !important;min-width:0 !important;max-width:none !important;height:100vh !important;max-height:100vh !important;border-radius:0;box-shadow:none;flex:1 1 auto}
-    /* ---------------------------------------------------------------- *
-     * Header 视觉规格对齐 pushUI.ts 的 .summary-bar（不复用 CSS，仅规格一致）
-     *   · padding：16px 20px（同 .summary-bar）
-     *   · 图标尺寸：28×28，font-size 16px（同 .summary-icon）
-     *   · 标题字号：15px（同 .summary-title）
-     * 保留 warning 语义配色（橙色感叹图标 + 浅米黄底），因为本页是"确认页"
-     * 而非"结果页"，不能切换到绿色/红色的结果语义。pushUI 若调整规格，人类
-     * 维护者应同步这三条。
-     * ---------------------------------------------------------------- */
-    .xs-modal-header{padding:16px 20px}
-    .xs-pr-icon{width:28px;height:28px;font-size:16px}
-    .xs-modal-title{font-size:15px}
+${batchConfirmShellCss_(headerBg, color)}
     /* 覆盖 baseModalCss_ 中的 body 内边距/滚动约束，让主体走自定义 flex 布局 */
     .xs-modal-body{flex:1;padding:0;min-height:60px;overflow:hidden;display:flex;flex-direction:column;gap:0}
     /* 顶部风险卡片区 */
-    .xs-bd-top{padding:12px 16px 8px;flex-shrink:0}
     .xs-bd-count{color:#d4380d;font-weight:700;font-size:15px;padding:0 2px}
     /* 风险置顶卡片 */
-    .xs-bd-risk{border:1px solid #ffd591;background:#fffbe6;border-radius:4px;padding:8px 12px}
-    .xs-bd-risk-strong{border-color:#ff7875;background:#fff1f0}
-    .xs-bd-risk-title{font-size:13px;font-weight:600;color:#d4380d;margin-bottom:4px}
-    .xs-bd-risk-list{margin:0;padding-left:20px;font-size:12px;color:#555;line-height:1.8}
-    .xs-bd-risk-list b{color:#d4380d;font-weight:700;font-size:15px;padding:0 2px}
     /* 主体：左栏 Tab + 右栏内容 */
     .xs-bd-main{flex:1;display:flex;flex-direction:row;min-height:200px;overflow:hidden;border-top:1px solid #e8e8e8}
     /* 左栏纵向 Tab 列表 */
@@ -471,6 +468,149 @@ ${baseModalCss_(headerBg, color, '')}
 }
 
 /**
+ * 构建「批量删除·整批本地删除」简化确认 HTML（F2 场景）。
+ *
+ * 适用：批量删除中整批都是「仅本地删除」类文件（未绑定测试任务的 unbound /
+ * 纯本地 hardDeleteOnly / 从未推送的 type=3），且至少含一个 unbound 文件。
+ *
+ * 与 buildBatchDeleteConfirmHtml（逐文件 Tab + 强制查看）不同，本弹窗把整批
+ * 聚合成一条「谨慎操作」整体提示（含文件总数与各分类计数 + 文件清单），
+ * 用户确认一次即对该批全部文件生效，无需逐个文件 Tab 查看/确认。
+ *
+ * 仅承载 N≥2 的整批本地删除路径；单文件（N=1）走 deleteConfirmModal.ts。
+ */
+export function buildLocalOnlyBatchConfirmHtml(entries: BatchDeleteFileEntry[]): string {
+    const color = MODAL_COLOR_WARNING;
+    const headerBg = MODAL_HEADER_BG_WARNING;
+    const ok = entries.filter(e => !e.precheckError);
+    const unboundCount = ok.filter(e => !!e.unbound).length;
+    const hardOnlyCount = ok.filter(e => !!e.hardDeleteOnly).length;
+    const type3Count = ok.filter(e => !!e.allType3).length;
+    // 用 ok（已剔除 precheckError）计数，使标题/谨慎提示的文件数与下方清单严格一致
+    const fileCount = ok.length;
+    const COUNTDOWN_SECS = 3;
+
+    const riskLines: string[] = [];
+    if (unboundCount > 0) {
+        riskLines.push(`<b>${unboundCount}</b> 个文件未绑定测试任务，仅本地删除、不同步 TMS`);
+    }
+    if (hardOnlyCount > 0) {
+        riskLines.push(`<b>${hardOnlyCount}</b> 个文件仅删除本地（无 TMS 同步）`);
+    }
+    if (type3Count > 0) {
+        riskLines.push(`<b>${type3Count}</b> 个文件所有案例均未推送 TMS（type=3，平台已不存在），将直接清理本地`);
+    }
+    const riskCard = `<div class="xs-bd-risk xs-bd-risk-strong">
+        <div class="xs-bd-risk-title">⚠ 谨慎操作</div>
+        <ul class="xs-bd-risk-list">${riskLines.map(t => `<li>${t}</li>`).join('')}</ul>
+        <div class="xs-bd-risk-note">本批共 <b>${fileCount}</b> 个文件，确认后仅删除本地、不同步 TMS 平台，且不可恢复。</div>
+    </div>`;
+
+    const fileListHtml = ok.length > 0
+        ? `<div class="xs-lo-list">${ok.map(e => {
+            const tag = e.unbound ? '未绑定' : (e.hardDeleteOnly ? '仅本地' : (e.allType3 ? 'type=3' : '本地'));
+            const tagCls = e.unbound ? 'unbound' : (e.hardDeleteOnly ? 'hard' : (e.allType3 ? 'type3' : 'local'));
+            return `<div class="xs-lo-item">`
+                + `<span class="xs-lo-name" title="${escapeHtml_(e.filePath || e.fileName)}">${escapeHtml_(e.fileName)}</span>`
+                + `<span class="xs-lo-tag xs-lo-tag-${tagCls}">${tag}</span>`
+                + `</div>`;
+        }).join('')}</div>`
+        : '';
+
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>批量删除案例</title>
+<style>
+${batchConfirmShellCss_(headerBg, color)}
+    .xs-modal-body{flex:1;padding:0;min-height:60px;display:flex;flex-direction:column;gap:0}
+    .xs-bd-risk-note{margin-top:6px;font-size:12px;color:#555;line-height:1.7}
+    .xs-bd-risk-note b{color:#d4380d;font-weight:700;font-size:15px;padding:0 2px}
+    .xs-lo-list{flex:1;overflow:auto;padding:10px 16px;border-top:1px solid #e8e8e8;background:#fff}
+    .xs-lo-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px}
+    .xs-lo-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#333;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace}
+    .xs-lo-tag{flex-shrink:0;font-size:11px;color:#888;background:#fafafa;border:1px solid #e8e8e8;border-radius:2px;padding:1px 8px}
+    .xs-lo-tag-unbound{color:#d46b08;background:#fff7e6;border-color:#ffd591}
+    .xs-lo-tag-hard{color:#595959;background:#fafafa;border-color:#e8e8e8}
+    .xs-lo-tag-type3{color:#8c8c8c;background:#fafafa;border-color:#e8e8e8}
+</style>
+</head>
+<body>
+<div class="xs-modal-overlay" id="overlay">
+    <div class="xs-modal-dialog">
+        <div class="xs-modal-header">
+            <span class="xs-pr-icon">!</span>
+            <span class="xs-modal-title">删除案例 — 共 ${fileCount} 个文件（仅本地删除）</span>
+        </div>
+        <div class="xs-modal-body">
+            <div class="xs-bd-top">
+                ${riskCard}
+            </div>
+            ${fileListHtml}
+        </div>
+        <div class="xs-modal-footer">
+            <div class="xs-bd-footer-hint" id="hint">以下文件确认后将仅本地删除，不可恢复。</div>
+            <button class="xs-btn" id="cancelBtn">取消</button>
+            <button class="xs-btn xs-btn-p" id="okBtn" disabled>确定删除</button>
+        </div>
+    </div>
+</div>
+<script>
+    (function(){
+        var vscode = acquireVsCodeApi();
+        var settled = false;
+        var okBtn = document.getElementById('okBtn');
+        var cancelBtn = document.getElementById('cancelBtn');
+        var hint = document.getElementById('hint');
+        var countdownSecs = ${COUNTDOWN_SECS};
+        var countdownTimer = null;
+        var remainSecs = countdownSecs;
+        var canFinalize = false;
+        function startCountdown(){
+            if(countdownTimer || canFinalize) return;
+            remainSecs = countdownSecs;
+            okBtn.disabled = true;
+            okBtn.textContent = '确定删除（' + remainSecs + 's）';
+            hint.innerHTML = '倒计时结束后可点击「确定删除」（不可恢复）。';
+            countdownTimer = setInterval(function(){
+                remainSecs--;
+                if(remainSecs <= 0){
+                    clearInterval(countdownTimer);
+                    countdownTimer = null;
+                    canFinalize = true;
+                    okBtn.disabled = false;
+                    okBtn.textContent = '确定删除';
+                    hint.innerHTML = '删除不可恢复，请确认后点击「确定删除」。';
+                    try{ okBtn.focus(); }catch(e){}
+                } else {
+                    okBtn.textContent = '确定删除（' + remainSecs + 's）';
+                }
+            }, 1000);
+        }
+        function done(v){
+            if(settled) return;
+            if(v && !canFinalize) return;
+            settled = true;
+            if(countdownTimer){ clearInterval(countdownTimer); countdownTimer=null; }
+            vscode.postMessage({type:'deleteConfirmResult', confirmed:v});
+        }
+        okBtn.onclick = function(){ done(true); };
+        cancelBtn.onclick = function(){ done(false); };
+        document.addEventListener('keydown',function(e){
+            if(e.key==='Escape'){ e.preventDefault(); done(false); }
+            else if(e.key==='Enter'){ if(canFinalize){ e.preventDefault(); done(true); } }
+        });
+        startCountdown();
+        try{ cancelBtn.focus(); }catch(e){}
+    })();
+</script>
+</body>
+</html>`;
+}
+
+/**
  * 展示「批量删除案例·聚合确认」面板（编辑器活动列的 Webview Panel），
  * 返回 Promise 等待用户选择。
  *
@@ -488,6 +628,7 @@ ${baseModalCss_(headerBg, color, '')}
  */
 export function showBatchDeleteConfirmModal(
     entries: BatchDeleteFileEntry[],
+    options?: { aggregated?: boolean },
     token?: vscode.CancellationToken,
 ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
@@ -508,7 +649,7 @@ export function showBatchDeleteConfirmModal(
         }
 
         try {
-            panel.webview.html = buildBatchDeleteConfirmHtml(entries);
+            panel.webview.html = (options?.aggregated ? buildLocalOnlyBatchConfirmHtml : buildBatchDeleteConfirmHtml)(entries);
         } catch (err: any) {
             console.error('[showBatchDeleteConfirmModal] html 构建失败:', err?.message || err);
             try { panel.dispose(); } catch { /* ignore */ }

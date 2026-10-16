@@ -46,6 +46,7 @@ import { isCreatedByCommand, markAsCreatedByCommand, unmarkAsCreatedByCommand, i
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { removeHighlightFile } from '../utils/highlightStore';
 import { cleanupCaseFileTraces } from '../utils/caseFileCleanup';
+import { isDeleteSuppressed } from '../utils/caseDeleteGuard';
 import {
     renamePathInBindings,
     removePathInBindings,
@@ -296,6 +297,12 @@ export function registerWorkspaceListeners(context: vscode.ExtensionContext): vs
 
             for (const file of event.files) {
                 const fp = file.fsPath;
+                // 要点删除发起的"可恢复删除"：抑制插件拦截（不备份 / 不还原 / 不弹框），
+                // 文件干净地进回收站，绑定清理由 pointCaseDeleter 自己负责
+                if (isDeleteSuppressed(fp)) {
+                    console.log('[workspaceListeners] 跳过删除拦截（要点删除发起的可恢复删除）:', fp);
+                    continue;
+                }
                 // 情形 A：明确的案例文件 —— 直接备份
                 if (isCaseFile(fp)) {
                     scheduleBackup(fp);
@@ -340,6 +347,8 @@ export function registerWorkspaceListeners(context: vscode.ExtensionContext): vs
             const folderPrefixes: string[] = [];
             for (const file of event.files) {
                 const fp = file.fsPath;
+                // 要点删除发起的"可恢复删除"：抑制插件拦截，避免还原 / 弹确认框，绑定清理由 pointCaseDeleter 负责
+                if (isDeleteSuppressed(fp)) continue;
                 if (isCreatedByCommand(fp)) {
                     unmarkAsCreatedByCommand(fp);
                 }
@@ -652,10 +661,15 @@ async function handleCaseFilesDidDelete(
     // 若整批仅由这两者构成（无任何需同步 / 预检失败文件）→ 整批跳过确认窗、直接删除，
     // 与编辑器内 / 单文件删除的 skipConfirm 行为一致；
     // 但若本批存在上述需确认文件，则 hardDeleteOnly 与 type=3 文件仍纳入弹窗逐个说明（每个文件去向说清楚）。
-    const hasSyncFile = needConfirmCtxs.some(c => c.stage === 'needConfirm' && !c.skipConfirm);
+    // 需同步 TMS 的文件 = 预检通过且既非未绑定任务(unbound)、也非 type=3（从未推送）的文件。
+    // 注意：排除 unbound —— 未绑定任务的文件只做本地删除、不同步 TMS，
+    // 不应再被当成"需同步文件"触发逐 Tab 确认（F2：整批未绑定文件应聚合为一条整体提示）。
+    const hasNeedTms = needConfirmCtxs.some(c => c.stage === 'needConfirm' && !c.unbound && !c.skipConfirm);
     const hasPrecheckFailed = precheckFailedCtxs.length > 0;
-    const needModal = hasSyncFile || hasPrecheckFailed;
-    const type3Entries: BatchDeleteFileEntry[] = needModal
+    const needModal = hasNeedTms || hasPrecheckFailed;
+    // 本批是否含未绑定测试任务文件（用于触发 F2 整批本地删除简化确认）
+    const hasUnboundInBatch = needConfirmCtxs.some(c => c.stage === 'needConfirm' && !!c.unbound);
+    const type3Entries: BatchDeleteFileEntry[] = (needModal || hasUnboundInBatch)
         ? needConfirmCtxs
             .filter((c): c is Extract<CaseFileDecisionContext, { stage: 'needConfirm' }> =>
                 c.stage === 'needConfirm' && !!c.skipConfirm)
@@ -709,6 +723,10 @@ async function handleCaseFilesDidDelete(
     // hardDeleteOnly / type=3 文件本身不触发弹窗——整批仅含这两者时跳过弹窗、直接删除；
     // 混合批量（含需同步 / 预检失败文件）时二者仍在 batchEntries 中、弹窗逐个说清楚。
     const needConfirmModal = needModal;
+    // F2：整批都是「仅本地删除」类文件（unbound / hardDeleteOnly / type=3）且至少含一个未绑定任务文件时，
+    // 不弹逐文件 Tab 的聚合确认，改用「整批本地删除」简化确认（一条谨慎操作提示 + 文件总数 + 文件清单，一次确认）。
+    // 该分支仅在"无需要同步 TMS 的文件、无预检失败"时才成立（否则走上方 needConfirmModal 分支）。
+    const useLocalOnlyModal = !allPrecheckFailed && !needConfirmModal && hasUnboundInBatch;
     let confirmed = true;
     if (allPrecheckFailed) {
         // 全部预检失败：reopen 所有文件，跳过 Step 6-9（无需确认、无需真删/线上删除）
@@ -716,11 +734,17 @@ async function handleCaseFilesDidDelete(
             if (c.entry.wasOpen) await reopenCaseFile(c.entry.filePath);
         }
     } else if (needConfirmModal) {
-        // Step 6: 弹聚合确认弹窗
+        // Step 6: 弹聚合确认弹窗（逐文件 Tab + 强制查看，用于含需同步 TMS / 预检失败文件的高风险批量）
         console.log('[workspaceListeners] 即将打开批量确认弹窗，batchEntries=', batchEntries.length,
             'items=', batchEntries.map(e => `${e.fileName}(cases=${e.caseCount},linked=${(e.items||[]).length},fail=${e.precheckError?'Y':'N'})`).join(' | '));
         confirmed = await showBatchDeleteConfirmModal(batchEntries);
         console.log('[workspaceListeners] 批量确认弹窗结束，confirmed=', confirmed);
+    } else if (useLocalOnlyModal) {
+        // Step 6b: F2 整批本地删除简化确认（未绑定任务等仅本地删除文件聚合为一条整体提示，一次确认、无需逐 Tab 查看）
+        console.log('[workspaceListeners] 即将打开整批本地删除简化确认弹窗（F2），batchEntries=', batchEntries.length,
+            'items=', batchEntries.map(e => `${e.fileName}(unbound=${e.unbound?'Y':'N'},hard=${e.hardDeleteOnly?'Y':'N'},type3=${e.allType3?'Y':'N'})`).join(' | '));
+        confirmed = await showBatchDeleteConfirmModal(batchEntries, { aggregated: true });
+        console.log('[workspaceListeners] 整批本地删除简化确认弹窗结束，confirmed=', confirmed);
     }
 
     if (!confirmed) {
@@ -1309,7 +1333,7 @@ async function finalizeCaseFileAfterUserConfirm(
 
     let syncResult: { synced: string[]; failed: Array<{ tsId: string; reason: string }>; deletedSuccess: string[]; deletedSourceMissing: string[]; localOnly?: boolean };
     try {
-        syncResult = await syncDeletedRows(filePath, nonEmptyIds);
+        syncResult = await syncDeletedRows(filePath, nonEmptyIds, { isUnbound: ctx.unbound });
     } catch (err: any) {
         // 接口整体异常：保留文件、reopen、弹失败结果
         const idToRowIndex = new Map<string, number>();

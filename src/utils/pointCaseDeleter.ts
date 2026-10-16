@@ -65,6 +65,7 @@ import { getCaseOfPoint } from './pointCaseBindingStore';
 import { buildSnapshotsForFile, savePushSnapshotPrepared } from './pushSnapshotStore';
 import { clearHighlight } from './highlightStore';
 import { cleanupCaseFileTraces } from './caseFileCleanup';
+import { deleteCaseFileRecoverable } from './caseFileRecoverableDelete';
 import { withFileLock } from './asyncLock';
 import { createLogger } from './logger';
 import { TS_ID_COLUMN } from '../services/utils';
@@ -539,15 +540,20 @@ async function deleteCasesFromCaseFileMulti(
     const remainingRecords = totalRecords - deletedCases.length;
 
     // ---- 3.5) 若删除后案例文件已空（remainingRecords===0），则整体删除该文件 ----
+    //   删除走 deleteCaseFileRecoverable（移到回收站，复用原生 Move to Trash，
+    //   F4：避免"通过要点清空案例文件"时静默永久丢失、且可像直接删除一样从回收站找回），
     //   并清理其绑定关系 + 所有相关追踪存储，避免出现"幽灵案例文件/绑定"。
     if (remainingRecords === 0) {
         let fileDeleted = false;
         let fileDeleteError = '';
         try {
-            await fs.promises.unlink(casePath);
-            fileDeleted = true;
+            // 可恢复删除（F4）：移到回收站（复用 VS Code 原生 Move to Trash，
+            // 与"资源管理器直接删除"一致、可找回）；trash 不可用时降级物理删除。
+            const delRes = await deleteCaseFileRecoverable(casePath);
+            fileDeleted = delRes.deleted;
+            fileDeleteError = delRes.error ?? '';
         } catch (err: any) {
-            // 文件已不存在 / 无权限等：记录但不阻断（继续清理绑定与缓存）
+            // deleteCaseFileRecoverable 内部已兜底，理论上不会抛；此处仅双保险
             fileDeleteError = err?.message || String(err);
             logger.warn('删除空的案例文件失败（不影响绑定清理）', err?.message);
         }

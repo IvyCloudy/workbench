@@ -38,6 +38,7 @@ export class CsvFileParser implements FileParser {
             TelemetryService.sendTelemetryErrorEvent('parser.parseFailed', buildErrorProps(e, {
                 fileFormat: 'csv',
                 fileName: path.basename(filePath),
+                filePath: path.basename(filePath),
                 line,
                 column,
                 source: detectParseSource(),

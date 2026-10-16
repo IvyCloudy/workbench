@@ -105,6 +105,7 @@ export class JsonFileParser implements FileParser {
             TelemetryService.sendTelemetryErrorEvent('parser.parseFailed', buildErrorProps(e, {
                 fileFormat: 'json',
                 fileName: path.basename(filePath),
+                filePath: path.basename(filePath),
                 line,
                 column,
                 source: detectParseSource(),

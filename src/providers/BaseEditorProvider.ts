@@ -157,7 +157,7 @@ export class PushViaHttpClient implements PushStrategy {
             }
         } catch (parseErr: any) {
             console.warn('[推送] 重新解析文件失败，使用前端数据兜底:', parseErr?.message || parseErr);
-            TelemetryService.sendTelemetryErrorEvent('editorPush.reparseFailed', buildErrorProps(parseErr, { ext }));
+            TelemetryService.sendTelemetryErrorEvent('editorPush.reparseFailed', buildErrorProps(parseErr, { ext, filePath: path.basename(ctx.filePath) }));
         }
         return pushData;
     }
@@ -326,7 +326,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         const timeoutPromise = new Promise<void>((_, reject) => {
             timer = setTimeout(() => {
                 timer = null;
-                TelemetryService.sendTelemetryErrorEvent('editor.waitReady.timeout', { targetFile: filePath });
+                TelemetryService.sendTelemetryErrorEvent('editor.waitReady.timeout', { targetFile: path.basename(filePath), filePath: path.basename(filePath) });
                 reject(new Error('等待 webview 就绪超时'));
             }, timeoutMs);
         });
@@ -500,7 +500,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         try {
             await vscode.commands.executeCommand('workbench.action.keepEditor');
         } catch (e: any) {
-            TelemetryService.sendTelemetryErrorEvent('editor.keepEditor.failed', buildErrorProps(e));
+            TelemetryService.sendTelemetryErrorEvent('editor.keepEditor.failed', buildErrorProps(e, { filePath: fileName }));
         }
 
         // 先识别文件类型；不合格时渲染清晰报错页
@@ -517,7 +517,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             // 注册了 priority=default 的 custom editor，openWith('default') 会再次路由回本
             // custom editor，造成 dispose↔resolve 死循环。
             if (isInTempFolder(document.uri.fsPath)) {
-                TelemetryService.sendTelemetryEvent('editor.opened.tempFolder', { targetFile: fileName });
+                TelemetryService.sendTelemetryEvent('editor.opened.tempFolder', { targetFile: fileName, filePath: fileName });
                 log('⚠ 位于「临时文件」文件夹，改用文本编辑器打开');
                 this.redirectToTextEditor(document, webviewPanel, fileName, log);
                 return;
@@ -527,7 +527,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             // 这类嵌套错位路径也会命中 glob），双击时会进入本 provider；若渲染错误页会让用户困惑。
             // 这里直接复用 redirectToTextEditor，与「临时文件夹」路径一致，静默切换到默认文本编辑器，
             // 不弹错误页、不打扰用户。
-            TelemetryService.sendTelemetryEvent('editor.opened.unqualified', { targetFile: fileName, relPath });
+            TelemetryService.sendTelemetryEvent('editor.opened.unqualified', { targetFile: fileName, relPath, filePath: fileName });
             log('⚠ unqualified, redirect to default text editor | relPath=', relPath);
             this.redirectToTextEditor(document, webviewPanel, fileName, log);
             return;
@@ -652,7 +652,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             try {
                 // 自身刚落盘 800ms 内的可见切换没必要重读，缓存即为最新
                 if (Date.now() - lastSelfSaveAt < SELF_SAVE_GUARD_MS) {
-                    TelemetryService.sendTelemetryEvent('editor.visibleChange.skipped', { reason: 'selfSaveGuard', fileFormat: session.type });
+                    TelemetryService.sendTelemetryEvent('editor.visibleChange.skipped', { reason: 'selfSaveGuard', fileFormat: session.type, filePath: fileName });
                     await pushDataToWebview(false, 'visible');
                     return;
                 }
@@ -661,7 +661,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                 await pushDataToWebview(true, 'visible', true);
             } catch (err: any) {
                 log('❌ visible-reload failed:', err?.message || err);
-            TelemetryService.sendTelemetryErrorEvent('editor.visibleChange.failed', buildErrorProps(err, { fileFormat: session.type }));
+            TelemetryService.sendTelemetryErrorEvent('editor.visibleChange.failed', buildErrorProps(err, { fileFormat: session.type, filePath: fileName }));
                 // 兜底：解析失败时仍按缓存推送一次，保证前端有数据
                 try { await pushDataToWebview(false, 'visible'); } catch (_) { /* ignore */ }
             }

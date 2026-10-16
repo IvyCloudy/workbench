@@ -146,7 +146,7 @@ async function handleInit(_msg: any, ctx: EditorMsgCtx): Promise<void> {
     });
     ctx.registerHeaderLabelsSubs(_hlSubs);
     try { ctx.onReady(); } catch (_) { /* ignore */ }
-    TelemetryService.sendTelemetryEvent('editor.opened', { fileFormat: ctx.session.type });
+    TelemetryService.sendTelemetryEvent('editor.opened', { fileFormat: ctx.session.type, filePath: path.basename(ctx.getFilePath()) });
 }
 
 async function handleSave(msg: any, ctx: EditorMsgCtx): Promise<void> {
@@ -206,6 +206,7 @@ async function handleSave(msg: any, ctx: EditorMsgCtx): Promise<void> {
     const _modifiedCells = diffStats?.modifiedCells ?? 0;
     TelemetryService.sendTelemetryEvent('editor.saved', {
         fileFormat: ctx.session.type,
+        filePath: path.basename(ctx.getFilePath()),
         rows: String(_inRows),
         cols: String(_inHeaders),
         costMs: String(_saveDur),
@@ -254,7 +255,7 @@ async function handlePushTestCase(msg: any, ctx: EditorMsgCtx): Promise<void> {
 }
 
 async function handleOpenTextEditor(_msg: any, ctx: EditorMsgCtx): Promise<void> {
-    TelemetryService.sendTelemetryEvent('editor.switchedToText', { fileFormat: ctx.session.type });
+    TelemetryService.sendTelemetryEvent('editor.switchedToText', { fileFormat: ctx.session.type, filePath: path.basename(ctx.getFilePath()) });
     await vscode.commands.executeCommand('vscode.openWith', ctx.documentUri, 'default');
 }
 
@@ -264,7 +265,7 @@ async function handleReload(_msg: any, ctx: EditorMsgCtx): Promise<void> {
     ctx.log('📨 reload from webview');
     ctx.session.cachedTableData = null;
     await ctx.pusher.push(true, 'reload', true);
-    TelemetryService.sendTelemetryEvent('editor.reloaded', { fileFormat: ctx.session.type });
+    TelemetryService.sendTelemetryEvent('editor.reloaded', { fileFormat: ctx.session.type, filePath: path.basename(ctx.getFilePath()) });
 }
 
 async function handleMark(msg: any, ctx: EditorMsgCtx): Promise<void> {
@@ -617,6 +618,7 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
         console.error('[editor.deleteRows] 同步失败:', err?.message || err);
         TelemetryService.sendTelemetryErrorEvent('editor.deleteRows.error', buildErrorProps(err, {
             fileFormat: ctx.session.type,
+            filePath: path.basename(ctx.getFilePath()),
             errorMessage: String(err?.message || String(err)).slice(0, 500),
         }));
         // 兜底：把本次删除的所有 tsId 作为「失败」回传给前端，避免行永远停在
@@ -655,19 +657,19 @@ async function handleDispatchError(err: any, msg: any, ctx: EditorMsgCtx): Promi
     const errMsg = err?.message || String(err) || '操作失败';
     const kind = msg?.type || '';
     TelemetryService.sendTelemetryErrorEvent('editor.message.error', buildErrorProps(err, {
-        messageKind: kind, fileFormat: ctx.session.type, errorMessage: errMsg.slice(0, 500),
+        messageKind: kind, fileFormat: ctx.session.type, filePath: path.basename(ctx.getFilePath()), errorMessage: errMsg.slice(0, 500),
     }));
     if (kind === 'save') {
-        TelemetryService.sendTelemetryErrorEvent('editor.save.error', { fileFormat: ctx.session.type, errorMessage: errMsg.slice(0, 500) });
+        TelemetryService.sendTelemetryErrorEvent('editor.save.error', { fileFormat: ctx.session.type, filePath: path.basename(ctx.getFilePath()), errorMessage: errMsg.slice(0, 500) });
         ctx.webviewPanel.webview.postMessage({ type: 'saveError', message: errMsg });
     } else if (kind === 'pushTestCase') {
-        TelemetryService.sendTelemetryErrorEvent('editor.push.error', { fileFormat: ctx.session.type, errorMessage: errMsg.slice(0, 500) });
+        TelemetryService.sendTelemetryErrorEvent('editor.push.error', { fileFormat: ctx.session.type, filePath: path.basename(ctx.getFilePath()), errorMessage: errMsg.slice(0, 500) });
         showPushErrorModal(ctx.webviewPanel, path.basename(ctx.getFilePath()), errMsg);
         ctx.webviewPanel.webview.postMessage({ type: 'pushError', message: errMsg });
     }
     // 网络类错误：展示更友好的操作按钮
     if (kind === 'pushTestCase' && /无法连接后端服务|连接.*超时|连接被重置/.test(errMsg)) {
-        TelemetryService.sendTelemetryErrorEvent('editor.network.error', { fileFormat: ctx.session.type });
+        TelemetryService.sendTelemetryErrorEvent('editor.network.error', { fileFormat: ctx.session.type, filePath: path.basename(ctx.getFilePath()) });
         const pick = await vscode.window.showErrorMessage(
             `[${ctx.typeName}] ${errMsg}`,
             '打开配置', '查看帮助'

@@ -16,6 +16,7 @@
  * ============================================================================
  */
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { TextEncoder } from 'util';
 import { ensureTrackingColumns } from '../parsers';
 import { getFailures } from './../utils/pushFailureStore';
@@ -163,7 +164,7 @@ export class WebviewDataPusher {
             } catch (e: any) {
                 this.log('⚠ testcase_id 落盘失败:', e?.message || e);
                 TelemetryService.sendTelemetryErrorEvent('editor.testcaseId.saveFailed',
-                    buildErrorProps(e, { fileFormat: this.session.type || '' }));
+                    buildErrorProps(e, { fileFormat: this.session.type || '', filePath: path.basename(this.filePath) }));
             }
         }
 

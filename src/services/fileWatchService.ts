@@ -132,7 +132,7 @@ export class FileWatchService {
         // 自身刚刚 save 完短时间内的回声：直接忽略
         if (lastSelfSaveAt && sinceSelfSave < this.opts.selfSaveGuardMs) {
             TelemetryService.sendTelemetryEvent('editor.externalChange.skipped',
-                { origin, fileFormat: this.opts.fileFormat });
+                { origin, fileFormat: this.opts.fileFormat, filePath: path.basename(this.opts.filePath) });
             this.opts.log(`🔁 ignore self-save echo (${origin}) sinceSelfSave=${sinceSelfSave}ms < ${this.opts.selfSaveGuardMs}ms`);
             return;
         }
@@ -145,7 +145,7 @@ export class FileWatchService {
             const firedOrigin = this.pendingOrigin ?? origin;
             this.pendingOrigin = null;
             TelemetryService.sendTelemetryEvent('editor.externalChange.fired',
-                { origin: firedOrigin, fileFormat: this.opts.fileFormat });
+                { origin: firedOrigin, fileFormat: this.opts.fileFormat, filePath: path.basename(this.opts.filePath) });
             this.opts.log(`📥 external change fired (${firedOrigin}), reload`);
             try {
                 this.opts.onExternalChange(firedOrigin);

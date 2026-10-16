@@ -308,10 +308,11 @@ export class YamlFileParser implements FileParser {
             } catch (parseErr: any) {
                 log.error('YAML 解析失败:', filePath, '|', parseErr?.message, parseErr?.stack ? '\n' + parseErr.stack : '');
                 const { line, column } = extractErrorLocation(parseErr, cleanContent);
-                TelemetryService.sendTelemetryErrorEvent('parser.parseFailed', buildErrorProps(parseErr, {
-                    fileFormat: 'yaml',
-                    fileName: path.basename(filePath),
-                    line,
+            TelemetryService.sendTelemetryErrorEvent('parser.parseFailed', buildErrorProps(parseErr, {
+                fileFormat: 'yaml',
+                fileName: path.basename(filePath),
+                filePath: path.basename(filePath),
+                line,
                     column,
                     source: detectParseSource(),
                 }));

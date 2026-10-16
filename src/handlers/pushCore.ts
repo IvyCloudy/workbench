@@ -94,9 +94,9 @@ export {
 // 埋点封装（保留在 barrel：契约测试读源码 marker）
 // ============================================
 
-/** 埋点事件的公共字段（ext + traceId），所有 step 共用。 */
+/** 埋点事件的公共字段（ext + traceId + filePath[仅文件名]），所有 step 共用。 */
 function baseTelemetryProps(ctx: PushContext): Record<string, string> {
-    return { ext: ctx.fileExt, traceId: ctx.traceId };
+    return { ext: ctx.fileExt, traceId: ctx.traceId, filePath: ctx.baseName };
 }
 
 /**

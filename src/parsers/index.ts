@@ -161,6 +161,28 @@ export function applyTestCaseNos(
 }
 
 /**
+ * F5 · 判断解析结果是否包含关键字段 testcase_id（用于「打开入口决策」内容门控）。
+ *   - CSV：检查 headers 是否含 testcase_id；
+ *   - YAML/JSON：tableData.headers 可能来自路径展开，无法命中字面量 testcase_id，
+ *     兜底检查 sourceData 顶层记录是否含 testcase_id 键。
+ * 纯函数，便于单测与编辑器/其它入口复用。
+ */
+export function containsTestCaseId(
+    headers: string[] | undefined,
+    sourceData: any,
+    type: FileType
+): boolean {
+    if (Array.isArray(headers) && headers.includes(TS_ID_COLUMN)) return true;
+    if (type !== 'csv') {
+        const recs: any[] = Array.isArray(sourceData)
+            ? sourceData
+            : (sourceData && typeof sourceData === 'object' ? [sourceData] : []);
+        return recs.some((r) => r && typeof r === 'object' && TS_ID_COLUMN in r);
+    }
+    return false;
+}
+
+/**
  * 解析文件并返回二维数组（推送用）
  */
 export async function parseFileToRows(filePath: string): Promise<any[] | null> {

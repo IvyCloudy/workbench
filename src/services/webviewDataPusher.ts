@@ -18,7 +18,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { TextEncoder } from 'util';
-import { ensureTrackingColumns } from '../parsers';
+import { ensureTrackingColumns, containsTestCaseId } from '../parsers';
 import { getFailures } from './../utils/pushFailureStore';
 import { getMarks } from './../utils/markStore';
 import { getHeaderLabels } from './../utils/headerLabels';
@@ -146,6 +146,26 @@ export class WebviewDataPusher {
         // 防御：force=true 时若解析为 0 行而旧 cache > 0 行，多半是 fs 未 flush
         if (force && prevRowsLen > 0 && newRowsLen === 0) {
             this.log(`⚠ skip suspicious empty reparse (prev=${prevRowsLen}, reason=${reason}) — likely fs flush midway`);
+            return false;
+        }
+
+        // ── F5：重新解析后若文件已不含 testcase_id，则文件不再是案例 ──
+        // 覆盖所有「重新解析磁盘」场景：外部变更（onDidSaveTextDocument / fsWatcher）、
+        // 切回可见时的 reload（reason='visible'）等。一旦文件不含关键字段 testcase_id，
+        // 就不应再由 ensureTrackingColumns 自动补全 / 落盘该字段（尊重用户删除该字段的意图），
+        // 关闭案例编辑器面板，让其回到普通状态；后续若再用案例编辑器打开，会被
+        // BaseEditorProvider 的 F5 打开门控拦截并重定向到文本编辑器。
+        // 说明：init 阶段不会命中——打开门控已保证仅含 testcase_id 的文件才进入案例编辑器，
+        // 因此不会误伤正常案例文件；本分支只在「文件先前是案例、后来不再含该字段」时生效。
+        if (!containsTestCaseId(result.tableData?.headers, result.sourceData, this.session.type)) {
+            this.log('⚠ 文件已不含 testcase_id，不再作为案例处理，关闭案例编辑器面板 | reason=', reason);
+            TelemetryService.sendTelemetryEvent('editor.externalChange.lostTestCaseIdField', {
+                targetFile: path.basename(this.filePath),
+                fileFormat: this.session.type,
+                filePath: path.basename(this.filePath),
+                reason,
+            });
+            try { this.webviewPanel.dispose(); } catch (_) { /* ignore */ }
             return false;
         }
 

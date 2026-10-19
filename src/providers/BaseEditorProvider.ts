@@ -24,7 +24,7 @@ import { getCurrentTaskInfo, type CurrentTask } from '../utils/commands';
 import { showPushErrorModal, showPushResult, showPushDone, showModal } from '../utils/message';
 import { openPreValidateGate } from '../preValidate';
 import { clearHighlight } from '../utils/highlightStore';
-import { createParser, ensureTrackingColumns, type FileType } from '../parsers';
+import { createParser, ensureTrackingColumns, containsTestCaseId, type FileType } from '../parsers';
 import { TelemetryService } from '../utils/telemetry';
 import { buildErrorProps } from '../services/utils';
 import { runPush } from '../handlers/pushCore';
@@ -533,6 +533,22 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             return;
         }
 
+        // ── F5：测试案例文件夹下的 csv/json/yaml，若内容不含关键字段 testcase_id，不使用案例编辑器打开 ──
+        // 在「打开入口决策阶段」即用解析器检查内容：不含 testcase_id 的文件不是案例，
+        // 重定向到系统文本编辑器打开（与普通文件一致），避免把非案例文件误导成案例解析。
+        // 解析结果复用给后续 prefetch，避免二次解析。
+        const precheck = await this.checkTestCaseIdField(resolved.type!, document.uri, log);
+        if (!precheck.hasKey) {
+            TelemetryService.sendTelemetryEvent('editor.opened.noTestCaseIdField', {
+                targetFile: fileName,
+                fileFormat: resolved.type!,
+                filePath: fileName,
+            });
+            log('⚠ 不含关键字段 testcase_id，重定向到文本编辑器打开 | type=', resolved.type);
+            this.redirectToTextEditor(document, webviewPanel, fileName, log);
+            return;
+        }
+
         // 每个 panel 独享的会话状态：避免多 panel 共用单例时被覆盖
         const session: EditorSession = {
             type: resolved.type,
@@ -604,9 +620,16 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         const prefetchPromise: Promise<PrefetchResult> =
             (async () => {
                 try {
-                    const result = await session.parser.parse(filePath);
+                    // 复用 F5 内容门控阶段已解析的结果，避免对同一个文件二次解析
+                    let result: { tableData: any; sourceData: any } | null = null;
+                    if (precheck.tableData) {
+                        result = { tableData: precheck.tableData, sourceData: precheck.sourceData };
+                        log(`⚡ reuse F5 precheck parse dur=${Date.now() - _prefetchStart}ms`);
+                    } else {
+                        result = await session.parser.parse(filePath);
+                    }
                     const ensured = ensureTrackingColumns(result.tableData, result.sourceData);
-                    log(`⚡ prefetch parse done dur=${Date.now() - _prefetchStart}ms rows=${(ensured.tableData?.rows || []).length} generated=${ensured.generated}`);
+                    log(`⚡ prefetch ready dur=${Date.now() - _prefetchStart}ms rows=${(ensured.tableData?.rows || []).length} generated=${ensured.generated}`);
                     return { tableData: ensured.tableData, sourceData: result.sourceData, generated: ensured.generated };
                 } catch (err: any) {
                     log('⚠ prefetch parse failed:', err?.message || err);
@@ -748,6 +771,31 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         }
         webviewPanel.webview.html = await this.buildEditorHtml(nonce, webviewPanel, session.type, taskInfoForWebView);
         log('✅ html ready');
+    }
+
+    /**
+     * F5 · 测试案例文件夹下 csv/json/yaml 的内容门控：
+     * 仅当文件「位于测试案例文件夹且为 csv/json/yaml」（已由 resolveFile 判定 qualified）时，
+     * 进一步解析内容，检查是否包含关键字段 testcase_id；
+     * 不含该字段的文件不应被当作案例，调用方应重定向到文本编辑器打开。
+     *
+     * 解析成功时一并返回 tableData / sourceData，供后续 prefetch 复用，避免二次解析。
+     * 解析失败时保守返回 hasKey=true（仍按案例文件打开），不因此误伤文件。
+     */
+    private async checkTestCaseIdField(
+        type: FileType,
+        uri: vscode.Uri,
+        log: (...args: any[]) => void
+    ): Promise<{ hasKey: boolean; tableData?: any; sourceData?: any }> {
+        try {
+            const parser = createParser(type);
+            const parsed = await parser.parse(uri.fsPath);
+            const hasKey = containsTestCaseId(parsed.tableData?.headers, parsed.sourceData, type);
+            return { hasKey, tableData: parsed.tableData, sourceData: parsed.sourceData };
+        } catch (err: any) {
+            log('⚠ 检查 testcase_id 字段失败（保守按案例文件处理）:', err?.message || err);
+            return { hasKey: true };
+        }
     }
 
     /**

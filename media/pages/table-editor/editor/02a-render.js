@@ -512,7 +512,12 @@ function _buildRowHtml(ri, tsIdColIdx) {
     // 此处的失败均为「前置校验拦截」——真正走后端推送并被拒绝的失败在 showToast 中提示，
     // 二者语义不同，文案上以「格式校验失败」显式区分，避免用户误以为已经发送到服务器。
     var rowNumTitle = '原始行号: ' + (ri + 1);
-    if (failReason) rowNumTitle += '\n⚠️ 格式校验失败：' + failReason;
+    if (failReason) {
+        // 图标随严重级分色：error(阻断)→🚫 红，warn(提醒)→⚠️ 黄（与格式校验弹窗徽章一致）。
+        // 行级 severity 取行级字典值（error 压 warn），与 00a getSeverity 兜底口径一致。
+        var _rowTitleSev = (S._pushFailedSeverity && S._pushFailedSeverity.get(String(rowTsId)) === 'warn') ? 'warn' : 'error';
+        rowNumTitle += '\n' + (_rowTitleSev === 'warn' ? '⚠️' : '🚫') + ' 格式校验失败：' + failReason;
+    }
     if (isFailedDel) {
         rowNumTitle += '\n删除失败：' + (failedDelReason || '线上拒绝删除');
     } else if (isPendingDel) {
@@ -637,10 +642,13 @@ function _buildRowHtml(ri, tsIdColIdx) {
                     : '';
             } catch (_e) { _cellReason = ''; }
             if (_cellReason) {
-                // 前缀加 ⚠️ emoji：原生 title tooltip 内也能显示 emoji，
+                // 前缀加 emoji（原生 title tooltip 内也能显示）：
+                //   error(阻断)→🚫 红，warn(提醒)→⚠️ 黄，与格式校验弹窗徽章一致；
                 // 让"校验失败"部分与"cell 原内容"在视觉上分离；
                 // 同时右上角 CSS ::after 小角标（table-editor.css B3+）已在 hover 前即可见。
-                var _prefix = '⚠️ 格式校验失败：' + _cellReason;
+                // severity 直接从本列已算出的 failedCellCls 判定（warn 类 → 黄）。
+                var _cellFailIcon = (c.failedCellCls.indexOf('xs-td-failed-cell-warn') >= 0) ? '⚠️' : '🚫';
+                var _prefix = _cellFailIcon + ' 格式校验失败：' + _cellReason;
                 if (cellTitleAttr) {
                     // 已有 title（内容 tooltip）→ 追加分隔符 + 失败原因
                     cellTitleAttr = cellTitleAttr.replace(/"$/, '\n' + escapeHtml(_prefix) + '"');
@@ -1407,10 +1415,11 @@ function patchCell(ri, ci) {
     }
     var _titleText = rawText ? rawText.replace(/\\n/g, '\n') : '';
     if (_failReasonForCell) {
-        // 前缀加 ⚠️ emoji：与首屏渲染路径（_buildRowHtml 内）保持一致，
-        // 让"校验失败"部分与"cell 原内容"在视觉上分离。
-        _titleText = _titleText ? (_titleText + '\n⚠️ 格式校验失败：' + _failReasonForCell)
-                                 : ('⚠️ 格式校验失败：' + _failReasonForCell);
+        // 前缀 emoji 与首屏渲染路径（_buildRowHtml 内）一致并按严重级分色：
+        //   error(阻断)→🚫 红，warn(提醒)→⚠️ 黄。
+        var _pcFailIcon = td.classList.contains('xs-td-failed-cell-warn') ? '⚠️' : '🚫';
+        _titleText = _titleText ? (_titleText + '\n' + _pcFailIcon + ' 格式校验失败：' + _failReasonForCell)
+                                 : (_pcFailIcon + ' 格式校验失败：' + _failReasonForCell);
     }
     if (_titleText) td.setAttribute('title', _titleText); else td.removeAttribute('title');
     // 注：detail-link click 已在 #tableContainer 上委托，无需在此重新绑定

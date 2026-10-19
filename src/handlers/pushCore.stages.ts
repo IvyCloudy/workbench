@@ -106,8 +106,8 @@ export async function resolveTaskInfoOrNull(filePath: string): Promise<ResolveTa
         return {
             status: 'ok',
             taskInfo: {
-                testTaskNo: currentTask.taskInfo.testTaskNo || '',
-                subTestTaskId: currentTask.taskInfo.subTestTaskId || '',
+                testTaskNo: currentTask.taskInfo?.testTaskNo || '',
+                subTestTaskId: currentTask.taskInfo?.subTestTaskId || '',
             },
         };
     } catch (err: any) {

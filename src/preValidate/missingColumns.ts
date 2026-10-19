@@ -7,7 +7,9 @@
  *   · 校验目标：文件级结构性错误 —— 缺少任一必备列（CSV）/ 必备字段（YAML/JSON）
  *     会导致本文件所有案例都无法被正确解析或推送。
  *   · 严重级：必备列分必填（error，硬拦截）与非必填（warn，仅提示不阻断）；
- *     目前 description / type / preconditions 为非必填（warn），其余为必填（error）。
+ *     目前仅 preconditions 为非必填（warn），其余为必填（error）。
+ *     ※ description / type 已不再作为必备字段校验：推送映射层会补默认值
+ *       （type→「功能点类」、description→空），缺失时不提醒、不阻断。
  *   · 判定规则：
  *       - CSV：以表头行为准，检查必备列是否全部存在（主列名 csvHeader 或别名
  *         csvAliases 任一命中即视为存在，兼容英文字段名 / 中文变体表头）；缺任一即命中。
@@ -65,15 +67,15 @@ export interface RequiredFieldSpec {
     location: 'top' | 'step';
     /**
      * 缺失列/字段的严重级：'error'=必填（硬拦截）；'warn'=非必填（仅提示、不阻断）。
-     * 未显式声明的项默认 'error'（必填）；目前 description / type / preconditions 显式为 'warn'。
+     * 未显式声明的项默认 'error'（必填）。
      */
     severity?: 'error' | 'warn';
 }
 
 /**
  * 必备列/字段清单（需求 §2.3.5 表格；顺序决定弹窗中缺失项的展示顺序）。
- * severity 分级：description / type / preconditions 为非必填（warn，仅提示不阻断），
- * 其余为必填（error，硬拦截）。severity 未声明的项默认 'error'。
+ * severity 分级：preconditions 为非必填（warn，仅提示不阻断）；其余为必填（error，硬拦截）。
+ * description / type 已不再列入必备字段（推送映射层补默认值，缺失不提醒）。severity 未声明的项默认 'error'。
  *
  * 命名说明：
  *   · path / name / description / preconditions / type / test_type / priority
@@ -92,17 +94,8 @@ export const REQUIRED_FIELDS: RequiredFieldSpec[] = [
         csvAliases: ['path', 'testCasePath', '案例路径', '用例路径'],
     },
     {
-        label: '案例描述', yamlKey: 'description', csvHeader: '案例描述', location: 'top', severity: 'warn',
-        csvAliases: ['description', 'testCaseDesc', '用例描述', '测试描述'],
-    },
-    {
         label: '前置条件', yamlKey: 'preconditions', csvHeader: '前置条件', location: 'top', severity: 'warn',
         csvAliases: ['preconditions', '前置'],
-    },
-    {
-        label: '案例类型', yamlKey: 'type', csvHeader: '案例类型', location: 'top', severity: 'warn',
-        // 2026-09-24：type 列缺失 → warn 软提示（文件级，不阻断推送）；行内非空非法取值由枚举校验器按 error 硬拦截，空值按 warn 处理。映射层空值回退默认值「功能点类」。
-        csvAliases: ['type', '用例类型'],
     },
     {
         label: '执行方式', yamlKey: 'test_type', csvHeader: '执行方式', location: 'top',
@@ -270,8 +263,8 @@ export function detectMissingColumns(
  * 兼容旧签名：未传 fileType 时按纯中文清单输出（保持向后兼容）。
  *
  * 例：
- *   CSV     → `当前文件缺少必备列/字段：路径、案例描述。缺列会导致推送失败，请补齐后再使用。`
- *   YAML    → `当前文件缺少必备列/字段：路径（path）、案例描述（description）、预期结果（steps[].ui_expected / api_expected / db_expected）。缺列会导致推送失败，请补齐后再使用。`
+ *   CSV     → `当前文件缺少必备列/字段：路径、名称。缺列会导致推送失败，请补齐后再使用。`
+ *   YAML    → `当前文件缺少必备列/字段：路径（path）、名称（name）、预期结果（steps[].ui_expected / api_expected / db_expected）。缺列会导致推送失败，请补齐后再使用。`
  */
 export function buildMissingColumnMessage(
     missing: MissingColumnHit[],
@@ -286,7 +279,7 @@ export function buildMissingColumnMessage(
  * 生成一条给推送失败列表用的 reason 文本（每个缺失一条 failure）。
  *
  * ‼️ 文案必须明确表达"文件级问题"，避免用户误以为某一行有问题。参考需求 §2.3.5：
- *   > “当前文件缺少必备列/字段：路径、案例描述、前置条件……”
+ *   > “当前文件缺少必备列/字段：路径、名称、前置条件……”
  *
  * fileType 语义：
  *   · 'csv'  → CSV 场景不带"（对应 YAML 字段：xxx）"后缀（用户面对的就是中文列名）；

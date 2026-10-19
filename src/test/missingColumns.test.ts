@@ -39,11 +39,20 @@ describe('missingColumns · CSV 表头判定', () => {
         expect(r.missing[0].label).toBe('路径');
     });
 
-    it('缺多列（"案例描述"+"预期结果"）→ 命中两条，按 REQUIRED_FIELDS 顺序', () => {
+    it('缺列（"预期结果"）→ 仅命中一条（description/type 已不作为必备字段，缺失不提醒）', () => {
         const headers = CSV_FULL_HEADERS.filter(h => h !== '案例描述' && h !== '预期结果');
         const r = detectMissingColumnsForCsv(headers);
         expect(r.ok).toBe(false);
-        expect(r.missing.map(m => m.label)).toEqual(['案例描述', '预期结果']);
+        // 案例描述/案例类型已从必备字段移除（推送映射层补默认值），只有"预期结果"命中
+        expect(r.missing.map(m => m.label)).toEqual(['预期结果']);
+    });
+
+    it('缺"案例描述"/"案例类型"列 → 不命中（推送映射层补默认值，缺失不提醒）', () => {
+        const headers = CSV_FULL_HEADERS.filter(h => h !== '案例描述' && h !== '案例类型');
+        const r = detectMissingColumnsForCsv(headers);
+        expect(r.ok).toBe(true);
+        expect(r.missing.map(m => m.label)).not.toContain('案例描述');
+        expect(r.missing.map(m => m.label)).not.toContain('案例类型');
     });
 
     it('空 headers（null / [] / undefined）→ 命中全部必备列', () => {
@@ -140,6 +149,16 @@ describe('missingColumns · YAML/JSON 全文件聚合判定', () => {
         const r = detectMissingColumnsForYamlJson(cases);
         expect(r.ok).toBe(false);
         expect(r.missing.map(m => m.label)).toContain('路径');
+    });
+
+    it('YAML 全文件缺 description/type 键 → 不命中（推送映射层补默认值，缺失不提醒）', () => {
+        const c = makeFullYamlCase();
+        delete (c as any).description;
+        delete (c as any).type;
+        const r = detectMissingColumnsForYamlJson([c]);
+        expect(r.ok).toBe(true);
+        expect(r.missing.map(m => m.label)).not.toContain('案例描述');
+        expect(r.missing.map(m => m.label)).not.toContain('案例类型');
     });
 
     it('中间态：只有一条案例含 path，其它都不含 → 视为存在，不命中（避免误伤中间态）', () => {

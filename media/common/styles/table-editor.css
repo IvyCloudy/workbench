@@ -144,10 +144,16 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 .xs-th[data-sort]{background:#e3f2fd}
 .xs-th[data-sort]::after{content:'\25b2';margin-left:4px;font-size:10px;opacity:.6;color:var(--p)}
 .xs-th[data-sort="desc"]::after{content:'\25bc'}
-.xs-th-cb{width:50px;text-align:center;padding:8px;box-sizing:border-box;position:sticky;left:0;top:0;z-index:5;background:#fafbfc;border-bottom:2px solid #d0d7de}
+/* 左上角（行号）表头：z-index 必须高于"冻结列单元格"(.xs-td-cb=3)、普通表头(.xs-th=6)、
+   以及失败单元格右上角 ⚠ 角标（td::after z-index:2，参与根层叠），确保不透明表头真正盖住
+   滚到其下方的单元格内容/角标（否则角标会浮到表头上，表现为"不合法标识跑到第一行"）。 */
+.xs-th-cb{width:50px;text-align:center;padding:8px;box-sizing:border-box;position:sticky;left:0;top:0;z-index:9;background:#fafbfc;border-bottom:2px solid #d0d7de}
 /* 左上角行号表头：仅显示 # 字符，不可选中也不可点击 */
 .xs-th-cb.xs-th-rownum{cursor:default;color:#8b95a1;font-weight:600;user-select:none}
-.xs-th:not(.xs-th-cb){position:sticky;top:0;z-index:2;background:#fafbfc}
+/* 普通表头：z-index 抬到 6，高于失败单元格 ⚠ 角标(td::after=2) 与冻结列单元格(.xs-td-cb=3)，
+   使不透明表头在垂直滚动时盖住滚到其下方的角标/单元格（修复"角标跑到第一行表头"）。
+   仍低于左上角表头(9) 与筛选下拉等浮层(≥999)。 */
+.xs-th:not(.xs-th-cb){position:sticky;top:0;z-index:6;background:#fafbfc}
 /* 表头列内布局：左侧 labels 自适应、右侧漏斗固定 */
 .xs-th-inner{display:flex;align-items:flex-start;gap:6px;min-width:0;padding-right:6px}
 .xs-th-labels{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}

@@ -233,7 +233,19 @@ function showPreValidateGateModal(payload) {
     var groups = _pvgGroupByRow(failures);
     var errorRowCount = 0;
     var warnOnlyRowCount = 0;
+    var rowGroupCount = 0; // 行级组数（不含文件级伪组）= 真实"影响行数"
+    var fileLevelItemCount = 0; // 文件级问题条数（缺必备列/字段，单独标注）
+    var fileLevelHasError = false; // 文件级问题是否含 error（决定"阻断"标注）
     for (var gi = 0; gi < groups.length; gi++) {
+        // 文件级问题（缺必备列/字段，tsId='__FILE_LEVEL__'）不属于任何案例行：
+        // 不计入"影响行数 / 阻断行数 / 仅提醒行数"，但其条数单独统计，在概要区以
+        // "文件级问题 N 项（阻断）"标注，保留阻断语义且不混入行数口径。
+        if (groups[gi].tsId === '__FILE_LEVEL__') {
+            fileLevelItemCount += groups[gi].errors.length + groups[gi].warns.length;
+            if (groups[gi].errors.length > 0) fileLevelHasError = true;
+            continue;
+        }
+        rowGroupCount++;
         if (groups[gi].errors.length > 0) errorRowCount++;
         else if (groups[gi].warns.length > 0) warnOnlyRowCount++;
     }
@@ -265,16 +277,25 @@ function showPreValidateGateModal(payload) {
     // 概要区：既展示"影响行数"（更贴用户心智：多少行需要处理），
     // 也保留"问题条数"（便于用户对总规模有感知）。
     if (summaryEl) {
-        var htmlS = '<span class="xs-pr-summary-item">影响行数 <span class="xs-pr-num">' + groups.length + '</span></span>';
+        var htmlS = '<span class="xs-pr-summary-item">影响行数 <span class="xs-pr-num">' + rowGroupCount + '</span></span>';
         if (errorRowCount > 0) {
             htmlS += '<span class="xs-pr-summary-item">阻断 <span class="xs-pr-num is-failed">' + errorRowCount + '</span> 行</span>';
         }
         if (warnOnlyRowCount > 0) {
             htmlS += '<span class="xs-pr-summary-item">仅提醒 <span class="xs-pr-num is-warn">' + warnOnlyRowCount + '</span> 行</span>';
         }
+        // 文件级问题（缺必备列/字段）单独标注：不属于任何案例行，不计入"影响行数"，
+        // 但本身具阻断性，单列体现其"整份文件阻断"的语义，不丢阻断信息。
+        if (fileLevelItemCount > 0) {
+            htmlS += '<span class="xs-pr-summary-item">文件级问题 <span class="xs-pr-num is-failed">' + fileLevelItemCount + '</span> 项'
+                + (fileLevelHasError ? '（阻断）' : '') + '</span>';
+        }
         htmlS += '<span class="xs-pr-summary-item xs-pr-summary-sub">'
               +    '共 <span class="xs-pr-num">' + (errorCount + warnCount) + '</span> 条问题'
-              +    (errorCount > 0 ? '（失败 ' + errorCount + '' : '')
+              // 括号成对：只要存在任一分类细分（失败/待完善）就输出完整括号，
+              // 修复纯 warn 场景下"前括号只在 errorCount>0 时输出"导致的"待完善 1）"半边括号。
+              +    (errorCount > 0 || warnCount > 0 ? '（' : '')
+              +    (errorCount > 0 ? '失败 ' + errorCount : '')
               +    (errorCount > 0 && warnCount > 0 ? ' / ' : '')
               +    (warnCount > 0 ? '待完善 ' + warnCount : '')
               +    (errorCount > 0 || warnCount > 0 ? '）' : '')

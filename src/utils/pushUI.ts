@@ -28,6 +28,8 @@ export interface SummaryUiOptions {
     documentTitle?: string;
     /** 是否在文件行下方展开失败明细（tsId · reason 列表），默认 false */
     showFailureDetails?: boolean;
+    /** 顶部提示横幅（如删除场景的"真实总删除数 / 案例 vs 非案例"说明），可选 */
+    note?: string;
 }
 
 /**
@@ -256,6 +258,9 @@ function buildSummaryHtml(results: PushFileResult[], opts?: SummaryUiOptions): s
     const btnColor = stats.statusColor;
     const _docTitle = escapeHtml(opts?.documentTitle || opts?.panelTitle || '推送结果');
     const _headerTitle = escapeHtml(opts?.headerTitle || '推送完成');
+    const _note = opts?.note
+        ? `<div style="margin:0;padding:10px 20px;background:#eef2ff;border-left:3px solid #6366f1;color:#3730a3;font-size:12px;line-height:1.6;">${escapeHtml(opts.note)}</div>`
+        : '';
 
     return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -303,6 +308,7 @@ function buildSummaryHtml(results: PushFileResult[], opts?: SummaryUiOptions): s
         &nbsp;·&nbsp;共 ${stats.totalFiles} 个文件
     </span>
 </div>
+${_note}
 <div class="search-wrap">
     <div class="search-input-wrap">
         <input class="search-input" id="searchInput" type="text" placeholder="搜索文件名称或路径..." autofocus />

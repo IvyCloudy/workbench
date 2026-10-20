@@ -96,12 +96,12 @@ export function telemetryTsIdListProps(lists: Record<string, ReadonlyArray<strin
  * 输出字段：
  *   - deletedFilePath                 : 被删除案例所在文件的**绝对路径**（未传入则为空串）
  *   - deletedTestcaseIds              : 本次成功删除（线上同步）的 testcase_id，`|` 拼接
- *   - deletedTestcaseIdCount          : 上述列表真实条数
+ *   - deletedTestcaseIdsCount         : 上述列表真实条数
  *   - deletedTestcaseIdsTruncated     : 仅截断时出现，恒为 'true'
  *   - deletedSuccessTestcaseIds       : 其中 type=1（sourceId 真实存在并删除）子集
- *   - deletedSuccessTestcaseIdCount
+ *   - deletedSuccessTestcaseIdsCount
  *   - deletedSourceMissingTestcaseIds : 其中 type=3（sourceId 不存在仍算成功）子集
- *   - deletedSourceMissingTestcaseIdCount
+ *   - deletedSourceMissingTestcaseIdsCount
  *
  * tsId 列表的 join / 截断 / 计数逻辑复用 telemetryTsIdListProps。
  */

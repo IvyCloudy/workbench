@@ -112,7 +112,7 @@ function batchConfirmShellCss_(headerBg: string, color: string): string {
  *   - 右下角拖拽 handle：鼠标按下拖拽调整弹窗尺寸；
  *   - 用户点「确定删除」→ true；点「取消」/关闭/遮罩/ESC → false。
  */
-function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
+function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[], nonCaseCount?: number): string {
     const color = MODAL_COLOR_WARNING;
     const headerBg = MODAL_HEADER_BG_WARNING;
 
@@ -240,16 +240,19 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[]): string {
            </div>`
         : '';
 
-    // header 标题分段组装，按「文件总数 / 需同步 TMS / 仅本地 / 跳过」逐项拼接，
-    // 避免将本地行数误当 TMS 删除行数一同展示。
+    // F7 计数透明：非案例文件不进本弹窗列表，直接在 header 中对齐 VSCode 删除确认总数，
+    // 避免"弹窗说 N 个、VSCode 说 M 个"的数字对不上（不再使用冗长的 note 横幅）。
+    // header 标题分段组装，按「需同步 TMS / 仅本地 / 未绑定 / 跳过 / 非案例」逐项拼接。
     const headerParts: string[] = [];
     if (needTmsCount > 0) headerParts.push(`${needTmsCount} 需同步 TMS·${totalCases} 案例`);
     if (hardOnlyCount > 0) headerParts.push(`${hardOnlyCount} 仅本地`);
     if (unboundCount > 0) headerParts.push(`${unboundCount} 未绑定`);
     if (type3OnlyCount > 0) headerParts.push(`${type3OnlyCount} 仅本地清理(type=3)`);
     if (failedCount > 0) headerParts.push(`${failedCount} 跳过`);
+    if (nonCaseCount && nonCaseCount > 0) headerParts.push(`${nonCaseCount} 非案例已直接删除`);
     const headerSuffix = headerParts.length > 0 ? `（${headerParts.join(' / ')}）` : '';
-    const headerTitleHtml = `删除案例 — 共 ${fileCount} 个文件${headerSuffix}`;
+    const headerTotal = fileCount + (nonCaseCount && nonCaseCount > 0 ? nonCaseCount : 0);
+    const headerTitleHtml = `删除案例 — 共 ${headerTotal} 个文件${headerSuffix}`;
 
     return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -479,7 +482,7 @@ ${batchConfirmShellCss_(headerBg, color)}
  *
  * 仅承载 N≥2 的整批本地删除路径；单文件（N=1）走 deleteConfirmModal.ts。
  */
-export function buildLocalOnlyBatchConfirmHtml(entries: BatchDeleteFileEntry[]): string {
+export function buildLocalOnlyBatchConfirmHtml(entries: BatchDeleteFileEntry[], nonCaseCount?: number): string {
     const color = MODAL_COLOR_WARNING;
     const headerBg = MODAL_HEADER_BG_WARNING;
     const ok = entries.filter(e => !e.precheckError);
@@ -492,18 +495,22 @@ export function buildLocalOnlyBatchConfirmHtml(entries: BatchDeleteFileEntry[]):
 
     const riskLines: string[] = [];
     if (unboundCount > 0) {
-        riskLines.push(`<b>${unboundCount}</b> 个文件未绑定测试任务，仅本地删除、不同步 TMS`);
+        riskLines.push(`下方清单中 <b>${unboundCount}</b> 个案例文件未绑定测试任务`);
     }
     if (hardOnlyCount > 0) {
-        riskLines.push(`<b>${hardOnlyCount}</b> 个文件仅删除本地（无 TMS 同步）`);
+        riskLines.push(`下方清单中 <b>${hardOnlyCount}</b> 个案例文件为本地专属（无 TMS 记录）`);
     }
     if (type3Count > 0) {
-        riskLines.push(`<b>${type3Count}</b> 个文件所有案例均未推送 TMS（type=3，平台已不存在），将直接清理本地`);
+        riskLines.push(`下方清单中 <b>${type3Count}</b> 个案例文件在 TMS 平台已不存在（type=3）`);
     }
+    // F7 计数透明：非案例文件已按普通文件直接删除，不进本弹窗清单；
+    // header 总数对齐 VSCode 删除确认数（案例文件数 + 非案例文件数），不再用冗长 note 横幅。
+    // 子弹点只说明清单中文件的类别，统一的「本地删除 / 不同步 TMS / 不可恢复」后果由下方总数行承担，避免重复。
+    const nonCase = nonCaseCount && nonCaseCount > 0 ? nonCaseCount : 0;
     const riskCard = `<div class="xs-bd-risk xs-bd-risk-strong">
         <div class="xs-bd-risk-title">⚠ 谨慎操作</div>
         <ul class="xs-bd-risk-list">${riskLines.map(t => `<li>${t}</li>`).join('')}</ul>
-        <div class="xs-bd-risk-note">本批共 <b>${fileCount}</b> 个文件，确认后仅删除本地、不同步 TMS 平台，且不可恢复。</div>
+        <div class="xs-bd-risk-note">本批共 <b>${fileCount + nonCase}</b> 个文件，确认后仅删除本地、不同步 TMS 平台，且不可恢复。</div>
     </div>`;
 
     const fileListHtml = ok.length > 0
@@ -542,7 +549,7 @@ ${batchConfirmShellCss_(headerBg, color)}
     <div class="xs-modal-dialog">
         <div class="xs-modal-header">
             <span class="xs-pr-icon">!</span>
-            <span class="xs-modal-title">删除案例 — 共 ${fileCount} 个文件（仅本地删除）</span>
+            <span class="xs-modal-title">删除案例 — 共 ${fileCount + nonCase} 个文件（仅本地删除${nonCase > 0 ? `，另有 ${nonCase} 个非案例文件已直接删除` : ''}）</span>
         </div>
         <div class="xs-modal-body">
             <div class="xs-bd-top">
@@ -551,7 +558,7 @@ ${batchConfirmShellCss_(headerBg, color)}
             ${fileListHtml}
         </div>
         <div class="xs-modal-footer">
-            <div class="xs-bd-footer-hint" id="hint">以下文件确认后将仅本地删除，不可恢复。</div>
+            <div class="xs-bd-footer-hint" id="hint">以下为待确认的本批案例文件，删除后不可恢复。</div>
             <button class="xs-btn" id="cancelBtn">取消</button>
             <button class="xs-btn xs-btn-p" id="okBtn" disabled>确定删除</button>
         </div>
@@ -628,7 +635,7 @@ ${batchConfirmShellCss_(headerBg, color)}
  */
 export function showBatchDeleteConfirmModal(
     entries: BatchDeleteFileEntry[],
-    options?: { aggregated?: boolean },
+    options?: { aggregated?: boolean; /** F7 计数透明：随批删除但不在本弹窗列出的非案例文件数，header 中对齐 VSCode 删除确认总数 */ nonCaseCount?: number },
     token?: vscode.CancellationToken,
 ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
@@ -649,7 +656,7 @@ export function showBatchDeleteConfirmModal(
         }
 
         try {
-            panel.webview.html = (options?.aggregated ? buildLocalOnlyBatchConfirmHtml : buildBatchDeleteConfirmHtml)(entries);
+            panel.webview.html = (options?.aggregated ? buildLocalOnlyBatchConfirmHtml : buildBatchDeleteConfirmHtml)(entries, options?.nonCaseCount);
         } catch (err: any) {
             console.error('[showBatchDeleteConfirmModal] html 构建失败:', err?.message || err);
             try { panel.dispose(); } catch { /* ignore */ }

@@ -51,7 +51,7 @@ import {
     renamePathInBindings,
     removePathInBindings,
 } from '../utils/pointCaseBindingStore';
-import { detectFileType, createParser } from '../parsers';
+import { detectFileType, createParser, containsTestCaseId } from '../parsers';
 import { syncDeletedRows } from '../utils/deletedRowsStore';
 import { TS_ID_COLUMN, isInTempFolder, isInQualifiedDir, FILE_PATTERNS } from '../services/utils';
 import { resolveTaskInfoOrNull } from './pushCore.stages';
@@ -117,20 +117,21 @@ function isCaseFile(fp: string): boolean {
 }
 
 /**
- * 同步递归收集给定目录下所有命中 isCaseFile 的文件绝对路径。
+ * 同步递归收集给定目录下所有命中 isCaseFile 的文件绝对路径，并统计目录内**真实文件总数**（含所有扩展名）。
  *
  * 用途：onWillDeleteFiles 阶段用户删除的可能是**文件夹**（VSCode 只把文件夹本身报到 event.files，
  * 不会展开其下文件）；本函数把文件夹展开为一组「具体案例文件」，让后续 backup/restore 流程
- * 完全复用「多文件删除」路径。
+ * 完全复用「多文件删除」路径。同时返回 totalFiles，供 F7 计数透明（banner/结果面板对齐 VSCode 删除确认数）。
  *
  * 设计约束：
  *   - **必须同步**：waitUntil 是限时的（默认 5s），不能用 fs.promises.*；
  *   - **必须容错**：遇到不可读/无权限目录时静默跳过，绝不抛异常（拖住 waitUntil）；
- *   - **仅扫描案例文件**：其它文件（如 .DS_Store、非案例目录）不备份、不干预，交由 VSCode 正常删除；
+ *   - 其余文件（如 .DS_Store、非案例目录）计入 totalFiles 但不进入 caseFiles（不备份、不干预，交 VSCode 正常删除）；
  *   - **深度不限**：真实业务中「测试案例」下层级可控（通常 ≤3 层），无栈溢出风险。
  */
-function collectCaseFilesUnderDir(dirPath: string): string[] {
+function collectCaseFilesUnderDir(dirPath: string): { caseFiles: string[]; totalFiles: number } {
     const results: string[] = [];
+    let totalFiles = 0;
     const stack: string[] = [dirPath];
     let scannedDirs = 0;
     let scannedFiles = 0;
@@ -154,6 +155,7 @@ function collectCaseFilesUnderDir(dirPath: string): string[] {
                     stack.push(child);
                 } else if (ent.isFile()) {
                     scannedFiles++;
+                    totalFiles++; // 所有真实文件均计入总数（不限扩展名），用于计数透明
                     if (isCaseFile(child)) {
                         results.push(child);
                     }
@@ -163,8 +165,8 @@ function collectCaseFilesUnderDir(dirPath: string): string[] {
             }
         }
     }
-    console.log(`[workspaceListeners] collectCaseFilesUnderDir 完成: dir=${dirPath}, 案例文件=${results.length}, 扫描目录=${scannedDirs}, 扫描文件=${scannedFiles}, readdir 失败=${readdirErrors}`);
-    return results;
+    console.log(`[workspaceListeners] collectCaseFilesUnderDir 完成: dir=${dirPath}, 案例文件=${results.length}, 总文件=${totalFiles}, 扫描目录=${scannedDirs}, 扫描文件=${scannedFiles}, readdir 失败=${readdirErrors}`);
+    return { caseFiles: results, totalFiles };
 }
 
 /**
@@ -211,6 +213,13 @@ interface WillBackupEntry {
     restoreSourceData: any;
     /** 删除前文件是否处于"已打开案例编辑器"状态（决策 2B：仅在"保留文件"路径才 reopen） */
     wasOpen: boolean;
+    /**
+     * F7 计数透明：本批 VSCode 真实要删除的文件总数（含所有扩展名、含文件夹展开），
+     * 由 will 阶段在 onWillDeleteFiles 计算后随每个 entry 下传，供 did 阶段 banner / 结果面板
+     * 把"插件处理的案例数"与"VSCode 删除确认数"对齐（消除"删除文件数对不上"的错觉）。
+     * 同批次所有 entry 共享同一值；undefined 表示 will 阶段未能取得（降级为仅统计案例格式文件）。
+     */
+    totalDeletedForEvent?: number;
 }
 
 /** filePath → WillBackupEntry（仅案例文件在 will 阶段写入，did 阶段消费后删除） */
@@ -278,6 +287,11 @@ export function registerWorkspaceListeners(context: vscode.ExtensionContext): vs
             const tasks: Promise<void>[] = [];
             // 去重：同一个文件被多次 push（如同时选中文件与其父目录）时只备份一次
             const seenFilePaths = new Set<string>();
+            // F7 计数透明：统计本批 VSCode 真实要删除的文件总数（含所有扩展名、含文件夹展开），
+            // 随每个 entry 下传 did 阶段，用于 banner / 结果面板把"插件处理的案例数"对齐 VSCode 删除确认数。
+            // 注意：必须等整个循环跑完（totalDeletedForEvent 才是最终总数）再回填，不能在 scheduleBackup
+            // 中途传"运行中的部分总数"，否则多选根目录文件时每个 entry 拿到的数值不一致（见下方 waitUntil 回填）。
+            let totalDeletedForEvent = 0;
             const scheduleBackup = (fp: string) => {
                 if (seenFilePaths.has(fp)) return;
                 seenFilePaths.add(fp);
@@ -298,20 +312,24 @@ export function registerWorkspaceListeners(context: vscode.ExtensionContext): vs
             for (const file of event.files) {
                 const fp = file.fsPath;
                 // 要点删除发起的"可恢复删除"：抑制插件拦截（不备份 / 不还原 / 不弹框），
-                // 文件干净地进回收站，绑定清理由 pointCaseDeleter 自己负责
+                // 文件干净地进回收站，绑定清理由 pointCaseDeleter 自己负责。
+                // 仍计入总数（VSCode 同样会删除这些文件），保持 banner 与删除确认框一致。
                 if (isDeleteSuppressed(fp)) {
                     console.log('[workspaceListeners] 跳过删除拦截（要点删除发起的可恢复删除）:', fp);
+                    totalDeletedForEvent += 1;
                     continue;
                 }
                 // 情形 A：明确的案例文件 —— 直接备份
                 if (isCaseFile(fp)) {
+                    totalDeletedForEvent += 1;
                     scheduleBackup(fp);
                     continue;
                 }
-                // 情形 B：文件夹 —— 递归收集其下所有案例文件（同步扫描，快速返回）
+                // 情形 B：文件夹 —— 递归收集其下所有案例文件，并累加目录内真实文件总数（同步扫描，快速返回）
                 const isDir = isExistingDirectory(fp);
                 if (isDir) {
-                    const inside = collectCaseFilesUnderDir(fp);
+                    const { caseFiles: inside, totalFiles: dirTotal } = collectCaseFilesUnderDir(fp);
+                    totalDeletedForEvent += dirTotal;
                     if (inside.length > 0) {
                         console.log(`[workspaceListeners] 目录删除展开为 ${inside.length} 个案例文件:`, fp, '→', inside);
                         TelemetryService.sendTelemetryEvent('caseFileDelete.folder.expand', {
@@ -326,13 +344,21 @@ export function registerWorkspaceListeners(context: vscode.ExtensionContext): vs
                     }
                     continue;
                 }
-                // 情形 C：非案例文件、非目录 —— 不干预
+                // 情形 C：非案例文件、非目录 —— 不干预，但仍计入总数
+                totalDeletedForEvent += 1;
                 console.log('[workspaceListeners] 非案例文件且非目录，不干预删除:', fp,
                     '（isCaseFile=false, isExistingDirectory=false — 可能是软链接/已被 unlink/权限不足）');
             }
             if (tasks.length > 0) {
-                // 等所有备份完成再 resolve；每个 backupCaseFileForDelete 内部都是快速 IO，通常 <100ms
-                event.waitUntil(Promise.all(tasks));
+                // 等所有备份完成再 resolve；每个 backupCaseFileForDelete 内部都是快速 IO，通常 <100ms。
+                // 备份完成后，把"最终总删除数"统一回填到本批所有 case entry（此时 totalDeletedForEvent 已累加完毕，
+                // 避免中途传部分总数导致多选根目录文件时各 entry 数值不一致）。
+                event.waitUntil(Promise.all(tasks).then(() => {
+                    for (const fp of seenFilePaths) {
+                        const e = willBackupEntries.get(fp);
+                        if (e) e.totalDeletedForEvent = totalDeletedForEvent;
+                    }
+                }));
             }
         }),
 
@@ -445,6 +471,7 @@ export function registerWorkspaceListeners(context: vscode.ExtensionContext): vs
  *   - 文件夹批量删除场景（20+ 文件）中，此优化将 waitUntil 阻塞时间从 ~1s 降到 ~50ms，
  *     用户视觉上"文件夹消失→拷回"的整体延迟显著缩短。
  */
+
 async function backupCaseFileForDelete(filePath: string): Promise<void> {
     const fileType = detectFileType(filePath);
     if (!fileType) return;
@@ -540,7 +567,108 @@ async function handleCaseFilesDidDelete(
     entries: WillBackupEntry[],
     extContext: vscode.ExtensionContext,
 ): Promise<void> {
-    // Step 1: 并行拷回所有文件（毫秒级 IO；此时用户视角"文件闪了一下就回来"）
+    // ─────────────────────────────────────────────────────────────────────────
+    // F7（did 阶段内容门控）：把"非案例文件"从案例删除流程中剔除
+    // 相较「will 阶段门控」的改进：
+    //   1) will 阶段仍只做 copyFileSync 备份（H1 优化：零 parse），删除不被阻塞；
+    //   2) 此处对每个备份解析一次，结果回填 entry.restoreTableData 供 Step2 复用，避免重复 parse；
+    //   3) 据此把 entries 拆为 caseEntries（真案例，走拦截/还原/重建）与 skipEntries（非案例，直接删除）；
+    //   4) 非案例文件不还原、不入弹窗、不同步 TMS —— 文件已由 VSCode 按普通文件删除；
+    //   5) 在确认弹窗与结果面板透出 skipEntries 计数，消除"删除文件数对不上"的错觉。
+    // 判据与 F5 打开门控完全一致：复用 parsers.containsTestCaseId（解析失败保守按案例处理）。
+    // ─────────────────────────────────────────────────────────────────────────
+    const makeSkipOnOpenFile = (): ((r: PushFileResult) => Promise<void>) => {
+        return async (result: PushFileResult) => {
+            let fileExists = true;
+            try { fileExists = fs.existsSync(result.filePath); } catch { fileExists = false; }
+            if (!fileExists) {
+                showModal('default', 'info', '文件已删除',
+                    `${result.fileName}\n\n${result.error || '该文件已按普通文件删除'}`);
+            }
+        };
+    };
+
+    const caseEntries: WillBackupEntry[] = [];
+    const skipEntries: WillBackupEntry[] = [];
+    const skipResults: PushFileResult[] = [];
+    await Promise.all(entries.map(async (entry) => {
+        const fileType = detectFileType(entry.filePath);
+        let isCase = true;
+        if (fileType && entry.backupPath) {
+            try {
+                const parsed = await createParser(fileType).parse(entry.backupPath);
+                // 回填解析结果，供 Step2 prepareCaseFileDecisionContext 复用，避免二次 parse
+                entry.restoreTableData = parsed.tableData;
+                entry.restoreSourceData = parsed.sourceData;
+                isCase = containsTestCaseId(parsed.tableData?.headers, parsed.sourceData, fileType);
+            } catch {
+                isCase = true; // 解析失败保守按案例文件处理，避免误删真案例
+            }
+        }
+        if (isCase) {
+            caseEntries.push(entry);
+        } else {
+            // 非案例文件：清理 tmp 备份，不还原、不拦截、不重建
+            if (entry.backupPath) { try { fs.unlinkSync(entry.backupPath); } catch { /* ignore */ } }
+            TelemetryService.sendTelemetryEvent('caseFileDelete.skipped.notTestCaseFile', {
+                filePath: entry.fileName,
+                fileFormat: fileType || 'unknown',
+            });
+            console.log('[workspaceListeners] 文件不含 testcase_id，跳过删除拦截/还原/重建（非案例文件）:', entry.filePath);
+            skipEntries.push(entry);
+            skipResults.push({
+                filePath: entry.filePath,
+                fileName: entry.fileName,
+                successCount: 0,
+                failCount: 0,
+                total: 0,
+                failures: [],
+                error: '非案例文件（不含 testcase_id），已按普通文件直接删除，未触发案例拦截/重建',
+            });
+        }
+    }));
+
+    // 本批 VSCode 真实删除总数（含所有扩展名、含文件夹展开），由 will 阶段随 entry 下传；
+    // 同一批次所有 entry 共享同一值。用于 banner / 结果面板把"插件处理的案例数"对齐 VSCode 删除确认数。
+    const totalDeletedForEvent = entries[0]?.totalDeletedForEvent;
+    const mCase = caseEntries.length;            // 真案例文件数
+    const kNonCaseFormat = skipEntries.length;   // 案例格式但内容非案例的文件数
+    const otherNonCase = (totalDeletedForEvent !== undefined)
+        ? Math.max(0, totalDeletedForEvent - mCase - kNonCaseFormat)
+        : 0;                                     // 其它格式（.txt/.md/.png 等）非案例文件数（will 未备份，仅计入总数）
+
+    // F7 计数透明：结果面板顶部的精简说明（确认弹窗的数字对齐由 header 的 nonCaseCount 承担）
+    let skipNoteText: string | undefined;
+    const hasNonCase = kNonCaseFormat > 0 || otherNonCase > 0;
+    if (totalDeletedForEvent !== undefined && (mCase > 0 || hasNonCase)) {
+        const nonCaseTotal = totalDeletedForEvent - mCase;
+        skipNoteText = nonCaseTotal > 0
+            ? `本次共删除 ${totalDeletedForEvent} 个文件，其中 ${nonCaseTotal} 个非案例文件已按普通文件直接删除，未走案例流程。`
+            : `本次共删除 ${totalDeletedForEvent} 个文件，均为案例文件。`;
+    } else if (hasNonCase) {
+        // will 阶段未取得真实总数（降级）：仅就案例格式文件说明，不声称"与删除确认框一致"
+        skipNoteText = `本次涉及 ${mCase + kNonCaseFormat} 个案例格式文件，其中 ${kNonCaseFormat} 个非案例文件已按普通文件直接删除，未走案例流程。`;
+    }
+
+    // 本批无任何案例文件：仅把非案例文件的"直接删除"结果告知用户后返回
+    if (caseEntries.length === 0) {
+        if (skipEntries.length > 0) {
+            showPushSummary(skipResults, makeSkipOnOpenFile(), {
+                panelTitle: '删除结果',
+                documentTitle: '删除结果',
+                headerTitle: '以下文件已按普通文件删除',
+                note: skipNoteText,
+                showFailureDetails: false,
+            });
+        }
+        return;
+    }
+
+    // 仅"纯案例文件（无跳过项）"走单文件弹窗以保持原有体验；混入非案例文件时统一走批量路径，
+    // 以便结果面板把案例/非案例一并列出、总数与 VSCode 删除确认一致。
+    entries = caseEntries;
+
+    // Step 1: 并行拷回所有（案例）文件（毫秒级 IO；此时用户视角"文件闪了一下就回来"）
     await Promise.all(entries.map(async (e) => {
         try {
             await restoreCaseFile(e);
@@ -553,8 +681,12 @@ async function handleCaseFilesDidDelete(
         }
     }));
 
-    // Step 2: N=1 走单文件路径（保持体验），N≥2 走聚合路径
-    if (entries.length === 1) {
+    // Step 2: N=1 走单文件路径（保持体验），N≥2 或存在未被插件接管的非案例文件（真实删除数 > 案例文件数）走聚合路径。
+    // 注：非案例「扩展名」文件（.txt/.md/.png 等）不会进入 skipEntries，但已计入 totalDeletedForEvent，
+    // 因此仅当 totalDeletedForEvent 与案例文件数一致时才允许走单文件路径，否则强制聚合路径以透出计数提示。
+    const pureSingleCase = entries.length === 1 && skipEntries.length === 0
+        && (totalDeletedForEvent === undefined || totalDeletedForEvent === entries.length);
+    if (pureSingleCase) {
         try {
             await decideAndFinalizeCaseFileDelete(entries[0], extContext);
         } catch (err: any) {
@@ -737,13 +869,18 @@ async function handleCaseFilesDidDelete(
         // Step 6: 弹聚合确认弹窗（逐文件 Tab + 强制查看，用于含需同步 TMS / 预检失败文件的高风险批量）
         console.log('[workspaceListeners] 即将打开批量确认弹窗，batchEntries=', batchEntries.length,
             'items=', batchEntries.map(e => `${e.fileName}(cases=${e.caseCount},linked=${(e.items||[]).length},fail=${e.precheckError?'Y':'N'})`).join(' | '));
-        confirmed = await showBatchDeleteConfirmModal(batchEntries);
+        confirmed = await showBatchDeleteConfirmModal(batchEntries, {
+            nonCaseCount: kNonCaseFormat + otherNonCase,
+        });
         console.log('[workspaceListeners] 批量确认弹窗结束，confirmed=', confirmed);
     } else if (useLocalOnlyModal) {
         // Step 6b: F2 整批本地删除简化确认（未绑定任务等仅本地删除文件聚合为一条整体提示，一次确认、无需逐 Tab 查看）
         console.log('[workspaceListeners] 即将打开整批本地删除简化确认弹窗（F2），batchEntries=', batchEntries.length,
             'items=', batchEntries.map(e => `${e.fileName}(unbound=${e.unbound?'Y':'N'},hard=${e.hardDeleteOnly?'Y':'N'},type3=${e.allType3?'Y':'N'})`).join(' | '));
-        confirmed = await showBatchDeleteConfirmModal(batchEntries, { aggregated: true });
+        confirmed = await showBatchDeleteConfirmModal(batchEntries, {
+            aggregated: true,
+            nonCaseCount: kNonCaseFormat + otherNonCase,
+        });
         console.log('[workspaceListeners] 整批本地删除简化确认弹窗结束，confirmed=', confirmed);
     }
 
@@ -858,7 +995,9 @@ async function handleCaseFilesDidDelete(
     //   - 无 detailPayload 但文件存在（全成功的 hardDelete 分支不会存在）→ 直接打开；
     //   - 文件已被真删（hardDelete 场景）→ 提示"文件已删除"；
     //   - 预检失败 → 用 modal 展示预检原因，不打开文件。
-    const allResults: PushFileResult[] = [...onlineResults, ...hardDeleteResults, ...skippedResults];
+    const allResults: PushFileResult[] = [...onlineResults, ...hardDeleteResults, ...skippedResults, ...skipResults];
+    // F7：非案例文件（skipResults）已被 VSCode 按普通文件删除，点击行时给出与"TMS 同步"无关的准确文案
+    const skipPaths = new Set(skipResults.map((r) => r.filePath));
     if (allResults.length > 0) {
         const onOpenFile = async (result: PushFileResult) => {
             const fp = result.filePath;
@@ -870,11 +1009,17 @@ async function handleCaseFilesDidDelete(
                 return;
             }
 
-            // 情况 2：文件已不存在（hardDelete 已真删 / 全部成功已真删）→ 提示"文件已删除"
+            // 情况 2：文件已不存在（hardDelete 已真删 / 全部成功已真删 / 非案例文件直接删除）→ 提示"文件已删除"
             let fileExists = true;
             try { fileExists = fs.existsSync(fp); } catch (_) { fileExists = false; }
             if (!fileExists) {
-                showModal('default', 'info', '文件已删除', `${result.fileName}\n\n该文件的所有案例均已从 TMS 平台删除。`);
+                if (skipPaths.has(fp)) {
+                    // 非案例文件：从未同步 TMS，给出准确文案，避免误导用户以为"案例已从平台删除"
+                    showModal('default', 'info', '文件已删除',
+                        `${result.fileName}\n\n${result.error || '该文件为非案例文件，已按普通文件直接删除，未触发案例拦截/重建。'}`);
+                } else {
+                    showModal('default', 'info', '文件已删除', `${result.fileName}\n\n该文件的所有案例均已从 TMS 平台删除。`);
+                }
                 return;
             }
 
@@ -933,6 +1078,8 @@ async function handleCaseFilesDidDelete(
             panelTitle: _isSingle ? '删除结果' : '批量删除结果',
             documentTitle: _isSingle ? '删除结果' : '批量删除结果',
             headerTitle: '删除完成',
+            // F7：透出"真实总删除数 / 案例 vs 非案例"提示，与 VSCode 删除确认数对齐，消除计数对不上错觉
+            note: skipNoteText,
             // 不展开失败明细，用户点击文件行时通过 presentDeleteResult 查看详情
             showFailureDetails: false,
         });
@@ -952,6 +1099,10 @@ async function handleCaseFilesDidDelete(
         TelemetryService.sendTelemetryEvent('caseFileDelete.batch.done', {
             // 文件维度统计
             batchTotalFiles: String(entries.length),
+            batchSkippedNonCaseFiles: String(skipEntries.length),
+            // F7 计数透明：VSCode 真实删除总数（含所有扩展名、含文件夹展开）与其它格式非案例文件数
+            batchTotalDeletedFiles: totalDeletedForEvent !== undefined ? String(totalDeletedForEvent) : String(entries.length + skipEntries.length),
+            batchOtherNonCaseFiles: String(otherNonCase),
             batchOnlineFiles: String(onlineResults.length),
             batchOnlineSucceededFiles: String(succeededOnlineFiles),
             batchOnlineFailedFiles: String(failedOnlineFiles),

@@ -146,8 +146,9 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 .xs-th[data-sort="desc"]::after{content:'\25bc'}
 /* 左上角（行号）表头：z-index 必须高于"冻结列单元格"(.xs-td-cb=3)、普通表头(.xs-th=6)、
    以及失败单元格右上角 ⚠ 角标（td::after z-index:2，参与根层叠），确保不透明表头真正盖住
-   滚到其下方的单元格内容/角标（否则角标会浮到表头上，表现为"不合法标识跑到第一行"）。 */
-.xs-th-cb{width:50px;text-align:center;padding:8px;box-sizing:border-box;position:sticky;left:0;top:0;z-index:9;background:#fafbfc;border-bottom:2px solid #d0d7de}
+   滚到其下方的单元格内容/角标（否则角标会浮到表头上，表现为"不合法标识跑到第一行"）。
+   右侧投影：横向滚动时让滚入 # 列下方的内容被清晰"切断"，避免 key 行残字（如 name→ame）像穿透/脏数据。 */
+.xs-th-cb{width:50px;text-align:center;padding:8px;box-sizing:border-box;position:sticky;left:0;top:0;z-index:9;background:#fafbfc;border-bottom:2px solid #d0d7de;box-shadow:6px 0 6px -3px rgba(0,0,0,.18)}
 /* 左上角行号表头：仅显示 # 字符，不可选中也不可点击 */
 .xs-th-cb.xs-th-rownum{cursor:default;color:#8b95a1;font-weight:600;user-select:none}
 /* 普通表头：z-index 抬到 6，高于失败单元格 ⚠ 角标(td::after=2) 与冻结列单元格(.xs-td-cb=3)，
@@ -179,7 +180,10 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 
 /* 单元格样式 */
 .xs-td{border:1px solid #eaecef;padding:7px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box;vertical-align:top;color:#24292f;line-height:1.5}
-.xs-td-cb{width:50px;text-align:center;cursor:pointer;position:sticky;left:0;z-index:3;background:#fff;overflow:visible;user-select:none}
+/* # 列数据格（行号/勾选）：sticky left:0 唯一真正冻结列。右侧投影与表头一致，
+   横向滚动时把滚入其下方的普通单元格在右缘处渐隐切断，明确冻结列边界（残字不再像穿透）。
+   overflow:visible 保留，不影响右上角 ⚠ 角标伸出。 */
+.xs-td-cb{width:50px;text-align:center;cursor:pointer;position:sticky;left:0;z-index:3;background:#fff;overflow:visible;user-select:none;box-shadow:6px 0 6px -3px rgba(0,0,0,.10)}
 .xs-td-cb input{cursor:pointer}
 /* 行号格内的行号文本：居中显示，禁止鼠标交互（事件由父 td 处理） */
 .xs-td-cb .xs-rownum{display:inline-block;color:#666;font-size:12px;font-variant-numeric:tabular-nums;line-height:1;user-select:none;pointer-events:none;font-weight:500}
@@ -247,11 +251,13 @@ tbody tr:hover td.xs-td-cb{background:#f0f6ff}
    由 02a-render.js 按 field → 列索引精准挂 class（默认兜底染 tsId 列一列）。 */
 tbody tr.xs-tr-push-failed{background:transparent}
 tbody tr.xs-tr-push-failed:hover{background:transparent}
-tbody tr.xs-tr-push-failed td.xs-td-cb{background:transparent;box-shadow:inset 3px 0 0 var(--d)}
+tbody tr.xs-tr-push-failed td.xs-td-cb{background:#fff;box-shadow:inset 3px 0 0 var(--d),6px 0 6px -3px rgba(0,0,0,.10)}
 tbody tr.xs-tr-push-failed:hover td.xs-td-cb{background:#fbd9d9}
 /* 同时被选中时：保持左侧红条（作为“该行有问题”的锚点），中央蓝条提示选中态 */
 tbody tr.xs-tr-push-failed.selected{background:transparent}
-tbody tr.xs-tr-push-failed.selected td.xs-td-cb{background:transparent;box-shadow:inset 3px 0 0 var(--d),inset -2px 0 0 var(--p)}
+/* # 冻结格必须不透明（与 246 行选中态蓝底一致）：透明会让横向滚动时滚到其下方的
+   普通格内容穿透显示（表现为"内容跑到 # 列里"、行号与内容叠字）。 */
+tbody tr.xs-tr-push-failed.selected td.xs-td-cb{background:#e3f2fd;box-shadow:inset 3px 0 0 var(--d),inset -2px 0 0 var(--p),6px 0 6px -3px rgba(0,0,0,.10)}
 /* 关键去噪：整行 td 背景不再统一红底 */
 tbody tr.xs-tr-push-failed td{background:inherit}
 tbody tr.xs-tr-push-failed:hover td{background:inherit}

@@ -14,7 +14,7 @@
  *  关键设计：
  *    - resolveCustomEditor 里调用 workbench.action.keepEditor，避免「预览 Tab」被互相覆盖。
  *    - cachedTableData 作为可见性变化时的快照，避免反复重解。
- *    - testcase_id 由 ensureTrackingColumns 代为生成，生成后立即 save 落盘，保证推送响应能匹配。
+ *    - testcase_id：打开时按原样呈现、不自动补列；用户可手动插入该列，或在保存 / 推送时由 ensureTrackingColumns 补列并落盘。
  * ============================================================================
  */
 import * as vscode from 'vscode';
@@ -533,21 +533,13 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             return;
         }
 
-        // ── F5：测试案例文件夹下的 csv/json/yaml，若内容不含关键字段 testcase_id，不使用案例编辑器打开 ──
-        // 在「打开入口决策阶段」即用解析器检查内容：不含 testcase_id 的文件不是案例，
-        // 重定向到系统文本编辑器打开（与普通文件一致），避免把非案例文件误导成案例解析。
-        // 解析结果复用给后续 prefetch，避免二次解析。
+        // ── 打开门控（F8 演进）：默认全部用案例编辑器打开 ──
+        // 测试案例文件夹下、合格（目录层级合规）的 csv/json/yaml 一律用案例编辑器打开，
+        // 不再因"不含 testcase_id"而重定向到文本编辑器（F8：默认即用案例编辑器打开；
+        // 非案例文件仅限制部分功能——见下方 isCaseFile 透传与 webview 端功能开关）。
+        // 解析结果（precheck）复用给后续 prefetch，避免二次解析；hasKey 即"是否案例文件"。
         const precheck = await this.checkTestCaseIdField(resolved.type!, document.uri, log);
-        if (!precheck.hasKey) {
-            TelemetryService.sendTelemetryEvent('editor.opened.noTestCaseIdField', {
-                targetFile: fileName,
-                fileFormat: resolved.type!,
-                filePath: fileName,
-            });
-            log('⚠ 不含关键字段 testcase_id，重定向到文本编辑器打开 | type=', resolved.type);
-            this.redirectToTextEditor(document, webviewPanel, fileName, log);
-            return;
-        }
+        const isCaseFile = precheck.hasKey;
 
         // 每个 panel 独享的会话状态：避免多 panel 共用单例时被覆盖
         const session: EditorSession = {
@@ -579,6 +571,8 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         //      避免出现「先无高亮 → 后异步刷新才上色」的短暂错觉。
         try {
             const { triggerEditValidationOnWebviewOpen } = await import('../preValidate/editValidationHandler');
+            // 非案例文件（不含 testcase_id）由 editValidationHandler._doValidate 内部闸门统一跳过校验
+            // 并清空残留高亮，此处无需分支；仅案例文件才产生红/黄高亮与校验弹窗。
             await triggerEditValidationOnWebviewOpen(filePath);
         } catch (e: any) {
             console.warn('[BaseEditorProvider] 触发编辑期校验失败（已忽略）:', e?.message || e);
@@ -614,7 +608,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         // 等 init 消息到达时若 prefetch 已完成，则直接复用结果立即推送，显著缩短首屏数据展示时间。
         //
         // 设计原则：YAML 文件只要 parser 能合法解析，就一律走原逻辑（缺 testcase_id 时
-        // 由 ensureTrackingColumns 自动补上主键列），不再做任何"结构合规性猜测式拦截"，
+        // 按原样打开、不自动补列），不再做任何"结构合规性猜测式拦截"，
         // 避免误伤用户手工创建的各种合法 YAML 形态。
         const _prefetchStart = Date.now();
         const prefetchPromise: Promise<PrefetchResult> =
@@ -628,7 +622,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
                     } else {
                         result = await session.parser.parse(filePath);
                     }
-                    const ensured = ensureTrackingColumns(result.tableData, result.sourceData);
+                    const ensured = ensureTrackingColumns(result.tableData, result.sourceData, { addIfMissing: false });
                     log(`⚡ prefetch ready dur=${Date.now() - _prefetchStart}ms rows=${(ensured.tableData?.rows || []).length} generated=${ensured.generated}`);
                     return { tableData: ensured.tableData, sourceData: result.sourceData, generated: ensured.generated };
                 } catch (err: any) {
@@ -769,18 +763,23 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             testTaskName: currentTask.taskInfo?.testTaskName || '',
             subTestTaskName: currentTask.taskInfo?.subTestTaskName || ''
         }
-        webviewPanel.webview.html = await this.buildEditorHtml(nonce, webviewPanel, session.type, taskInfoForWebView);
+        webviewPanel.webview.html = await this.buildEditorHtml(nonce, webviewPanel, session.type, taskInfoForWebView, isCaseFile);
         log('✅ html ready');
     }
 
     /**
-     * F5 · 测试案例文件夹下 csv/json/yaml 的内容门控：
-     * 仅当文件「位于测试案例文件夹且为 csv/json/yaml」（已由 resolveFile 判定 qualified）时，
-     * 进一步解析内容，检查是否包含关键字段 testcase_id；
-     * 不含该字段的文件不应被当作案例，调用方应重定向到文本编辑器打开。
+     * 打开门控（F5 演进）：测试案例文件夹下 csv/json/yaml 的内容决策。
+     * 仅当文件「位于测试案例文件夹且为 csv/json/yaml」（已由 resolveFile 判定 qualified）时运行。
+     *
+     * 决策：
+     *   - 含关键字段 testcase_id → 放行（hasKey=true），用案例编辑器打开。
+     *   - 不含 testcase_id → 重定向到文本编辑器（hasKey=false），不使用案例编辑器
+     *       （F5 默认行为；普通文件不应被误导成案例，除非用户显式「用案例编辑器打开」）。
      *
      * 解析成功时一并返回 tableData / sourceData，供后续 prefetch 复用，避免二次解析。
-     * 解析失败时保守返回 hasKey=true（仍按案例文件打开），不因此误伤文件。
+     * 解析失败（文件损坏/无法解析）时保守返回 hasKey=false（按非案例文件处理，功能受限），
+     * 避免把"解析异常的文件"误判为完整案例、放开推送等能力；空文件已由各解析器返回空表，
+     * 不会被本分支命中（空表 → containsTestCaseId=false → 非案例）。
      */
     private async checkTestCaseIdField(
         type: FileType,
@@ -793,8 +792,8 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             const hasKey = containsTestCaseId(parsed.tableData?.headers, parsed.sourceData, type);
             return { hasKey, tableData: parsed.tableData, sourceData: parsed.sourceData };
         } catch (err: any) {
-            log('⚠ 检查 testcase_id 字段失败（保守按案例文件处理）:', err?.message || err);
-            return { hasKey: true };
+            log('⚠ 检查 testcase_id 字段失败（解析异常，按非案例文件处理）:', err?.message || err);
+            return { hasKey: false };
         }
     }
 
@@ -846,7 +845,8 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         nonce: string,
         webviewPanel: vscode.WebviewPanel,
         dataType: FileType,
-        taskInfo: { bind: boolean, testTaskNo: string, testTaskName: string, subTestTaskName: string }
+        taskInfo: { bind: boolean, testTaskNo: string, testTaskName: string, subTestTaskName: string },
+        isCaseFile: boolean
     ): Promise<string> {
         const msgType = `${dataType}Data`;
 
@@ -929,6 +929,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
             .replace(/\{\{nonce\}\}/g, nonce)
             .replace(/\{\{dataType\}\}/g, dataType)
             .replace(/\{\{msgType\}\}/g, msgType)
+            .replace(/\{\{isCaseFile\}\}/g, String(isCaseFile))
             .replace(/\{\{cspSource\}\}/g, cspSource)
             .replace(/\{\{stylesUri\}\}/g, stylesUri.toString())
             .replace(/\{\{editorScripts\}\}/g, editorScriptsHtml)

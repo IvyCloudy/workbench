@@ -74,6 +74,9 @@ function hasStepsColumn() {
 var S = {
     dataType: __CFG.dataType,
     msgType: __CFG.msgType,
+    // 是否为案例文件（含 testcase_id）：由扩展端通过配置与 Data 帧下发；
+    // 非案例文件时隐藏/禁用案例专属功能（推送、格式校验、展开步骤、删除等）。
+    isCaseFile: !!__CFG.isCaseFile,
     data: { headers: [], rows: [] },
     // 当前文档的绝对路径（由扩展端通过 Data 消息下发），用于 UI 状态命名空间隔离，
     // 避免同 dataType 的不同文件之间共享列宽/行高/筛选/搜索/滚动位置。
@@ -580,6 +583,8 @@ function init() {
     bindToolbar();
     bindDocument();
     bindContainerScroll();
+    // 非案例文件（不含 testcase_id）立即隐藏案例专属功能按钮，避免首屏闪烁
+    if (typeof applyNonCaseRestrictions === 'function') applyNonCaseRestrictions();
 }
 
 // ==================== UI 状态持久化 ====================
@@ -746,7 +751,13 @@ function bindContainerScroll() {
 window.addEventListener('message', function (e) {
     var m = e.data;
     if (!m) return;
+    var _caseFileChanged = false;
     if (m.type === S.msgType) {
+        // 是否为案例文件：以扩展端下发为准（动态，用户插入 testcase_id 列保存后会变 true）
+        if (typeof m.isCaseFile === 'boolean') {
+            _caseFileChanged = (S.isCaseFile !== m.isCaseFile);
+            S.isCaseFile = m.isCaseFile;
+        }
         // 文件路径切换检测：扩展端每次推数据都带上 filePath；
         // 当与当前 S.filePath 不一致时，说明：
         //   1) 首屏（S.filePath 还是 '__pending__' 占位）
@@ -793,7 +804,11 @@ window.addEventListener('message', function (e) {
         // 兜底重发数据场景：当切换 tab 后扩展端主动 repush 时，
         // 如果用户已有未保存修改或撤销栈，则忽略这次推送，避免覆盖用户编辑成果。
         // 例外：当扩展端带 force=true（如外部 TextEditor 修改了文件），强制覆盖以同步最新内容。
-        if (hasUserChanges && alreadyRendered && !m.force) {
+        // 用户保存的回包（saveHighlight）且本次 isCaseFile 发生翻转时，放行数据覆盖：
+        // 非案例文件插入/删除 testcase_id 列后，需以回包数据刷新前端（自动放开案例功能、刷上扩展端补的
+        // testcase_id 值），无需手动点刷新。常态（isCaseFile 未变）仍走 skip 保护编辑成果，避免实时
+        // 自动保存每帧覆盖光标/选区。
+        if (hasUserChanges && alreadyRendered && !m.force && !(m.reason === 'saveHighlight' && _caseFileChanged)) {
             dbg('⏭ skip repush (user changes)');
             // saveHighlight 等 reason 带高亮信息时，仍更新 highlightedCells / addedInfos 避免丢失
             if ('highlightedCells' in m) {
@@ -900,6 +915,8 @@ window.addEventListener('message', function (e) {
         dbg('🎨 render rows=' + S.data.rows.length + ' force=' + !!m.force + ' reason=' + (m.reason || ''));
         // 数据到达后按最新表头刷新「展开步骤」按钮显隐（YAML 且有 steps 列才显示）
         if (typeof updateExpandStepsBtnVisibility === 'function') updateExpandStepsBtnVisibility();
+        // 非案例文件（不含 testcase_id）限制功能：隐藏/禁用推送、格式校验、展开步骤、删除等
+        if (typeof applyNonCaseRestrictions === 'function') applyNonCaseRestrictions();
         S.sel.clear();
         // 仅在数据真正被外部重置/重载时清空 mods；saveHighlight / pushSuccess / reload
         // 这类"自反弹或用户主动 refresh"场景数据其实未变（已落盘），mods 是 webview 端的权威

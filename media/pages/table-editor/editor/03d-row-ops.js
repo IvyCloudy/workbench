@@ -508,8 +508,8 @@ function deleteRow(ri) {
     var rowToDelete = S.data.rows[ri];
     var tsId = (tsIdIdx >= 0 && rowToDelete[tsIdIdx] != null) ? String(rowToDelete[tsIdIdx]) : '';
 
-    // 纯本地行（无 testcase_id）：直接物理删除，不调接口（线上无记录）
-    if (!tsId) {
+    // 纯本地行（无 testcase_id）或非案例文件（S.isCaseFile=false）：直接物理删除，不调接口（线上无记录）
+    if (!tsId || !S.isCaseFile) {
         S.data.rows.splice(ri, 1);
         var ddts = getDetailTables();
         ddts.forEach(function (dt) {
@@ -589,7 +589,8 @@ function deleteSelectedRows() {
     sorted.forEach(function (i) {
         var row = S.data.rows[i];
         var tsId = (tsIdIdx >= 0 && row[tsIdIdx] != null) ? String(row[tsIdIdx]) : '';
-        if (tsId) pendingRows.push(row);
+        // 案例文件且行含 testcase_id → 走线上删除（pending）；其余（无 tsId 或整体为非案例文件）本地删除
+        if (tsId && S.isCaseFile) pendingRows.push(row);
         else localRows.push(i);
     });
 

@@ -29,6 +29,12 @@ export class JsonFileParser implements FileParser {
         let content = '';
         try {
             content = await fs.promises.readFile(filePath, 'utf-8');
+            // 空文件 / 全空白：与 YAML 解析器保持一致，返回空表而非抛异常。
+            // 否则 JSON.parse('') 抛 SyntaxError，会令打开门控（checkTestCaseIdField）
+            // 走入"解析失败保守按案例文件处理"分支，把空 json 误当案例文件打开。
+            if (!content || content.trim() === '') {
+                return { tableData: { headers: [], rows: [] }, sourceData: [] };
+            }
             const data = JSON.parse(content);
 
             const isTopArray = Array.isArray(data);

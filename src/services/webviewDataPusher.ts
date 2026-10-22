@@ -149,31 +149,37 @@ export class WebviewDataPusher {
             return false;
         }
 
-        // ── F5：重新解析后若文件已不含 testcase_id，则文件不再是案例 ──
-        // 覆盖所有「重新解析磁盘」场景：外部变更（onDidSaveTextDocument / fsWatcher）、
-        // 切回可见时的 reload（reason='visible'）等。一旦文件不含关键字段 testcase_id，
-        // 就不应再由 ensureTrackingColumns 自动补全 / 落盘该字段（尊重用户删除该字段的意图），
-        // 关闭案例编辑器面板，让其回到普通状态；后续若再用案例编辑器打开，会被
-        // BaseEditorProvider 的 F5 打开门控拦截并重定向到文本编辑器。
-        // 说明：init 阶段不会命中——打开门控已保证仅含 testcase_id 的文件才进入案例编辑器，
-        // 因此不会误伤正常案例文件；本分支只在「文件先前是案例、后来不再含该字段」时生效。
-        if (!containsTestCaseId(result.tableData?.headers, result.sourceData, this.session.type)) {
-            this.log('⚠ 文件已不含 testcase_id，不再作为案例处理，关闭案例编辑器面板 | reason=', reason);
-            TelemetryService.sendTelemetryEvent('editor.externalChange.lostTestCaseIdField', {
-                targetFile: path.basename(this.filePath),
-                fileFormat: this.session.type,
-                filePath: path.basename(this.filePath),
-                reason,
-            });
-            try { this.webviewPanel.dispose(); } catch (_) { /* ignore */ }
-            return false;
+        // ── F5（演进）：仅当文件「先前含 testcase_id、本次解析已不含」时才关闭面板 ──
+        // 尊重用户用外部编辑器删除 testcase_id 的意图；但「打开时本就不含 testcase_id」的普通文件
+        // （按原样打开、用户后续按需手动补列）不应被关闭，否则刚打开的普通文件会在初次渲染 /
+        // 切回可见（reason='visible'）时被误关。
+        // 判定「先前是否有」以会话缓存的 cachedTableData 表头为准：init / 首次解析时缓存为空，视为「先前无」。
+        const hasNow = containsTestCaseId(result.tableData?.headers, result.sourceData, this.session.type);
+        // 是否为案例文件（含 testcase_id）——供 webview 端按"非案例文件"限制功能（隐藏推送/校验/删除等）。
+        // 基于当前文件内容动态判定：用户手动插入 testcase_id 列并保存后，下一次 push 帧会更新为 true，功能随之放开。
+        this.session.isCaseFile = hasNow;
+        if (!hasNow) {
+            const hadBefore = !!(oldData && containsTestCaseId(oldData.headers, undefined, this.session.type));
+            if (hadBefore) {
+                this.log('⚠ 文件已不含 testcase_id（先前有、后被删除），关闭案例编辑器面板 | reason=', reason);
+                TelemetryService.sendTelemetryEvent('editor.externalChange.lostTestCaseIdField', {
+                    targetFile: path.basename(this.filePath),
+                    fileFormat: this.session.type,
+                    filePath: path.basename(this.filePath),
+                    reason,
+                });
+                try { this.webviewPanel.dispose(); } catch (_) { /* ignore */ }
+                return false;
+            } else {
+                this.log('⚠ 文件不含 testcase_id（打开时即无，按原样打开），放行不关闭 | reason=', reason);
+            }
         }
 
         this.session.originalSourceData = result.sourceData;
-        // prefetch 命中时 ensureTrackingColumns 已执行过，无需重复
+        // prefetch 命中时 ensureTrackingColumns 已执行过（addIfMissing:false，仅补空单元格），无需重复
         const ensured = prefetchHit
             ? { tableData: prefetchHit.tableData, generated: prefetchHit.generated }
-            : ensureTrackingColumns(result.tableData, this.session.originalSourceData);
+            : ensureTrackingColumns(result.tableData, this.session.originalSourceData, { addIfMissing: false });
         this.session.cachedTableData = ensured.tableData;
 
         if (ensured.generated) {
@@ -214,6 +220,7 @@ export class WebviewDataPusher {
             reason,
             externalChange: isExternal,
             filePath: this.filePath,
+            isCaseFile: !!this.session.isCaseFile,
         };
         if (highlighted !== undefined) {
             msgPayload.highlightedCells = highlighted;

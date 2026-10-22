@@ -39,6 +39,8 @@ export interface EditorSession {
     deletedInfos?: DeletedRowInfo[];
     /** 快照差异检测到的新增行信息（下次 pushDataToWebview 消费后清空） */
     addedInfos?: AddedRowInfo[];
+    /** 是否为案例文件（含关键字段 testcase_id）：用于 webview 端按"非案例文件"限制功能（隐藏推送/校验/删除等） */
+    isCaseFile?: boolean;
 }
 
 // ============================================

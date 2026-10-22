@@ -62,7 +62,8 @@ export function detectFileType(filePath: string): FileType | null {
  */
 export function ensureTrackingColumns(
     tableData: TableData,
-    sourceData?: any
+    sourceData?: any,
+    opts?: { addIfMissing?: boolean }
 ): { tableData: TableData; generated: boolean } {
     if (!tableData) return { tableData, generated: false };
     if (!Array.isArray(tableData.headers)) tableData.headers = [];
@@ -70,8 +71,16 @@ export function ensureTrackingColumns(
 
     let generated = false;
 
+    // addIfMissing 默认 true（推送等显式场景需要"缺则新增"主键列）；
+    // 打开 / 保存路径传 false，仅补齐已存在 testcase_id 列的空单元格，绝不新增列，
+    // 以尊重"按原样打开、用户按需手动加列"的诉求（见 F8）。
+    const addIfMissing = opts?.addIfMissing !== false;
     let tsIdx = tableData.headers.indexOf(TS_ID_COLUMN);
     if (tsIdx < 0) {
+        if (!addIfMissing) {
+            // 不新增列：按原样返回，由调用方决定（如打开时保持文件原貌、待用户手动加列）
+            return { tableData, generated: false };
+        }
         // testcase_id 固定置顶（最前），其余字段保持文件中的原有相对顺序不变。
         tableData.headers.unshift(TS_ID_COLUMN);
         tableData.rows.forEach(row => {
@@ -180,6 +189,15 @@ export function containsTestCaseId(
         return recs.some((r) => r && typeof r === 'object' && TS_ID_COLUMN in r);
     }
     return false;
+}
+
+/**
+ * 判断文件原始内容是否为空白（空文件 / 全空白），用于「打开入口决策」门控：
+ * 仅当文件为空 / 全空白时才重定向到文本编辑器；非空白的普通数据文件（即便缺 testcase_id）
+ * 一律放行由案例编辑器打开并补全主键列。
+ */
+export function isBlankFileContent(content: string | undefined | null): boolean {
+    return !content || content.trim() === '';
 }
 
 /**

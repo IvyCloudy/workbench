@@ -38,7 +38,7 @@ import { resolveTaskInfoOrNull } from '../handlers/pushCore.stages';
 import { resolvePreValidateGate } from '../preValidate';
 import { requestEditValidation, type EditValidationResult } from '../preValidate/editValidationHandler';
 import { TS_ID_COLUMN } from '../services/utils';
-import { detectFileType, createParser } from '../parsers';
+import { detectFileType, createParser, ensureTrackingColumns } from '../parsers';
 import type { PushStrategy, PushContext } from '../providers/BaseEditorProvider';
 import { pushDiag, showPushDiag } from '../utils/pushDiagnostics';
 
@@ -188,6 +188,10 @@ async function handleSave(msg: any, ctx: EditorMsgCtx): Promise<void> {
         } catch (_) { /* 解析失败则沿用既有空值，交给 json-parser 既有逻辑处理 */ }
     }
 
+    // 写盘前补列：若文件已存在 testcase_id 列（原始即有、或用户手动插入），仅补齐空单元格的 uuid，
+    // 使其成为有效主键；绝不新增列（新增列由用户按需手动操作，打开时不再自动补列，见 F8）。
+    ensureTrackingColumns(msg.data, originalSourceData, { addIfMissing: false });
+
     // 写盘前先打时间戳，覆盖 watcher 在 await 期间就回包的极端竞态
     ctx.onSelfSave();
     await ctx.session.parser.save(filePath, msg.data, originalSourceData);
@@ -217,8 +221,17 @@ async function handleSave(msg: any, ctx: EditorMsgCtx): Promise<void> {
     });
     // 缓存与前端最新数据一致：直接复用 webview 提交上来的 data
     try { ctx.session.cachedTableData = msg.data; } catch (_) { ctx.session.cachedTableData = null; }
-    // save 后始终推送高亮状态到 webview（有变化下发新格 / 无变化下发 null 清除残留）
-    ctx.pusher.push(false, 'saveHighlight');
+    // save 后始终推送高亮状态到 webview（有变化下发新格 / 无变化下发 null 清除残留）。
+    // 是否强制重新解析磁盘仅取决于"testcase_id 列的存在性是否翻转"：
+    //   - isCaseFile 完全由是否含 testcase_id 决定，故仅当该列被插入/删除（headers 含 testcase_id 翻转）时才
+    //     需要 forceReparse 重算 session.isCaseFile，使下一帧携带正确的 isCaseFile；
+    //   - 普通内容编辑（改值/增删行等）不影响 testcase_id 存在性，isCaseFile 必然不变，复用缓存、不重解析，
+    //     避免大文件每次保存都重读磁盘+差异比对（保存是高频操作，逐单元格编辑即触发 saveFile）。
+    // 否则非案例文件插入 testcase_id 列保存后，webview 收到的仍是旧 isCaseFile=false，
+    // 案例功能不会自动放开，必须手动点刷新（reload）才会生效。
+    const _curHasTs = Array.isArray(msg.data.headers) && msg.data.headers.includes('testcase_id');
+    const _needReparse = ctx.session.isCaseFile !== _curHasTs;
+    ctx.pusher.push(_needReparse, 'saveHighlight');
     showSaveResult(ctx.webviewPanel, true);
     ctx.log('💾 saved msg posted');
 
@@ -240,6 +253,12 @@ async function handleSave(msg: any, ctx: EditorMsgCtx): Promise<void> {
 
 async function handlePushTestCase(msg: any, ctx: EditorMsgCtx): Promise<void> {
     if (!msg?.data) return;
+    // 非案例文件（不含 testcase_id）不提供推送，直接拒绝（webview 端已隐藏推送入口，此处为兜底）
+    if (!ctx.session.isCaseFile) {
+        ctx.webviewPanel.webview.postMessage({ type: 'toast', text: '非案例文件，无法推送（请先添加 testcase_id 列）', level: 'warning' });
+        ctx.log('⚠ 非案例文件，拒绝推送 | filePath=', ctx.getFilePath());
+        return;
+    }
     pushDiag(`[前端请求] 收到推送 | 前端下发行数=${Array.isArray(msg.data) ? msg.data.length : '非数组'} | pushIndexToRow长度=${Array.isArray(msg.pushIndexToRow) ? msg.pushIndexToRow.length : 0} | rowIndexMap键数=${msg.rowIndexMap && typeof msg.rowIndexMap === 'object' ? Object.keys(msg.rowIndexMap).length : 0} | filePath=${ctx.getFilePath()}`);
     const pushCtx: PushContext = {
         session: ctx.session,
@@ -324,6 +343,17 @@ async function handleClearAllMarks(_msg: any, ctx: EditorMsgCtx): Promise<void> 
  *                  errorMessage?: string }
  */
 async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
+    // 非案例文件（不含 testcase_id）删除不走线上逻辑：兜底拒绝。
+    // webview 端对未含 testcase_id 的行已走本地删除、且非案例文件强制本地删除（不发 TMS 消息），
+    // 此处为极端情况兜底，防止非案例文件误触发线上删除预检。
+    if (!ctx.session.isCaseFile) {
+        ctx.webviewPanel.webview.postMessage({
+            type: 'confirmDeleteRowsResult', ok: false, items: [],
+            errorMessage: '非案例文件，删除仅本地执行，不走线上逻辑',
+        });
+        ctx.log('⚠ 非案例文件，拒绝线上删除 | filePath=', ctx.getFilePath());
+        return;
+    }
     const filePath = ctx.getFilePath();
     const tsIds: string[] = Array.isArray(msg?.data?.tsIds)
         ? msg.data.tsIds.map((x: any) => String(x)).filter(Boolean)
@@ -460,6 +490,11 @@ async function handleConfirmDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<voi
 async function handleRunFormatValidation(_msg: any, ctx: EditorMsgCtx): Promise<void> {
     const filePath = ctx.getFilePath();
     ctx.log('📨 runFormatValidation from webview');
+    // 非案例文件（不含 testcase_id）无需格式校验，直接拒绝（webview 端已隐藏入口，此处为兜底）
+    if (!ctx.session.isCaseFile) {
+        ctx.webviewPanel.webview.postMessage({ type: 'toast', text: '非案例文件，无需格式校验', level: 'info' });
+        return;
+    }
     // 非 csv/yaml/json 文件（理论上不会出现在本编辑器，但兜底避免静默无响应）
     if (!detectFileType(filePath)) {
         ctx.webviewPanel.webview.postMessage({ type: 'toast', text: '当前文件类型不支持格式校验', level: 'info' });
@@ -503,6 +538,13 @@ async function handleRunFormatValidation(_msg: any, ctx: EditorMsgCtx): Promise<
  * （显式传入 tsIds），而不是文件内全部待同步行。
  */
 async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
+    // 非案例文件（不含 testcase_id）删除不走线上逻辑：兜底拒绝。
+    // webview 端对未含 testcase_id 的行已走本地删除、且非案例文件强制本地删除（不向本 handler 发 TMS 删除），
+    // 此处为极端情况兜底，防止非案例文件误触发线上删除。
+    if (!ctx.session.isCaseFile) {
+        ctx.log('⚠ 非案例文件，拒绝线上删除 | filePath=', ctx.getFilePath());
+        return;
+    }
     const filePath = ctx.getFilePath();
     const tsIds: string[] = Array.isArray(msg?.data?.tsIds)
         ? msg.data.tsIds.map((x: any) => String(x)).filter(Boolean)

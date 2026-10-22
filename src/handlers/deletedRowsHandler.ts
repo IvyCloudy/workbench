@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { detectFileType, createParser } from '../parsers';
+import { detectFileType, createParser, containsTestCaseId } from '../parsers';
 import { syncDeletedRows, refreshAndGetDeletedRows } from '../utils/deletedRowsStore';
 import { showToast } from '../utils/message';
 import { reportDeleteResult, buildDeleteFailures, postDeleteRowsResult } from '../utils/deleteFeedback';
@@ -30,6 +30,13 @@ export async function handleSyncDeletedRows(): Promise<void> {
         }
         const parser = createParser(fileType);
         const parsed = await parser.parse(uri.fsPath);
+        // F8：非案例文件（不含 testcase_id）不做线上删除同步，避免"删除不走线上逻辑"被绕过。
+        // 目录层级判定（isTestCaseFile）只确认落在测试案例文件夹，此处再按内容确认确为案例文件。
+        if (!containsTestCaseId(parsed.tableData?.headers, parsed.sourceData, fileType)) {
+            TelemetryService.sendTelemetryEvent('syncDeletedRows.aborted', { reason: 'notCaseFile' });
+            showToast(undefined, 'info', '非案例文件（不含 testcase_id），无需同步线上删除');
+            return;
+        }
         const deletedRows = refreshAndGetDeletedRows(uri.fsPath, parsed.tableData);
         if (deletedRows.length === 0) {
             TelemetryService.sendTelemetryEvent('syncDeletedRows.noPending', {});

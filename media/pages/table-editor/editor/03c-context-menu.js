@@ -85,14 +85,16 @@ function showContextMenu(e) {
             }
             _areaSize = _areaRows + '\u00d7' + (_rc2.c2 - _rc2.c1 + 1);
         }
-        // 推送：选中行 > 0 时优先推送选中行（含单元格矩形选区涵盖的行），否则推送当前右键所在行
-        var _selRowCnt = (typeof getPushTargetRows === 'function') ? getPushTargetRows().length : S.sel.size;
-        var pushCount = _selRowCnt > 0 ? _selRowCnt : (S._ctxRow >= 0 ? 1 : 0);
-        var pushLabel = pushCount > 0
-            ? '推送测试案例 (' + pushCount + ')'
-            : '推送测试案例';
-        items.push({ label: pushLabel, action: pushFromContextMenu, disabled: pushCount === 0 });
-        items.push({ divider: true });
+        // 推送：仅案例文件（含 testcase_id）提供；非案例文件不提供推送（删除/推送均不走线上逻辑）
+        if (S.isCaseFile) {
+            var _selRowCnt = (typeof getPushTargetRows === 'function') ? getPushTargetRows().length : S.sel.size;
+            var pushCount = _selRowCnt > 0 ? _selRowCnt : (S._ctxRow >= 0 ? 1 : 0);
+            var pushLabel = pushCount > 0
+                ? '推送测试案例 (' + pushCount + ')'
+                : '推送测试案例';
+            items.push({ label: pushLabel, action: pushFromContextMenu, disabled: pushCount === 0 });
+            items.push({ divider: true });
+        }
         items.push({
             label: _hasArea ? ('复制选区 (' + _areaSize + ')') : '复制单元格',
             action: copyCell, disabled: S._ctxRow < 0 || S._ctxCol < 0
@@ -149,6 +151,8 @@ function showContextMenu(e) {
             items.push({ label: '重命名列', action: function () { renameCol(S._ctxCol); }, disabled: isFrozenCol(S._ctxCol) });
             items.push({ label: '删除该列', action: function () { deleteCol(S._ctxCol); }, disabled: isFrozenCol(S._ctxCol) });
         }
+        // 删除组：始终提供。删除逻辑按文件是否案例文件分流——
+        // 案例文件走 TMS 线上删除；非案例文件仅本地删行（不调线上接口、不同步 TMS）。
         items.push({ divider: true });
         items.push({ label: '删除该行', action: function () { deleteRow(S._ctxRow); }, disabled: S._ctxRow < 0 });
         // 删除选中行：整行选择 S.sel 优先；无整行选择但存在跨多行单元格矩形选区时，

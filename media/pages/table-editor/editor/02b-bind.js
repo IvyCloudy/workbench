@@ -14,7 +14,26 @@
 // 供 bindToolbar 初始化与 webview 切换文件（CustomEditor 复用）、数据到达刷新时统一调用。
 function updateExpandStepsBtnVisibility() {
     var btn = document.getElementById('expandStepsBtn');
-    if (btn) btn.style.display = (supportsStepsExpansion() && hasStepsColumn()) ? '' : 'none';
+    if (btn) {
+        // 非案例文件（不含 testcase_id）不显示「展开步骤」；案例文件仍需结构化类型且含 steps 列
+        btn.style.display = (S.isCaseFile && supportsStepsExpansion() && hasStepsColumn()) ? '' : 'none';
+    }
+}
+
+// 非案例文件（不含 testcase_id）：隐藏/禁用案例专属功能（推送、格式校验、展开步骤），
+// 使其仅作为普通表格查看/编辑使用。isCaseFile 由扩展端通过配置与 Data 帧下发，可动态更新
+// （用户手动插入 testcase_id 列并保存后变为案例文件，功能随之放开）。
+function applyNonCaseRestrictions() {
+    var isCase = !!S.isCaseFile;
+    var pushBtn = document.getElementById('pushBtn');
+    if (pushBtn) pushBtn.style.display = isCase ? '' : 'none';
+    var validateBtn = document.getElementById('validateBtn');
+    if (validateBtn) validateBtn.style.display = isCase ? '' : 'none';
+    // 筛选失败按钮：依赖案例合法性校验产生的失败项；非案例文件无失败项，一并隐藏
+    var failedFilterBtn = document.getElementById('failedFilterBtn');
+    if (failedFilterBtn) failedFilterBtn.style.display = isCase ? '' : 'none';
+    // 展开步骤按钮受 isCaseFile 与 steps 列共同控制
+    if (typeof updateExpandStepsBtnVisibility === 'function') updateExpandStepsBtnVisibility();
 }
 
 function bindToolbar() {

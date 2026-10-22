@@ -37,5 +37,6 @@ export {
     requestEditValidation,
     registerEditValidation,
     triggerEditValidationOnWebviewOpen,
-    setSuppressEditValidationPrompt,
+    suppressEditValidationPromptForFile,
+    clearEditValidationPromptSuppressionForFile,
 } from './editValidationHandler';

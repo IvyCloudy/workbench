@@ -22,7 +22,7 @@ import type { RowLike } from '../handlers/pushCore.types';
 import type { PushFailureItem } from '../handlers/pushCore.types';
 import { classifyFailure } from '../utils/pushFailure/categoryClassify';
 import { persistPushFailures, clearFailures } from '../utils/pushFailureStore';
-import { detectFileType, createParser, type FileType } from '../parsers';
+import { detectFileType, createParser, type FileType, containsTestCaseId } from '../parsers';
 import { FILE_PATTERNS, isInQualifiedDir } from '../services/utils';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { TelemetryService } from '../utils/telemetry';
@@ -87,12 +87,28 @@ const _pendingTimers: Map<string, NodeJS.Timeout> = new Map();
 // filePath -> 最近一次 validate 序列号；用于异步竞态时丢弃过期结果
 const _seqMap: Map<string, number> = new Map();
 
-// 删除流程（案例文件删除 / 删除结果详情重开编辑器）重开编辑器时，临时抑制
-// 「案例格式校验」弹窗——删除按需求不做格式校验，重开仅用于展示删除结果，
-// 不应再弹出格式校验窗口。该标志为短时开关：在重开前置 true，重开后置 false。
-let _suppressValidationPrompt = false;
-export function setSuppressEditValidationPrompt(value: boolean): void {
-    _suppressValidationPrompt = value;
+// 结果页跳转 / 删除后重开编辑器等场景：打开文件期间抑制该校文件的「打开校验」弹窗。
+//
+// 为什么按文件路径抑制、且由调用方显式控制生命周期（而非旧的全局瞬时布尔）：
+// CustomEditor 的打开校验在 resolveWebviewView 内异步执行
+// （panelMap.set → await triggerEditValidationOnWebviewOpen → parse/validate → 弹窗），
+// 而 executeCommand('vscode.openWith') 兑现时该异步链通常还没跑完——旧的
+// "打开前置 true、executeCommand 返回后 finally 置 false"会在校验执行前就把标志复位，
+// 弹窗照弹（现象：结果页点击跳转先弹案例合法性校验、关掉后才看见删除/推送结果）。
+// 正确时机：打开前 add，等 BaseEditorProvider.waitReady 兑现后再 remove——
+// waitReady 由 webview ready 消息触发，必晚于 resolveWebviewView 内的校验，此时清除不会漏抑制。
+// 按路径抑制还可同时覆盖同一次打开的两个触发点（onDidOpenTextDocument 与 webview-open），
+// 且不影响用户之后从资源管理器正常打开同一文件（那时抑制已清除）。
+const _suppressedOpenPromptPaths = new Set<string>();
+
+/** 打开文件前调用：抑制该文件的「打开校验」弹窗（结果页跳转 / 删除重开等场景） */
+export function suppressEditValidationPromptForFile(filePath: string): void {
+    if (filePath) _suppressedOpenPromptPaths.add(filePath);
+}
+
+/** 面板 ready 后调用：解除该文件的抑制，恢复正常打开校验 */
+export function clearEditValidationPromptSuppressionForFile(filePath: string): void {
+    if (filePath) _suppressedOpenPromptPaths.delete(filePath);
 }
 
 // 说明：2026-09-19 后策略调整为「仅『打开文件』时弹窗，保存/编辑一律不弹」。
@@ -189,6 +205,16 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
         sourceRows = [];
     }
 
+    // 非案例文件（不含 testcase_id）：不做案例合法性校验——
+    // 台账 / 配置导出等非案例结构化文件不应被案例专属校验规则（缺列 / 枚举 / 待补充 / 名称空等）
+    // 误飘红黄，故整体跳过校验，并清空可能残留的校验结果，保证非案例文件无高亮、无校验弹窗。
+    // 动态：用户插入 testcase_id 列并保存后，本判定变 true，合法性校验自动恢复。
+    const isCaseFile = containsTestCaseId(parsedHeaders, parsedSourceData, fileType);
+    if (!isCaseFile) {
+        await clearFailures(filePath).catch(() => {});
+        return { aborted: false, hasFailures: false, counts: {} };
+    }
+
     // §2.3.5 · 结构性检查（缺列）预计算：先算出文件级 failures，但不立即弹窗。
     //   · 保存 / 编辑防抖通路（promptOnMissing=false）也会跑本段检测，用于让行级校验
     //     和推送前拦截拿到最新数据，但**不弹窗**，避免打断用户手上的动作。
@@ -226,7 +252,7 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
     // §2.3.5 · 打开文件通路：把文件级（缺列）+ 行级（枚举/待补充/名称空/计划执行次数等）合并成
     //   一份 failures 一次弹出，与推送前拦截共用同一个 05g 弹窗（openPreValidateGate）。
     //   顺序：文件级置顶（tsId='__FILE_LEVEL__'）→ 行级按行号；前端渲染时天然按此顺序显示。
-    if (promptOnMissing && !_suppressValidationPrompt && (fileLevelFailures.length > 0 || failures.length > 0)) {
+    if (promptOnMissing && !_suppressedOpenPromptPaths.has(filePath) && (fileLevelFailures.length > 0 || failures.length > 0)) {
         const combined: PushFailureItem[] = [
             ...fileLevelFailures,
             ...failures.map(f => ({

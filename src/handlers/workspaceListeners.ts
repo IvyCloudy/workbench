@@ -67,8 +67,9 @@ import { showDeleteConfirmSimpleModal, showBatchDeleteConfirmModal } from '../ut
 import type { PushFailure, DeleteConfirmItem } from '../utils/deleteFeedback';
 import type { BatchDeleteFileEntry } from '../utils/messageExtras';
 import { confirmDeleteTestCase } from '../services/http';
-// 删除流程重开编辑器时抑制「案例格式校验」弹窗（删除不强制做格式校验）
-import { setSuppressEditValidationPrompt } from '../preValidate/editValidationHandler';
+// 删除流程重开编辑器 / 结果页跳转：以案例编辑器打开文件并抑制「案例格式校验」弹窗
+// （删除与结果展示不做打开校验，详见 openCaseFileInEditor 头注释）
+import { openCaseFileInEditor } from '../utils/openCaseFileInEditor';
 // 批量删除结果汇总面板：复用批量推送的 pushUI（同一 webview 组件，onOpenFile 点击才打开文件）
 import { showPushSummary } from '../utils/pushUI';
 import type { PushFileResult } from '../utils/pushUI';
@@ -77,9 +78,6 @@ import {
     type BatchSyncedIdsSink,
     type FileUnlinkReport,
 } from '../utils/batchDeleteSink';
-
-/** 案例编辑器 viewType（保持与 BaseEditorProvider 注册值一致） */
-const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
 /** 若某文件的扩展名属于 point/case 绑定域，才有必要通知绑定库 */
 function isBindingRelevant(fp: string): boolean {
@@ -577,17 +575,6 @@ async function handleCaseFilesDidDelete(
     //   5) 在确认弹窗与结果面板透出 skipEntries 计数，消除"删除文件数对不上"的错觉。
     // 判据与 F5 打开门控完全一致：复用 parsers.containsTestCaseId（解析失败保守按案例处理）。
     // ─────────────────────────────────────────────────────────────────────────
-    const makeSkipOnOpenFile = (): ((r: PushFileResult) => Promise<void>) => {
-        return async (result: PushFileResult) => {
-            let fileExists = true;
-            try { fileExists = fs.existsSync(result.filePath); } catch { fileExists = false; }
-            if (!fileExists) {
-                showModal('default', 'info', '文件已删除',
-                    `${result.fileName}\n\n${result.error || '该文件已按普通文件删除'}`);
-            }
-        };
-    };
-
     const caseEntries: WillBackupEntry[] = [];
     const skipEntries: WillBackupEntry[] = [];
     const skipResults: PushFileResult[] = [];
@@ -650,15 +637,29 @@ async function handleCaseFilesDidDelete(
         skipNoteText = `本次涉及 ${mCase + kNonCaseFormat} 个案例格式文件，其中 ${kNonCaseFormat} 个非案例文件已按普通文件直接删除，未走案例流程。`;
     }
 
-    // 本批无任何案例文件：仅把非案例文件的"直接删除"结果告知用户后返回
+    // 本批无任何案例文件：
+    //   - 不论单个还是批量，全部已按普通文件直接删除，不弹"删除结果"面板
+    //     （文件在资源管理器消失即是反馈；确认弹窗与结果页仅在本批包含案例文件时出现）。
     if (caseEntries.length === 0) {
         if (skipEntries.length > 0) {
-            showPushSummary(skipResults, makeSkipOnOpenFile(), {
-                panelTitle: '删除结果',
-                documentTitle: '删除结果',
-                headerTitle: '以下文件已按普通文件删除',
-                note: skipNoteText,
-                showFailureDetails: false,
+            // F7 计数透明：纯非案例批次也要上报批量汇总埋点（与 Step 12 同事件、同字段口径）。
+            // 否则后端从 caseFileDelete.batch.done 永远核对不到"纯非案例删除"的规模——
+            // batchSkippedNonCaseFiles / batchTotalDeletedFiles 对这类批次恒缺失。
+            // 逐文件的 caseFileDelete.skipped.notTestCaseFile 已在分区阶段上报，此处只补汇总维度。
+            TelemetryService.sendTelemetryEvent('caseFileDelete.batch.done', {
+                batchTotalFiles: '0',
+                batchSkippedNonCaseFiles: String(skipEntries.length),
+                batchTotalDeletedFiles: totalDeletedForEvent !== undefined ? String(totalDeletedForEvent) : String(skipEntries.length),
+                batchOtherNonCaseFiles: String(otherNonCase),
+                batchOnlineFiles: '0',
+                batchOnlineSucceededFiles: '0',
+                batchOnlineFailedFiles: '0',
+                batchHardDeleteFiles: '0',
+                batchPrecheckFailedFiles: '0',
+                batchSyncedTotal: '0',
+                batchDeletedSuccessTotal: '0',
+                batchDeletedSourceMissingTotal: '0',
+                ...caseDeletionTelemetryProps({}),
             });
         }
         return;
@@ -998,7 +999,17 @@ async function handleCaseFilesDidDelete(
     const allResults: PushFileResult[] = [...onlineResults, ...hardDeleteResults, ...skippedResults, ...skipResults];
     // F7：非案例文件（skipResults）已被 VSCode 按普通文件删除，点击行时给出与"TMS 同步"无关的准确文案
     const skipPaths = new Set(skipResults.map((r) => r.filePath));
-    if (allResults.length > 0) {
+    // 与单文件删除 / 非案例文件口径对齐：本批若没有任何"真实案例操作"——即没有需同步 TMS 或本地删案例的
+    // needConfirm 文件（onlineResults 为空）、也没有预检失败文件（skippedResults 为空）——整批仅由
+    // hardDeleteOnly（无有效 testcase_id：样例占位/全空文件）+ 非案例文件构成时，不弹结果面板：
+    // 单文件删除此类文件本就是静默真删（decideAndFinalizeCaseFileDelete 的 hardDelete 分支无任何 UI），
+    // 批量删除不应额外弹出一个没有实际案例操作的结果页。
+    // 两个例外仍保留面板：
+    //   ① 预检失败（P0-C1：告知用户哪些文件被跳过、为何保留原状）；
+    //   ② hardDelete 真删失败（unlink 失败行带 error）——避免"文件没删掉却无任何反馈"的静默失败。
+    const hasRealCaseWork = onlineResults.length > 0 || skippedResults.length > 0
+        || hardDeleteResults.some(r => !!r.error);
+    if (hasRealCaseWork && allResults.length > 0) {
         const onOpenFile = async (result: PushFileResult) => {
             const fp = result.filePath;
 
@@ -1029,21 +1040,9 @@ async function handleCaseFilesDidDelete(
             //   3) presentDeleteResult 弹详情弹窗（内部 getPanel 已就绪，不会重复打开）
             const payload = detailPayloadSink.get(fp);
             if (payload) {
-                // 删除结果详情重开编辑器：抑制「案例格式校验」弹窗
-                setSuppressEditValidationPrompt(true);
-                try {
-                    await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(fp), TESTCASE_EDITOR_VIEWTYPE);
-                } catch (_) { /* ignore */ }
-                finally {
-                    setSuppressEditValidationPrompt(false);
-                }
-                let panel = BaseEditorProvider.getPanel(fp);
-                for (let i = 0; !panel && i < 30; i++) {
-                    await new Promise(res => setTimeout(res, 100));
-                    panel = BaseEditorProvider.getPanel(fp);
-                }
+                // 删除结果详情重开编辑器：抑制「案例格式校验」弹窗（结果页跳转只应看到删除结果）
+                const panel = await openCaseFileInEditor(fp, { suppressValidationPrompt: true });
                 if (panel) {
-                    try { await BaseEditorProvider.waitReady(fp, 3000); } catch (_) { /* ignore */ }
                     try {
                         const reasons: Array<[string, string]> = (payload.failures || [])
                             .map(f => [String(f.tsId), String(f.reason || '')]);
@@ -1063,13 +1062,7 @@ async function handleCaseFilesDidDelete(
             }
 
             // 情况 4：兜底 —— 无 payload 但文件仍存在（理论上不会走到）→ 直接打开
-            setSuppressEditValidationPrompt(true);
-            try {
-                await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(fp), TESTCASE_EDITOR_VIEWTYPE);
-            } catch (_) { /* ignore */ }
-            finally {
-                setSuppressEditValidationPrompt(false);
-            }
+            await openCaseFileInEditor(fp, { suppressValidationPrompt: true });
         };
 
         // P1-C2：文件数为 1 时（极端场景，如 batchMode 走到单文件），标题去掉「批量」字样
@@ -1871,17 +1864,13 @@ async function restoreCaseFile(entry: WillBackupEntry): Promise<void> {
  */
 async function reopenCaseFile(filePath: string): Promise<void> {
     // 删除流程重开编辑器仅用于展示"保留原状"结果，不应再弹「案例格式校验」窗口
-    setSuppressEditValidationPrompt(true);
-    try {
-        const uri = vscode.Uri.file(filePath);
-        await vscode.commands.executeCommand('vscode.openWith', uri, TESTCASE_EDITOR_VIEWTYPE);
+    const panel = await openCaseFileInEditor(filePath, { suppressValidationPrompt: true });
+    if (panel) {
         TelemetryService.sendTelemetryEvent('caseFileDelete.reopen', {
             filePath: path.basename(filePath),
         });
-    } catch (err: any) {
-        console.warn('[workspaceListeners] 重建后重开文件失败（已忽略）:', err?.message || err);
-    } finally {
-        setSuppressEditValidationPrompt(false);
+    } else {
+        console.warn('[workspaceListeners] 重建后重开文件失败（已忽略）:', filePath);
     }
 }
 
@@ -1907,18 +1896,7 @@ async function presentDeleteResult(r: {
         let panel = BaseEditorProvider.getPanel(r.filePath);
         if (!panel && r.needRestore) {
             // panel 尚未注册 → 再试一次打开（删除结果展示，抑制校验弹窗）
-            setSuppressEditValidationPrompt(true);
-            try {
-                await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(r.filePath), TESTCASE_EDITOR_VIEWTYPE);
-            } catch (_) { /* ignore */ }
-            finally {
-                setSuppressEditValidationPrompt(false);
-            }
-            for (let i = 0; i < 30; i++) {
-                await new Promise(res => setTimeout(res, 100));
-                panel = BaseEditorProvider.getPanel(r.filePath);
-                if (panel) break;
-            }
+            panel = await openCaseFileInEditor(r.filePath, { suppressValidationPrompt: true });
         }
         if (panel) {
             try {

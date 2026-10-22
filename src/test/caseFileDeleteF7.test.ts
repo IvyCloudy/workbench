@@ -35,6 +35,17 @@ vi.mock('./pushCore.stages', () => ({
     resolveTaskInfoOrNull: vi.fn(async () => ({ status: 'unbound' })),
 }));
 
+// 记录埋点事件：断言 F7 删除链路（逐文件跳过 + 批量汇总）的埋点完整性
+const telemetryEvents: Array<{ kind: 'event' | 'error'; name: string; props: any }> = [];
+vi.mock('../utils/telemetry', () => ({
+    TelemetryService: {
+        sendTelemetryEvent: vi.fn((name: string, props?: any) =>
+            telemetryEvents.push({ kind: 'event', name, props })),
+        sendTelemetryErrorEvent: vi.fn((name: string, props?: any) =>
+            telemetryEvents.push({ kind: 'error', name, props })),
+    },
+}));
+
 import { registerWorkspaceListeners } from '../handlers/workspaceListeners';
 import { showPushSummary } from '../utils/pushUI';
 import { showBatchDeleteConfirmModal } from '../utils/messageExtras';
@@ -58,6 +69,7 @@ beforeEach(() => {
     (vscode.workspace as any).onDidDeleteFiles = vi.fn((cb: any) => { didHandler = cb; });
     willHandler = null;
     didHandler = null;
+    telemetryEvents.length = 0;
     registerWorkspaceListeners({} as any);
 });
 
@@ -176,5 +188,172 @@ describe('F7 · 删除不含 testcase_id 的文件不视为案例文件（did �
         }
         expect(notes.some((n) => n.includes('共删除 2 个文件'))).toBe(true);
         expect(notes.some((n) => n.includes('其余 -') || n.includes('另有 -'))).toBe(false); // 不可出现负数非案例计数
+    });
+
+    it('单个非案例文件删除：直接删除完成，不弹"删除结果"汇总面板', async () => {
+        (showPushSummary as any).mockClear();
+        const fp = path.join(tmpWork, 'plain.csv');
+        fs.writeFileSync(fp, 'name,age\nAlice,30\nBob,25\n');
+        await triggerWillAndDid(fp);
+        expect(fs.existsSync(fp)).toBe(false);        // 已按普通文件删除，未还原
+        expect(showPushSummary).not.toHaveBeenCalled(); // 单文件免结果面板（资源管理器消失即是反馈）
+
+        // 埋点①：逐文件跳过事件（含文件名 + 格式维度）
+        const skipped = telemetryEvents.filter(e => e.name === 'caseFileDelete.skipped.notTestCaseFile');
+        expect(skipped.length).toBe(1);
+        expect(skipped[0].props.filePath).toBe('plain.csv');
+        expect(skipped[0].props.fileFormat).toBe('csv');
+        // 埋点②：纯非案例批次也要上报批量汇总（batchTotalFiles=0 + 跳过计数=1 + 真实总数=1），
+        // 否则后端无法从 caseFileDelete.batch.done 核对"纯非案例删除"规模
+        const batchDone = telemetryEvents.filter(e => e.name === 'caseFileDelete.batch.done');
+        expect(batchDone.length).toBe(1);
+        expect(batchDone[0].props.batchTotalFiles).toBe('0');
+        expect(batchDone[0].props.batchSkippedNonCaseFiles).toBe('1');
+        expect(batchDone[0].props.batchTotalDeletedFiles).toBe('1');
+        expect(batchDone[0].props.batchOtherNonCaseFiles).toBe('0');
+    });
+
+    it('批量删除多个非案例文件：同样不弹"删除结果"面板（仅含案例文件时才弹）', async () => {
+        (showPushSummary as any).mockClear();
+        (showBatchDeleteConfirmModal as any).mockClear();
+        const aFp = path.join(tmpWork, 'plainA.csv');
+        const bFp = path.join(tmpWork, 'plainB.csv');
+        fs.writeFileSync(aFp, 'name,age\nAlice,30\n');
+        fs.writeFileSync(bFp, 'name\nBob\n');
+        willHandler!({ files: [{ fsPath: aFp }, { fsPath: bFp }], waitUntil: vi.fn() });
+        await new Promise((r) => setTimeout(r, 150));
+        fs.unlinkSync(aFp);
+        fs.unlinkSync(bFp);
+        didHandler!({ files: [{ fsPath: aFp }, { fsPath: bFp }] });
+        await new Promise((r) => setTimeout(r, 500));
+        expect(fs.existsSync(aFp)).toBe(false);
+        expect(fs.existsSync(bFp)).toBe(false);
+        // 纯非案例批次：不弹结果面板，也不弹删除确认框（含案例文件时才出现）
+        expect(showPushSummary).not.toHaveBeenCalled();
+        expect(showBatchDeleteConfirmModal).not.toHaveBeenCalled();
+
+        // 埋点：两个逐文件跳过事件 + 一条汇总（跳过=2 / 真实总数=2）
+        const skipped = telemetryEvents.filter(e => e.name === 'caseFileDelete.skipped.notTestCaseFile');
+        expect(skipped.length).toBe(2);
+        const batchDone = telemetryEvents.filter(e => e.name === 'caseFileDelete.batch.done');
+        expect(batchDone.length).toBe(1);
+        expect(batchDone[0].props.batchTotalFiles).toBe('0');
+        expect(batchDone[0].props.batchSkippedNonCaseFiles).toBe('2');
+        expect(batchDone[0].props.batchTotalDeletedFiles).toBe('2');
+    });
+
+    it('对照：本批含案例文件时，确认框与结果面板照常出现（含案例才需确认/结果页）', async () => {
+        (showPushSummary as any).mockClear();
+        (showBatchDeleteConfirmModal as any).mockClear();
+        const caseFp = path.join(tmpWork, 'case.csv');
+        const plainFp = path.join(tmpWork, 'plain.csv');
+        fs.writeFileSync(caseFp, 'testcase_id,name\na1,Alice\n');
+        fs.writeFileSync(plainFp, 'name,age\nAlice,30\n');
+        willHandler!({ files: [{ fsPath: caseFp }, { fsPath: plainFp }], waitUntil: vi.fn() });
+        await new Promise((r) => setTimeout(r, 150));
+        fs.unlinkSync(caseFp);
+        fs.unlinkSync(plainFp);
+        didHandler!({ files: [{ fsPath: caseFp }, { fsPath: plainFp }] });
+        await new Promise((r) => setTimeout(r, 500));
+
+        // 含案例文件 → 走批量确认 + 结果面板，且面板同时列出案例/非案例两类行
+        expect(showBatchDeleteConfirmModal).toHaveBeenCalled();
+        expect(showPushSummary).toHaveBeenCalled();
+        const allRows: any[][] = (showPushSummary as any).mock.calls.map((c: any[]) => c[0]);
+        const flat = allRows.flat();
+        expect(flat.some((r) => String(r?.fileName) === 'case.csv')).toBe(true);
+        expect(flat.some((r) => String(r?.fileName) === 'plain.csv')).toBe(true); // 非案例行并入结果页
+        // 埋点：1 个逐文件跳过 + 批量汇总 batchTotalFiles=1（案例数）、跳过=1、真实总数=2
+        const skipped = telemetryEvents.filter(e => e.name === 'caseFileDelete.skipped.notTestCaseFile');
+        expect(skipped.length).toBe(1);
+        const batchDone = telemetryEvents.filter(e => e.name === 'caseFileDelete.batch.done');
+        expect(batchDone.length).toBe(1);
+        expect(batchDone[0].props.batchTotalFiles).toBe('1');
+        expect(batchDone[0].props.batchSkippedNonCaseFiles).toBe('1');
+        expect(batchDone[0].props.batchTotalDeletedFiles).toBe('2');
+    });
+
+    // ── 仅含样例数据（testcase_id 为占位文案）的案例文件：与单文件/非案例文件口径对齐 ──
+    /** 写一个"仅样例数据"的案例文件：有 testcase_id 列，但行的 id 是样例占位文案 */
+    function writeSampleOnlyCaseFile(name: string): string {
+        const fp = path.join(tmpWork, name);
+        fs.writeFileSync(fp, 'testcase_id,name\n案例唯一标识，不可修改,示例案例\n');
+        return fp;
+    }
+
+    it('单个"仅样例数据"案例文件删除：静默真删，无确认框、无结果面板', async () => {
+        (showPushSummary as any).mockClear();
+        (showBatchDeleteConfirmModal as any).mockClear();
+        const fp = writeSampleOnlyCaseFile('sample.csv');
+        await triggerWillAndDid(fp);
+        expect(fs.existsSync(fp)).toBe(false);          // 已真删
+        expect(showPushSummary).not.toHaveBeenCalled();  // 无结果面板
+        expect(showBatchDeleteConfirmModal).not.toHaveBeenCalled();
+        // 埋点：intercept.init 记 nonEmptyIds=0；file.unlink 记 hardDeleteOnly 真删
+        const inits = telemetryEvents.filter(e => e.name === 'caseFileDelete.intercept.init');
+        expect(inits.length).toBe(1);
+        expect(inits[0].props.nonEmptyIds).toBe('0');
+        const unlinks = telemetryEvents.filter(e => e.name === 'caseFileDelete.file.unlink');
+        expect(unlinks.length).toBe(1);
+        expect(unlinks[0].props.mode).toBe('hardDeleteOnly');
+        expect(unlinks[0].props.unlinkResult).toBe('ok');
+    });
+
+    it('批量删除多个"仅样例数据"案例文件：同样静默（无确认框、无结果面板），与非案例文件口径对齐', async () => {
+        (showPushSummary as any).mockClear();
+        (showBatchDeleteConfirmModal as any).mockClear();
+        const aFp = writeSampleOnlyCaseFile('sampleA.csv');
+        const bFp = writeSampleOnlyCaseFile('sampleB.csv');
+        willHandler!({ files: [{ fsPath: aFp }, { fsPath: bFp }], waitUntil: vi.fn() });
+        await new Promise((r) => setTimeout(r, 150));
+        fs.unlinkSync(aFp);
+        fs.unlinkSync(bFp);
+        didHandler!({ files: [{ fsPath: aFp }, { fsPath: bFp }] });
+        await new Promise((r) => setTimeout(r, 500));
+        expect(fs.existsSync(aFp)).toBe(false);
+        expect(fs.existsSync(bFp)).toBe(false);
+        // 整批无真实案例操作 → 不弹确认框、不弹结果面板（单文件删除本就是静默的）
+        expect(showBatchDeleteConfirmModal).not.toHaveBeenCalled();
+        expect(showPushSummary).not.toHaveBeenCalled();
+
+        // 埋点仍然完整：2 条 intercept.init(nonEmptyIds=0) + 2 条 hardDeleteOnly unlink + 1 条汇总
+        const inits = telemetryEvents.filter(e => e.name === 'caseFileDelete.intercept.init');
+        expect(inits.length).toBe(2);
+        expect(inits.every(e => e.props.nonEmptyIds === '0')).toBe(true);
+        const unlinks = telemetryEvents.filter(e => e.name === 'caseFileDelete.file.unlink');
+        expect(unlinks.length).toBe(2);
+        expect(unlinks.every(e => e.props.mode === 'hardDeleteOnly' && e.props.batch === 'true')).toBe(true);
+        const batchDone = telemetryEvents.filter(e => e.name === 'caseFileDelete.batch.done');
+        expect(batchDone.length).toBe(1);
+        expect(batchDone[0].props.batchTotalFiles).toBe('2');      // 均为案例格式文件
+        expect(batchDone[0].props.batchSkippedNonCaseFiles).toBe('0'); // 不含"非案例"跳过项
+        expect(batchDone[0].props.batchTotalDeletedFiles).toBe('2');
+    });
+
+    it('对照："仅样例数据"案例文件与真实案例文件混批时，确认框与结果面板照常出现', async () => {
+        (showPushSummary as any).mockClear();
+        (showBatchDeleteConfirmModal as any).mockClear();
+        const caseFp = path.join(tmpWork, 'case.csv');
+        const sampleFp = writeSampleOnlyCaseFile('sample.csv');
+        fs.writeFileSync(caseFp, 'testcase_id,name\na1,Alice\n');
+        willHandler!({ files: [{ fsPath: caseFp }, { fsPath: sampleFp }], waitUntil: vi.fn() });
+        await new Promise((r) => setTimeout(r, 150));
+        fs.unlinkSync(caseFp);
+        fs.unlinkSync(sampleFp);
+        didHandler!({ files: [{ fsPath: caseFp }, { fsPath: sampleFp }] });
+        await new Promise((r) => setTimeout(r, 500));
+
+        // 含真实案例操作 → 面板照常，且两个文件都在结果清单里
+        expect(showBatchDeleteConfirmModal).toHaveBeenCalled();
+        expect(showPushSummary).toHaveBeenCalled();
+        const flat = (showPushSummary as any).mock.calls.map((c: any[]) => c[0]).flat();
+        expect(flat.some((r) => String(r?.fileName) === 'case.csv')).toBe(true);
+        expect(flat.some((r) => String(r?.fileName) === 'sample.csv')).toBe(true);
+        // 埋点：汇总 batchTotalFiles=2（两个案例格式文件）、跳过=0、真实总数=2
+        const batchDone = telemetryEvents.filter(e => e.name === 'caseFileDelete.batch.done');
+        expect(batchDone.length).toBe(1);
+        expect(batchDone[0].props.batchTotalFiles).toBe('2');
+        expect(batchDone[0].props.batchSkippedNonCaseFiles).toBe('0');
+        expect(batchDone[0].props.batchTotalDeletedFiles).toBe('2');
     });
 });

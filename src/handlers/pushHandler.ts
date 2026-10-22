@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { FileTypeChecker } from '../providers/UnifiedEditorProvider';
 import { isInTempFolder } from '../services/utils';
-import { parseFileToRows } from '../parsers';
+import { parseFileToRows, createParser, containsTestCaseId, detectFileType } from '../parsers';
 import { showPushErrorModal, showModal, showPushResult } from '../utils/message';
 import { createPushProgress, PushFileResult } from '../utils/pushUI';
 import { TelemetryService } from '../utils/telemetry';
@@ -13,12 +13,11 @@ import { validateYamlContent, publishYamlDiagnostics } from '../utils/yamlValida
 import { YAML_CMD_FIX_ALL } from '../utils/yamlConstants';
 import { validateFileForPush } from '../preValidate/batchPreValidate';
 import { openPreValidateGate } from '../preValidate/preValidateGate';
+import { openCaseFileInEditor } from '../utils/openCaseFileInEditor';
 import {
     classifyFailure,
     failureFieldOf,
 } from '../utils/pushFailureCategory';
-
-const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 
 /** 支持的推送文件扩展名 */
 const PUSH_EXTENSIONS = new Set(['.csv', '.yaml', '.yml', '.json']);
@@ -84,28 +83,6 @@ async function collectPushableFiles(dirOrFiles: vscode.Uri[]): Promise<{ uri: vs
         }
     }
     return result;
-}
-
-/**
- * 确保指定文件以 testcase 编辑器打开，返回其 webview panel。
- * - 已打开：调用 reveal() 切到该 tab。
- * - 未打开：openWith 拉起 testcase 编辑器，并等待 webview ready（收到 init 后）。
- */
-async function ensureOpenedInTestcaseEditor(uri: vscode.Uri): Promise<vscode.WebviewPanel | undefined> {
-    const filePath = uri.fsPath;
-    const existing = BaseEditorProvider.getPanel(filePath);
-    if (existing) {
-        try { existing.reveal(existing.viewColumn, false); } catch (_) { /* ignore */ }
-        try { await BaseEditorProvider.waitReady(filePath, 3000); } catch (_) { /* ignore */ }
-        return existing;
-    }
-    await vscode.commands.executeCommand('vscode.openWith', uri, TESTCASE_EDITOR_VIEWTYPE);
-    try {
-        await BaseEditorProvider.waitReady(filePath, 8000);
-    } catch (e: any) {
-        console.warn('[推送] 等待 webview 就绪超时:', e?.message || e);
-    }
-    return BaseEditorProvider.getPanel(filePath);
 }
 
 /**
@@ -364,7 +341,26 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
     const batchStart = Date.now();
 
     // ─── 阶段 1：收集可推送文件 ─────────────────────────────────────────────
-    const files = await collectPushableFiles(targets);
+    const collected = await collectPushableFiles(targets);
+    // F8：非案例文件（不含 testcase_id）不提供推送，剔除并提示
+    const files: { uri: vscode.Uri; relativePath: string }[] = [];
+    const skippedNonCase: string[] = [];
+    for (const f of collected) {
+        const type = detectFileType(f.uri.fsPath);
+        let isCase = true; // 保守：解析异常时仍视为可推送，交由后续流程校验
+        if (type) {
+            try {
+                const parsed = await createParser(type).parse(f.uri.fsPath);
+                isCase = containsTestCaseId(parsed.tableData?.headers, parsed.sourceData, type);
+            } catch { /* 保守 */ }
+        }
+        if (isCase) files.push(f);
+        else skippedNonCase.push(path.basename(f.uri.fsPath));
+    }
+    if (skippedNonCase.length > 0) {
+        showModal('default', 'warning', '已跳过非案例文件',
+            `已跳过 ${skippedNonCase.length} 个不含 testcase_id 的文件（非案例文件无法推送）：\n` + skippedNonCase.join('\n'));
+    }
     if (files.length === 0) {
         TelemetryService.sendTelemetryEvent('explorerPush.aborted', {
             reason: 'noFiles', ext: '', traceId: batchTraceId, costMs: String(Date.now() - batchStart),
@@ -390,12 +386,7 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         const baseName = path.basename(filePath);
 
         // 先确保 webview 已打开，以便校验错误也能在页面居中弹窗展示
-        let panel: vscode.WebviewPanel | undefined;
-        try {
-            panel = await ensureOpenedInTestcaseEditor(target);
-        } catch (_) {
-            // webview 打开失败，继续走校验兜底
-        }
+        let panel: vscode.WebviewPanel | undefined = await openCaseFileInEditor(filePath, { waitReadyMs: 8000 });
 
         const fileCheck = FileTypeChecker.isQualifiedFile(target);
         if (!fileCheck.qualified) {
@@ -511,7 +502,7 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
                 markSelfSave: () => BaseEditorProvider.markPanelSelfSave(filePath),
                 // ─── 前置校验门控（B5）─────────────────────────────────────────────
                 // 单文件资源管理器推送：与编辑器内推送共用同一份 05g 交互。
-                //   · panel 已在上方 ensureOpenedInTestcaseEditor 拿到 → webview 内弹校验汇总
+                //   · panel 已在上方 openCaseFileInEditor 拿到 → webview 内弹校验汇总
                 //   · error → 只显示"关闭"，强制阻断（用户须修正后再推送）
                 //   · 仅 warn（「待补充」）→ 可"忽略并继续"
                 //   · 无 panel 场景（例如强制关闭编辑器）→ hook 未生效，退化为 continue
@@ -875,7 +866,10 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
             ext: fileExt,
             hasError: result.error ? '1' : '0',
         });
-        const panel = await ensureOpenedInTestcaseEditor(uri);
+        // 结果页跳转：抑制「案例格式校验」弹窗——否则会先弹校验窗、关掉后才看到推送结果。
+        // 抑制生命周期由 openCaseFileInEditor 内部管理（waitReady 兑现后才解除，
+        // 必晚于 resolveWebviewView 内的打开校验）；不影响用户之后从资源管理器正常打开同一文件。
+        const panel = await openCaseFileInEditor(uri.fsPath, { suppressValidationPrompt: true, waitReadyMs: 8000 });
         // 等待 webview 前端消息监听器就绪（waitReady 仅保证扩展端就绪）
         await new Promise(resolve => setTimeout(resolve, 400));
         if (result.error) {

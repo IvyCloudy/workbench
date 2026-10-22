@@ -578,7 +578,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         //      拿到的即为最新失败盘 → webview 首帧就能带上红/黄单元格高亮，
         //      避免出现「先无高亮 → 后异步刷新才上色」的短暂错觉。
         try {
-            const { triggerEditValidationOnWebviewOpen } = await import('../preValidate/editValidationHandler.js');
+            const { triggerEditValidationOnWebviewOpen } = await import('../preValidate/editValidationHandler');
             await triggerEditValidationOnWebviewOpen(filePath);
         } catch (e: any) {
             console.warn('[BaseEditorProvider] 触发编辑期校验失败（已忽略）:', e?.message || e);

@@ -1,4 +1,4 @@
-路径,测试名称,描述,步骤描述,预期结果,优先级
+﻿路径,测试名称,描述,步骤描述,预期结果,优先级
 合并测试阶段/案例编辑器展开步骤/按钮显隐/结构化含steps列显示按钮,结构化文件含steps列时显示展开步骤按钮,updateExpandStepsBtnVisibility：supportsStepsExpansion()(yaml/json) 且 hasStepsColumn()(headers 含 steps) 时 #expandStepsBtn 显示，否则隐藏。,"步骤1:
 打开一个 YAML/JSON 案例文件（含 steps 字段）
 步骤2:

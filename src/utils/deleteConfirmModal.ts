@@ -228,13 +228,15 @@ export function showDeleteConfirmModal(
  * 样式与 baseModalCss_ 完全一致（warning 配色 / 420px 宽 / 12px 16px header / 20px 16px body / 10px 16px footer），
  * 与「案例编辑器内删除」弹窗视觉完全统一。
  */
-function buildDeleteConfirmSimpleHtml(filePath: string, fileName: string, caseCount: number, unbound: boolean = false): string {
+function buildDeleteConfirmSimpleHtml(filePath: string, fileName: string, caseCount: number, unbound: boolean = false, type3: boolean = false): string {
     const color = MODAL_COLOR_WARNING;
     const headerBg = MODAL_HEADER_BG_WARNING;
     const lead = unbound
         ? '当前文件未绑定测试任务，删除仅清理本地，不会同步删除 TMS 平台上的案例。是否继续删除？'
-        : `谨慎操作：删除文件「${escapeHtml_(fileName)}」将同步删除 TMS 平台上的 `
-            + `<span class="xs-dc-count">${caseCount}</span> 条案例，以及这些案例的执行记录和缺陷关联，此操作不可恢复。是否确定删除？`;
+        : (type3
+            ? '该文件的案例均未推送至 TMS 平台，删除将直接清理本地、不会同步删除 TMS 平台上的案例，此操作不可恢复。是否确定删除？'
+            : `谨慎操作：删除文件「${escapeHtml_(fileName)}」将同步删除 TMS 平台上的 `
+                + `<span class="xs-dc-count">${caseCount}</span> 条案例，以及这些案例的执行记录和缺陷关联，此操作不可恢复。是否确定删除？`);
 
     return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -310,7 +312,7 @@ ${baseModalCss_(headerBg, color, '')}
  * @returns true=用户确认删除；false=取消 / 关闭 / token 取消
  */
 export function showDeleteConfirmSimpleModal(
-    opts: { filePath: string; fileName: string; caseCount: number; unbound?: boolean },
+    opts: { filePath: string; fileName: string; caseCount: number; unbound?: boolean; type3?: boolean },
     token?: vscode.CancellationToken,
 ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
@@ -320,7 +322,7 @@ export function showDeleteConfirmSimpleModal(
             { viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
             { enableScripts: true, retainContextWhenHidden: false },
         );
-        panel.webview.html = buildDeleteConfirmSimpleHtml(opts.filePath, opts.fileName, opts.caseCount, opts.unbound);
+        panel.webview.html = buildDeleteConfirmSimpleHtml(opts.filePath, opts.fileName, opts.caseCount, opts.unbound, opts.type3);
 
         let settled = false;
         const finish = (v: boolean) => {

@@ -790,22 +790,26 @@ async function handleCaseFilesDidDelete(
     // Step 5: 构造聚合弹窗 entries
     // 弹窗触发条件（needModal）：本批存在「需同步 TMS 的非 type=3 文件」或「预检失败文件」；
     // 二者任一存在才弹确认窗（让用户确认同步删除 / 知晓将被跳过的文件）。
-    // hardDeleteOnly（纯本地删除）与 type=3（平台已不存在）本身不触发弹窗——
-    // 若整批仅由这两者构成（无任何需同步 / 预检失败文件）→ 整批跳过确认窗、直接删除，
-    // 与编辑器内 / 单文件删除的 skipConfirm 行为一致；
+    // hardDeleteOnly（纯本地删除）与 type=3（平台已不存在）不触发该逐 Tab 弹窗；其中 type=3 会改走
+    // 下方 F2 整批本地删除简化确认（与 unbound 一致），纯 hardDeleteOnly 才静默直删；
     // 但若本批存在上述需确认文件，则 hardDeleteOnly 与 type=3 文件仍纳入弹窗逐个说明（每个文件去向说清楚）。
     // 需同步 TMS 的文件 = 预检通过且既非未绑定任务(unbound)、也非 type=3（从未推送）的文件。
     // 注意：排除 unbound —— 未绑定任务的文件只做本地删除、不同步 TMS，
     // 不应再被当成"需同步文件"触发逐 Tab 确认（F2：整批未绑定文件应聚合为一条整体提示）。
-    const hasNeedTms = needConfirmCtxs.some(c => c.stage === 'needConfirm' && !c.unbound && !c.skipConfirm);
+    const hasNeedTms = needConfirmCtxs.some(c => c.stage === 'needConfirm' && !c.unbound && !c.allType3);
+    // type=3（案例从未推送 TMS / 无线上记录，即没匹配到线上案例）：删除前也要给确认（恢复 97d9d78 之前行为）。
+    const hasType3 = needConfirmCtxs.some(c => c.stage === 'needConfirm' && !!c.allType3);
     const hasPrecheckFailed = precheckFailedCtxs.length > 0;
     const needModal = hasNeedTms || hasPrecheckFailed;
     // 本批是否含未绑定测试任务文件（用于触发 F2 整批本地删除简化确认）
     const hasUnboundInBatch = needConfirmCtxs.some(c => c.stage === 'needConfirm' && !!c.unbound);
-    const type3Entries: BatchDeleteFileEntry[] = (needModal || hasUnboundInBatch)
+    // 需要用户确认的仅本地类文件：unbound 或 type=3。纯 hardDeleteOnly（无有效 testcase_id）
+    // 不含 unbound/type=3 时仍静默直删、不弹确认（维持原语义）。
+    const hasLocalOnlyConfirmable = hasUnboundInBatch || hasType3;
+    const type3Entries: BatchDeleteFileEntry[] = (needModal || hasLocalOnlyConfirmable)
         ? needConfirmCtxs
             .filter((c): c is Extract<CaseFileDecisionContext, { stage: 'needConfirm' }> =>
-                c.stage === 'needConfirm' && !!c.skipConfirm)
+                c.stage === 'needConfirm' && !!c.allType3)
             .map(c => ({
             filePath: c.entry.filePath,
             fileName: c.entry.fileName,
@@ -828,7 +832,7 @@ async function handleCaseFilesDidDelete(
         })),
         ...needConfirmCtxs
             .filter((c): c is Extract<CaseFileDecisionContext, { stage: 'needConfirm' }> =>
-                c.stage === 'needConfirm' && !c.skipConfirm)
+                c.stage === 'needConfirm' && !c.allType3)
             .map(c => ({
             filePath: c.entry.filePath,
             fileName: c.entry.fileName,
@@ -837,7 +841,7 @@ async function handleCaseFilesDidDelete(
             unbound: !!c.unbound,
         })),
         // 全部 type=3（从未推送 TMS）的文件：仅在混合批量中纳入弹窗展示（每个文件说清楚"直接清理本地"），
-        // 其 caseCount 计 0、不占 TMS 同步口径；整批全 type=3 时 type3Entries 为空、不入弹窗。
+        // 其 caseCount 计 0、不占 TMS 同步口径；整批全 type=3 时也纳入（改走下方 F2 整批本地删除确认，见 useLocalOnlyModal）。
         ...type3Entries,
         ...precheckFailedCtxs.map(c => ({
             filePath: c.entry.filePath,
@@ -852,14 +856,17 @@ async function handleCaseFilesDidDelete(
     // 直接走到 Step 10+11 用汇总面板展示所有跳过原因（与部分失败/全部成功走同款 panel）
     // 之前的实现：直接 showModal 弹阻断提示后 return，会造成"仅有此场景不走 panel"的 UI 割裂。
     const allPrecheckFailed = hardDeleteCtxs.length === 0 && needConfirmCtxs.length === 0;
-    // 弹窗仅由「需同步 TMS 的非 type=3 文件」或「预检失败文件」触发（needModal）；
-    // hardDeleteOnly / type=3 文件本身不触发弹窗——整批仅含这两者时跳过弹窗、直接删除；
-    // 混合批量（含需同步 / 预检失败文件）时二者仍在 batchEntries 中、弹窗逐个说清楚。
+    // 逐文件 Tab 确认（needConfirmModal）仅由「需同步 TMS 的非 type=3 文件」或「预检失败文件」触发；
+    // hardDeleteOnly / type=3 文件本身不触发该逐 Tab 弹窗——但它们会改走下方 F2 整批本地删除简化确认
+    // （type=3 / unbound）或保持静默（纯 hardDeleteOnly）；混合批量（含需同步 / 预检失败）时二者仍在
+    // batchEntries 中、逐 Tab 弹窗逐个说清楚去向。
     const needConfirmModal = needModal;
-    // F2：整批都是「仅本地删除」类文件（unbound / hardDeleteOnly / type=3）且至少含一个未绑定任务文件时，
-    // 不弹逐文件 Tab 的聚合确认，改用「整批本地删除」简化确认（一条谨慎操作提示 + 文件总数 + 文件清单，一次确认）。
+    // F2：整批均为「仅本地删除」类文件（unbound / hardDeleteOnly / type=3），且至少含一个
+    // unbound 或 type=3（type=3=没匹配到线上案例，删除前也要确认）时，不弹逐文件 Tab 的聚合确认，
+    // 改用「整批本地删除」简化确认（一条谨慎操作提示 + 文件总数 + 文件清单，一次确认）。
+    // 纯 hardDeleteOnly（不含 unbound/type=3）不在此列——仍静默直删（维持原语义）。
     // 该分支仅在"无需要同步 TMS 的文件、无预检失败"时才成立（否则走上方 needConfirmModal 分支）。
-    const useLocalOnlyModal = !allPrecheckFailed && !needConfirmModal && hasUnboundInBatch;
+    const useLocalOnlyModal = !allPrecheckFailed && !needConfirmModal && hasLocalOnlyConfirmable;
     let confirmed = true;
     if (allPrecheckFailed) {
         // 全部预检失败：reopen 所有文件，跳过 Step 6-9（无需确认、无需真删/线上删除）
@@ -1205,17 +1212,16 @@ async function decideAndFinalizeCaseFileDelete(
         return;
     }
 
-    // 需要用户确认
+    // 需要用户确认。
+    // 注意：即使确认接口全部返回 type=3（案例从未推送 TMS、无线上记录，即"没匹配到线上案例"），
+    // 删除前也一律给出确认（恢复 97d9d78 之前的行为）；type=3 走简化确认，并明示"仅清理本地、不同步 TMS"。
     const { confirmItems, caseCountForConfirm, unbound } = ctx;
-    // 确认接口仅返回 type=3（案例从未推送过）→ 跳过案例确认界面，直接删除（结果界面照常展示）
-    let userConfirmed = true;
-    if (!ctx.skipConfirm) {
-        userConfirmed = confirmItems.length > 0
-            ? await confirmCaseFileDeleteWithDetails(
-                { filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, items: confirmItems, unbound },
-            )
-            : await showDeleteConfirmSimpleModal({ filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, unbound });
-    }
+    const type3 = !!ctx.allType3;
+    const userConfirmed = confirmItems.length > 0
+        ? await confirmCaseFileDeleteWithDetails(
+            { filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, items: confirmItems, unbound },
+        )
+        : await showDeleteConfirmSimpleModal({ filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, unbound, type3 });
 
     if (!userConfirmed) {
         if (entry.wasOpen) await reopenCaseFile(entry.filePath);
@@ -1256,8 +1262,8 @@ type CaseFileDecisionContext =
         caseCountForConfirm: number;
         /** 未绑定测试任务：跳过线上预检，仅本地删除 */
         unbound?: boolean;
-        /** 确认接口仅返回 type=3（案例从未推送过），跳过案例确认界面直接删除 */
-        skipConfirm?: boolean;
+        /** 确认接口全部返回 type=3（案例从未推送 TMS / 无线上记录）：删除前仍弹确认（简化版），但不涉及 TMS 同步 */
+        allType3?: boolean;
     }
     | {
         stage: 'precheckFailed';
@@ -1417,7 +1423,7 @@ async function prepareCaseFileDecisionContext(
         nonEmptyIds,
         confirmItems,
         caseCountForConfirm,
-        skipConfirm: allType3,
+        allType3,
     };
 }
 

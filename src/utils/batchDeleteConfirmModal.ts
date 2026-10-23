@@ -37,6 +37,11 @@ export interface BatchDeleteFileEntry {
      * hardDeleteOnly=true 时该字段应为 0（因为该文件不涉及线上删除）。
      */
     caseCount: number;
+    /**
+     * 该文件的总案例数（真实 testcase_id 行数，含 type=1/2/3）。用于在"同步 TMS 数"之外
+     * 补充展示文件总案例数，避免用户因只看到 TMS 子集而低估删除影响（totalCases > caseCount 时展示）。
+     */
+    totalCases?: number;
     /** 该文件下 type=2 需要用户二次确认的关联案例明细（仅预检通过时有值） */
     items: DeleteConfirmItem[];
     /** 预检失败时的原因（非空表示该文件被跳过、不会删除） */
@@ -207,7 +212,9 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[], nonCaseCou
                 ? `<div class="xs-bd-pane-meta">当前文件未绑定测试任务，删除将清理本地 <b class="xs-bd-count">${e.caseCount}</b> 条案例、不会同步删除 TMS 平台上的案例。</div>`
                 : (e.hardDeleteOnly
                     ? `<div class="xs-bd-pane-meta">仅删除本地文件（共 <b class="xs-bd-count">${e.localRowCount || 0}</b> 行），不涉及 TMS 平台。</div>`
-                    : `<div class="xs-bd-pane-meta">删除本文件将同步删除 TMS 平台上的 <b class="xs-bd-count">${e.caseCount}</b> 条案例，以及这些案例的执行记录和缺陷关联。</div>`));
+                    : (e.totalCases != null && e.totalCases > e.caseCount
+                        ? `<div class="xs-bd-pane-meta">删除本文件共 <b class="xs-bd-count">${e.totalCases}</b> 条案例，其中 <b class="xs-bd-count">${e.caseCount}</b> 条会一并删除 TMS 平台上的案例并解除执行与缺陷关联，其余 <b class="xs-bd-count">${e.totalCases - e.caseCount}</b> 条仅在本地清理。</div>`
+                        : `<div class="xs-bd-pane-meta">删除本文件会一并删除 TMS 平台上的 <b class="xs-bd-count">${e.caseCount}</b> 条案例，并解除其执行与缺陷关联。</div>`)));
         return `<div class="xs-bd-pane${idx === 0 ? ' xs-bd-pane-active' : ''}" role="tabpanel" data-idx="${idx}">
             <div class="xs-bd-file-path" title="${escapeHtml_(e.filePath || e.fileName)}">${escapeHtml_(e.filePath || e.fileName)}</div>
             ${paneMeta}
@@ -247,7 +254,7 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[], nonCaseCou
     if (needTmsCount > 0) headerParts.push(`${needTmsCount} 需同步 TMS·${totalCases} 案例`);
     if (hardOnlyCount > 0) headerParts.push(`${hardOnlyCount} 仅本地`);
     if (unboundCount > 0) headerParts.push(`${unboundCount} 未绑定`);
-    if (type3OnlyCount > 0) headerParts.push(`${type3OnlyCount} 仅本地清理`);
+    if (type3OnlyCount > 0) headerParts.push(`${type3OnlyCount} 未推送`);
     if (failedCount > 0) headerParts.push(`${failedCount} 跳过`);
     if (nonCaseCount && nonCaseCount > 0) headerParts.push(`${nonCaseCount} 非案例已直接删除`);
     const headerSuffix = headerParts.length > 0 ? `（${headerParts.join(' / ')}）` : '';

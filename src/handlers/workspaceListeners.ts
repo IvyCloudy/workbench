@@ -838,6 +838,8 @@ async function handleCaseFilesDidDelete(
             filePath: c.entry.filePath,
             fileName: c.entry.fileName,
             caseCount: c.caseCountForConfirm,
+            // totalCases 为文件总案例数；normal 时 > caseCount（含 type=3/本地案例），供 pane 补充展示
+            totalCases: c.nonEmptyIds.length,
             items: c.confirmItems,
             unbound: !!c.unbound,
         })),
@@ -1223,9 +1225,9 @@ async function decideAndFinalizeCaseFileDelete(
     const displayCaseCount = (type3 || unbound) ? nonEmptyIds.length : caseCountForConfirm;
     const userConfirmed = confirmItems.length > 0
         ? await confirmCaseFileDeleteWithDetails(
-            { filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, items: confirmItems, unbound },
+            { filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, items: confirmItems, unbound, totalCases: nonEmptyIds.length },
         )
-        : await showDeleteConfirmSimpleModal({ filePath: entry.filePath, fileName: entry.fileName, caseCount: displayCaseCount, unbound, type3 });
+        : await showDeleteConfirmSimpleModal({ filePath: entry.filePath, fileName: entry.fileName, caseCount: displayCaseCount, unbound, type3, totalCases: nonEmptyIds.length });
 
     if (!userConfirmed) {
         if (entry.wasOpen) await reopenCaseFile(entry.filePath);

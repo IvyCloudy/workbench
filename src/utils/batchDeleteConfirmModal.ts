@@ -151,7 +151,7 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[], nonCaseCou
         const icon = isFail ? '⊘' : (isType3 ? '🧹' : (linkedCount > 0 ? '⚠' : '📄'));
         const cls = isFail ? 'xs-bd-tab xs-bd-tab-fail' : (isType3 ? 'xs-bd-tab xs-bd-tab-type3' : (linkedCount > 0 ? 'xs-bd-tab xs-bd-tab-warn' : 'xs-bd-tab'));
         const badge = isType3
-            ? `<span class="xs-bd-tab-badge xs-bd-tab-badge-type3">type3</span>`
+            ? `<span class="xs-bd-tab-badge xs-bd-tab-badge-type3">未推送</span>`
             : (linkedCount > 0 ? `<span class="xs-bd-tab-badge">${linkedCount}</span>` : '');
         return `<button type="button" class="${cls}" role="tab" data-idx="${idx}" aria-selected="${idx === 0 ? 'true' : 'false'}" tabindex="${idx === 0 ? '0' : '-1'}" title="${escapeHtml_(e.filePath || e.fileName)}">`
             + `<span class="xs-bd-tab-icon">${icon}</span>`
@@ -202,9 +202,9 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[], nonCaseCou
             : `<div class="xs-bd-empty">该文件下无需二次确认的执行/缺陷关联案例。</div>`;
         // pane meta 文案：区分「同步 TMS」与「仅本地删除」两种语义，避免将本地行数当线上行数展示。
         const paneMeta = e.allType3
-            ? `<div class="xs-bd-pane-meta">该文件所有案例均未推送 TMS（<b>type=3</b>，平台已不存在）；删除将直接清理本地。</div>`
+            ? `<div class="xs-bd-pane-meta">该文件 <b class="xs-bd-count">${e.caseCount}</b> 条案例均未推送 TMS，删除将直接清理本地。</div>`
             : (e.unbound
-                ? `<div class="xs-bd-pane-meta">当前文件未绑定测试任务，删除仅清理本地，不会同步删除 TMS 平台上的案例。</div>`
+                ? `<div class="xs-bd-pane-meta">当前文件未绑定测试任务，删除将清理本地 <b class="xs-bd-count">${e.caseCount}</b> 条案例、不会同步删除 TMS 平台上的案例。</div>`
                 : (e.hardDeleteOnly
                     ? `<div class="xs-bd-pane-meta">仅删除本地文件（共 <b class="xs-bd-count">${e.localRowCount || 0}</b> 行），不涉及 TMS 平台。</div>`
                     : `<div class="xs-bd-pane-meta">删除本文件将同步删除 TMS 平台上的 <b class="xs-bd-count">${e.caseCount}</b> 条案例，以及这些案例的执行记录和缺陷关联。</div>`));
@@ -228,7 +228,7 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[], nonCaseCou
         riskLines.push(`<b>${unboundCount}</b> 个文件未绑定测试任务，仅本地删除、不同步 TMS`);
     }
     if (type3OnlyCount > 0) {
-        riskLines.push(`<b>${type3OnlyCount}</b> 个文件所有案例均未推送 TMS（type=3，平台已不存在），将直接清理本地`);
+        riskLines.push(`<b>${type3OnlyCount}</b> 个文件所有案例均未推送 TMS，将直接清理本地`);
     }
     if (failedCount > 0) {
         riskLines.push(`<b>${failedCount}</b> 个文件预检失败，将被跳过、不会删除`);
@@ -247,7 +247,7 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[], nonCaseCou
     if (needTmsCount > 0) headerParts.push(`${needTmsCount} 需同步 TMS·${totalCases} 案例`);
     if (hardOnlyCount > 0) headerParts.push(`${hardOnlyCount} 仅本地`);
     if (unboundCount > 0) headerParts.push(`${unboundCount} 未绑定`);
-    if (type3OnlyCount > 0) headerParts.push(`${type3OnlyCount} 仅本地清理(type=3)`);
+    if (type3OnlyCount > 0) headerParts.push(`${type3OnlyCount} 仅本地清理`);
     if (failedCount > 0) headerParts.push(`${failedCount} 跳过`);
     if (nonCaseCount && nonCaseCount > 0) headerParts.push(`${nonCaseCount} 非案例已直接删除`);
     const headerSuffix = headerParts.length > 0 ? `（${headerParts.join(' / ')}）` : '';
@@ -501,21 +501,24 @@ export function buildLocalOnlyBatchConfirmHtml(entries: BatchDeleteFileEntry[], 
         riskLines.push(`下方清单中 <b>${hardOnlyCount}</b> 个案例文件为本地专属（无 TMS 记录）`);
     }
     if (type3Count > 0) {
-        riskLines.push(`下方清单中 <b>${type3Count}</b> 个案例文件在 TMS 平台已不存在（type=3）`);
+        riskLines.push(`下方清单中 <b>${type3Count}</b> 个案例文件均未推送至 TMS 平台`);
     }
     // F7 计数透明：非案例文件已按普通文件直接删除，不进本弹窗清单；
     // header 总数对齐 VSCode 删除确认数（案例文件数 + 非案例文件数），不再用冗长 note 横幅。
     // 子弹点只说明清单中文件的类别，统一的「本地删除 / 不同步 TMS / 不可恢复」后果由下方总数行承担，避免重复。
     const nonCase = nonCaseCount && nonCaseCount > 0 ? nonCaseCount : 0;
+    // 本地待删除案例/行数合计：unbound/type=3 用 caseCount（本地案例数），hardDeleteOnly 用 localRowCount（本地行数）
+    const totalLocalCases = ok.reduce((sum, e) => sum + (e.hardDeleteOnly ? (e.localRowCount || 0) : (e.caseCount || 0)), 0);
+    const caseSuffix = totalLocalCases > 0 ? `、<b>${totalLocalCases}</b> 条案例` : '';
     const riskCard = `<div class="xs-bd-risk xs-bd-risk-strong">
         <div class="xs-bd-risk-title">⚠ 谨慎操作</div>
         <ul class="xs-bd-risk-list">${riskLines.map(t => `<li>${t}</li>`).join('')}</ul>
-        <div class="xs-bd-risk-note">本批共 <b>${fileCount + nonCase}</b> 个文件，确认后仅删除本地、不同步 TMS 平台，且不可恢复。</div>
+        <div class="xs-bd-risk-note">本批共 <b>${fileCount + nonCase}</b> 个文件${caseSuffix}，确认后仅删除本地、不同步 TMS 平台，且不可恢复。</div>
     </div>`;
 
     const fileListHtml = ok.length > 0
         ? `<div class="xs-lo-list">${ok.map(e => {
-            const tag = e.unbound ? '未绑定' : (e.hardDeleteOnly ? '仅本地' : (e.allType3 ? 'type=3' : '本地'));
+            const tag = e.unbound ? '未绑定' : (e.hardDeleteOnly ? '仅本地' : (e.allType3 ? '未推送' : '本地'));
             const tagCls = e.unbound ? 'unbound' : (e.hardDeleteOnly ? 'hard' : (e.allType3 ? 'type3' : 'local'));
             return `<div class="xs-lo-item">`
                 + `<span class="xs-lo-name" title="${escapeHtml_(e.filePath || e.fileName)}">${escapeHtml_(e.fileName)}</span>`

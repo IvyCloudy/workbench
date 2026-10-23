@@ -813,7 +813,8 @@ async function handleCaseFilesDidDelete(
             .map(c => ({
             filePath: c.entry.filePath,
             fileName: c.entry.fileName,
-            caseCount: 0,
+            // caseCount 存本地待删除案例数（type=3 无 TMS 同步，不计入"需同步 TMS"合计），供弹窗 pane 展示。
+            caseCount: c.nonEmptyIds.length,
             items: [] as DeleteConfirmItem[],
             allType3: true,
             unbound: false,
@@ -841,7 +842,7 @@ async function handleCaseFilesDidDelete(
             unbound: !!c.unbound,
         })),
         // 全部 type=3（从未推送 TMS）的文件：仅在混合批量中纳入弹窗展示（每个文件说清楚"直接清理本地"），
-        // 其 caseCount 计 0、不占 TMS 同步口径；整批全 type=3 时也纳入（改走下方 F2 整批本地删除确认，见 useLocalOnlyModal）。
+        // 其 caseCount 记本地案例数、不占 TMS 同步口径；整批全 type=3 时也纳入（改走下方 F2 整批本地删除确认，见 useLocalOnlyModal）。
         ...type3Entries,
         ...precheckFailedCtxs.map(c => ({
             filePath: c.entry.filePath,
@@ -1215,13 +1216,16 @@ async function decideAndFinalizeCaseFileDelete(
     // 需要用户确认。
     // 注意：即使确认接口全部返回 type=3（案例从未推送 TMS、无线上记录，即"没匹配到线上案例"），
     // 删除前也一律给出确认（恢复 97d9d78 之前的行为）；type=3 走简化确认，并明示"仅清理本地、不同步 TMS"。
-    const { confirmItems, caseCountForConfirm, unbound } = ctx;
+    const { confirmItems, caseCountForConfirm, unbound, nonEmptyIds } = ctx;
     const type3 = !!ctx.allType3;
+    // 本地删除（未绑定 / type=3）时，"案例数"应展示本地真实案例数（nonEmptyIds），
+    // 而非 caseCountForConfirm（type=3 时为 0，因其只统计可同步 TMS 的条数）。
+    const displayCaseCount = (type3 || unbound) ? nonEmptyIds.length : caseCountForConfirm;
     const userConfirmed = confirmItems.length > 0
         ? await confirmCaseFileDeleteWithDetails(
             { filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, items: confirmItems, unbound },
         )
-        : await showDeleteConfirmSimpleModal({ filePath: entry.filePath, fileName: entry.fileName, caseCount: caseCountForConfirm, unbound, type3 });
+        : await showDeleteConfirmSimpleModal({ filePath: entry.filePath, fileName: entry.fileName, caseCount: displayCaseCount, unbound, type3 });
 
     if (!userConfirmed) {
         if (entry.wasOpen) await reopenCaseFile(entry.filePath);

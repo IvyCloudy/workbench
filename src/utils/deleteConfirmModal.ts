@@ -232,9 +232,9 @@ function buildDeleteConfirmSimpleHtml(filePath: string, fileName: string, caseCo
     const color = MODAL_COLOR_WARNING;
     const headerBg = MODAL_HEADER_BG_WARNING;
     const lead = unbound
-        ? '当前文件未绑定测试任务，删除仅清理本地，不会同步删除 TMS 平台上的案例。是否继续删除？'
+        ? `当前文件未绑定测试任务，删除将清理本地 <span class="xs-dc-count">${caseCount}</span> 条案例、不会同步删除 TMS 平台上的案例。是否继续删除？`
         : (type3
-            ? '该文件的案例均未推送至 TMS 平台，删除将直接清理本地、不会同步删除 TMS 平台上的案例，此操作不可恢复。是否确定删除？'
+            ? `该文件的 <span class="xs-dc-count">${caseCount}</span> 条案例均未推送至 TMS 平台，删除将直接清理本地、不会同步删除 TMS 平台上的案例，此操作不可恢复。是否确定删除？`
             : `谨慎操作：删除文件「${escapeHtml_(fileName)}」将同步删除 TMS 平台上的 `
                 + `<span class="xs-dc-count">${caseCount}</span> 条案例，以及这些案例的执行记录和缺陷关联，此操作不可恢复。是否确定删除？`);
 

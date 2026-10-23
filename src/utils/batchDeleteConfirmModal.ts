@@ -213,7 +213,7 @@ function buildBatchDeleteConfirmHtml(entries: BatchDeleteFileEntry[], nonCaseCou
                 : (e.hardDeleteOnly
                     ? `<div class="xs-bd-pane-meta">仅删除本地文件（共 <b class="xs-bd-count">${e.localRowCount || 0}</b> 行），不涉及 TMS 平台。</div>`
                     : (e.totalCases != null && e.totalCases > e.caseCount
-                        ? `<div class="xs-bd-pane-meta">删除本文件共 <b class="xs-bd-count">${e.totalCases}</b> 条案例，其中 <b class="xs-bd-count">${e.caseCount}</b> 条会一并删除 TMS 平台上的案例并解除执行与缺陷关联，其余 <b class="xs-bd-count">${e.totalCases - e.caseCount}</b> 条仅在本地清理。</div>`
+                        ? `<div class="xs-bd-pane-meta">删除本文件共 <b class="xs-bd-count">${e.totalCases}</b> 条案例，其中 <b class="xs-bd-count">${e.caseCount}</b> 条会一并删除 TMS 平台上的案例并解除执行与缺陷关联。</div>`
                         : `<div class="xs-bd-pane-meta">删除本文件会一并删除 TMS 平台上的 <b class="xs-bd-count">${e.caseCount}</b> 条案例，并解除其执行与缺陷关联。</div>`)));
         return `<div class="xs-bd-pane${idx === 0 ? ' xs-bd-pane-active' : ''}" role="tabpanel" data-idx="${idx}">
             <div class="xs-bd-file-path" title="${escapeHtml_(e.filePath || e.fileName)}">${escapeHtml_(e.filePath || e.fileName)}</div>

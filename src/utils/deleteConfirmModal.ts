@@ -47,14 +47,12 @@ export interface DeleteConfirmItem {
 /**
  * 正常（需同步 TMS）删除确认的"影响面"子句。
  * 当文件总案例数 > 可同步 TMS 的条数时（即文件里还有 type=3 / 本地案例），
- * 补充"共 N 条案例，其中 M 条会一并删除 TMS 平台上的案例，其余仅在本地清理"，避免只显示 TMS 子集而让用户低估删除影响。
+ * 补充"共 N 条案例，其中 M 条会一并删除 TMS 平台上的案例"，避免只显示 TMS 子集而让用户低估删除影响。
  */
 function buildSyncLead_(caseCount: number, totalCases?: number): string {
     if (totalCases != null && totalCases > caseCount) {
-        const local = totalCases - caseCount;
         return `共 <span class="xs-dc-count">${totalCases}</span> 条案例，其中 `
-            + `<span class="xs-dc-count">${caseCount}</span> 条会一并删除 TMS 平台上的案例并解除执行与缺陷关联，`
-            + `其余 <span class="xs-dc-count">${local}</span> 条仅在本地清理`;
+            + `<span class="xs-dc-count">${caseCount}</span> 条会一并删除 TMS 平台上的案例并解除执行与缺陷关联`;
     }
     return `会一并删除 TMS 平台上的 <span class="xs-dc-count">${caseCount}</span> 条案例，并解除其执行与缺陷关联`;
 }

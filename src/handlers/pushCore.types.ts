@@ -204,6 +204,11 @@ export interface PushFailureItem {
     /** 命中的接口字段码（聚焦维度；字段类错误才有值，其余为 undefined） */
     field?: PushInterfaceField;
     /**
+     * 人类可读的列/字段名（中文标签）。缺列（missingColumn）场景下由 MissingColumnHit.label 填充；
+     * 行级失败时通常走 field（接口字段码）。与 field 互补，统一作为埋点/展示的「有问题的列名」维度。
+     */
+    columnName?: string;
+    /**
      * B4 · 步骤下标（0-based）：仅当失败点可定位到 steps[i] 或 preconditions[i] 时才有值；
      * 与 subField 成对出现，用于前端展开态 sub-td / 弹窗 dv2 精确定位。
      */

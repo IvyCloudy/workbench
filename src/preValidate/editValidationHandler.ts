@@ -21,7 +21,7 @@ import { runValidatorsOnRowsPure } from './validators';
 import type { RowLike } from '../handlers/pushCore.types';
 import type { PushFailureItem } from '../handlers/pushCore.types';
 import { classifyFailure } from '../utils/pushFailure/categoryClassify';
-import { persistPushFailures, clearFailures } from '../utils/pushFailureStore';
+import { persistPushFailures, clearFailures, collectFailureColumns } from '../utils/pushFailureStore';
 import { detectFileType, createParser, type FileType, containsTestCaseId } from '../parsers';
 import { FILE_PATTERNS, isInQualifiedDir } from '../services/utils';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
@@ -288,6 +288,7 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
                 errorCount: String(openErr),
                 warnCount: String(openWarn),
                 fileLevelCount: String(fileLevelFailures.length),
+                columns: collectFailureColumns(failures),
             });
         }
     }
@@ -331,6 +332,7 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
             fileFormat: fileType,
             errorCount: String(errorCount),
             warnCount: String(warnCount),
+            columns: collectFailureColumns(failures),
         });
     }
 

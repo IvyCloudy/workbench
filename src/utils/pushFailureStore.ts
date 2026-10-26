@@ -20,7 +20,20 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { TS_ID_COLUMN } from '../services/utils';
 import type { PushFailCategory, PushInterfaceField } from './pushFailureCategory';
-import type { PushSubField } from '../handlers/pushCore.types';
+import type { PushSubField, PushFailureItem } from '../handlers/pushCore.types';
+
+/**
+ * 从失败项集合中聚合「有问题的列名」：优先取接口字段码 field，缺列等无 field 时回退 columnName，
+ * 去重后以 '|' 连接，作为埋点 columns 维度，便于看板下钻定位出问题的列。
+ */
+export function collectFailureColumns(failures: PushFailureItem[]): string {
+    const cols = new Set<string>();
+    for (const f of failures) {
+        const col = f.field ?? f.columnName;
+        if (col) cols.add(col);
+    }
+    return [...cols].join('|');
+}
 
 // ============================================
 // 类型定义

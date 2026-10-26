@@ -16,7 +16,7 @@
  */
 
 import { TelemetryService } from '../utils/telemetry';
-import { persistPushFailures } from '../utils/pushFailureStore';
+import { persistPushFailures, collectFailureColumns } from '../utils/pushFailureStore';
 import { ROW_INDEX_META } from '../utils/pushDataMapper';
 import { TS_ID_COLUMN } from '../services/utils';
 import type { PushFailureItem, PreValidationResult, PushContext, RowLike } from '../handlers/pushCore.types';
@@ -96,6 +96,7 @@ async function detectMissingColumnFailures(ctx: PushContext): Promise<PushFailur
             // rowIndex 有意留空 —— 前端据此走"文件级"渲染分支
             category: classifyFailure({ reason, validatorKind: 'missingColumn' }),
             severity: hit.severity,
+            columnName: hit.label,
         } as PushFailureItem;
     });
 }
@@ -117,6 +118,7 @@ export async function stepPreValidate(ctx: PushContext, rows: RowLike[]): Promis
         TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.missingColumnsDetected`, {
             ...baseTelemetryProps(ctx),
             count: String(missingColumnFailures.length),
+            columns: collectFailureColumns(missingColumnFailures),
         });
     }
     const { failuresByKind, droppedIndex } = runValidators(rows, ctx.opts.resolveRowIndex);
@@ -159,18 +161,21 @@ export async function stepPreValidate(ctx: PushContext, rows: RowLike[]): Promis
         TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.placeholderTestcaseIdSkipped`, {
             ...baseTelemetryProps(ctx),
             count: String(placeholderFailures.length),
+            columns: collectFailureColumns(placeholderFailures),
         });
     }
     if (emptyFailures.length > 0) {
         TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.emptyTestcaseIdSkipped`, {
             ...baseTelemetryProps(ctx),
             count: String(emptyFailures.length),
+            columns: collectFailureColumns(emptyFailures),
         });
     }
     if (formatFailures.length > 0) {
         TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.invalidFormatSkipped`, {
             ...baseTelemetryProps(ctx),
             count: String(formatFailures.length),
+            columns: collectFailureColumns(formatFailures),
         });
     }
     // B2 · error 级枚举/类型命中埋点：与 tsId 硬拦截同族的 `.xxxSkipped` 命名，
@@ -179,18 +184,21 @@ export async function stepPreValidate(ctx: PushContext, rows: RowLike[]): Promis
         TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.enumInvalidSkipped`, {
             ...baseTelemetryProps(ctx),
             count: String(enumInvalidFailures.length),
+            columns: collectFailureColumns(enumInvalidFailures),
         });
     }
     if (planExecNumFailures.length > 0) {
         TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.planExecNumInvalidSkipped`, {
             ...baseTelemetryProps(ctx),
             count: String(planExecNumFailures.length),
+            columns: collectFailureColumns(planExecNumFailures),
         });
     }
     if (nameEmptyFailures.length > 0) {
         TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.nameEmptySkipped`, {
             ...baseTelemetryProps(ctx),
             count: String(nameEmptyFailures.length),
+            columns: collectFailureColumns(nameEmptyFailures),
         });
     }
     // D5 · 重复案例名称命中埋点（error 级，属内容层硬拦截 → 同族命名）
@@ -198,6 +206,7 @@ export async function stepPreValidate(ctx: PushContext, rows: RowLike[]): Promis
         TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.duplicateNameSkipped`, {
             ...baseTelemetryProps(ctx),
             count: String(duplicateNameFailures.length),
+            columns: collectFailureColumns(duplicateNameFailures),
         });
     }
     // 「待补充」软拦截命中埋点（不区分 skipped/pushed，因为软拦截行仍会被推送）。
@@ -205,6 +214,7 @@ export async function stepPreValidate(ctx: PushContext, rows: RowLike[]): Promis
         TelemetryService.sendTelemetryEvent(`${ctx.telemetryPrefix}.todoPlaceholderDetected`, {
             ...baseTelemetryProps(ctx),
             count: String(todoFailures.length),
+            columns: collectFailureColumns(todoFailures),
         });
     }
     // 高亮持久化：将命中项写入 pushFailureStore，供编辑器侧渲染黄/红底色。

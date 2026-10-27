@@ -50,7 +50,7 @@ export interface PushFailureFieldCell {
 }
 
 /** 单条失败记录：reason 为失败原因原文，timestamp 为失败时间戳（ms），category/fields 为分类与字段维度 */
-export interface PushFailureItem {
+export interface PersistedFailureItem {
     reason: string;
     timestamp: number;
     /** 失败分类码（统计/埋点维度），历史数据缺失时为 undefined */
@@ -96,7 +96,7 @@ export interface PushFailureItem {
 }
 
 export interface PushFailureEntry {
-    [tsId: string]: PushFailureItem; // tsId -> { reason, timestamp }
+    [tsId: string]: PersistedFailureItem; // tsId -> { reason, timestamp }
 }
 
 interface PushFailureStoreData {

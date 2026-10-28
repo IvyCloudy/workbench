@@ -31,9 +31,9 @@ export type EnumField = 'caseType' | 'testType' | 'priority' | 'keyFlag';
 const CONFIG_PREFIX = 'testcaseViewer.enum';
 
 /** 代码级硬编码兜底（仅在 VSCode 环境异常/配置全丢失时使用，保证最小可用）。
- * 2026-09-19：caseType 与 package.json 的 default（11 项）对齐，避免"兜底集合过窄"导致误判。 */
+ * caseType 与 package.json 的 default（13 项）对齐，避免"兜底集合过窄"导致误判。 */
 const HARD_FALLBACK: Record<EnumField, string[]> = {
-    caseType: ['功能点类', '流程类', '界面类', '批处理类', '数据仓库类', '报表统计类', '算法类', '安全类', '可用性检查类', '报文接口类', '其他'],
+    caseType: ['流程类', '功能点类', '报表统计类', '界面类', '报文接口类', '批处理类', '其他', '算法类', '可用性检查类', '数据仓库类', '安全类', '性能类', 'AI类'],
     testType: ['手工', 'UI自动化', '接口自动化', '自动化'],
     priority: ['高', '中', '低'],
     keyFlag:  ['是', '否'],

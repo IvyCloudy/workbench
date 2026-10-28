@@ -65,3 +65,31 @@ export function isValidEnumValue(field: EnumField, v: any): boolean {
     if (s === '') return false;
     return getEnumValues(field).indexOf(s) !== -1;
 }
+
+/**
+ * 「执行方式 / test_type」口语化输入 → 标准值 的别名归一化映射（校验侧单一来源）。
+ * 允许用户用更口语/简短的词表达执行方式；校验侧（pushCore.enumTypeValidators）
+ * 复用本来源，与推送侧（pushDataMapper 的等价 TEST_TYPE_ALIASES）保持语义一致：
+ *   - '接口'     → '接口自动化'
+ *   - '界面'     → 'UI自动化'
+ * 不在表中的输入原样返回（交给后续白名单校验决定是否合法）。
+ */
+export const TEST_TYPE_ALIASES: Record<string, string> = {
+    '接口': '接口自动化',
+    '界面': 'UI自动化',
+};
+
+/**
+ * 将口语化输入归一化为标准执行方式值；命中别名表则翻译，否则原样返回。
+ * 含大小写忽略匹配（覆盖 'UI' / 'API' 等混入大小写的情况）。
+ */
+export function normalizeTestTypeInput(raw: any): string {
+    const v = (raw == null ? '' : String(raw)).trim();
+    if (v === '') return v;
+    if (Object.prototype.hasOwnProperty.call(TEST_TYPE_ALIASES, v)) return TEST_TYPE_ALIASES[v];
+    const lower = v.toLowerCase();
+    for (const key of Object.keys(TEST_TYPE_ALIASES)) {
+        if (key.toLowerCase() === lower) return TEST_TYPE_ALIASES[key];
+    }
+    return v;
+}

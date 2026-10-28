@@ -37,7 +37,7 @@
 import type { RowLike } from './pushCore.types';
 import type { RowValidator } from '../preValidate/validators';
 import type { PushInterfaceField } from '../utils/pushFailureCategory';
-import { getEnumValues } from '../utils/caseEnumValues';
+import { getEnumValues, normalizeTestTypeInput } from '../utils/caseEnumValues';
 
 /**
  * 从配置中拉取「关键案例」合法取值（严格按 testcaseViewer.enum.keyFlag 为准，默认仅「是/否」）。
@@ -195,7 +195,8 @@ function scanEnumFields(row: RowLike, colPresent: Record<string, boolean>): { hi
         //       - 非空非法 → 仅 warn 提示、不阻断推送（让问题可见，但不影响原有推送结果）。
         if (isAbsent) continue;
         const val = readEnumRaw(row, rule);
-        if (!isAllowedEnum(val, allowed)) {
+        const normVal = rule.field === 'testType' ? normalizeTestTypeInput(val) : val;
+        if (!isAllowedEnum(normVal, allowed)) {
             const isTwoTier = rule.field === 'type' || rule.field === 'keyFlag';
             // 两档字段别名列的空值：走默认值，完全跳过（保持已有推送行为）
             if (isTwoTier && val === '') continue;

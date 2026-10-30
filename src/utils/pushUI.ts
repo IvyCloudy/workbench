@@ -46,6 +46,8 @@ export interface PushProgressOptions extends SummaryUiOptions {
     progressCancelTitle?: string;
     /** 进度视图动作动词（副标题与取消说明使用，默认 "推送"） */
     progressVerb?: string;
+    /** 批量推送中被自动跳过的非案例文件数（不含 testcase_id），用于在进度视图头部提示 */
+    skippedCount?: number;
 }
 
 /** 批量推送单文件结果 */
@@ -67,6 +69,8 @@ export interface PushFileResult {
     costMs?: number;
     /** 整文件异常原因（对应 .aborted 的 reason 维度），批量下钻分析用 */
     reason?: string;
+    /** 非案例文件跳过条目（不含 testcase_id，未参与推送），仅用于批量汇总视图的灰色「已跳过」渲染 */
+    nonCase?: boolean;
 }
 
 /** 进度项状态 */
@@ -80,6 +84,8 @@ interface PushProgressItem {
 export interface ValidateGateFileEntry {
     filePath: string;
     fileName: string;
+    /** 非案例文件跳过条目（不含 testcase_id，未参与推送）；仅用于在门控视图渲染灰色「已跳过」行，不计入阻断/提醒统计 */
+    nonCase?: boolean;
     /** 该文件的所有 failures（含 severity/rowIndex/tsId 等，格式同 05g 内部） */
     failures: Array<{
         tsId: string;
@@ -145,13 +151,18 @@ function buildSummaryStats(results: PushFileResult[]) {
     const totalSucc = results.reduce((s, r) => s + r.successCount, 0);
     const totalFail = results.reduce((s, r) => s + r.failCount, 0);
     const errorFiles = results.filter(r => r.error).length;
+    const skippedCount = results.filter(r => r.nonCase === true).length;
     const hasFailures = totalFail > 0 || errorFiles > 0;
-    const statusColor = hasFailures ? '#dc3545' : '#28a745';
-    const statusIcon = hasFailures ? '✕' : '✓';
+    // 全部为「已跳过」非案例文件（无成功/失败）时，用中性灰状态，避免误导为"成功"
+    const allSkipped = totalFiles > 0 && skippedCount === totalFiles && !hasFailures;
+    const statusColor = hasFailures ? '#dc3545' : allSkipped ? '#999' : '#28a745';
+    const statusIcon = hasFailures ? '✕' : allSkipped ? '○' : '✓';
     const statusBg = hasFailures
         ? 'linear-gradient(180deg,#fdecea,#fdf3f3)'
+        : allSkipped
+        ? 'linear-gradient(180deg,#f3f4f6,#fafafa)'
         : 'linear-gradient(180deg,#e6f4ea,#f3faf5)';
-    return { totalFiles, totalSucc, totalFail, errorFiles, hasFailures, statusColor, statusIcon, statusBg };
+    return { totalFiles, totalSucc, totalFail, errorFiles, skippedCount, hasFailures, statusColor, statusIcon, statusBg };
 }
 
 /** 共享 CSS（进度 & 总结视图共用：文件列表 + 行布局 + 按钮 + 滚动条） */
@@ -209,22 +220,27 @@ function buildUnifiedFileRow(params: {
 
 /** 总结视图单文件行 HTML */
 function buildFileRow(index: number, r: PushFileResult, opts?: SummaryUiOptions): string {
+    const isNonCase = r.nonCase === true;
     const isError = !!r.error;
-    const icon = isError ? '✕' : (r.failCount > 0 ? '⚠' : '✓');
-    const rowColor = isError ? '#dc3545' : (r.failCount > 0 ? '#f0a020' : '#28a745');
-    const rowClass = [
+    const icon = isNonCase ? '○' : isError ? '✕' : (r.failCount > 0 ? '⚠' : '✓');
+    const rowColor = isNonCase ? '#999' : isError ? '#dc3545' : (r.failCount > 0 ? '#f0a020' : '#28a745');
+    const rowClass = isNonCase ? '' : [
         isError ? 'file-error' : '',
         !isError && r.failCount > 0 ? 'file-warn' : '',
         !isError && r.failCount === 0 && r.successCount > 0 ? 'file-ok' : '',
     ].filter(Boolean).join(' ');
 
-    const statusHtml = isError
+    const statusHtml = isNonCase
+        ? '已跳过：非案例文件（不含 testcase_id）'
+        : isError
         ? escapeHtml(r.error!.length > 80 ? r.error!.slice(0, 80) + '…' : r.error!)
         : `成功 ${r.successCount} / 失败 ${r.failCount} / 共 ${r.total} 条`;
-    const statusTooltip = isError
+    const statusTooltip = isNonCase
+        ? '该文件不含 testcase_id，推送时已自动跳过'
+        : isError
         ? r.error!
         : `成功 ${r.successCount} / 失败 ${r.failCount} / 共 ${r.total} 条`;
-    const statusClass = isError ? 'status-err' : (r.failCount > 0 ? 'status-warn' : '');
+    const statusClass = isNonCase ? '' : isError ? 'status-err' : (r.failCount > 0 ? 'status-warn' : '');
 
     const mainRow = buildUnifiedFileRow({
         index,
@@ -305,6 +321,7 @@ function buildSummaryHtml(results: PushFileResult[], opts?: SummaryUiOptions): s
     <span class="summary-stats">
         <span class="s-ok">${stats.totalSucc} 成功</span>
         ${stats.totalFail > 0 ? ` / <span class="s-err">${stats.totalFail} 失败</span>` : ''}
+        ${stats.skippedCount > 0 ? ` / <span style="color:#999">${stats.skippedCount} 跳过</span>` : ''}
         &nbsp;·&nbsp;共 ${stats.totalFiles} 个文件
     </span>
 </div>
@@ -410,6 +427,8 @@ export function createPushProgress(totalFiles: number, options?: PushProgressOpt
     let _onOpenFile: ((result: PushFileResult) => Promise<void>) | undefined;
     // 当前阶段：validating（前置校验中）→ pushing（真正推送中）
     let _phase: PushProgressPhase = 'pushing';
+    // 批量推送中被自动跳过的非案例文件数（仅用于进度视图头部提示）
+    let _skippedCount = options?.skippedCount || 0;
     // 校验汇总视图的 pending resolver（用户点【取消】/【忽略并继续】时结算）
     let _validateGateResolver: ((decision: 'continue' | 'cancel') => void) | null = null;
 
@@ -475,6 +494,7 @@ export function createPushProgress(totalFiles: number, options?: PushProgressOpt
     .header{flex-shrink:0;padding:16px 20px 12px;border-bottom:1px solid var(--bd);background:#fafbfc}
     .header-title{font-size:15px;font-weight:600;margin-bottom:4px}
     .header-sub{font-size:12px;color:var(--text-secondary)}
+    .header-note{font-size:12px;color:#999;margin-top:6px;line-height:1.4}
     .bar-wrap{flex-shrink:0;height:4px;background:#e8e8e8}
     .bar-fill{height:100%;background:${barColor};transition:width .3s ease;border-radius:0 2px 2px 0}
     .btn-primary{background:${barColor}}
@@ -485,6 +505,7 @@ export function createPushProgress(totalFiles: number, options?: PushProgressOpt
 <div class="header">
     <div class="header-title">${headerTitle}</div>
     <div class="header-sub">${headerSub}</div>
+${_skippedCount > 0 ? `    <div class="header-note">另有 ${_skippedCount} 个非案例文件已跳过（不含 testcase_id）</div>` : ''}
 </div>
 <div class="bar-wrap"><div class="bar-fill" style="width:${pct}%"></div></div>
 <div class="file-list">${fileRows}</div>
@@ -535,6 +556,7 @@ export function createPushProgress(totalFiles: number, options?: PushProgressOpt
             if (eCnt > 0) errFileCount++;
             else if (wCnt > 0) warnOnlyFileCount++;
         }
+        const skippedCount = entries.filter(e => e.nonCase === true).length;
         const hasError = totalErr > 0;
         const status = hasError ? 'error' : 'warning';
         const headerBg = hasError
@@ -547,6 +569,17 @@ export function createPushProgress(totalFiles: number, options?: PushProgressOpt
 
         // 按文件构建单行（仅文件级汇总；不展开每行明细 → 明细通过点击文件名跳转到编辑器时由 05g 弹窗承载）
         const fileRowsHtml = entries.map((en, fi) => {
+            // 非案例跳过条目：灰色「已跳过」行，不参与阻断/提醒统计，点击可打开文件查看
+            if (en.nonCase === true) {
+                return `
+    <div class="file-row" data-file-index="${fi}" data-file-path="${escapeHtml(en.filePath)}" title="点击打开：${escapeHtml(en.filePath)}">
+        <div class="file-header">
+            <span class="file-icon" style="color:#999">○</span>
+            <span class="file-name-col" title="${escapeHtml(en.filePath)}">${escapeHtml(en.fileName)}</span>
+            <span class="file-status-col" title="该文件不含 testcase_id，推送时已自动跳过" style="color:#999">已跳过：非案例文件（不含 testcase_id）</span>
+        </div>
+    </div>`;
+            }
             const failures = en.failures || [];
             if (failures.length === 0) return '';
             const eCnt = failures.filter(f => (f.severity || 'error') !== 'warn').length;
@@ -608,9 +641,10 @@ export function createPushProgress(totalFiles: number, options?: PushProgressOpt
     <span class="vg-header-icon">${iconChar}</span>
         <span class="vg-header-title">案例格式校验${titleSuffix}</span>
     <span class="vg-header-stats">
-        涉及 ${entries.length} 个文件
+        涉及 ${entries.length - skippedCount} 个文件
         ${errFileCount > 0 ? ` · <span class="s-err">${errFileCount}</span> 阻断` : ''}
         ${warnOnlyFileCount > 0 ? ` · <span class="s-warn">${warnOnlyFileCount}</span> 仅提醒` : ''}
+        ${skippedCount > 0 ? ` · <span style="color:#999">${skippedCount}</span> 跳过` : ''}
         &nbsp;·&nbsp; 共 <b>${totalErr + totalWarn}</b> 条问题
     </span>
 </div>

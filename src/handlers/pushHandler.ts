@@ -5,8 +5,8 @@ import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { FileTypeChecker } from '../providers/UnifiedEditorProvider';
 import { isInTempFolder } from '../services/utils';
 import { parseFileToRows, createParser, containsTestCaseId, detectFileType } from '../parsers';
-import { showPushErrorModal, showModal, showPushResult } from '../utils/message';
-import { createPushProgress, PushFileResult } from '../utils/pushUI';
+import { showPushErrorModal, showModal, showPushResult, MsgType } from '../utils/message';
+import { createPushProgress, showPushSummary, PushFileResult } from '../utils/pushUI';
 import { TelemetryService } from '../utils/telemetry';
 import { runPush, buildRowIndexMappings, buildFailDimensions, PushFailureItem } from './pushCore';
 import { validateYamlContent, publishYamlDiagnostics } from '../utils/yamlValidator';
@@ -322,6 +322,36 @@ async function pushSingleFile(
     };
 }
 
+/**
+ * 在案例文件页面内展示弹窗（webview 内自定义模态框，与编辑器内推送同款效果）：
+ * - 目标文件的案例编辑器已打开 → 直接复用其 panel，页面内浮层弹窗；
+ * - 未打开 → 先以案例编辑器打开该文件，再在其页面内弹窗；
+ * - 打开失败 / 无宿主文件（如文件夹推送）→ 退回独立模态框页面（showModal 'default'）。
+ *
+ * 用于资源管理器推送的预检提示（已跳过非案例文件 / 无可推送文件），
+ * 避免这些弹窗单独打开一个 standaloneModal tab。
+ */
+async function showModalInCasePage(
+    hostFilePath: string | undefined,
+    modalType: MsgType,
+    title: string,
+    message: string,
+): Promise<void> {
+    let panel = hostFilePath ? BaseEditorProvider.getPanel(hostFilePath) : undefined;
+    if (!panel && hostFilePath) {
+        panel = await openCaseFileInEditor(hostFilePath, { waitReadyMs: 8000, panelWaitMs: 8000 });
+        if (panel) {
+            // 等待 webview 前端消息监听器就绪（waitReady 仅保证扩展端就绪）
+            await new Promise(resolve => setTimeout(resolve, 400));
+        }
+    }
+    if (panel) {
+        showModal(panel, modalType, title, message);
+    } else {
+        showModal('default', modalType, title, message);
+    }
+}
+
 // ============================================
 // 主入口
 // ============================================
@@ -344,7 +374,7 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
     const collected = await collectPushableFiles(targets);
     // F8：非案例文件（不含 testcase_id）不提供推送，剔除并提示
     const files: { uri: vscode.Uri; relativePath: string }[] = [];
-    const skippedNonCase: string[] = [];
+    const skippedNonCase: { uri: vscode.Uri; relativePath: string }[] = [];
     for (const f of collected) {
         const type = detectFileType(f.uri.fsPath);
         let isCase = true; // 保守：解析异常时仍视为可推送，交由后续流程校验
@@ -353,40 +383,112 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
                 const parsed = await createParser(type).parse(f.uri.fsPath);
                 isCase = containsTestCaseId(parsed.tableData?.headers, parsed.sourceData, type);
             } catch { /* 保守 */ }
+        } else {
+            // 不可识别扩展名（collectPushableFiles 已按白名单预过滤，此处正常不可达，
+            // 作为防御：不视为案例文件，标记为「已跳过」而非后续校验才失败）。
+            isCase = false;
         }
         if (isCase) files.push(f);
-        else skippedNonCase.push(path.basename(f.uri.fsPath));
+        else skippedNonCase.push({ uri: f.uri, relativePath: f.relativePath });
     }
-    if (skippedNonCase.length > 0) {
-        showModal('default', 'warning', '已跳过非案例文件',
-            `已跳过 ${skippedNonCase.length} 个不含 testcase_id 的文件（非案例文件无法推送）：\n` + skippedNonCase.join('\n'));
+    // 是否强制走批量（汇总）流程：
+    //   · 选中文件数 > 1（多选），或
+    //   · 任一 target 为文件夹（文件夹本身只占 1 个 target，但内部可能含多个/各类文件，
+    //     统一以汇总界面承载，避免单文件编辑器内推送路径漏掉非案例/多文件语境）。
+    const hasFolderTarget = targets.some(t => {
+        try { return fs.statSync(t.fsPath).isDirectory(); } catch { return false; }
+    });
+    const forceBatch = targets.length > 1 || hasFolderTarget;
+
+    // 页内浮层兜底：仅"单选且全为非案例文件 且非文件夹"（无批量汇总面板承载）时使用。
+    // 只要有任一案例文件（files.length >= 1），或选择文件数 > 1（多选），或含文件夹 target，
+    // 都走批量汇总界面，非案例以灰色「已跳过」行承载——此处不再弹窗，
+    // 避免该浮层与后续推送结果浮层叠在同一案例编辑器页内造成两层堆叠。
+    if (skippedNonCase.length > 0 && files.length === 0 && !forceBatch) {
+        const modalHostPath = skippedNonCase[0].uri.fsPath;
+        const skipDetail = skippedNonCase.map(s => s.relativePath).join('\n');
+        await showModalInCasePage(modalHostPath, 'warning', '已跳过非案例文件',
+            skippedNonCase.length === 1
+                ? `该文件不含 testcase_id，不是有效的测试案例，已跳过（不会推送）：\n\n${skipDetail}`
+                : `以下 ${skippedNonCase.length} 个文件不含 testcase_id，不是有效的测试案例，已跳过（不会推送）：\n\n${skipDetail}`);
+        return;
     }
     if (files.length === 0) {
+        if (skippedNonCase.length > 0) {
+            // 多选全为非案例文件，或选中了文件夹（文件夹 target 内部全为非案例）：直接弹批量汇总界面，
+            // 以灰色「已跳过」行承载，与常规批量推送体验一致，不再弹页内浮层。
+            TelemetryService.sendTelemetryEvent('explorerPush.batch.start', {
+                fileCount: String(skippedNonCase.length), isMulti: '1',
+            });
+            const skippedResults: PushFileResult[] = skippedNonCase.map(sk => ({
+                filePath: sk.uri.fsPath,
+                fileName: sk.relativePath,
+                successCount: 0,
+                failCount: 0,
+                total: 0,
+                failures: [],
+                nonCase: true,
+            }));
+            showPushSummary(
+                skippedResults,
+                async (r) => {
+                    try {
+                        await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(r.filePath), 'testcaseViewer.unifiedEditor');
+                    } catch (_) { /* ignore */ }
+                },
+                {
+                    panelTitle: '推送结果',
+                    headerTitle: '推送完成',
+                    note: '所选文件均不含 testcase_id，已全部跳过，未推送任何案例。',
+                },
+            );
+            return;
+        }
+        // 无可推送文件（既无案例也无非案例被识别）：保持页内浮层提示
         TelemetryService.sendTelemetryEvent('explorerPush.aborted', {
             reason: 'noFiles', ext: '', traceId: batchTraceId, costMs: String(Date.now() - batchStart),
         });
-        showModal('default', 'warning', '无可推送文件',
+        // 弹窗宿主：单目标且本身是案例格式文件时落到其案例编辑器页面内
+        const noFileHost = targets.length === 1 && detectFileType(targets[0].fsPath)
+            ? targets[0].fsPath
+            : undefined;
+        await showModalInCasePage(noFileHost, 'warning', '无可推送文件',
             '所选目录或文件中未找到可推送的测试案例文件（.csv / .yaml / .yml / .json）。\n\n请确认文件位于 测试任务/<任务文件夹>/测试案例/ 目录下。');
         return;
     }
-
-    TelemetryService.sendTelemetryEvent('explorerPush.start', {
-        fileCount: String(files.length),
-        isMulti: String(files.length > 1),
-    });
 
     const totalFiles = files.length;
 
     // ====================================================================
     //  单文件推送 — 与原「编辑器内推送」完全一致
+    //  仅当"真正的单选（targets.length === 1 且非文件夹）且恰好 1 个案例文件"时走此路径，
+    //  结果直接弹在案例编辑器页内。其余一律走下方批量流程：
+    //  多选（targets.length > 1）或含文件夹 target 即使只含 1 个案例文件也走批量，
+    //  以保证「选中数 > 1 / 含文件夹 一律弹汇总界面」——非案例文件并入灰色「已跳过」行。
     // ====================================================================
-    if (totalFiles === 1) {
+    if (totalFiles === 1 && !forceBatch) {
+        TelemetryService.sendTelemetryEvent('explorerPush.start', {
+            fileCount: '1',
+            isMulti: '0',
+        });
         const target = files[0].uri;
         const filePath = target.fsPath;
         const baseName = path.basename(filePath);
 
-        // 先确保 webview 已打开，以便校验错误也能在页面居中弹窗展示
-        let panel: vscode.WebviewPanel | undefined = await openCaseFileInEditor(filePath, { waitReadyMs: 8000 });
+        // 先打开案例文件（若未打开），确保拿到案例编辑器的 webview panel，
+        // 推送结果 / 错误直接在案例文件页面内弹窗（与编辑器内推送一致），
+        // 避免退回 message.ts 的无面板降级（会单独开一个 standaloneModal 页面）。
+        let panel: vscode.WebviewPanel | undefined = await openCaseFileInEditor(filePath, {
+            waitReadyMs: 10000,
+            panelWaitMs: 10000,
+        });
+        if (!panel) {
+            // 兜底：极端时序下 openWith 注册 panelMap 晚于轮询上限，再轮询取一次
+            for (let i = 0; i < 50 && !panel; i++) {
+                await new Promise(res => setTimeout(res, 100));
+                panel = BaseEditorProvider.getPanel(filePath);
+            }
+        }
 
         const fileCheck = FileTypeChecker.isQualifiedFile(target);
         if (!fileCheck.qualified) {
@@ -566,7 +668,7 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
     // ====================================================================
     const batchStartTs = Date.now();
     const results: PushFileResult[] = [];
-    const progressPanel = createPushProgress(totalFiles);
+    const progressPanel = createPushProgress(totalFiles, { skippedCount: skippedNonCase.length });
 
     // 批次启动埋点：文件类型分布
     const extCount: Record<string, number> = {};
@@ -654,17 +756,29 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         TelemetryService.sendTelemetryEvent('explorerPush.batch.preValidate.hit', {
             fileCount: String(totalFiles),
             hitFileCount: String(validateEntries.length),
+            skippedNonCase: String(skippedNonCase.length),
             errorFiles: String(validateEntries.filter(e => e.failures.some(f => (f.severity || 'error') !== 'warn')).length),
             errorRows: String(totalErrRows),
             warnRows: String(totalWarnRows),
             durationMs: String(preValidateCostMs),
         });
-        const decision = await progressPanel.showValidateGate(validateEntries);
+        // 非案例跳过文件一并并入门控视图（灰色「已跳过」行），让用户在校验阶段即看到完整文件去向
+        const gateEntries: import('../utils/pushUI').ValidateGateFileEntry[] = [
+            ...validateEntries,
+            ...skippedNonCase.map(sk => ({
+                filePath: sk.uri.fsPath,
+                fileName: sk.relativePath,
+                nonCase: true,
+                failures: [],
+            })),
+        ];
+        const decision = await progressPanel.showValidateGate(gateEntries);
         if (decision === 'cancel') {
             // 有 error 时"关闭" = 整批阻断；纯 warn 时"取消" = 整批取消。两种都直接结束。
             TelemetryService.sendTelemetryEvent('explorerPush.batch.preValidate.blocked', {
                 fileCount: String(totalFiles),
                 hitFileCount: String(validateEntries.length),
+                skippedNonCase: String(skippedNonCase.length),
                 hasError: hasError ? '1' : '0',
                 errorRows: String(totalErrRows),
                 warnRows: String(totalWarnRows),
@@ -858,7 +972,18 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
 
     // 汇总埋点已发出，下面仅负责展示总结视图（不 await：done() 会等用户关闭面板才 resolve，
     // 不能让它阻塞主流程，否则埋点要等用户手动关面板才"算完成"）。点击文件回调内展示结果弹窗。
-    void progressPanel.done(results, async (result) => {
+    // 非案例跳过文件（不含 testcase_id）：构造标准 PushFileResult 并标记 nonCase，
+    // 复用批量汇总 machinery 的渲染/点击骨架，仅在 buildFileRow 中以灰色「已跳过」行区分（非错误）。
+    const skippedResults: PushFileResult[] = skippedNonCase.map(sk => ({
+        filePath: sk.uri.fsPath,
+        fileName: sk.relativePath,
+        successCount: 0,
+        failCount: 0,
+        total: 0,
+        failures: [],
+        nonCase: true,
+    }));
+    void progressPanel.done([...skippedResults, ...results], async (result) => {
         const uri = vscode.Uri.file(result.filePath);
         const fileExt = path.extname(result.filePath).toLowerCase();
         // 总结面板点击文件埋点
@@ -866,10 +991,25 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
             ext: fileExt,
             hasError: result.error ? '1' : '0',
         });
+        // 非案例跳过条目：仅打开文件供查看，不弹推送结果
+        if (result.nonCase) {
+            try {
+                await vscode.commands.executeCommand('vscode.openWith', uri, 'testcaseViewer.unifiedEditor');
+            } catch (_) { /* ignore */ }
+            return;
+        }
         // 结果页跳转：抑制「案例格式校验」弹窗——否则会先弹校验窗、关掉后才看到推送结果。
         // 抑制生命周期由 openCaseFileInEditor 内部管理（waitReady 兑现后才解除，
         // 必晚于 resolveWebviewView 内的打开校验）；不影响用户之后从资源管理器正常打开同一文件。
-        const panel = await openCaseFileInEditor(uri.fsPath, { suppressValidationPrompt: true, waitReadyMs: 8000 });
+        // 优先打开案例文件页面并在其内弹结果；openCaseFileInEditor 超时未拿到 panel 时，
+        // 再轮询 BaseEditorProvider.panelMap 兜底，避免 showPushResult 退回独立 standaloneModal 页面。
+        let panel = await openCaseFileInEditor(uri.fsPath, { suppressValidationPrompt: true, waitReadyMs: 10000, panelWaitMs: 10000 });
+        if (!panel) {
+            for (let i = 0; i < 50 && !panel; i++) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+                panel = BaseEditorProvider.getPanel(uri.fsPath);
+            }
+        }
         // 等待 webview 前端消息监听器就绪（waitReady 仅保证扩展端就绪）
         await new Promise(resolve => setTimeout(resolve, 400));
         if (result.error) {

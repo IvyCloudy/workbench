@@ -355,7 +355,7 @@ export class YamlFileParser implements FileParser {
         } catch (e: any) {
             const { line } = extractErrorLocation(e, content);
             const raw = e?.message ? String(e.message).split('\n')[0] : 'YAML 解析失败';
-            return { line: line || 1, message: raw.slice(0, 240) };
+            return { line: Number(line) || 1, message: raw.slice(0, 240) };
         }
     }
 

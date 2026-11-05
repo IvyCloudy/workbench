@@ -303,6 +303,37 @@ export function validateYamlContent(content: string, filePath?: string): YamlIss
 }
 
 /**
+ * 带「重读兜底」的 YAML 内容校验。
+ *
+ * 背景：在 Tab 打开 / resolveCustomEditor 阶段做语法预检时，复杂 YAML 文件
+ * 可能恰好处于「尚未完全就绪」的状态——例如大文件 TextDocument 懒加载未结束、
+ * 或与外部写入（保存 / 同步）发生竞态——导致首次读取到不完整 / 陈旧内容，被
+ * YAML 解析器误报为格式错误（典型现象：第一次打开被判格式错误并拦截、关闭后
+ * 第二次打开又正常，报错形如 `| - testcase_id: ...` 出现在第 1 行）。
+ *
+ * 策略：首轮校验若命中 error，先延后一拍、重新读取最新内容再校验一次；仅当
+ *   二次校验仍报错才认定为真实格式错误。真正损坏的文件两次都会失败、仍会被
+ *   正常拦截；瞬态误报会在二次校验时消失，从而正常打开。
+ *
+ * 注意：仅当首轮命中 error 时才会产生 ~150ms 延时；正常文件首轮无 error，
+ *   直接返回，不增加任何额外校验开销。
+ *
+ * @param readContent 读取文件内容的回调（每次调用都重新读取，确保拿到最新内容）
+ */
+export async function validateYamlContentWithRetry(
+    uri: vscode.Uri,
+    readContent: () => string | Promise<string>,
+): Promise<YamlIssue[]> {
+    const first = validateYamlContent(await readContent());
+    if (!first.some((i) => i.severity === 'error')) return first;
+    log.debug('validateYamlContentWithRetry: first pass reported error, re-reading once', {
+        uri: uri.toString(),
+    });
+    await new Promise<void>((r) => setTimeout(r, 150));
+    return validateYamlContent(await readContent());
+}
+
+/**
  * 读取文件内容并逐行校验 YAML 格式。
  */
 export async function validateYamlFile(filePath: string): Promise<YamlIssue[]> {

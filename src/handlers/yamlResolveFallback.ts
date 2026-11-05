@@ -26,7 +26,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { TelemetryService } from '../utils/telemetry';
 import { YAML_CMD_FIX_ALL, YAML_DIAGNOSTIC_SOURCE } from '../utils/yamlConstants';
-import { validateYamlContent, publishYamlDiagnostics } from '../utils/yamlValidator';
+import { validateYamlContentWithRetry, publishYamlDiagnostics } from '../utils/yamlValidator';
 import type { YamlIssue } from '../utils/yamlTypes';
 import { wasHandledByInterceptor } from '../utils/yamlInterceptorState';
 
@@ -54,22 +54,27 @@ export async function tryYamlResolveFallback(params: {
     // 【Toast / 光标 / Problems 面板 三者行号必须一致】
     // 详见文件头注释；此处按 3 步走：① publish 最新诊断 ② 从 getDiagnostics 拉 ③ 兜底
     // ═══════════════════════════════════════════════════════════════════════════
-    const openedDoc =
-        vscode.workspace.textDocuments.find(
-            (d) => d.uri.fsPath === filePath || d.uri.toString() === document.uri.toString(),
-        );
-    let rawTextForCheck: string;
-    try {
-        rawTextForCheck = openedDoc ? openedDoc.getText() : await fs.promises.readFile(filePath, 'utf-8');
-    } catch (readErr: any) {
-        log('⚠ yaml pre-open read failed:', readErr?.message || readErr);
-        rawTextForCheck = '';
-    }
+    // 读取内容（优先内存文档，否则磁盘），供「重读兜底」重复调用。
+    const readContent = async (): Promise<string> => {
+        const openedDoc =
+            vscode.workspace.textDocuments.find(
+                (d) => d.uri.fsPath === filePath || d.uri.toString() === document.uri.toString(),
+            );
+        try {
+            return openedDoc ? openedDoc.getText() : await fs.promises.readFile(filePath, 'utf-8');
+        } catch (readErr: any) {
+            log('⚠ yaml pre-open read failed:', readErr?.message || readErr);
+            return '';
+        }
+    };
 
     // ─── 步骤 1：主动跑一次校验并 publish，强制 Problems 面板同步到最新内存内容 ───
+    //   首开瞬间文件可能尚未完全就绪（大文件懒加载 / 外部写入竞态），读到不完整或
+    //   陈旧内容会被误判为格式错误；validateYamlContentWithRetry 会延后一拍重读
+    //   重校验，仅当二次校验仍报错才认定为真实错误。
     let publishedIssues: YamlIssue[] = [];
     try {
-        publishedIssues = validateYamlContent(rawTextForCheck);
+        publishedIssues = await validateYamlContentWithRetry(document.uri, readContent);
         publishYamlDiagnostics(document.uri, publishedIssues);
     } catch (vErr: any) {
         log('⚠ validateYamlContent/publish failed:', vErr?.message || vErr);

@@ -21,7 +21,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { validateYamlContent } from '../utils/yamlValidator';
+import { validateYamlContentWithRetry } from '../utils/yamlValidator';
 import { markInterceptorHandled } from '../utils/yamlInterceptorState';
 import { YAML_CMD_FIX_ALL } from '../utils/yamlConstants';
 import { TelemetryService } from '../utils/telemetry';
@@ -45,60 +45,66 @@ export function registerYamlPreOpenInterceptor(): vscode.Disposable {
             const fsPath = uri.fsPath;
             if (!/\.ya?ml$/i.test(fsPath)) continue; // 仅 YAML
 
-            // 同步读文件并预检
-            let content = '';
-            try {
+            // 读取内容（优先内存文档，否则磁盘）。先做一次性空内容保护。
+            const readContent = (): string => {
                 const openedDoc = vscode.workspace.textDocuments.find(
                     (d) => d.uri.fsPath === fsPath || d.uri.toString() === uri.toString(),
                 );
-                content = openedDoc ? openedDoc.getText() : fs.readFileSync(fsPath, 'utf-8');
-            } catch {
-                continue; // 读不到直接放行
-            }
-            if (!content) continue;
-
-            // ─── 语义预检 + 计算首条 error（按行号升序）───
-            // 【关键】Toast 展示的行号、光标定位的行号，必须来自同一个 validateYamlContent 结果，
-            // 与 Problems 面板的数据源保持一致（Problems 面板也是 validateYamlContent 生成的）。
-            let firstError: { line: number; message: string } | undefined;
-            let errorCount = 0;
-            try {
-                const errIssues = validateYamlContent(content)
-                    .filter((iss) => iss.severity === 'error')
-                    .sort((a, b) => a.line - b.line);
-                errorCount = errIssues.length;
-                if (errIssues.length > 0) {
-                    firstError = {
-                        line: errIssues[0].line,
-                        // 剥掉「YAML 解析错误 (第 X 行): 」前缀，只留原始错误摘要
-                        message: errIssues[0].message.replace(/^YAML (解析|格式)错误 \(第 \d+ 行\): /, ''),
-                    };
+                try {
+                    return openedDoc ? openedDoc.getText() : fs.readFileSync(fsPath, 'utf-8');
+                } catch {
+                    return '';
                 }
-            } catch {
-                // 校验器自身崩溃视为致命错误，仍走文本编辑器更安全
-                firstError = { line: 1, message: 'YAML 校验器异常，请手动检查文件语法' };
-                errorCount = 1;
-            }
-            if (!firstError) continue; // 无 error → 放行给 CustomEditor
+            };
+            if (!readContent()) continue; // 读不到 / 空内容直接放行
 
-            // 标记：本次已由拦截器完整处理（Toast + 光标定位一体化完成），
-            // BaseEditorProvider 兜底路径若也被 VS Code 触发，会通过 wasHandledByInterceptor 检测
-            // 到该标志，从而"静默切换"，不重复弹 Toast、不重复拉光标。
-            markInterceptorHandled(uri);
-
-            const displayLine = firstError.line;
-            const displayMessage = firstError.message;
-            const errSummary = displayMessage.split('\n')[0].slice(0, 240);
-            const locHint = `第 ${displayLine} 行`;
-
-            // 🔑 关键：必须"先关后开"——直接 openWith('default') 只会新开 tab，
-            //         而 CustomEditor 的 tab 仍占据位置，导致两个 tab 并存。
-            //   步骤：
-            //     ① tabGroups.close(tab) —— 关闭当前 CustomEditor tab
-            //     ② openTextDocument + showTextDocument(doc, {selection}) —— 打开文本编辑器
-            //        并一步到位把光标定位到首条 error 行（不依赖 activeTextEditor，避免时序问题）
-            //     ③ Toast 提示（说明为什么切换 + 提供"查看问题面板"等快捷入口）
+            // 延迟到下一拍再校验：首开瞬间文件可能尚未完全就绪（大文件 TextDocument
+            // 懒加载未结束、或与外部写入 / 保存发生竞态），读到不完整或陈旧内容会被
+            // YAML 解析器误报为格式错误（典型现象：第一次打开被拦截、关闭后第二次
+            // 打开又正常）。校验时通过 validateYamlContentWithRetry 做一次「重读 +
+            // 重校验」兜底，仅当二次校验仍报错才认定为真实格式错误。
             setTimeout(async () => {
+                // ─── 语义预检 + 计算首条 error（按行号升序）───
+                // 【关键】Toast 展示的行号、光标定位的行号，必须来自同一个
+                // validateYamlContent 结果，与 Problems 面板的数据源保持一致。
+                let firstError: { line: number; message: string } | undefined;
+                let errorCount = 0;
+                try {
+                    const errIssues = (await validateYamlContentWithRetry(uri, readContent))
+                        .filter((iss) => iss.severity === 'error')
+                        .sort((a, b) => a.line - b.line);
+                    errorCount = errIssues.length;
+                    if (errIssues.length > 0) {
+                        firstError = {
+                            line: errIssues[0].line,
+                            // 剥掉「YAML 解析错误 (第 X 行): 」前缀，只留原始错误摘要
+                            message: errIssues[0].message.replace(/^YAML (解析|格式)错误 \(第 \d+ 行\): /, ''),
+                        };
+                    }
+                } catch {
+                    // 校验器自身崩溃视为致命错误，仍走文本编辑器更安全
+                    firstError = { line: 1, message: 'YAML 校验器异常，请手动检查文件语法' };
+                    errorCount = 1;
+                }
+                if (!firstError) return; // 无 error → 放行给 CustomEditor
+
+                // 标记：本次已由拦截器完整处理（Toast + 光标定位一体化完成），
+                // BaseEditorProvider 兜底路径若也被 VS Code 触发，会通过 wasHandledByInterceptor
+                // 检测该标志，从而"静默切换"，不重复弹 Toast、不重复拉光标。
+                markInterceptorHandled(uri);
+
+                const displayLine = firstError.line;
+                const displayMessage = firstError.message;
+                const errSummary = displayMessage.split('\n')[0].slice(0, 240);
+                const locHint = `第 ${displayLine} 行`;
+
+                // 🔑 关键：必须"先关后开"——直接 openWith('default') 只会新开 tab，
+                //         而 CustomEditor 的 tab 仍占据位置，导致两个 tab 并存。
+                //   步骤：
+                //     ① tabGroups.close(tab) —— 关闭当前 CustomEditor tab
+                //     ② openTextDocument + showTextDocument(doc, {selection}) —— 打开文本编辑器
+                //        并一步到位把光标定位到首条 error 行（不依赖 activeTextEditor，避免时序问题）
+                //     ③ Toast 提示（说明为什么切换 + 提供"查看问题面板"等快捷入口）
                 try {
                     // 先关闭 CustomEditor tab
                     await vscode.window.tabGroups.close(tab, true);

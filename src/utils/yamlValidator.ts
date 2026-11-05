@@ -18,6 +18,7 @@ import * as YAML from 'yaml';
 import * as vscode from 'vscode';
 import { TelemetryService } from './telemetry';
 import { createLogger } from './logger';
+import { YamlFileParser } from '../parsers/yaml-parser';
 import type { YamlIssue } from './yamlTypes';
 import { YAML_DIAGNOSTIC_SOURCE } from './yamlConstants';
 import {
@@ -35,6 +36,10 @@ import { buildErrorProps } from '../services/utils';
 export type { YamlIssue } from './yamlTypes';
 
 const log = createLogger('YAML');
+
+// 案例编辑器解析口径实例：用于判断文件是否「能被案例编辑器正常打开」，
+// 以对齐诊断严重级——可容忍的解析瑕疵不应标为 error（红色）。
+const caseEditorParser = new YamlFileParser();
 
 // 见 src/utils/yamlRules.ts：YAML_TO_JS_OPTIONS 已抽出为共享常量（统一别名上限）。
 
@@ -191,6 +196,10 @@ export function validateYamlContent(content: string, filePath?: string): YamlIss
     }
 
     // ── 3. yaml 库解析错误捕获 ──
+    // 与案例编辑器对齐：先用案例编辑器同口径判断文件是否「可被正常打开」。
+    // 案例编辑器能容忍的解析瑕疵（doc.errors 但 toJS 可恢复）不应显示成红色 error，
+    // 降级为 warning；仅当文件确实无法被案例编辑器打开时才保留 error。
+    const openableByCaseEditor = caseEditorParser.tryParseContent(content) === null;
     let firstParseErr: any = null;
     let firstParseLine = 1;
     let firstParseCol = 1;
@@ -233,7 +242,7 @@ export function validateYamlContent(content: string, filePath?: string): YamlIss
                     line: errLine, column: errCol, length: 1,
                     title: 'YAML 解析错误',
                     message: `YAML 解析错误 (第 ${errLine} 行): ${truncateYamlMessage(err.message)}`,
-                    severity: 'error',
+                    severity: openableByCaseEditor ? 'warning' : 'error',
                     fix,
                 });
             }
@@ -281,7 +290,7 @@ export function validateYamlContent(content: string, filePath?: string): YamlIss
                     line: errLine, column: errCol, length: 1,
                     title: 'YAML 格式错误',
                     message: `YAML 格式错误 (第 ${errLine} 行): ${truncateYamlMessage(parseErr.message)}`,
-                    severity: 'error',
+                    severity: openableByCaseEditor ? 'warning' : 'error',
                     fix,
                 });
             }

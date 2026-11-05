@@ -3,150 +3,30 @@
  *  yamlPreOpenInterceptor.ts
  *  YAML CustomEditor Tab 前置拦截器
  * ----------------------------------------------------------------------------
- *  背景：当用户从 Problems 面板 / 资源管理器双击等入口打开一个 YAML 文件，
- *  由于 package.json 中 `testcaseViewer.unifiedEditor` 是该扩展名的默认
- *  CustomEditor，VS Code 会立即为其派单我们的编辑器（进入 resolveCustomEditor）。
- *  若此时 YAML 语法错误无法解析成表结构，用户会看到"空表 / 数据丢失"甚至
- *  过渡占位页。
+ *  设计取舍（2026-11 调整 —— 尽最大可能用案例编辑器打开）：
+ *    早期版本会在 Tab 打开事件（onDidChangeTabs.opened）阶段同步预检 YAML 内容，
+ *    一旦发现不可解析就立即关掉 CustomEditor tab + 打开文本编辑器，避免案例编辑器
+ *    渲染「空表 / 数据丢失」错误页。但实践中，复杂 YAML 在「首开瞬间」常因内存文档
+ *    未就绪 / 外部写入竞态读到不完整内容，被误判为格式错误而误杀——而这些文件本可被
+ *    案例编辑器正常打开。
  *
- *  更优做法：在 tab 一出现时（`onDidChangeTabs.opened`）就同步预检 YAML 内容，
- *  一旦发现不可解析 → 立即关掉 CustomEditor tab + 打开文本编辑器，
- *  用户完全看不到中间过渡页面。
+ *    现改为「解析口径尽量宽松，尽可能用案例编辑器打开」：本模块不再拦截 / 切换文本编辑器，
+ *    任何文件都交给案例编辑器自行处理。语法瑕疵由案例编辑器自身的错误页 / Problems 面板
+ *    承载（错误页已提供「用文本编辑器打开」按钮，真正损坏的文件仍可手动切换）。
  *
- *  与 BaseEditorProvider 内的兜底逻辑构成"双保险"：
- *   - 此处：Tab 打开事件（最早时机，用户零感知切换）
- *   - Base：resolveCustomEditor 内（若上面因异步/缓存等原因未拦到时的兜底）
+ *  —— 如需重新启用前置拦截，请恢复 onDidChangeTabs 内的判定逻辑，并确保使用
+ *     YamlFileParser.tryParseContent 这种与案例编辑器完全一致的解析口径（否则会再次误杀）。
  * ============================================================================
  */
 import * as vscode from 'vscode';
-import * as path from 'path';
-import * as fs from 'fs';
-import { validateYamlContentWithRetry } from '../utils/yamlValidator';
-import { markInterceptorHandled } from '../utils/yamlInterceptorState';
-import { YAML_CMD_FIX_ALL } from '../utils/yamlConstants';
-import { TelemetryService } from '../utils/telemetry';
 
-const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
-
+/**
+ * 注册 YAML CustomEditor Tab 前置拦截器。
+ *
+ * 当前实现为「尽最大可能用案例编辑器打开」策略：不再做 YAML 语法预检与自动切换，
+ * 直接返回一个空 Disposable，维持 extension.ts 的调用入口不变。
+ */
 export function registerYamlPreOpenInterceptor(): vscode.Disposable {
-    // 记录已处理过的 uri，避免因 openWith 触发新 tab 事件时二次拦截导致循环
-    const processed = new WeakSet<vscode.Tab>();
-    return vscode.window.tabGroups.onDidChangeTabs((e) => {
-        for (const tab of e.opened) {
-            if (processed.has(tab)) continue;
-            processed.add(tab);
-
-            const input = tab.input as any;
-            // 仅拦截 CustomEditor 类型的 tab
-            if (!input || typeof input.viewType !== 'string' || !(input.uri instanceof vscode.Uri)) continue;
-            if (input.viewType !== TESTCASE_EDITOR_VIEWTYPE) continue;
-
-            const uri: vscode.Uri = input.uri;
-            const fsPath = uri.fsPath;
-            if (!/\.ya?ml$/i.test(fsPath)) continue; // 仅 YAML
-
-            // 读取内容（优先内存文档，否则磁盘）。先做一次性空内容保护。
-            const readContent = (): string => {
-                const openedDoc = vscode.workspace.textDocuments.find(
-                    (d) => d.uri.fsPath === fsPath || d.uri.toString() === uri.toString(),
-                );
-                try {
-                    return openedDoc ? openedDoc.getText() : fs.readFileSync(fsPath, 'utf-8');
-                } catch {
-                    return '';
-                }
-            };
-            if (!readContent()) continue; // 读不到 / 空内容直接放行
-
-            // 延迟到下一拍再校验：首开瞬间文件可能尚未完全就绪（大文件 TextDocument
-            // 懒加载未结束、或与外部写入 / 保存发生竞态），读到不完整或陈旧内容会被
-            // YAML 解析器误报为格式错误（典型现象：第一次打开被拦截、关闭后第二次
-            // 打开又正常）。校验时通过 validateYamlContentWithRetry 做一次「重读 +
-            // 重校验」兜底，仅当二次校验仍报错才认定为真实格式错误。
-            setTimeout(async () => {
-                // ─── 语义预检 + 计算首条 error（按行号升序）───
-                // 【关键】Toast 展示的行号、光标定位的行号，必须来自同一个
-                // validateYamlContent 结果，与 Problems 面板的数据源保持一致。
-                let firstError: { line: number; message: string } | undefined;
-                let errorCount = 0;
-                try {
-                    const errIssues = (await validateYamlContentWithRetry(uri, readContent))
-                        .filter((iss) => iss.severity === 'error')
-                        .sort((a, b) => a.line - b.line);
-                    errorCount = errIssues.length;
-                    if (errIssues.length > 0) {
-                        firstError = {
-                            line: errIssues[0].line,
-                            // 剥掉「YAML 解析错误 (第 X 行): 」前缀，只留原始错误摘要
-                            message: errIssues[0].message.replace(/^YAML (解析|格式)错误 \(第 \d+ 行\): /, ''),
-                        };
-                    }
-                } catch {
-                    // 校验器自身崩溃视为致命错误，仍走文本编辑器更安全
-                    firstError = { line: 1, message: 'YAML 校验器异常，请手动检查文件语法' };
-                    errorCount = 1;
-                }
-                if (!firstError) return; // 无 error → 放行给 CustomEditor
-
-                // 标记：本次已由拦截器完整处理（Toast + 光标定位一体化完成），
-                // BaseEditorProvider 兜底路径若也被 VS Code 触发，会通过 wasHandledByInterceptor
-                // 检测该标志，从而"静默切换"，不重复弹 Toast、不重复拉光标。
-                markInterceptorHandled(uri);
-
-                const displayLine = firstError.line;
-                const displayMessage = firstError.message;
-                const errSummary = displayMessage.split('\n')[0].slice(0, 240);
-                const locHint = `第 ${displayLine} 行`;
-
-                // 🔑 关键：必须"先关后开"——直接 openWith('default') 只会新开 tab，
-                //         而 CustomEditor 的 tab 仍占据位置，导致两个 tab 并存。
-                //   步骤：
-                //     ① tabGroups.close(tab) —— 关闭当前 CustomEditor tab
-                //     ② openTextDocument + showTextDocument(doc, {selection}) —— 打开文本编辑器
-                //        并一步到位把光标定位到首条 error 行（不依赖 activeTextEditor，避免时序问题）
-                //     ③ Toast 提示（说明为什么切换 + 提供"查看问题面板"等快捷入口）
-                try {
-                    // 先关闭 CustomEditor tab
-                    await vscode.window.tabGroups.close(tab, true);
-                } catch (closeErr: any) {
-                    console.warn('[YAML PreOpen] close tab failed:', closeErr?.message || closeErr);
-                }
-                try {
-                    // 用文本编辑器打开 + 一步到位定位光标到首条 error 行
-                    // 【绝对可靠】showTextDocument 的 selection 参数由 VS Code 内部保证生效，
-                    // 不需要事后去拿 activeTextEditor 再设置 selection（那种方式在切换过程中
-                    // activeTextEditor 可能仍指向旧编辑器，导致定位失效）。
-                    const doc = await vscode.workspace.openTextDocument(uri);
-                    const lineIdx = Math.max(0, Math.min(displayLine - 1, doc.lineCount - 1));
-                    const pos = new vscode.Position(lineIdx, 0);
-                    await vscode.window.showTextDocument(doc, {
-                        preview: false,
-                        selection: new vscode.Range(pos, pos),
-                    });
-                    TelemetryService.sendTelemetryEvent('yaml.preOpen.autoSwitch', {
-                        file: path.basename(fsPath),
-                        errorLine: String(displayLine),
-                        errorCount: String(errorCount),
-                    });
-                } catch (err: any) {
-                    console.warn('[YAML PreOpen] open text editor failed:', err?.message || err);
-                }
-
-                // Toast 提示（Warning 级别 + 快捷按钮）
-                // 明确告知用户：光标已定位到"首条错误"，若关注其他错误请去 Problems 面板
-                const countHint = errorCount > 1 ? `，共 ${errorCount} 处错误` : '';
-                vscode.window.showWarningMessage(
-                    `YAML 文件存在语法错误（首条：${locHint}${countHint}），已切换为文本编辑器打开。错误摘要：${errSummary}`,
-                    'YAML 修复全部',
-                    '查看问题面板',
-                ).then((choice) => {
-                    if (choice === 'YAML 修复全部') {
-                        vscode.commands.executeCommand(YAML_CMD_FIX_ALL, uri);
-                    } else if (choice === '查看问题面板') {
-                        vscode.commands.executeCommand('workbench.actions.view.problems');
-                    }
-                });
-            }, 0);
-        }
-    });
+    // 解析口径已调整为「尽最大可能用案例编辑器打开」：不再拦截 / 切换文本编辑器。
+    return new vscode.Disposable(() => {});
 }

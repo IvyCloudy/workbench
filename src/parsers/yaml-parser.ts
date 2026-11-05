@@ -337,6 +337,28 @@ export class YamlFileParser implements FileParser {
         };
     }
 
+    /**
+     * 预检拦截器专用：用与案例编辑器**完全相同**的解析口径（loadYamlFromContent）尝试解析内容。
+     *
+     * 返回 null 表示内容可被案例编辑器正常打开——即使存在可被 `doc.toJS()` 恢复的
+     * 语法瑕疵（如双引号字符串、裸特殊字符等），案例编辑器也能渲染，不应被拦截。
+     * 返回错误描述表示会触发案例编辑器错误页，应当切换为文本编辑器。
+     *
+     * 设计关键：拦截 / 放行判定必须与案例编辑器自身行为严格一致，避免把案例编辑器
+     * 本可打开的文件误杀（此前拦截器用 validateYamlContent 把 doc.errors 当 fatal
+     * 上报，比案例编辑器更严格，导致大量合法文件被错误拦截）。
+     */
+    tryParseContent(content: string, filePath = ''): { line: number; message: string } | null {
+        try {
+            this.loadYamlFromContent(content, filePath || '__preopen_check__');
+            return null;
+        } catch (e: any) {
+            const { line } = extractErrorLocation(e, content);
+            const raw = e?.message ? String(e.message).split('\n')[0] : 'YAML 解析失败';
+            return { line: line || 1, message: raw.slice(0, 240) };
+        }
+    }
+
     private cleanYamlContent(content: string): string {
         const lines = content.split('\n');
         let result = '';

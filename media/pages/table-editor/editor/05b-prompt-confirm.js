@@ -50,7 +50,9 @@ function closeXsPrompt(confirmed) {
     var msgEl = document.getElementById('xsPromptMessage');
     if (msgEl) { msgEl.style.display = 'none'; msgEl.textContent = ''; msgEl.innerHTML = ''; }
     var dlg = modal ? modal.querySelector('.xs-modal-dialog') : null;
-    if (dlg) dlg.style.width = '';
+    if (dlg) { dlg.style.width = ''; dlg.style.maxHeight = ''; }
+    var dlgBody = dlg ? dlg.querySelector('.xs-modal-body') : null;
+    if (dlgBody) dlgBody.style.overflowY = '';
     var header = document.getElementById('xsPromptHeader');
     if (header) {
         header.classList.remove('xs-prompt-type-warning', 'xs-prompt-type-danger');
@@ -126,12 +128,15 @@ function _applyXsPromptConfig(modal, opts) {
     modal.classList.remove('xs-prompt-type-warning', 'xs-prompt-type-danger');
     if (opts.type === 'warning') modal.classList.add('xs-prompt-type-warning');
     else if (opts.type === 'danger') modal.classList.add('xs-prompt-type-danger');
-    // 宽度：由调用方按需加宽（承载表格等宽内容），缺省时交还 HTML 默认宽度
+    // 宽度：由调用方按需加宽（承载表格等宽内容）；缺省时恢复 HTML 默认 380px，
+    // 不能清空内联宽度，否则会被通用 .xs-modal-dialog{width:88vw} 覆盖成全屏宽
     var dialog = modal ? modal.querySelector('.xs-modal-dialog') : null;
-    if (dialog) {
-        if (opts.width) dialog.style.width = opts.width;
-        else dialog.style.width = '';
-    }
+    var body = dialog ? dialog.querySelector('.xs-modal-body') : null;
+    if (dialog) dialog.style.width = opts.width || '380px';
+    // 高度保护：纯文字（message）确认/提示内容可能较长，限制弹窗高度并让内容区
+    // 可滚动，避免超出视口且无法操作；富文本表格（html）保持原生高度不约束。
+    if (dialog) dialog.style.maxHeight = opts.html ? '' : '80vh';
+    if (body) body.style.overflowY = opts.html ? '' : 'auto';
     if (msgEl) {
         if (opts.html) {
             // 富文本分支（表格等）：调用方负责转义，此处仅做渲染

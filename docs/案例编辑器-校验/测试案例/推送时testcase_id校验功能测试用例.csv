@@ -1,0 +1,94 @@
+﻿路径,测试名称,描述,步骤描述,预期结果,优先级
+合并测试阶段/推送时testcase_id校验/合法格式/标准UUID放行,标准 UUID 格式通过校验并路由到 testAgentMA,TESTCASE_ID_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(TC|MA)[0-9a-f]{32})$/i；标准 UUID（8-4-4-4-12 十六进制带连字符）命中第一分支，FORMAT_VALIDATOR 放行。resolveRowSource 中 TC_SOURCE_PATTERN=/^TC[0-9a-f]{32}$/i 不命中 → 归 testAgentMA 批次。,"步骤1:
+新建案例文件（命令创建或手动均可），将某行 testcase_id 设为标准 UUID，如 123e4567-e89b-12d3-a456-426614174000
+步骤2:
+推送该文件并观察是否进入接口调用、归属哪个平台批次","【业务功能检查】
+- 该行通过 testcase_id 格式校验，不被拦截
+- 推送进入 testAgentMA 批次（非 testAgent，因其不是 TC 前缀）
+- 接口收到该案例数据，最终推送结果按行号正常呈现",高
+合并测试阶段/推送时testcase_id校验/合法格式/TC加32hex放行并路由Agent,TC 前缀加 32 位 hex 通过校验并路由到 testAgent,testcase_id 形如 TC + 32 位小写/大写 hex（TC_SOURCE_PATTERN 命中）→ resolveRowSource 返回 testAgent；同时 TESTCASE_ID_PATTERN 的 (TC|MA)[0-9a-f]{32} 分支也命中，FORMAT_VALIDATOR 放行。,"步骤1:
+将某行 testcase_id 设为 TC + 32 位 hex，如 TC1234567890abcdef1234567890abcdef12
+步骤2:
+推送并核对来源平台批次","【业务功能检查】
+- 该行通过格式校验不被拦截
+- 来源判定为 testAgent，进入 testAgent 批次独立调用接口
+- 大小写不敏感：TC 与 tc 前缀均按同一规则处理",高
+合并测试阶段/推送时testcase_id校验/合法格式/MA加32hex放行并路由AgentMA,MA 前缀加 32 位 hex 通过校验并路由到 testAgentMA,testcase_id 形如 MA + 32 位 hex（由 genUuid / genUuidV4 自动生成，与扩展端一致）；TESTCASE_ID_PATTERN 的 (TC|MA)[0-9a-f]{32} 分支命中 → 放行，且因非 TC 前缀 → resolveRowSource 归 testAgentMA。,"步骤1:
+使用插件自动生成 testcase_id（命令创建案例文件时自动填充 MA+32hex），如 MAa1b2c3d4e5f60718293a4b5c6d7e8f90
+步骤2:
+推送并核对来源平台批次","【业务功能检查】
+- 自动生成的 MA+32hex 通过格式校验
+- 来源判定为 testAgentMA，进入 testAgentMA 批次
+- 与标准 UUID 同属 testAgentMA，不混进 testAgent",高
+合并测试阶段/推送时testcase_id校验/非法格式/裸32hex无前缀拦截,仅 32 位 hex 无 TC或MA 前缀视为非法格式,TESTCASE_ID_PATTERN 要求：要么带连字符的标准 UUID，要么 (TC|MA)+32hex。裸 32 位 hex（如 a1b2c3d4e5f60718293a4b5c6d7e8f90，既无数下划线也无 TC/MA 前缀）两分支均不命中 → FORMAT_VALIDATOR 判 invalidFormat 阻断。,"步骤1:
+将某行 testcase_id 设为纯 32 位 hex（无前缀无连字符），如 a1b2c3d4e5f60718293a4b5c6d7e8f90
+步骤2:
+推送并查看失败明细","【业务功能检查】
+- 该行被判定为非法格式（invalidFormat）拦截，不进入接口
+- 推送结果弹窗列出该行行号并提示格式不正确
+- 其余合法行不受影响照常推送",高
+合并测试阶段/推送时testcase_id校验/非法格式/含非hex字符拦截,testcase_id 含空格或非 hex 字符视为非法,TESTCASE_ID_PATTERN 仅接受 [0-9a-f]（大小写不敏感）与连字符、TC/MA 前缀；含空格、下划线、中文或其它字符（如 TC_xyz、MA 1234-中文）均不匹配 → invalidFormat 阻断。,"步骤1:
+将某行 testcase_id 设为含非法字符的值，如 TC_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz 或带空格的 MA 1234 5678...
+步骤2:
+推送并核查拦截结果","【业务功能检查】
+- 含非 hex/非预期字符的 testcase_id 被拦截为非法格式
+- 弹窗失败明细标注该行格式不正确
+- 不触发任何后端接口调用（预校验阶段即剔除）",中
+合并测试阶段/推送时testcase_id校验/非法格式/错误前缀或长度不对拦截,TC或MA 前缀错误或非 32 位长度视为非法,TESTCASE_ID_PATTERN 严格匹配：前缀仅限 TC 或 MA，且其后必须恰好 32 位 hex。TA+32hex（错误前缀）、TC+31hex（少一位）、MA+33hex（多一位）均不匹配 → invalidFormat 阻断。,"步骤1:
+准备三行分别设为 TA1234...（错误前缀 TA）、TC1234...（仅 31 位 hex）、MA1234...（33 位 hex）
+步骤2:
+批量推送并查看每行结果","【业务功能检查】
+- 三种错误形态均被判定为非法格式拦截
+- 错误前缀（TA）不被当成 TC 误放行
+- 长度偏差（31/33 位）不被当成 32 位 hex 误放行
+- 弹窗按行号分别列出失败",中
+合并测试阶段/推送时testcase_id校验/占位符/英文TESTCASE_ID阻断,testcase_id 为英文大写占位 TESTCASE_ID 时阻断并弹窗,PLACEHOLDER_VALIDATOR：tsId.toUpperCase() === 'TESTCASE_ID'（大小写不敏感）即命中 kind='placeholder'，阻断推送并进入失败明细；与中文样例占位不同，它走「阻断+弹窗列出可跳转」路径而非静默过滤。,"步骤1:
+将某行 testcase_id 改为 TESTCASE_ID（或 testcase_id 全大写 / Testcase_Id 等大小写变体）
+步骤2:
+推送并查看弹窗","【业务功能检查】
+- 该行被判定为占位值阻断，不进入后端接口
+- 弹窗列出该行并标注为占位，支持「第 N 行」点击跳转到主表对应行
+- 大小写不敏感：TESTCASE_ID / testcase_id / Testcase_Id 均被识别为占位",高
+合并测试阶段/推送时testcase_id校验/空值/testcase_id为空阻断,testcase_id 为空字符串时阻断推送,EMPTY_VALIDATOR：tsId === '' 命中 kind='empty'，阻断推送。此外中文 CSV 映射路径 mapChineseRowToCaseItem 在 sourceId 为空时抛 missingTestcaseId（含 1-based 行号），两条路径都保证空 testcase_id 不被推送。,"步骤1:
+将某行 testcase_id 单元格清空（空字符串）
+步骤2:
+推送并查看错误提示","【业务功能检查】
+- 空 testcase_id 行被拦截不进入接口
+- 提示包含具体行号，便于定位（如「案例 [xxx] 缺少 testcase_id」或等价空值提示）
+- 其余有 testcase_id 的行正常推送",高
+合并测试阶段/推送时testcase_id校验/样例/中文长占位静默过滤,testcase_id 为「案例唯一标识，不可修改」时静默过滤不推送,filterTemplateExampleRows 基于 isSampleTsId 命中 TEMPLATE_EXAMPLE_TS_ID='案例唯一标识，不可修改'，将该行从推送数据静默剔除（不计入 failures、不调用接口）；其余真实行照常推送。,"步骤1:
+新建案例文件保留模板示例行（testcase_id=案例唯一标识，不可修改）并额外添加一条真实案例
+步骤2:
+推送并核对结果","【业务功能检查】
+- 示例行被静默过滤，不进入后端推送
+- 提示「跳过 N 行样例数据」或等价信息（skipped 维度）
+- 真实行正常推送成功，total = 成功数 + 跳过数",高
+合并测试阶段/推送时testcase_id校验/样例/中文短占位静默过滤,testcase_id 为「案例唯一标识」短占位时同样静默过滤,isSampleTsId 同时命中 TEMPLATE_EXAMPLE_TS_ID_SHORT='案例唯一标识'（列名字段的中文注释文案可能残留在数据行），与长占位同属静默过滤策略。,"步骤1:
+将某行 testcase_id 改为「案例唯一标识」（不含「，不可修改」）
+步骤2:
+推送并核对","【业务功能检查】
+- 短占位行同样被静默过滤不推送
+- 不会作为业务数据上报后端
+- 与长占位行为一致",中
+合并测试阶段/推送时testcase_id校验/样例/全样例终止不调接口,选中的全部为样例数据时终止推送并提示行号可跳转,过滤后无任何业务行（全部为样例占位）→ 终止推送并返回样例失败明细；不调用后端接口，弹窗以「为样例数据」汇总并列出具体行号，行号可点击跳转到主表。,"步骤1:
+新建案例文件后仅保留模板示例行，不添加任何真实案例
+步骤2:
+推送","【业务功能检查】
+- 推送被终止，不调用后端接口
+- 提示「为样例数据」并列出所有样例行号
+- 弹窗行号可点击跳转到对应主表行",高
+合并测试阶段/推送时testcase_id校验/预校验/先于接口调用,全部 testcase_id 非法时绝不调用后端推送接口,stepPreValidate / runValidators（占位/空/格式三类）均在调用推送接口（pushTestCase）之前完成；契约保证：整份文件全是非法格式时 pushTestCase 不被调用，直接以失败明细汇总。,"步骤1:
+准备一个文件，所有行 testcase_id 均为非法（如统一填 TC_EXPECTED_OBJECT_001）
+步骤2:
+推送并监控是否产生后端接口请求","【业务功能检查】
+- 推送流程在预校验阶段即拦截全部行，不发起任何后端接口调用
+- 弹窗以失败明细（非法格式/占位/空）汇总，标注对应行号
+- 无「成功」行，successCount=0",高
+合并测试阶段/推送时testcase_id校验/预校验/混合剔除合法行照常,混合文件中非法行被剔除、合法行照常推送,runValidators 对每行单独判定：命中占位/空/格式非法的行从 payload 剔除并记入 failuresByKind，剩余合规行进入接口调用；全部命中则短路不调接口。,"步骤1:
+一个文件含 1 行占位 + 1 行非法格式（裸 hex）+ 2 行合法（1 个标准 UUID、1 个 MA+32hex）
+步骤2:
+批量推送","【业务功能检查】
+- 占位行与非法格式行被拦截，不进入后端
+- 2 行合法行成功推送
+- 弹窗失败明细列出被剔除的两行行号，成功明细列出 2 行
+- 行号与失败/成功映射无错位",高

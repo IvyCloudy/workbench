@@ -1,0 +1,307 @@
+﻿路径,测试名称,描述,步骤描述,预期结果,优先级
+合并测试阶段/推送失败度量/数据采集/单文件complete携带完整失败维度,单文件推送失败complete事件携带完整失败维度,资源管理器右键单文件推送失败后，结局事件 explorerPush.complete 应携带失败分类分布、接口级/行级字段分布、弱信号样本等全部维度，复合码（字段.性质）直接可聚合。,"前置数据：准备一个 CSV 案例文件 pushfail_demo.csv，含以下失败数据：
+  - 行1：步骤描述 为空（触发 description.empty，行级）
+  - 行2：案例名称 = 超过 250 字符的长串（触发 testCaseName.length，行级）
+  - 行3：type 填 ""XYZ""（不在 手工/UI自动化/接口自动化/自动化/半自动化 枚举内，触发 type.enum，行级）
+  - 整批：testTaskNo 为空导致接口级整批失败（触发 testTaskNo.empty，interface 级）
+操作步骤：
+  步骤1：在资源管理器右键该文件 → 选择“推送”
+  步骤2：等待推送结局，触发 explorerPush.complete
+  步骤3：在埋点/调试台抓取 explorerPush.complete 的 props
+结果查看：核对 props 字段清单与取值","【业务功能检查】
+- 失败分类维度存在：failCategoryBreakdown（形如 ""description.empty:1,testCaseName.length:1,type.enum:1,testTaskNo.empty:1""）、topFailCategory
+- 失败字段维度存在：failFieldBreakdown / topFailField / interfaceFailBreakdown（含 testTaskNo）/ topInterfaceFailField / caseFailBreakdown（含 description/testCaseName/type）/ topCaseFailField
+- 复合码（如 description.empty）直接出现在 failCategoryBreakdown，可定位“字段+性质”，无需交叉 field 维度
+- 中文 reason 原文不进聚合维度（仅用于 UI 展示/样本透传），payload 不含长中文，避免撑爆 8KB 埋点上限
+- 弱信号样本维度存在：auxFieldRawSamples / unknownSamples（截断 200 字）",高
+合并测试阶段/推送失败度量/数据采集/批量事件携带维度且单文件complete被跳过,批量推送batch事件携带失败维度且单文件complete被跳过,多文件/文件夹批量推送时，batch.fileResult 与 batch.done 携带失败维度；因 skipCompleteTelemetry=true，逐文件 .complete 被跳过，避免重复计数。,"前置数据：文件夹 push_dir/ 下放 3 个 CSV：
+  - a.csv：步骤描述为空（行级失败）
+  - b.csv：案例名称为空（行级失败）
+  - c.csv：testTaskNo 为空（接口级整批失败）
+操作步骤：
+  步骤1：右键文件夹 push_dir → 选择“推送”（批量）
+  步骤2：等待推送结局，应触发 explorerPush.batch.fileResult（3 次）+ explorerPush.batch.done（1 次）
+  步骤3：检索埋点，确认是否存在 explorerPush.complete（单文件）事件
+结果查看：对比 batch 事件与单文件事件的计数一致性","【业务功能检查】
+- 每个 batch.fileResult 含：ext / pushResult / totalRows / successRows / failedRows / preValidationFailedRows / traceId / costMs，以及 failCategoryBreakdown / failFieldBreakdown / interfaceFailBreakdown / caseFailBreakdown / auxFieldRawSamples / paramFormatSamples / fieldInvalidSamples
+- batch.done 含汇总：fileCount=3 / totalRows / successRows / failedRows / errorFiles / durationMs，以及 failCategoryBreakdown / topFailCategory / 各 failField 维度
+- 全链路检索 ""explorerPush.complete"" 结果为 0（被 skipCompleteTelemetry 跳过）
+- batch.done 的 totalRows / failedRows 等于逐文件累加之和，无重复计数",高
+合并测试阶段/推送失败度量/数据采集/采集或持久化异常静默降级,采集或持久化异常时静默降级不阻塞推送,失败数据聚合/持久化/上报任一环节抛异常时，应静默降级，不弹错、不影响推送主流程与结果展示（对应 AC-2）。,"前置数据：准备一个会失败（如 步骤描述为空）的 CSV。
+操作步骤：
+  步骤1：在 src/utils/pushFailureCategory 的聚合函数或 telemetry 上报处临时注入 throw new Error('mock agg fail')
+  步骤2：右键推送该 CSV
+  步骤3：观察是否出现报错弹窗、推送结局计数是否正确
+结果查看：核对主流程是否中断、计数是否准确","【业务功能检查】
+- 推送结局正常返回（allFail / partial 计数正确，successRows/failedRows 正确）
+- 前端无任何报错弹窗（try/catch 静默降级，异常不影响推送）
+- 主流程不被中断：即使采集失败，文件仍按原行为判定失败并展示中文原因
+- 持久化异常时失败记录可降级缺失，但不影响当次推送结果",高
+合并测试阶段/推送失败度量/数据采集/前置拦截类也携带失败维度与拦截标记,前置拦截类（emptyFile/fileError）也携带失败维度与拦截标记,文件级前置拦截（emptyFile/fileError，早于 runPush）的结局事件同样携带失败维度，并标记是否前置拦截，避免丢失“未真正推送”的失败样本（对应采集字段“是否前置拦截”）。,"前置数据：
+  - 文件A：空数据 / 无有效数据行的 CSV（触发 emptyFile）
+  - 文件B：不在合规目录、或 CSV 解析失败的乱码文件（触发 fileError / yamlSyntax）
+操作步骤：
+  步骤1：分别右键推送 A、B
+  步骤2：抓取各自 explorerPush.complete 的 props
+结果查看：核对是否含失败维度与拦截标记","【业务功能检查】
+- 事件含 failCategoryBreakdown（emptyFile / fileError，或 yamlSyntax）、failFieldBreakdown（可能为空聚合）
+- 含“是否前置拦截”标记维度为真，便于区分“被拦未推送”与“推送后端拒绝”
+- 拦截类失败同样进入失败记录，不丢失败数据
+- yamlSyntax 命中早于其余规则，不被误吞为 fieldInvalid",中
+合并测试阶段/推送失败度量/分类建模/行级复合码-空值empty,行级字段空值归类为字段.empty复合码,后端行级必填字段为空（如“步骤描述不能为空”“案例名称不能为空”“测试任务编号不能为空”）归类为 字段.empty 复合码，并抽取对应接口字段，取不到字段落 fieldEmpty 兜底。,"前置数据：构造 PushFailureItem（reason 见下，不传 category）：
+  - ""步骤描述不能为空""（场景#13）
+  - ""案例名称不能为空""（场景#17）
+  - ""测试任务编号不能为空""（场景#1，接口级）
+  - ""案例信息不能为空""（场景#8，整行，caseInfo）
+操作步骤：
+  步骤1：对每个 item 调用 classifyFailure + failureFieldOf
+  步骤2：查看返回的 category / field / level
+结果查看：核对复合码与字段映射","【业务功能检查】
+- 步骤描述空 → category=description.empty，field=description，level=case
+- 案例名称空 → category=testCaseName.empty，field=testCaseName，level=case
+- 测试任务编号空 → category=testTaskNo.empty，field=testTaskNo，level=interface
+- 案例信息空 → category=caseInfo.empty，field=caseInfo，level=case
+- 取不到字段时落 fieldEmpty 性质级兜底（field=undefined，不进 failFieldBreakdown）",高
+合并测试阶段/推送失败度量/分类建模/行级复合码-长度超限length,字段长度超限归类为字段.length复合码,字段长度超限（如“案例名称长度不能超过250个字符”“产出物Id长度不能超过500个字符”）归类为 字段.length 复合码。,"前置数据：构造 PushFailureItem：
+  - ""案例名称长度不能超过250个字符""（场景#18）
+  - ""产出物Id长度不能超过500个字符""（场景#6）
+  - ""案例来源Id长度不能超过36个字符""（场景#16）
+操作步骤：
+  步骤1：调用 classifyFailure + failureFieldOf
+  步骤2：查看 category / field
+结果查看：核对长度类复合码","【业务功能检查】
+- 案例名称超长 → category=testCaseName.length，field=testCaseName
+- 产出物Id超长 → category=artifactId.length，field=artifactId
+- 来源Id超长 → category=sourceId.length，field=sourceId
+- 取不到字段 → fieldLength 性质级兜底",高
+合并测试阶段/推送失败度量/分类建模/行级复合码-枚举非法enum,行内枚举值非法归类为字段.enum复合码,行内枚举值非法（如“无效的案例类型”“无效的案例优先级”“无效的案例默认执行方式”）归类为 字段.enum 复合码。,"前置数据：构造 PushFailureItem：
+  - ""数据中包含无效的案例类型(...)""（场景#26）→ type
+  - ""数据中包含无效的案例优先级(...)""（场景#27）→ priority
+  - ""数据中包含无效的案例默认执行方式(...)""（场景#25）→ testType
+操作步骤：
+  步骤1：调用 classifyFailure + failureFieldOf
+  步骤2：查看 category / field
+结果查看：核对枚举类复合码","【业务功能检查】
+- type 枚举非法 → category=type.enum，field=type
+- priority 枚举非法 → category=priority.enum，field=priority
+- testType 枚举非法 → category=testType.enum，field=testType
+- 取不到字段 → enumInvalid 性质级兜底",高
+合并测试阶段/推送失败度量/分类建模/行级复合码-重复dup,字段重复已存在归类为字段.dup复合码,字段重复/已存在（如“sourceId已存在”“案例已存在请勿重复添加”）归类为 字段.dup 复合码；别名顺序敏感，“案例已存在”须先于通用“已存在”命中，避免误归 caseInfo。,"前置数据：构造 PushFailureItem：
+  - ""sourceId已存在""（场景#31）→ sourceId
+  - ""案例已存在请勿重复添加""（场景#32，含“案例已存在”别名）
+  - ""测试任务编号未匹配到有效阶段信息或设计人无权限""（taskStageMissing，场景#9）
+操作步骤：
+  步骤1：调用 classifyFailure + failureFieldOf
+  步骤2：查看 category / field
+结果查看：核对重复类复合码与别名顺序","【业务功能检查】
+- sourceId已存在 → category=sourceId.dup，field=sourceId
+- 案例已存在请勿重复添加 → category=sourceId.dup，field=sourceId（“案例已存在”别名先于通用“已存在”命中，不误归 caseInfo）
+- taskStageMissing → category=taskStageMissing，field=testTaskNo（按 category 命中，非 字段.dup 复合码）
+- 取不到字段 → fieldDup 性质级兜底",高
+合并测试阶段/推送失败度量/分类建模/行级复合码-格式非法format,字段格式非法归类为字段.format复合码,字段格式非法（如“路径格式不正确必须以/结尾”“关键案例格式不正确请填写是或否”“案例路径错误未匹配到有效测试要点”）归类为 字段.format 或对应 category。,"前置数据：构造 PushFailureItem：
+  - ""路径格式不正确必须以/结尾""（场景#30）→ testCasePath
+  - ""关键案例格式不正确请填写是或否""（场景#24）→ keyFlag
+  - ""案例路径错误未匹配到有效测试要点""（场景#33）→ pathNotMatchPoint
+操作步骤：
+  步骤1：调用 classifyFailure + failureFieldOf
+  步骤2：查看 category / field
+结果查看：核对格式类复合码与 pathNotMatchPoint 命中","【业务功能检查】
+- 路径格式错 → category=testCasePath.format，field=testCasePath
+- 关键案例格式错 → category=keyFlag.format，field=keyFlag
+- 路径不匹配要点 → category=pathNotMatchPoint，field=testCasePath（按 category 直接命中，不进 字段.format 复合码）
+- 取不到字段 → fieldFormat 性质级兜底",高
+合并测试阶段/推送失败度量/分类建模/接口级与行级分层互不淹没,接口级（一次错整批）与行级字段分层聚合互不淹没,接口级公共参数（一次错=整批失败）与行级字段错误分层聚合，避免接口级连坐在计数维度淹没行级真实分布（对应 AC-5）。,"前置数据：构造一批失败（10 行）：
+  - 1 个接口级：designer 为空（designer.empty，interface 级，整批 10 行全失败）
+  - 9 个行级：其中 7 行 description 为空、2 行 expected 为空
+操作步骤：
+  步骤1：调用 aggregateByField 聚合该批失败
+  步骤2：分别取 interfaceFailBreakdown 与 caseFailBreakdown、topInterfaceFailField / topCaseFailField
+结果查看：核对两层分离与 top 取值","【业务功能检查】
+- interfaceFailBreakdown 含 designer:1（level=interface，连坐整批语境）
+- caseFailBreakdown 含 description:7、expected:2（level=case）
+- topInterfaceFailField=designer，topCaseFailField=description
+- 两层分离展示，行级 7+2 的真实分布不被 designer 的 1 次放大淹没
+- interfaceFailBreakdown 与 caseFailBreakdown 由 summarizeFieldBreakdown(stats, level) 分别按 level 输出",高
+合并测试阶段/推送失败度量/分类建模/结构化信号优先于中文文本,结构化信号（mapErrorReason/validatorKind）优先于中文文本归类,同时携带结构化信号（mapErrorReason / validatorKind）与后端中文文本时，取结构化信号直接映射，不走中文文本归类（对应 AC-4）。,"前置数据：构造携带结构化信号的 PushFailureItem：
+  - mapErrorReason=""invalidTestType"" 且 reason 含中文“无效的案例默认执行方式...”
+  - validatorKind=""missingTestcaseId"" 且 reason 含中文
+  - validatorKind=""invalidFormat""（testcase_id 不符合案例唯一标识规范）
+操作步骤：
+  步骤1：调用 classifyFailure（不传 category，依赖结构化信号路径）
+  步骤2：查看 category / field
+结果查看：核对结构化信号覆盖中文关键词","【业务功能检查】
+- mapErrorReason=invalidTestType → category=testType.enum，field=testType（非文本兜底的 fieldInvalid）
+- validatorKind=missingTestcaseId → category=sourceId.empty，field=sourceId
+- validatorKind=invalidFormat → category=sourceId.format，field=sourceId
+- 结构化信号优先于 BACKEND_TOP_RULES / BACKEND_NATURE_RULES 中文文本，不因 reason 含关键词而误归",高
+合并测试阶段/推送失败度量/分类建模/未归类unknown与aux弱信号兜底,未归类兜底unknown并透传aux弱信号字段,无法归类的后端文本兜底为 unknown（进 unknownSamples 全量）；category 已知但 reason 无字段别名的场景按 AUX_FIELD_BY_CATEGORY 兜底推断字段（source=aux），原样进 auxFieldRawSamples（对应 §3.1 aux 机制）。,"前置数据：构造 PushFailureItem：
+  - ""无效的状态值""（无匹配规则）→ unknown
+  - ""任务未绑定，无法推送""（命中 taskNotFound，但 reason 无 testTaskNo 别名）→ aux 兜底
+  - ""不支持的案例来源""（命中 sourceNotSupported，无 sourcePlatform 别名）→ aux 兜底
+  - ""测试任务不存在""（taskNotFound，aux 兜底）
+操作步骤：
+  步骤1：调用 classifyFailure + failureFieldOf 取 source
+  步骤2：查看 aggregateByField 的 auxSamples 与 summarizeAuxFieldSamples
+结果查看：核对 unknown/aux 三态来源","【业务功能检查】
+- ""无效的状态值"" → category=unknown，field=undefined（不进 failFieldBreakdown），原文进 unknownSamples
+- ""任务未绑定，无法推送"" → category=taskNotFound，field=testTaskNo，source=aux；reason 进 auxFieldRawSamples，与 failFieldBreakdown 的 testTaskNo:count 一致
+- ""不支持的案例来源"" → category=sourceNotSupported，field=sourcePlatform，source=aux
+- auxFieldRawSamples 序列化形如 ""任务未绑定，无法推送 || 不支持的案例来源""
+- source 三态区分：structured（强信号）/ text（强信号）/ aux（弱信号兜底）",中
+合并测试阶段/推送失败度量/分类建模/接口级冷门资源字段下钻,冷门资源字段（caseLib/tag/module/env/owner）下钻到具体字段,v1.6 新增冷门资源场景（用例库/标签/模块/环境/负责人等）使 notFound / fieldInvalid 类报错也能下钻到具体资源字段，避免字段维度黑洞。,"前置数据：构造 PushFailureItem：
+  - ""用例库不存在或未找到""（场景#34）→ caseLib
+  - ""标签不存在或未找到""（场景#35）→ tag
+  - ""所属模块不存在或未找到""（场景#36）→ module
+  - ""测试环境不存在或无效""（场景#37）→ env
+  - ""负责人不存在或未找到""（场景#38）→ owner
+  - ""标签结构异常""（场景#39，fieldInvalid）→ tag
+操作步骤：
+  步骤1：调用 classifyFailure + failureFieldOf
+  步骤2：断言所有字段类场景 field 均非空（含 v1.6 冷门资源码）
+结果查看：核对 FIELD_RELATED_CATEGORIES 覆盖与 field 非空","【业务功能检查】
+- 各冷门资源场景 → category=notFound（或 fieldInvalid）且 field 分别为 caseLib / tag / module / env / owner（caseLib→caseLib，tag→tag 等）
+- 字段类场景（含冷门资源码）field 均非空，无 undefined 维度黑洞
+- 纯非字段类（network/auth/serverError/bizReject 及未点名字段的 fieldInvalid/notFound）本就无 field，符合设计预期",中
+合并测试阶段/推送失败度量/分类建模/参数级整批失败paramFormat透传,参数级整批失败paramFormat单独透传原样reason,paramFormat 类（接口请求参数格式/校验错误，整批失败）区别于行级字段格式错 fieldFormat，其原样 reason 单独透传 paramFormatSamples，便于定位参数级整批失败占比。,"前置数据：构造 PushFailureItem：
+  - ""参数格式不对，请检查参数""（paramFormat，整批）
+  - ""请求参数格式不正确""（paramFormat）
+  - 对照：某行 ""路径格式不正确必须以/结尾""（fieldFormat，行级）
+操作步骤：
+  步骤1：调用 classifyFailure 后聚合，查看 failCategoryBreakdown 与 paramFormatSamples / fieldInvalidSamples
+结果查看：核对 paramFormat 与 fieldFormat 分离","【业务功能检查】
+- ""参数格式不对..."" → category=paramFormat，field=undefined（整批失败，非行级字段）
+- paramFormatSamples 透传 paramFormat 类原样 reason（截断 200 字）
+- 与 fieldFormat（行级 testCasePath.format，有 field）在 failFieldBreakdown 中分离，互不混淆
+- fieldInvalidSamples 透传字段类兜底（无法定位性质，如“参数结构错误”）原样 reason",中
+合并测试阶段/推送失败度量/埋点事件贯通/编辑器内推送同样归类,编辑器内推送失败上报editorPush.complete含失败维度,案例编辑器内（webview 点推送）失败同样经 runPush 归类下钻，结局事件 editorPush.complete 携带与文件推送一致的失败维度（对应 §5.2 事件贯通）。,"前置数据：在编辑器内打开一个含失败（如 步骤描述为空 + 案例名称超长）的案例文件。
+操作步骤：
+  步骤1：在编辑器内点击“推送”按钮
+  步骤2：等待结局，抓取 editorPush.complete 的 props
+  步骤3：对比 explorerPush.complete 的 props 结构
+结果查看：核对两前缀 props 一致","【业务功能检查】
+- editorPush.complete 含：pushResult / totalRows / successRows / failedRows / preValidationFailedRows / costMs
+- 含失败分类：failCategoryBreakdown / topFailCategory
+- 含失败字段：failFieldBreakdown / topFailField / interfaceFailBreakdown / topInterfaceFailField / caseFailBreakdown / topCaseFailField
+- 含弱信号样本：auxFieldRawSamples / unknownSamples / paramFormatSamples / fieldInvalidSamples
+- 口径与 explorerPush.complete 完全一致（同为 runPush 结局，仅 telemetryPrefix 不同）
+- telemetryPrefix=editorPush，skipCompleteTelemetry=false（正常发）",高
+合并测试阶段/推送失败度量/埋点事件贯通/全量分析须合并双前缀,全量失败分析须合并editorPush与explorerPush前缀,做全量失败度量时，须合并 editorPush.complete 与 explorerPush.complete / batch.done 两个前缀，否则编辑器内推送失败会被漏统计（对应 §5.3 每日失败总量趋势）。,"前置数据：分别触发两类失败推送：
+  - 编辑器内推送 1 个失败案例（editorPush.complete）
+  - 资源管理器右键推送 1 个失败案例（explorerPush.complete）
+操作步骤：
+  步骤1：汇总失败度量时，分别按 eventName 前缀过滤
+  步骤2：对比“仅 explorerPush”与“合并两前缀”的 failedRows 总量
+结果查看：核对是否漏统计编辑器内失败","【业务功能检查】
+- 仅看 explorerPush 前缀会漏掉 editorPush 的失败行
+- 合并两前缀（editorPush.complete + explorerPush.complete + batch.done）后 failedRows 含编辑器内失败，与真实失败总量一致
+- 每日失败趋势/总量查询必须 union 两前缀",中
+合并测试阶段/推送失败度量/埋点事件贯通/unknownSamples全量透传不受上限,unknownSamples全量透传未归类原文不受3条上限,unknownSamples 收集全部未归类原文（去重后全量拼接），不受 aggregateFailures 的 3 条样本上限约束；其它分类样本仍受 3 条上限（对应 §5.2 特例）。,"前置数据：准备 6 条不同的未归类原文：
+  - ""无效的状态值"" / ""阶段信息不匹配"" / ""校验码过期"" / ""未知的内部错误"" / ""服务网关超时重试"" / ""数据解密失败""
+操作步骤：
+  步骤1：触发一次失败推送，聚合该 6 条 unknown 项
+  步骤2：查看 unknownSamples 与 topFailCategory（samples 上限 3）
+结果查看：核对 unknownSamples 全量与其他分类 3 条上限","【业务功能检查】
+- unknownSamples 含全部 6 条原文（去重后全量拼接，以合理分隔符连接），不止 3 条
+- 其它分类（如 testCaseName.empty）的 reason 样本最多 3 条（maxSamples=3）
+- 后台可基于全量 unknownSamples 完整回流、补 BACKEND_CATEGORY_RULES",中
+合并测试阶段/推送失败度量/聚合分析/字段缺陷热点Top10行级降序,字段缺陷热点按行级失败行数降序Top10,分析视图默认展示字段缺陷热点 Top10（行级），按失败行数降序，标明级别=行级（对应 AC-6）。,"前置数据：导入一批历史失败数据，行级失败分布：
+  - 步骤描述:842 / 预期结果:530 / 案例名称:210 / 案例路径:120 / 来源Id:88 / 预期结果(格式):60 / 类型:40
+操作步骤：
+  步骤1：打开分析视图（命令调出）
+  步骤2：查看「① 字段缺陷热点 Top10」
+结果查看：核对降序与级别标注","【业务功能检查】
+- Top10 列表按失败行数降序：步骤描述(842) > 预期结果(530) > 案例名称(210) > 案例路径(120) > 来源Id(88) > …
+- 每条标注级别=行级（case）
+- 直接回答“失败最集中在哪个字段”
+- 默认视图还含「② 接口级 Top5」并行展示",高
+合并测试阶段/推送失败度量/聚合分析/接口级连坐标识,接口级失败单独展示并标注一次错连坐整批,接口级公共参数失败单独展示，并标注“一次错连坐整批”，不与行级字段热点混排（对应 AC-7）。,"前置数据：批次含接口级失败“设计人无权限”（designer，整批 100 行失败）+ 行级“步骤描述为空”若干。
+操作步骤：
+  步骤1：查看聚合视图「② 接口级公共参数」
+  步骤2：对比与行级 Top10 是否混排
+结果查看：核对连坐标注与分层","【业务功能检查】
+- 接口级区单独列出：设计人:100(整批连坐)
+- 标注“一次错连坐整批”，不与行级 Top10 混排
+- interfaceFailBreakdown 与 caseFailBreakdown 分离，避免 designer 放大淹没行级分布",中
+合并测试阶段/推送失败度量/聚合分析/按来源平台切片失败率,按来源平台切片失败率定位高失败来源,分析视图支持按来源平台（TMS / RFWeb / 手工）切片失败率，定位高失败来源（对应 AC-8）。,"前置数据：导入多来源失败数据：
+  - TMS：推送 1000 行，失败 123 行
+  - RFWeb：推送 1000 行，失败 31 行
+  - 手工：推送 200 行，失败 10 行
+操作步骤：
+  步骤1：按来源平台维度查看失败率
+  步骤2：定位高失败来源
+结果查看：核对各来源失败率计算","【业务功能检查】
+- 输出各来源失败率：TMS 12.3% / RFWeb 3.1% / 手工 5.0%
+- 可定位高失败来源（TMS 明显高于其它）
+- 支持 sourcePlatform 维度下钻（结合 sourceNotSupported 业务拒绝来源）",中
+合并测试阶段/推送失败度量/聚合分析/按插件版本分组成功率对比,按插件版本分组成功率对比（仅观测）,分析视图可按插件版本分组成功率，对比插件侧改动影响（仅观测，不影响推送）（对应 AC-9）。,"前置数据：导入不同插件版本失败数据：
+  - v1.4：推送 10000 行，成功 8800
+  - v1.5：推送 12000 行，成功 10944
+操作步骤：
+  步骤1：按插件版本分组查看成功率
+结果查看：核对成功率计算","【业务功能检查】
+- 各版本成功率：v1.4 88.0% / v1.5 91.2%
+- 可对比插件侧改动后成功率变化（仅观测，不回写、不影响推送）",低
+合并测试阶段/推送失败度量/聚合分析/未知原因聚类Top10,未知原因原文聚类Top10暴露分类盲区,对未归类原文去重计数输出 Top10，暴露分类体系盲区，供补规则（对应 AC-10）。,"前置数据：导入含未归类原文的数据，聚类结果：
+  - ""无效的状态值""×23 / ""阶段信息不匹配""×11 / ""校验码过期""×7 / ""未知的内部错误""×4 …
+操作步骤：
+  步骤1：查看「⑤ 未知原因追踪」聚类
+结果查看：核对 Top10 原文+次数","【业务功能检查】
+- 输出未知原因 Top10：原文 + 次数，如「无效的状态值」×23、「阶段信息不匹配」×11
+- 暴露未覆盖文案，提示回流补 BACKEND_CATEGORY_RULES
+- 与 unknownSamples 全量透传互补（榜单看频率，样本看原文）",中
+合并测试阶段/推送失败度量/切片对比/按来源版本时间窗筛选,按来源平台/版本/时间窗筛选失败数据,分析视图支持按来源平台、插件版本、时间窗过滤失败数据（对应 AC-13）。,"前置数据：混合数据（来源=TMS/RFWeb，版本=v1.4/v1.5，时间=2026-07~08）。
+操作步骤：
+  步骤1：设置筛选条件（来源=TMS + 版本=v1.5 + 时间窗 2026-08-01~08-31）
+  步骤2：查看视图
+结果查看：核对筛选后计数收敛","【业务功能检查】
+- 视图仅展示符合条件（TMS + v1.5 + 8 月）的数据
+- 各计数（failedRows / 失败文件数）随筛选正确收敛
+- 多条件 AND 生效，不满足任一条件的数据被排除",中
+合并测试阶段/推送失败度量/切片对比/点字段下钻到失败文件列表,点字段下钻到失败文件列表（近20个）,点击某行级字段，下钻列出近 N（20）个含该失败的 文件名 + 时间，便于抽样核对（对应 AC-13 下钻）。,"前置数据：多个文件含“步骤描述为空”失败，记录文件名与时间戳。
+操作步骤：
+  步骤1：点击热点字段「步骤描述为空」
+  步骤2：查看下钻列表
+结果查看：核对文件列表数量与时间倒序","【业务功能检查】
+- 展示近 20 个含该失败的 文件名 + 推送时间
+- 列表按时间倒序
+- 可定位具体文件，便于抽样核对原文与上下文",中
+合并测试阶段/推送失败度量/切片对比/两版本对比输出差值与字段变化,两插件版本对比输出成功率差值与字段失败率变化,对比模式下选两个插件版本，展示成功率差值与各字段失败率变化（仅观测插件侧变动影响）（对应 AC-9）。,"前置数据：v1.4 与 v1.5 的失败数据。
+操作步骤：
+  步骤1：选 v1.4 与 v1.5 进入对比模式
+  步骤2：查看差值报告
+结果查看：核对差值计算","【业务功能检查】
+- 输出成功率差值：91.2% - 88.0% = +3.2%
+- 输出各字段失败率变化（如 步骤描述 失败率 v1.4 9% → v1.5 7%）
+- 仅观测，不回写，不影响推送",低
+合并测试阶段/推送失败度量/未知补盲/高频未归类Top10与占比监控,高频未归类Top10与未归类占比监控,对未归类原文去重计数输出 Top10，并监控 未归类占比（未归类行 / 总失败行），目标逐步压降（对应 §3.5 占比监控）。,"前置数据：总失败行 1480，其中 unknown 行 96，Top10 高频未归类含「无效的状态值」×23 等。
+操作步骤：
+  步骤1：查看未知聚类榜单 + 占比指标
+结果查看：核对 Top10 与占比计算","【业务功能检查】
+- 输出 Top10 原文 + 次数
+- 展示未归类占比：96 / 1480 ≈ 6.5%
+- 占比指标用于监控分类体系补盲进度，目标逐步压降",中
+合并测试阶段/推送失败度量/未知补盲/高频未归类可转化分类映射规则,高频未归类可转化为分类映射规则补充（映射可扩展）,高频未归类原文附“建议归属分类”草拟；开发采纳后在归类映射表追加一行，分析与渲染无需改代码（对应 AC-14、AC-16 映射可扩展）。,"前置数据：高频未归类“无效的状态值”×23，建议归属 enumInvalid / 具体 字段.enum。
+操作步骤：
+  步骤1：在 BACKEND_NATURE_RULES / INTERFACE_FIELD_ALIASES 映射表追加对应规则
+  步骤2：重跑 classifyFailure
+结果查看：核对归类的规则变更闭环","【业务功能检查】
+- 重跑后该原文归为正确分类（如 enumInvalid 或具体 字段.enum）
+- 新增规则不需改 analyze/render 代码（映射可扩展，仅扩展映射）
+- 未归类占比下降，补盲闭环成立",中
+合并测试阶段/推送失败度量/导出下钻/导出字段级失败明细CSV,导出字段级失败明细CSV（五列）,导出 CSV 含 字段/级别/失败行数/失败文件数/涉及来源/示例版本 五列，供二次透视（对应 AC-11）。,"前置数据：在分析视图含聚合结果（含多字段、多来源、多版本失败）。
+操作步骤：
+  步骤1：点击「导出 CSV」
+  步骤2：打开导出的 csv 文件
+结果查看：核对列名与每行内容","【业务功能检查】
+- 生成 CSV，列含：字段、级别、失败行数、失败文件数、涉及来源、示例版本（六列，对应需求 §3.3.3）
+- 每行对应一个失败字段（如：步骤描述, 行级, 842, 15, TMS, v1.5）
+- 可二次透视 / 做趋势看板或对外反馈",中
+合并测试阶段/推送失败度量/导出下钻/复制含五视角摘要文本报告,复制含五视角摘要与未归类样本的文本报告,生成纯文本报告（时间范围/总行数/失败行数/成功率/五视角Top摘要/未归类样本），便于贴工单/IM（对应 AC-12）。,"前置数据：分析视图含五视角聚合结果。
+操作步骤：
+  步骤1：点击「复制报告」
+  步骤2：粘贴到记事本查看
+结果查看：核对报告结构完整","【业务功能检查】
+- 剪贴板含文本报告，含：时间范围、总推送行数、总失败行数、成功率
+- 含五视角 Top 摘要（①字段缺陷热点 ②接口级公共参数 ③来源失败率 ④版本成功率 ⑤未知原因 Top3）
+- 含未归类原文样本（如「无效的状态值」等）
+- 可直接贴工单 / IM 作为失败规律客观依据",中

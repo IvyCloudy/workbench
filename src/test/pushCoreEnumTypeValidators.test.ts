@@ -39,6 +39,9 @@ vi.mock('../utils/telemetry', () => ({
 }));
 vi.mock('../utils/pushFailureStore', () => ({
     persistPushFailures: vi.fn(async () => {}),
+    collectFailureColumns: vi.fn(() => ''),
+    clearFailures: vi.fn(async () => {}),
+    getFailures: vi.fn(() => ({})),
 }));
 
 const VALID_TSID_1 = '11111111-1111-1111-1111-111111111111';

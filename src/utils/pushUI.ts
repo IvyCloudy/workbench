@@ -10,6 +10,7 @@
  */
 import * as vscode from 'vscode';
 import { PushFailure } from './message';
+import { normalizeSeverity } from './pushFailure';
 
 // ============================================
 // 类型定义
@@ -93,6 +94,7 @@ export interface ValidateGateFileEntry {
         rowIndex?: number;
         severity?: 'error' | 'warn';
         field?: string;
+        columnName?: string;
         stepIdx?: number;
         subField?: string;
         hits?: Array<{ field?: string; stepIdx?: number; subField?: string; singleReason?: string }>;
@@ -549,7 +551,7 @@ ${_skippedCount > 0 ? `    <div class="header-note">另有 ${_skippedCount} 个�
         // 汇总统计（跨文件）
         let totalErr = 0, totalWarn = 0, errFileCount = 0, warnOnlyFileCount = 0;
         for (const en of entries) {
-            const eCnt = en.failures.filter(f => (f.severity || 'error') !== 'warn').length;
+            const eCnt = en.failures.filter(f => normalizeSeverity(f.severity) !== 'warn').length;
             const wCnt = en.failures.length - eCnt;
             totalErr += eCnt;
             totalWarn += wCnt;
@@ -582,7 +584,7 @@ ${_skippedCount > 0 ? `    <div class="header-note">另有 ${_skippedCount} 个�
             }
             const failures = en.failures || [];
             if (failures.length === 0) return '';
-            const eCnt = failures.filter(f => (f.severity || 'error') !== 'warn').length;
+            const eCnt = failures.filter(f => normalizeSeverity(f.severity) !== 'warn').length;
             const wCnt = failures.length - eCnt;
             const isErr = eCnt > 0;
             const icon = isErr ? '✕' : '⚠';

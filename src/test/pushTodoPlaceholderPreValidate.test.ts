@@ -23,6 +23,9 @@ vi.mock('../utils/telemetry', () => ({
 
 vi.mock('../utils/pushFailureStore', () => ({
     persistPushFailures: vi.fn(async () => {}),
+    collectFailureColumns: vi.fn(() => ''),
+    clearFailures: vi.fn(async () => {}),
+    getFailures: vi.fn(() => ({})),
 }));
 
 /** 合法 testcase_id，用于隔离出「只测『待补充』」的场景（不被格式非法/占位/空拦截误伤）。 */

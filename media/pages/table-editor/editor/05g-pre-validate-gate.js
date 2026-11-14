@@ -126,6 +126,18 @@ function _pvgRenderReason(f, seq, kind) {
 }
 
 /**
+ * 文件级伪 tsId：这类问题不属于任何案例行，不计入「影响行数」，组头也不显示
+ * "testcase_id 前8位"，避免误导用户以为某一行有问题。
+ *   · PVG_FILE_LEVEL_TSID → 缺必备列/字段
+ */
+// 与后端 FILE_LEVEL_TSID 同值；跨语言无法直接 import，
+// 由 src/test/preValidateShared.test.ts 的契约测试守护，改名须两边同步。
+var PVG_FILE_LEVEL_TSID = '__FILE_LEVEL__';
+function _pvgIsFileLevelTsId(tsId) {
+    return tsId === PVG_FILE_LEVEL_TSID;
+}
+
+/**
  * 渲染一组（同一行/同一 tsId 的多条问题）。
  *   · 组头：行号/tsId + 徽章（🚫 error / ⚠ warn），点击行号可跳转；
  *   · 组头右侧：分类计数「阻断 X · 提醒 Y」（与顶部 summary 口径一致），
@@ -140,9 +152,9 @@ function _pvgRenderGroup(group, groupIndex, fileName) {
     var hasWarn = warns.length > 0;
 
     var hasRow = (g.rowIndex != null && g.rowIndex > 0);
-    // §2.3.5 · 文件级问题（缺必备列/字段）：tsId 使用固定伪值 '__FILE_LEVEL__'，
-    //   此时不显示"testcase_id 前8位"，也不提供复制按钮/跳转，避免误导用户以为某一行有问题。
-    var isFileLevel = (g.tsId === '__FILE_LEVEL__');
+    // §2.3.5 · 文件级问题（伪 tsId，见 _pvgIsFileLevelTsId）：不显示"testcase_id 前8位"、
+    //   不提供跳转，避免误导用户以为某一行有问题。
+    var isFileLevel = _pvgIsFileLevelTsId(g.tsId);
     var rowText;
     if (isFileLevel) {
         rowText = '📁 文件级问题（缺必备列/字段）';
@@ -237,10 +249,10 @@ function showPreValidateGateModal(payload) {
     var fileLevelItemCount = 0; // 文件级问题条数（缺必备列/字段，单独标注）
     var fileLevelHasError = false; // 文件级问题是否含 error（决定"阻断"标注）
     for (var gi = 0; gi < groups.length; gi++) {
-        // 文件级问题（缺必备列/字段，tsId='__FILE_LEVEL__'）不属于任何案例行：
+        // 文件级问题（伪 tsId，见 _pvgIsFileLevelTsId）不属于任何案例行：
         // 不计入"影响行数 / 阻断行数 / 仅提醒行数"，但其条数单独统计，在概要区以
         // "文件级问题 N 项（阻断）"标注，保留阻断语义且不混入行数口径。
-        if (groups[gi].tsId === '__FILE_LEVEL__') {
+        if (_pvgIsFileLevelTsId(groups[gi].tsId)) {
             fileLevelItemCount += groups[gi].errors.length + groups[gi].warns.length;
             if (groups[gi].errors.length > 0) fileLevelHasError = true;
             continue;
@@ -344,14 +356,14 @@ function showPreValidateGateModal(payload) {
     if (hintEl) {
         if (!allowContinue) {
             hintEl.textContent = hasError
-                ? '请先修复上述阻断问题后保存（重新打开或点击「格式校验」复查）'
+                ? '请先修复上述问题后保存（重新打开或点击「格式校验」复查）'
                 : '可关闭后继续编辑；修复后再次点击「格式校验」复查';
         } else if (hasError && warnCount > 0) {
             hintEl.textContent = '请先修复"阻断"类问题；"提醒"类可修复后一并推送';
         } else if (hasError) {
             hintEl.textContent = '请修复上述阻断问题后重新推送';
         } else {
-            hintEl.textContent = '点击"忽略并继续"将推送包含"待补充"的案例，可稍后完善';
+            hintEl.textContent = '点击"忽略并继续"将保留上述提醒并继续推送，可稍后复查';
         }
     }
     if (cancelBtn) cancelBtn.textContent = (hasError || !allowContinue) ? '关闭' : '取消';

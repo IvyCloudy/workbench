@@ -17,17 +17,19 @@
 
 import { TelemetryService } from '../utils/telemetry';
 import { persistPushFailures, collectFailureColumns } from '../utils/pushFailureStore';
+import { collectPathFailuresForFile } from '../utils/casePathValidator';
 import { ROW_INDEX_META } from '../utils/pushDataMapper';
 import { TS_ID_COLUMN } from '../services/utils';
 import type { PushFailureItem, PreValidationResult, PushContext, RowLike } from '../handlers/pushCore.types';
-import { runValidators } from './validators';
+import { runValidators, flattenFailuresByKind } from './validators';
 import { createParser, detectFileType } from '../parsers';
 import {
     detectMissingColumns,
     buildMissingColumnReason,
     type MissingColumnHit,
 } from './missingColumns';
-import { classifyFailure } from '../utils/pushFailureCategory';
+import { classifyFailure } from '../utils/pushFailure';
+import { FILE_LEVEL_TSID } from './validationSource';
 
 /** 埋点事件的公共字段（ext + traceId + filePath[仅文件名]），所有 step 共用。 */
 function baseTelemetryProps(ctx: PushContext): Record<string, string> {
@@ -86,12 +88,12 @@ async function detectMissingColumnFailures(ctx: PushContext): Promise<PushFailur
     if (result.ok || result.missing.length === 0) return [];
     // §2.3.5：缺列/字段是"文件级"错误，不属于任何一行 ——
     //   · rowIndex 传 undefined，让前端 05g 不渲染"第 N 行"，也不挂"点击定位"跳转；
-    //   · tsId 用固定伪值 '__FILE_LEVEL__'，让 05g 分组键落到同一组（不按行拆散）；
+    //   · tsId 用共享常量 FILE_LEVEL_TSID，让 05g 分组键落到同一组（不按行拆散）；
     //   · reason 文案已在 missingColumns.ts 中明确"当前文件缺少..."，避免误导为单行问题。
     return result.missing.map((hit: MissingColumnHit) => {
         const reason = buildMissingColumnReason(hit, fileType);
         return {
-            tsId: '__FILE_LEVEL__',
+            tsId: FILE_LEVEL_TSID,
             reason,
             // rowIndex 有意留空 —— 前端据此走"文件级"渲染分支
             category: classifyFailure({ reason, validatorKind: 'missingColumn' }),
@@ -139,21 +141,23 @@ export async function stepPreValidate(ctx: PushContext, rows: RowLike[]): Promis
     const enumInvalidFailures = failuresByKind['enumInvalid'] || [];
     const planExecNumFailures = failuresByKind['planExecNumInvalid'] || [];
     const nameEmptyFailures = failuresByKind['nameEmpty'] || [];
+    const pathEmptyFailures = failuresByKind['pathEmpty'] || [];
     // D5 · 案例唯一性（name+path 同文件内重复）：error 级，与 nameEmpty 同层
     const duplicateNameFailures = failuresByKind['duplicateName'] || [];
     const todoFailures = failuresByKind['todoPlaceholder'] || [];
-    // §2.3.5：结构性错误在最前展示，让用户先看到"文件级缺列"再看到行级错误
-    const failures: PushFailureItem[] = [
-        ...missingColumnFailures,
-        ...placeholderFailures,
-        ...emptyFailures,
-        ...formatFailures,
-        ...enumInvalidFailures,
-        ...planExecNumFailures,
-        ...nameEmptyFailures,
-        ...duplicateNameFailures,
-        ...todoFailures,
-    ];
+    // 案例路径合法性校验：空路径由 PATH_EMPTY_VALIDATOR 逐行拦截，这里只判定非空 path。
+    // 行数据与行号映射复用 runValidators 的同一份，命中行并入 droppedIndex。
+    let pathFailures: PushFailureItem[] = [];
+    try {
+        pathFailures = await collectPathFailuresForFile(
+            ctx.opts.filePath, rows, ctx.opts.resolveRowIndex, droppedIndex,
+        );
+    } catch (e: any) {
+        console.warn(`[推送][${ctx.traceId}] 案例路径校验异常，跳过:`, e?.message || e);
+    }
+    // 与其它校验结果一样归入对应 kind，由 PRE_VALIDATE_KIND_ORDER 统一排序
+    failuresByKind['pathInvalid'] = pathFailures;
+    const failures: PushFailureItem[] = flattenFailuresByKind(failuresByKind);
     if (failures.length === 0) {
         return { failures, droppedIndex, byKind: failuresByKind };
     }
@@ -227,8 +231,10 @@ export async function stepPreValidate(ctx: PushContext, rows: RowLike[]): Promis
         ...enumInvalidFailures,
         ...planExecNumFailures,
         ...nameEmptyFailures,
+        ...pathEmptyFailures,
         // D5 · 重复 name+path 也需高亮（红色）：持久化以便编辑器 hover 时看到字段级 reason
         ...duplicateNameFailures,
+        ...pathFailures,
         ...todoFailures,
     ];
     if (highlightFailures.length > 0) {

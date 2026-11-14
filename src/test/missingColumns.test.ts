@@ -83,15 +83,15 @@ describe('missingColumns · CSV 表头判定', () => {
         expect(r.missing).toEqual([]);
     });
 
-    it('中文变体表头（案例名称/用例路径/...）→ 视为齐全，不再判缺列', () => {
+    it('中文变体表头（案例名称/案例路径/...）→ 由缺列校验拦下（推送 mapper 读不到这些键）', () => {
         const headers = ['案例名称', '案例路径', '用例描述', '前置', '用例类型', '执行类型', '优先级', '操作步骤', 'api_expected'];
         const r = detectMissingColumnsForCsv(headers);
-        expect(r.ok).toBe(true);
-        expect(r.missing).toEqual([]);
+        expect(r.ok).toBe(false);
+        expect(r.missing.map(m => m.label)).toEqual(expect.arrayContaining(['名称', '路径']));
     });
 
-    it('中英混排表头（部分英文 + 部分中文变体）→ 视为齐全', () => {
-        const headers = ['name', '案例路径', 'description', '前置', 'type', 'test_type', 'priority', 'operation', 'db_expected'];
+    it('中英混排（英文键 + 规范中文列名）→ 视为齐全', () => {
+        const headers = ['name', '路径', 'description', '前置', 'type', 'test_type', 'priority', 'operation', 'db_expected'];
         const r = detectMissingColumnsForCsv(headers);
         expect(r.ok).toBe(true);
         expect(r.missing).toEqual([]);

@@ -28,11 +28,17 @@ vi.mock('../providers/BaseEditorProvider', () => ({
 // 失败盘持久化：mock，避免真实写盘
 vi.mock('../utils/pushFailureStore', () => ({
     persistPushFailures: vi.fn(async () => {}),
+    collectFailureColumns: vi.fn(() => ''),
     clearFailures: vi.fn(async () => {}),
+    getFailures: vi.fn(() => ({})),
 }));
 // 遥测：mock，避免依赖 vscode.env
 vi.mock('../utils/telemetry', () => ({
     TelemetryService: { sendTelemetryEvent: vi.fn(), sendTelemetryErrorEvent: vi.fn() },
+}));
+// 路径合法性校验：mock，隔离接口；用 spy 断言编辑期校验传入的按需查询模式
+vi.mock('../utils/casePathValidator', () => ({
+    collectPathFailuresForFile: vi.fn(async () => []),
 }));
 
 import {
@@ -41,8 +47,13 @@ import {
     clearEditValidationPromptSuppressionForFile,
 } from '../preValidate/editValidationHandler';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
+import { collectPathFailuresForFile } from '../utils/casePathValidator';
+import { persistPushFailures, clearFailures } from '../utils/pushFailureStore';
 
 const gateSpy = BaseEditorProvider.postFileLevelPreValidateGate as any;
+const pathSpy = collectPathFailuresForFile as any;
+const persistSpy = persistPushFailures as any;
+const clearSpy = clearFailures as any;
 
 let tmpDir: string;
 
@@ -52,6 +63,9 @@ beforeEach(() => {
     (vscode.workspace as any).asRelativePath = (p: string) =>
         `测试任务/任务1/测试案例/${path.basename(p)}`;
     gateSpy.mockClear();
+    pathSpy.mockClear();
+    persistSpy.mockClear();
+    clearSpy.mockClear();
 });
 
 afterEach(() => {
@@ -126,5 +140,40 @@ describe('编辑期校验 · 打开弹窗抑制（结果页跳转不做合法性
         fs.writeFileSync(fp, 'name,age\nAlice,30\n');
         await requestEditValidation(fp, { immediate: true, promptOnMissing: true });
         expect(gateSpy).not.toHaveBeenCalled();
+    });
+
+    it('保存通路复用已判定的路径失败项，覆盖式写盘不清掉 path 红格', async () => {
+        const fp = writeCaseFileWithIssues('case.csv');
+        const pathFailure = {
+            tsId: 'TESTCASE_ID',
+            reason: '路径问题：路径为功能条目，无测试要点，请核对路径',
+            field: 'testCasePath',
+            columnName: '案例路径',
+            category: 'casePath',
+            severity: 'error',
+        };
+        pathSpy.mockResolvedValueOnce([pathFailure]);
+
+        await requestEditValidation(fp, { immediate: true, promptOnMissing: false });
+
+        // 覆盖式写盘仍带上 pathInvalid 项，且不会走 clearFailures 清空整张失败盘
+        expect(persistSpy).toHaveBeenCalledTimes(1);
+        expect(persistSpy.mock.calls[0][2]).toEqual(expect.arrayContaining([
+            expect.objectContaining({ tsId: 'TESTCASE_ID', field: 'testCasePath', severity: 'error' }),
+        ]));
+        expect(clearSpy).not.toHaveBeenCalled();
+    });
+
+    it('路径判定走同一条编辑期校验闭环：打开全量查、保存按需增量查', async () => {
+        const fp = writeCaseFileWithIssues('case.csv');
+        await requestEditValidation(fp, { immediate: true, promptOnMissing: true });
+        // 第 5 个参数为按需查询开关；打开 / 格式校验全量查线上最新状态
+        expect(pathSpy).toHaveBeenCalledTimes(1);
+        expect(pathSpy.mock.calls[0][1]).toEqual(expect.any(Array));
+        expect(pathSpy.mock.calls[0][4]).toEqual({ incremental: false });
+
+        await requestEditValidation(fp, { immediate: true, promptOnMissing: false });
+        expect(pathSpy).toHaveBeenCalledTimes(2);
+        expect(pathSpy.mock.calls[1][4]).toEqual({ incremental: true });
     });
 });

@@ -20,6 +20,17 @@ import * as https from 'https';
 import { execFile } from 'child_process';
 import { readConfig } from './storage';
 import { TelemetryService } from '../utils/telemetry';
+
+// 扩展上下文单例：编辑期/推送前校验（editValidationHandler / stepPreValidate / batchPreValidate）
+// 需调用 query-tco-path 接口，而该接口依赖 ExtensionContext 读取 apiUrl / authToken 等配置。
+// 因 ExtensionContext 无法在模块内自行获取，这里在 activate 阶段通过 setExtensionContext 注入一次。
+let _extensionContext: vscode.ExtensionContext | undefined;
+function getExtensionContext(): vscode.ExtensionContext | undefined {
+    return _extensionContext;
+}
+export function setExtensionContext(ctx: vscode.ExtensionContext): void {
+    _extensionContext = ctx;
+}
 import { stackHead } from './utils';
 import { telemetryTsIdListProps } from '../utils/telemetryProps';
 import { mapRowToCaseItem } from '../utils/pushDataMapper';
@@ -455,6 +466,63 @@ export async function queryTestCases(
         costMs: String(Date.now() - _start),
     });
     return response.data;
+}
+
+/**
+ * 查询线上案例路径（tcoPath）合法性信息。
+ * 入参：taskInfo { testTaskNo, subTestTaskId } + tcoPath[]，
+ * 返回每个路径的 tcoType / pointTotal / type 等，供「打开文件 / 推送前」共用的路径合法性校验判定。
+ *   · tcoType=1 → 功能条目
+ *   · tcoType=2 & pointTotal>1 → 非末级测试要点
+ *   · tcoType=2 & pointTotal=0 & type=3 → 测试要点不存在
+ */
+export interface TcoPathQueryItem {
+    tcoPath: string;
+    tcoType: number;
+    caseTotal: number;
+    pointTotal: number;
+    type: number;
+    data: any[];
+}
+
+/** 案例路径合法性校验接口的专用超时（优化 2）：打开校验等场景不应长时间阻塞，故单独封顶 8s。 */
+const QUERY_TCO_PATH_TIMEOUT = 8 * 1000;
+
+export async function queryTcoPath(
+    taskInfo: { testTaskNo: string; subTestTaskId: string },
+    tcoPaths: string[],
+    timeoutMs: number = QUERY_TCO_PATH_TIMEOUT,
+): Promise<TcoPathQueryItem[]> {
+    if (!tcoPaths || tcoPaths.length === 0) return [];
+    const ctx = getExtensionContext();
+    if (!ctx) {
+        console.warn('[queryTcoPath] 扩展上下文未初始化，跳过案例路径校验');
+        return [];
+    }
+    const url = `${await getApiBaseUrl(ctx)}/test-task/query-tco-path`;
+    const body = { taskInfo, tcoPath: tcoPaths };
+    const cfg = await readConfig(ctx);
+    // 封顶到专用超时：即使 app-config 的 requestTimeoutMs 更大，本校验调用最多等 8s，
+    // 避免后端异常时打开/推送前校验长时间挂起（DEFAULT_TIMEOUT 为 90s）。
+    const effectiveTimeout = Math.min(resolveTimeout(cfg, timeoutMs), timeoutMs);
+    const _start = Date.now();
+    const response = await post<{ errorMsg: string; body: TcoPathQueryItem[]; returnCode: string }>(
+        ctx, url, body, effectiveTimeout,
+    );
+    const _costMs = String(Date.now() - _start);
+    if (response.data.returnCode !== 'SUC0000') {
+        TelemetryService.sendTelemetryErrorEvent('api.queryTcoPath.fail', {
+            returnCode: response.data.returnCode || '',
+            costMs: _costMs,
+        });
+        throw new Error(response.data.errorMsg || '查询案例路径合法性失败');
+    }
+    TelemetryService.sendTelemetryEvent('api.queryTcoPath.ok', {
+        returnCode: response.data.returnCode,
+        pathCount: String(tcoPaths.length),
+        costMs: _costMs,
+    });
+    return response.data.body || [];
 }
 
 /**

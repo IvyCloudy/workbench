@@ -37,6 +37,9 @@ vi.mock('../utils/fileIdentifier', async (importActual) => {
 
 vi.mock('../utils/pushFailureStore', () => ({
     persistPushFailures: vi.fn(async () => {}),
+    collectFailureColumns: vi.fn(() => ''),
+    clearFailures: vi.fn(async () => {}),
+    getFailures: vi.fn(() => ({})),
 }));
 
 vi.mock('../services/http', () => ({

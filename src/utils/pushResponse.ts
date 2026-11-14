@@ -11,7 +11,7 @@
  */
 
 import { TS_ID_COLUMN } from '../services/utils';
-import { classifyFailure, extractInterfaceField, type PushFailCategory, type PushInterfaceField } from './pushFailureCategory';
+import { classifyFailure, extractInterfaceField, type PushFailCategory, type PushInterfaceField } from './pushFailure';
 import type { PushSubField } from '../handlers/pushCore.types';
 
 // ============================================

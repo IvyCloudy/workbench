@@ -23,7 +23,12 @@ vi.mock('../utils/fileIdentifier', async (importActual) => {
     return { ...actual, filterTemplateExampleRows: (_fp: string, rows: any[]) => rows };
 });
 vi.mock('../services/http', () => ({ pushTestCase: (...args: any[]) => pushTestCase(...args) }));
-vi.mock('../utils/pushFailureStore', () => ({ persistPushFailures: vi.fn(async () => {}) }));
+vi.mock('../utils/pushFailureStore', () => ({
+    persistPushFailures: vi.fn(async () => {}),
+    collectFailureColumns: vi.fn(() => ''),
+    clearFailures: vi.fn(async () => {}),
+    getFailures: vi.fn(() => ({})),
+}));
 
 const HEX32 = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
 const TC_ID = `TC${HEX32}`;

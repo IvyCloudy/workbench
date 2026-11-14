@@ -15,4 +15,19 @@ vi.mock('vscode', () => ({
     getConfiguration: () => ({ get: (_key: string, defaultValue?: unknown) => defaultValue }),
     asRelativePath: (p: string) => p,
   },
+  // telemetry / yaml 链路会读取 vscode.env；缺此导出会让 vitest 直接抛
+  // 'No "env" export is defined on the "vscode" mock'，导致整批基线测试失败。
+  // isTelemetryEnabled=false 使遥测在单测中静默丢弃，避免真实上报。
+  env: {
+    isTelemetryEnabled: false,
+    language: 'zh-cn',
+    machineId: 'test-machine-id',
+    sessionId: 'test-session-id',
+    appName: 'Visual Studio Code',
+    uriScheme: 'vscode',
+  },
+  commands: {
+    executeCommand: vi.fn(async () => undefined),
+    registerCommand: vi.fn(() => ({ dispose: () => {} })),
+  },
 }));

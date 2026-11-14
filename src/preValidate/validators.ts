@@ -22,10 +22,18 @@ import {
     classifyFailure,
     failureFieldOf,
     type PushInterfaceField,
-} from '../utils/pushFailureCategory';
-import { isSampleTsId } from '../utils/fileIdentifier';
+} from '../utils/pushFailure';
+import {
+    CASE_NAME_COLUMN_ALIASES,
+    CASE_PATH_COLUMN_ALIASES,
+    CASE_PATH_EMPTY_REASON,
+    CASE_PATH_FIELD,
+    readCaseTsId,
+    readCaseField,
+    readCaseFieldValue,
+    isSampleCaseTsId,
+} from '../utils/caseRowFields';
 import { isTestAgentUuid, isTestFlowUuid } from '../utils/testcaseId';
-import { TS_ID_COLUMN } from '../services/utils';
 import type { PushFailureItem, RowLike, PushSubField } from '../handlers/pushCore.types';
 import { B2_ERROR_VALIDATORS, makeEnumValidator, isTypeColumnPresent, isKeyFlagColumnPresent } from '../handlers/pushCore.enumTypeValidators';
 
@@ -33,11 +41,9 @@ import { B2_ERROR_VALIDATORS, makeEnumValidator, isTypeColumnPresent, isKeyFlagC
 // 行级小工具
 // =============================================================
 
-/** 从行对象读取标准化后的 tsId（trim + 空值兜底为 ''）。 */
+/** 从行对象读取标准化后的 tsId（trim + 空值兜底为 ''）。实现下沉到公共层，保留导出以兼容既有调用方。 */
 export function readTsId(rec: RowLike | undefined | null): string {
-    if (!rec) return '';
-    const raw = rec[TS_ID_COLUMN];
-    return raw == null ? '' : String(raw).trim();
+    return readCaseTsId(rec);
 }
 
 // =============================================================
@@ -74,7 +80,7 @@ const PLACEHOLDER_VALIDATOR: RowValidator = {
         if (tsId.toUpperCase() === 'TESTCASE_ID') {
             return {
                 tsId,
-                reason: 'testcase_id 为占位值 TESTCASE_ID，请修改为真实的案例 ID 后再推送',
+                reason: 'testcase_id 为占位值 TESTCASE_ID，请调整为符合条件的案例 ID',
             };
         }
         return null;
@@ -89,7 +95,7 @@ const EMPTY_VALIDATOR: RowValidator = {
         if (tsId === '') {
             return {
                 tsId: '',
-                reason: 'testcase_id 不能为空，请填写案例 ID 后再推送',
+                reason: 'testcase_id 不能为空，请填写案例ID',
             };
         }
         return null;
@@ -379,6 +385,34 @@ const NAME_EMPTY_VALIDATOR: RowValidator = {
     },
 };
 
+// -----------------------------------------------------------------------------
+// 案例路径非空校验（error 级硬拦截）
+// -----------------------------------------------------------------------------
+// 与 NAME_EMPTY_VALIDATOR 对称：路径是推送必备字段（空路径无法确定归属的测试要点）。
+//   · 字段完全缺省（YAML `path` 与 CSV「路径」列都 undefined）→ 跳过校验，避免误伤旧模板；
+//   · 字段存在但为空串 / 仅空白 → error，行从 payload 剔除，并标红 path 列单元格。
+//
+// 与「路径合法性校验」(casePathValidator 查接口判断 功能条目/非末级/要点不存在) 的分工：
+//   本校验只管「本地必填非空」，逐行定位、不依赖任务绑定、不查接口；
+//   后者只判定「非空 path 本身是否合法」，依赖绑定任务，二者互不替代。
+//   因此「部分行 path 为空、部分非空」时，空值行由本校验逐行标红、非空行照常查接口。
+// -----------------------------------------------------------------------------
+const PATH_EMPTY_VALIDATOR: RowValidator = {
+    kind: 'pathEmpty',
+    severity: 'error',
+    check(row, tsId) {
+        // 统一走公共层：别名 / 大小写变体 / null 口径与路径合法性校验、重复名称校验一致
+        const field = readCaseField(row, CASE_PATH_COLUMN_ALIASES);
+        if (!field.present) return null; // 字段完全缺省 → 跳过校验
+        if (field.value !== '') return null;
+        return {
+            tsId,
+            reason: CASE_PATH_EMPTY_REASON,
+            field: CASE_PATH_FIELD,
+        };
+    },
+};
+
 /** 内置校验器序列（按需扩展；语义即"按顺序对每行跑一遍所有校验"）。 */
 export const DEFAULT_VALIDATORS: RowValidator[] = [
     PLACEHOLDER_VALIDATOR,
@@ -386,6 +420,7 @@ export const DEFAULT_VALIDATORS: RowValidator[] = [
     FORMAT_VALIDATOR,
     ...B2_ERROR_VALIDATORS,       // B2：枚举取值 + 计划执行次数类型（error 级）
     NAME_EMPTY_VALIDATOR,         // D4：案例名称非空（error 级）
+    PATH_EMPTY_VALIDATOR,         // 案例路径非空（error 级，逐行标红 path 单元格）
     TODO_PLACEHOLDER_VALIDATOR,   // B1：「待补充」字面量（warn 级，排在末尾）
 ];
 
@@ -400,22 +435,17 @@ export const DEFAULT_VALIDATORS: RowValidator[] = [
 // 再在主循环中对命中行插入一条 failure。
 //
 // 归一化规则（与 NAME_EMPTY_VALIDATOR 对齐）：
-//   · name  : yaml `name`  → csv 「名称」（trim 后比较，大小写敏感）
-//   · path  : yaml `path`  → csv 「路径」（trim 后比较，大小写敏感）
+//   · name  : yaml `name`  → csv 「名称」（字段读取统一走 caseRowFields，兼容表头大小写变体）
+//   · path  : yaml `path`  → csv 「路径」（同上，与路径合法性校验 / 必填校验同口径）
 //   · 缺省与空值不参与去重（避免误判：多条"名称都为空"被强报"重复"，
 //     空名称由 NAME_EMPTY_VALIDATOR 单独处理）
 // -----------------------------------------------------------------------------
 function _readNameFieldRaw(row: RowLike): string {
-    const y = (row as any)?.['name'];
-    const c = (row as any)?.['名称'];
-    const raw = (y !== undefined && y !== null) ? y : c;
-    return raw == null ? '' : String(raw).trim();
+    return readCaseFieldValue(row, CASE_NAME_COLUMN_ALIASES);
 }
 function _readPathFieldRaw(row: RowLike): string {
-    const y = (row as any)?.['path'];
-    const c = (row as any)?.['路径'];
-    const raw = (y !== undefined && y !== null) ? y : c;
-    return raw == null ? '' : String(raw).trim();
+    // 与公共层一致：兼容 Path/PATH 等表头大小写变体（此前只认精确键，会导致重复名称校验漏报）
+    return readCaseFieldValue(row, CASE_PATH_COLUMN_ALIASES);
 }
 
 /**
@@ -434,7 +464,7 @@ function scanDuplicateNameRows(rows: RowLike[]): Set<number> {
         if (!rec) continue;
         // 样例行不参与（与 runValidators 主循环 isSampleTsId 跳过口径一致）
         const tsId = readTsId(rec);
-        if (isSampleTsId(tsId)) continue;
+        if (isSampleCaseTsId(tsId)) continue;
         const name = _readNameFieldRaw(rec);
         const path = _readPathFieldRaw(rec);
         // 名称或路径任一为空 → 跳过（不参与重复判定）
@@ -495,7 +525,7 @@ export function runValidators(
     for (let i = 0; i < rows.length; i++) {
         const rec = rows[i];
         const tsId = readTsId(rec);
-        if (isSampleTsId(tsId)) continue;
+        if (isSampleCaseTsId(tsId)) continue;
         let tsIdHardHit = false;
         for (const v of effectiveValidators) {
             if (tsIdHardHit) break;
@@ -610,6 +640,29 @@ export function collectInvalidFormatFailures(
 // B3 · 编辑期主动校验入口（纯函数版本）
 // =============================================================
 /**
+ * 预校验失败项的统一展示顺序：结构性错误在前 → error 级居中 → warn 级垫底。
+ * 单一来源，供 runValidatorsOnRowsPure 与 stepPreValidate 共用；新增校验器只需在此登记，
+ * 避免两处硬编码展开清单不同步（此前加 pathEmpty 时曾两处都要手动补）。
+ *
+ * 注意不能改用 Object.values(failuresByKind)：键的插入顺序由 runValidators 主循环决定，
+ * duplicateName 在每行循环末尾单独写入、missingColumn 在 runValidators 返回后才赋值，
+ * 直接展开会打乱展示顺序。
+ */
+export const PRE_VALIDATE_KIND_ORDER: readonly string[] = [
+    'missingColumn', 'placeholder', 'empty', 'invalidFormat', 'enumInvalid',
+    'planExecNumInvalid', 'nameEmpty', 'pathEmpty', 'pathInvalid', 'duplicateName', 'todoPlaceholder',
+];
+
+/** 按统一顺序展开 failuresByKind（所有校验结果先归入对应 kind，不设特例插队参数） */
+export function flattenFailuresByKind(byKind: Record<string, PushFailureItem[]>): PushFailureItem[] {
+    const out: PushFailureItem[] = [];
+    for (const kind of PRE_VALIDATE_KIND_ORDER) {
+        out.push(...(byKind[kind] || []));
+    }
+    return out;
+}
+
+/**
  * 纯校验函数：对一批行跑一遍 DEFAULT_VALIDATORS，返回扁平化 failures（含 severity）。
  * - 与 stepPreValidate 的差异：无埋点、无落盘、无阶段化字段（不返回 droppedIndex），
  *   只做「行 → 失败清单」的纯映射；供编辑期 handler 与推送时共用同一套规则。
@@ -621,17 +674,5 @@ export function runValidatorsOnRowsPure(
     validators: RowValidator[] = DEFAULT_VALIDATORS,
 ): PushFailureItem[] {
     const { failuresByKind } = runValidators(rows, resolveRowIndex, validators);
-    return [
-        // §2.3.5：结构性错误优先展示（编辑期与推送期同口径）
-        ...(failuresByKind['missingColumn'] || []),
-        ...(failuresByKind['placeholder'] || []),
-        ...(failuresByKind['empty'] || []),
-        ...(failuresByKind['invalidFormat'] || []),
-        ...(failuresByKind['enumInvalid'] || []),
-        ...(failuresByKind['planExecNumInvalid'] || []),
-        ...(failuresByKind['nameEmpty'] || []),
-        // D5 · 案例唯一性 error 与其它 error 级同层展示（排在同类 error 尾部）
-        ...(failuresByKind['duplicateName'] || []),
-        ...(failuresByKind['todoPlaceholder'] || []),
-    ];
+    return flattenFailuresByKind(failuresByKind);
 }

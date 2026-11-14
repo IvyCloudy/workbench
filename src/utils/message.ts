@@ -16,7 +16,7 @@
  */
 import * as vscode from 'vscode';
 import { escapeHtml_, baseModalCss_, formatFailures_, showResultErrorModal_, showResultModalFallback_ } from './messageExtras';
-import type { PushInterfaceField } from './pushFailureCategory';
+import type { PushInterfaceField } from './pushFailure';
 
 // ============================================
 // 类型定义

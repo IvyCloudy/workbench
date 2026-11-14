@@ -5,7 +5,7 @@
 
 import type * as vscode from 'vscode';
 import type { FileParser } from '../parsers';
-import type { PushFailCategory, PushInterfaceField } from '../utils/pushFailureCategory';
+import type { PushFailCategory, PushInterfaceField } from '../utils/pushFailure';
 
 /**
  * 「步骤子字段」枚举：仅当失败点可定位到 steps[i] 的某个子字段时才有值。

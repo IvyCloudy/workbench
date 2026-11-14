@@ -25,6 +25,7 @@
  */
 import * as vscode from 'vscode';
 import type { PushFailureItem } from '../handlers/pushCore.types';
+import { normalizeSeverity } from '../utils/pushFailure';
 
 /** 单条 pending 门控 Promise 的登记条目。 */
 interface PendingGate {
@@ -93,8 +94,9 @@ export function openPreValidateGate(
                     tsId: f.tsId,
                     reason: f.reason,
                     rowIndex: f.rowIndex,
-                    severity: f.severity || 'error',
+                    severity: normalizeSeverity(f.severity),
                     field: f.field,
+                    columnName: f.columnName,
                     // R2（2026-09-19）：同行多字段命中时，把每条 hit 的独立单字段话术透给 webview，
                     //   05g 弹窗按 hits[i].singleReason 逐条渲染 bullet（"每项各一条"），
                     //   顶层 reason 仍保留完整汇总句以兼容单 hit 回退渲染路径。

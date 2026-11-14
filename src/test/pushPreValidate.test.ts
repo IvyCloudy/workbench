@@ -21,6 +21,9 @@ vi.mock('../utils/telemetry', () => ({
 
 vi.mock('../utils/pushFailureStore', () => ({
     persistPushFailures: vi.fn(async () => {}),
+    collectFailureColumns: vi.fn(() => ''),
+    clearFailures: vi.fn(async () => {}),
+    getFailures: vi.fn(() => ({})),
 }));
 
 const row = (id: string) => ({ [TS_ID_COLUMN]: id });

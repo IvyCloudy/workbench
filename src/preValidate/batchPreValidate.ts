@@ -23,14 +23,15 @@
  *    · 行级校验（占位/空/格式/枚举/待补充/…）→ 每行按规则产出 failure
  * ============================================================================
  */
-import { classifyFailure } from '../utils/pushFailure/categoryClassify';
-import * as vscode from 'vscode';
-import { detectFileType, createParser } from '../parsers';
-import { FILE_PATTERNS, isInQualifiedDir } from '../services/utils';
-import { runValidatorsOnRowsPure } from './validators';
+import { classifyFailure } from '../utils/pushFailure';
+import { detectFileType } from '../parsers';
+import { runValidators, flattenFailuresByKind } from './validators';
 import { detectMissingColumns, buildMissingColumnReason } from './missingColumns';
-import { buildCsvRowLikes } from './csvRowAdapter';
-import type { RowLike, PushFailureItem } from '../handlers/pushCore.types';
+import {
+    resolveTargetType, loadValidationSource, FILE_LEVEL_TSID, type ValidationSource,
+} from './validationSource';
+import { collectPathFailuresForFile } from '../utils/casePathValidator';
+import type { PushFailureItem } from '../handlers/pushCore.types';
 
 /** 单文件批量前置校验结果。 */
 export interface BatchPreValidateFileResult {
@@ -51,36 +52,13 @@ export interface BatchPreValidateFileResult {
 }
 
 /**
- * 判断文件是否属于批量前置校验支持的类型 + 是否位于合规目录。
- * 与 editValidationHandler.resolveTargetType 语义完全一致，避免"打开时校验/推送前校验"口径漂移。
- */
-function resolveTargetType(filePath: string): 'csv' | 'yaml' | 'json' | null {
-    const lower = filePath.toLowerCase();
-    // 口径对齐（2026-10-07 修复）：isInQualifiedDir 要求 parts[0]==='测试任务'，
-    // 必须传"相对工作区根"的路径，不能是绝对路径；与 FileTypeChecker /
-    // editValidationHandler.resolveTargetType 共用同一转换，避免批量推送前
-    // 校验把合规文件误判为"不合规→skip"。
-    const relPath = vscode.workspace.asRelativePath(filePath, false);
-    if (lower.endsWith('.yaml') || lower.endsWith('.yml')) {
-        return isInQualifiedDir(relPath, FILE_PATTERNS.YAML) ? 'yaml' : null;
-    }
-    if (lower.endsWith('.csv')) {
-        return isInQualifiedDir(relPath, FILE_PATTERNS.CSV) ? 'csv' : null;
-    }
-    if (lower.endsWith('.json')) {
-        return isInQualifiedDir(relPath, FILE_PATTERNS.JSON) ? 'json' : null;
-    }
-    return null;
-}
-
-/**
  * 对单个文件跑一次前置校验（纯函数：无埋点 / 无落盘 / 无 UI 副作用）。
  *
  * 返回策略：
  *   · 不合规目录 / 类型不支持 → skipped=true, failures=[]（上层视为"无问题"）
  *   · parse 失败                 → skipped=true, failures=[]（parse 错误由推送阶段的
  *                                    fileError / yamlSyntax 归口处理，避免"重复弹解析错误"）
- *   · 结构性错误（缺必备列/字段） → 一条 file-level failure（tsId='__FILE_LEVEL__'），severity=error
+ *   · 结构性错误（缺必备列/字段） → 一条 file-level failure（tsId=FILE_LEVEL_TSID），severity=error
  *   · 行级失败                   → 每行产出 failure，含 severity（error/warn）
  */
 export async function validateFileForPush(
@@ -93,34 +71,16 @@ export async function validateFileForPush(
         return { filePath, fileName, failures: [], hasError: false, hasOnlyWarn: false, skipped: true, skipReason: 'unsupportedType' };
     }
 
-    const parser = createParser(fileType);
-    let sourceRows: RowLike[] = [];
-    let parsedHeaders: string[] | undefined;
-    let parsedSourceData: any;
+    let source: ValidationSource;
     try {
-        const parsed = await parser.parse(filePath);
-        parsedHeaders = parsed?.tableData?.headers;
-        parsedSourceData = parsed?.sourceData;
-        const src = parsed.sourceData;
-
-        if (fileType === 'csv') {
-            // 与 editValidationHandler._doValidate 完全对齐：CSV parser.sourceData 恒为 null，
-            // 需从 headers + rows 组装以中文列名为 key 的对象数组，与 ENUM_VALIDATOR 的 csvKey 对齐。
-            // P4 · 使用共享的 buildCsvRowLikes 避免逻辑双份维护。
-            sourceRows = buildCsvRowLikes(parsedHeaders, parsed?.tableData?.rows);
-        } else if (Array.isArray(src)) {
-            sourceRows = src as RowLike[];
-        } else if (src && typeof src === 'object') {
-            sourceRows = [src as RowLike];
-        } else {
-            sourceRows = [];
-        }
+        source = await loadValidationSource(filePath, fileType);
     } catch (err: any) {
         return {
             filePath, fileName, failures: [], hasError: false, hasOnlyWarn: false,
             skipped: true, skipReason: `parseError:${err?.message || err}`,
         };
     }
+    const { parsed, parsedHeaders, parsedSourceData, sourceRows } = source;
 
     // §2.3.5 · 结构性检查（缺列）—— 与 stepPreValidate / editValidationHandler 完全一致
     let fileLevelFailures: PushFailureItem[] = [];
@@ -130,7 +90,7 @@ export async function validateFileForPush(
             fileLevelFailures = missingResult.missing.map(hit => {
                 const reason = buildMissingColumnReason(hit, fileType);
                 return {
-                    tsId: '__FILE_LEVEL__',
+                    tsId: FILE_LEVEL_TSID,
                     reason,
                     category: classifyFailure({ reason, validatorKind: 'missingColumn' }),
                     severity: hit.severity,
@@ -139,23 +99,20 @@ export async function validateFileForPush(
         }
     }
 
-    // 行级校验（1-based rowIndex，与编辑期口径一致）
-    const rowFailures = runValidatorsOnRowsPure(sourceRows, i => i + 1);
+    // 行级校验 + 文件级 / 路径校验结果统一归入 kind，由 PRE_VALIDATE_KIND_ORDER 排序
+    const { failuresByKind } = runValidators(sourceRows, i => i + 1);
+    if (fileLevelFailures.length > 0) failuresByKind['missingColumn'] = fileLevelFailures;
 
-    const failures: PushFailureItem[] = [
-        ...fileLevelFailures,
-        ...rowFailures.map(f => ({
-            tsId: f.tsId,
-            reason: f.reason,
-            category: f.category,
-            field: f.field,
-            severity: f.severity,
-            rowIndex: f.rowIndex,
-            stepIdx: f.stepIdx,
-            subField: f.subField,
-            hits: f.hits,
-        } as PushFailureItem)),
-    ];
+    // 案例路径合法性校验：只判定非空 path，接口异常时跳过
+    let pathFailures: PushFailureItem[] = [];
+    try {
+        pathFailures = await collectPathFailuresForFile(filePath, sourceRows, i => i + 1);
+    } catch (e: any) {
+        console.warn('[批量前置校验] 案例路径校验异常，跳过:', e?.message || e);
+    }
+    failuresByKind['pathInvalid'] = pathFailures;
+
+    const failures: PushFailureItem[] = flattenFailuresByKind(failuresByKind);
 
     const hasError = failures.some(f => f.severity !== 'warn');
     const hasOnlyWarn = !hasError && failures.length > 0;

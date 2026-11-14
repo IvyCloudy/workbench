@@ -14,6 +14,8 @@ export {
     fieldOfComposite,
 } from './categoryClassify';
 export type { FailNature, PushFailCategory } from './categoryClassify';
+export { normalizeSeverity } from './severity';
+export type { FailureSeverity } from './severity';
 
 export {
     fieldLevelOf,

@@ -39,6 +39,7 @@ export type PushFailCategory =
     | 'emptyFile'
     | 'fileError'
     | 'mapError'
+    | 'casePath'   // 案例路径合法性校验（tco 接口判定 / 接口不可用提醒）
     // —— 后端失败（自由中文文本，需关键词归类）——
     | 'network'
     | 'auth'
@@ -79,6 +80,8 @@ const VALIDATOR_KIND_TO_CATEGORY: Record<string, PushFailCategory> = {
     enumInvalid: 'enumInvalid',
     planExecNumInvalid: 'planExecNum.format' as PushFailCategory,
     nameEmpty: 'testCaseName.empty' as PushFailCategory,
+    pathEmpty: 'testCasePath.empty' as PushFailCategory,
+    pathInvalid: 'casePath',
     // §2.3.6 · 案例唯一性：同文件内 (name, path) 重复（error 级，强制阻断）
     duplicateName: 'testCaseName.dup' as PushFailCategory,
     // §2.3.5 结构完整性 · 必备列/字段存在性校验（error 级，强制阻断）

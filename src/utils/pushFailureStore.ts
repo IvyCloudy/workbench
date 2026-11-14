@@ -19,7 +19,8 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { TS_ID_COLUMN } from '../services/utils';
-import type { PushFailCategory, PushInterfaceField } from './pushFailureCategory';
+import { normalizeSeverity } from './pushFailure/severity';
+import type { PushFailCategory, PushInterfaceField } from './pushFailure';
 import type { PushSubField, PushFailureItem } from '../handlers/pushCore.types';
 
 /**
@@ -413,7 +414,7 @@ export async function mergeFailures(
             if (!existing) {
                 // P1 · 首字段 + _extraCells 一次性写入
                 const initFields: PushInterfaceField[] = inField ? [inField] : [];
-                const initSev: Array<'error' | 'warn'> = inField ? [inSeverity || 'error'] : [];
+                const initSev: Array<'error' | 'warn'> = inField ? [normalizeSeverity(inSeverity)] : [];
                 const initCells: PushFailureFieldCell[] = inField ? [inCell] : [];
                 const initReasons: string[] = inField ? [inFieldReason] : [];
                 let initRowSev: 'error' | 'warn' | undefined = inSeverity;
@@ -460,7 +461,7 @@ export async function mergeFailures(
             const mergedFields: PushInterfaceField[] = Array.isArray(existing.fields) ? existing.fields.slice() : [];
             const mergedFieldSev: Array<'error' | 'warn'> = Array.isArray(existing.fieldSeverities)
                 ? existing.fieldSeverities.slice()
-                : mergedFields.map(() => existing.severity || 'error');
+                : mergedFields.map(() => normalizeSeverity(existing.severity));
             const mergedFieldCells: PushFailureFieldCell[] = Array.isArray(existing.fieldCells)
                 ? existing.fieldCells.slice()
                 : mergedFields.map(() => ({}));
@@ -470,7 +471,7 @@ export async function mergeFailures(
                 ? existing.fieldReasons.slice()
                 : mergedFields.map(() => existing.reason || '');
             // 兜底对齐长度（防御旧盘：fields 有但 fieldSeverities / fieldCells / fieldReasons 缺）
-            while (mergedFieldSev.length < mergedFields.length) mergedFieldSev.push(existing.severity || 'error');
+            while (mergedFieldSev.length < mergedFields.length) mergedFieldSev.push(normalizeSeverity(existing.severity));
             while (mergedFieldCells.length < mergedFields.length) mergedFieldCells.push({});
             while (mergedFieldReasons.length < mergedFields.length) mergedFieldReasons.push(existing.reason || '');
             // P1 · 首字段 + _extraCells 一次性合并（拆到统一函数避免重复代码）

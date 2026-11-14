@@ -17,20 +17,20 @@
  */
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import { runValidatorsOnRowsPure } from './validators';
+import { runValidators, flattenFailuresByKind } from './validators';
 import type { RowLike } from '../handlers/pushCore.types';
 import type { PushFailureItem } from '../handlers/pushCore.types';
-import { classifyFailure } from '../utils/pushFailure/categoryClassify';
+import { classifyFailure } from '../utils/pushFailure';
 import { persistPushFailures, clearFailures, collectFailureColumns } from '../utils/pushFailureStore';
-import { detectFileType, createParser, type FileType, containsTestCaseId } from '../parsers';
-import { FILE_PATTERNS, isInQualifiedDir } from '../services/utils';
+import { detectFileType, containsTestCaseId } from '../parsers';
 import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { TelemetryService } from '../utils/telemetry';
 import {
     detectMissingColumns,
     buildMissingColumnReason,
 } from './missingColumns';
-import { buildCsvRowLikes } from './csvRowAdapter';
+import { resolveTargetType, loadValidationSource, FILE_LEVEL_TSID } from './validationSource';
+import { collectPathFailuresForFile } from '../utils/casePathValidator';
 
 // ----------------------------------------------------------------------------
 // 防抖配置（依 B3 需求最终定稿：yaml / json 500ms，csv 800ms）
@@ -116,35 +116,6 @@ export function clearEditValidationPromptSuppressionForFile(filePath: string): v
 // 指纹去重。保留常量位仅用于必要时的调试观察，不参与逻辑判断。
 
 /**
- * 识别目标文件类型 + 合规目录：不合规的文件不参与编辑期校验。
- *
- * 支持类型：
- *   · .yaml / .yml → 'yaml'
- *   · .csv         → 'csv'
- *   · .json        → 'json'（2026-09-19 补齐 P1：需求 §2.2.1 / §3 明确 csv/json/yaml 三类均要参与）
- * 三类文件均要求位于「测试任务/<任务>/测试案例/」合规目录内，且不在「临时文件」文件夹下。
- *
- * 口径对齐（2026-10-07 修复）：isInQualifiedDir 自 R6 修复起要求 parts[0]==='测试任务'
- * （严格锚定工作区根），因此传入必须是「相对工作区根」的路径，不能是绝对路径。
- * 与 FileTypeChecker.isQualifiedFile 使用同一套 `asRelativePath(filePath, false)`
- * 转换，保证"打开弹窗 / 编辑期高亮 / 右键菜单 / 推送前校验"全链路口径一致。
- */
-function resolveTargetType(filePath: string): FileType | null {
-    const lower = filePath.toLowerCase();
-    const relPath = vscode.workspace.asRelativePath(filePath, false);
-    if (lower.endsWith('.yaml') || lower.endsWith('.yml')) {
-        return isInQualifiedDir(relPath, FILE_PATTERNS.YAML) ? 'yaml' : null;
-    }
-    if (lower.endsWith('.csv')) {
-        return isInQualifiedDir(relPath, FILE_PATTERNS.CSV) ? 'csv' : null;
-    }
-    if (lower.endsWith('.json')) {
-        return isInQualifiedDir(relPath, FILE_PATTERNS.JSON) ? 'json' : null;
-    }
-    return null;
-}
-
-/**
  * 真正的校验执行体：parse → 跑规则 → 覆盖式写盘 → 通知 webview 刷新。
  *
  * @param filePath        目标文件绝对路径
@@ -158,6 +129,7 @@ function resolveTargetType(filePath: string): FileType | null {
  *                                  「只需要在文件打开时弹窗，推送前校验包含该项，文件修改保存无需触发」）。
  *                        无论 true/false，结构性检测本身都会跑（用于给行级高亮/持久化提供数据基础，
  *                        以及给推送前 stepPreValidate 共用同一份判定）。
+ *                        路径接口判定也随此区分：true=全量查最新状态，false=按需增量查询。
  */
 /**
  * 单次编辑期校验结论（结构化）：
@@ -177,31 +149,16 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
     const fileType = detectFileType(filePath);
     if (!fileType) return { aborted: true, hasFailures: false, counts: {} };
 
-    const parser = createParser(fileType);
-    let sourceRows: RowLike[] = [];
     let parsedHeaders: string[] | undefined;
     let parsedSourceData: any;
+    let sourceRows: RowLike[] = [];
     try {
-        const parsed = await parser.parse(filePath);
-        parsedHeaders = parsed?.tableData?.headers;
-        parsedSourceData = parsed?.sourceData;
-        const src = parsed.sourceData;
-
-        if (fileType === 'csv') {
-            // 修复（2026-09-19）：CSV parser 的 sourceData 恒为 null（见 csv-parser.ts），
-            // 若继续走"src 为空 → sourceRows=[]"分支，会导致 CSV 文件从来不跑行级校验
-            // （现象：单元格「功能点类111」这种非法枚举值不会飘红、编辑期弹窗不触发）。
-            // P4 · 抽公共 buildCsvRowLikes 以便与 batchPreValidate 共享一份实现，避免行数据组装
-            // 逻辑双份维护、任一处修复漏另一处。
-            sourceRows = buildCsvRowLikes(parsedHeaders, parsed?.tableData?.rows);
-        } else if (Array.isArray(src)) {
-            sourceRows = src as RowLike[];
-        } else if (src && typeof src === 'object') {
-            sourceRows = [src as RowLike];
-        } else {
-            sourceRows = [];
-        }
+        const source = await loadValidationSource(filePath, fileType);
+        parsedHeaders = source.parsedHeaders;
+        parsedSourceData = source.parsedSourceData;
+        sourceRows = source.sourceRows;
     } catch (_err) {
+        // parse 失败静默降级为空清单（编辑期不打断用户操作）
         sourceRows = [];
     }
 
@@ -226,14 +183,14 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
         const missingResult = detectMissingColumns(fileType, parsedHeaders, parsedSourceData);
         if (!missingResult.ok && missingResult.missing.length > 0) {
             // 组装文件级 failures —— 与 stepPreValidate 中的推送前拦截结构完全一致：
-            //   · tsId='__FILE_LEVEL__' 让 05g 分组到同一张卡片（不按行拆散）；
+            //   · tsId=FILE_LEVEL_TSID 让 05g 分组到同一张卡片（不按行拆散）；
             //   · rowIndex 留空 → 前端走文件级渲染分支（不显示"第 N 行"）；
             //   · reason 由 buildMissingColumnReason(hit, fileType) 组装
             //     （YAML 带英文键 `xxx（对应 YAML 字段：xxx）`；CSV 纯中文）。
             fileLevelFailures = missingResult.missing.map(hit => {
                 const reason = buildMissingColumnReason(hit, fileType);
                 return {
-                    tsId: '__FILE_LEVEL__',
+                    tsId: FILE_LEVEL_TSID,
                     reason,
                     category: classifyFailure({ reason, validatorKind: 'missingColumn' }),
                     severity: hit.severity,
@@ -246,12 +203,30 @@ async function _doValidate(filePath: string, promptOnMissing: boolean = false): 
     // 异步竞态保护：慢 parse 已被后续 fast parse 覆盖，不再写盘
     if (_seqMap.get(filePath) !== seq) return { aborted: true, hasFailures: false, counts: {} };
 
-    // 编辑期视图：源数据的 1-based 索引即行号（parse 后已按文件顺序）
-    const failures = runValidatorsOnRowsPure(sourceRows, i => i + 1);
+    // 案例路径合法性校验与其它行级字段共用同一份 rows / kind 排序 / 失败盘 / 高亮闭环。
+    // 打开 / 工具栏「格式校验」全量查线上最新状态；单元格编辑保存 / 文本编辑防抖走增量
+    // （按需查询）：只有 path 值新增或改动过才请求接口，改其它列复用已有结论 ——
+    // 既避免逐单元格编辑频繁打接口，也保证覆盖式写盘不会清掉已有的 path 红格。
+    let pathFailures: PushFailureItem[] = [];
+    try {
+        pathFailures = await collectPathFailuresForFile(
+            filePath, sourceRows, i => i + 1, undefined, { incremental: !promptOnMissing },
+        );
+    } catch (e: any) {
+        console.warn('[EditValidation] 案例路径校验异常:', e?.message || e);
+    }
+
+    // 异步竞态保护：等接口期间可能已有更新的校验完成，过期结果不再写盘
+    if (_seqMap.get(filePath) !== seq) return { aborted: true, hasFailures: false, counts: {} };
+
+    // 行级 + 路径校验结果统一归入 kind，与推送期共用同一套排序
+    const { failuresByKind } = runValidators(sourceRows, i => i + 1);
+    failuresByKind['pathInvalid'] = pathFailures;
+    const failures: PushFailureItem[] = flattenFailuresByKind(failuresByKind);
 
     // §2.3.5 · 打开文件通路：把文件级（缺列）+ 行级（枚举/待补充/名称空/计划执行次数等）合并成
     //   一份 failures 一次弹出，与推送前拦截共用同一个 05g 弹窗（openPreValidateGate）。
-    //   顺序：文件级置顶（tsId='__FILE_LEVEL__'）→ 行级按行号；前端渲染时天然按此顺序显示。
+    //   顺序：文件级置顶（tsId=FILE_LEVEL_TSID）→ 行级按行号；前端渲染时天然按此顺序显示。
     if (promptOnMissing && !_suppressedOpenPromptPaths.has(filePath) && (fileLevelFailures.length > 0 || failures.length > 0)) {
         const combined: PushFailureItem[] = [
             ...fileLevelFailures,

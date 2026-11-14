@@ -27,6 +27,7 @@
  */
 
 import type { FileType } from '../parsers';
+import { normalizeSeverity } from '../utils/pushFailure';
 
 /**
  * 一条"必备列/字段"契约。
@@ -52,15 +53,10 @@ export interface RequiredFieldSpec {
     /**
      * CSV 表头别名集合（可选）：表头命中 csvHeader 或任一别名即视为该必备列存在。
      *
-     * 背景（2026-09-24）：现网 CSV 表头存在两类"语义等价但字面不同"的写法——
-     *   · 英文字段名（name / path / description …）：编辑器经「表头中英文映射」
-     *     显示为中文（如 name → 案例名称），推送映射也能正确还原为英文字段；
-     *   · 中文变体（案例名称 / 测试名称 / 用例名称 …）：与界面显示名、
-     *     linkerDiagnosticHandler / pushFailure/fieldMapping 等既有别名口径一致。
-     * 若仅按 csvHeader 精确匹配，会把上述文件误判为"缺列"；且这些列多为受保护列
-     * （PROTECTED_COLS 禁止重命名/删除），用户在编辑器内无法改成 csvHeader 字面值，
-     * 只能新增中文列——新增时若按界面显示名填写（如"案例名称"）仍被判缺，
-     * 形成"改了还是缺列"的死循环。故此处按"主名 + 别名"集合判定。
+     * 口径以推送映射层 utils/pushDataMapper 为准：CSV 表头是规范中文列名，
+     * YAML / JSON 源数据键只有英文（中文只是 headerLabels 的显示映射，不写回文件）。
+     * 故 name / path 只额外兼容对应的英文键，不再放行「案例名称」「用例路径」等
+     * 中文变体 —— 这些表头推送 mapper 读不到，必须由缺列校验在文件层拦下。
      */
     csvAliases?: string[];
     /** 命中位置 —— 决定 YAML / JSON 的扫描策略：'top' 扫顶层键，'step' 扫 steps[] */
@@ -86,12 +82,12 @@ export interface RequiredFieldSpec {
 export const REQUIRED_FIELDS: RequiredFieldSpec[] = [
     {
         label: '名称', yamlKey: 'name', csvHeader: '名称', location: 'top',
-        // 别名与 highlight-util / linkerDiagnosticHandler.caseNameField / pushFailure.fieldMapping 口径一致
-        csvAliases: ['name', 'testCaseName', '案例名称', '测试名称', '用例名称', '测试案例名称'],
+        // 规范键口径（与 pushDataMapper 一致）：仅额外兼容 YAML 英文键 name
+        csvAliases: ['name'],
     },
     {
         label: '路径', yamlKey: 'path', csvHeader: '路径', location: 'top',
-        csvAliases: ['path', 'testCasePath', '案例路径', '用例路径'],
+        csvAliases: ['path'],
     },
     {
         label: '前置条件', yamlKey: 'preconditions', csvHeader: '前置条件', location: 'top', severity: 'warn',
@@ -154,7 +150,7 @@ function toHit(spec: RequiredFieldSpec): MissingColumnHit {
         csvHeader: spec.csvHeader,
         yamlKeys: keys,
         location: spec.location,
-        severity: spec.severity || 'error',
+        severity: normalizeSeverity(spec.severity),
     };
 }
 

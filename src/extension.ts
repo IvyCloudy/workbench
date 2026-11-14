@@ -42,6 +42,7 @@ import { initYamlDiagnostics } from './utils/yamlValidator';
 import { registerYamlValidation, disposeYamlValidation } from './handlers/yamlValidationHandler';
 import { registerYamlPreOpenInterceptor } from './handlers/yamlPreOpenInterceptor';
 import { registerEditValidation } from './preValidate';
+import { setExtensionContext } from './services/http';
 import { handleLinkerDiagnostic } from './handlers/linkerDiagnosticCommand';
 
 const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
@@ -49,6 +50,11 @@ const TESTCASE_EDITOR_VIEWTYPE = 'testcaseViewer.unifiedEditor';
 export async function activate(context: vscode.ExtensionContext) {
     const _activateStart = Date.now();
     console.log('[Extension] 插件激活中...');
+
+    // 注入 ExtensionContext（query-tco-path 等接口需读取 apiUrl / authToken 配置）。
+    // 必须在注册任何监听器之前完成：编辑期校验监听器可能在激活时立即触发路径校验。
+    // 注意：该函数返回 void，不是 Disposable，不能放进 context.subscriptions.push(...)。
+    setExtensionContext(context);
 
     // 埋点初始化（必须尽早，且尊重用户 telemetry 设置）
     TelemetryService.init(context).catch(err => {

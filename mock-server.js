@@ -74,6 +74,13 @@ const SLOW_MS = _msOf('MOCK_SLOW_MS');
 const CONFIRM_SLOW_MS = _msOf('MOCK_CONFIRM_SLOW_MS');
 const DELETE_SLOW_MS = _msOf('MOCK_DELETE_SLOW_MS');
 
+// ============================================================================
+// query-tco-path 联调 mock（确定性分发，便于复现）
+// ----------------------------------------------------------------------------
+// 路径含 func / nonleaf / missing 关键字时返回对应非法规则，其余一律合法末级。
+// 需要模拟超时可用通用参数 ?__slow=<ms>（需 > 插件侧 8s 超时）。
+// ============================================================================
+
 /** 删除确认接口（新旧契约均覆盖） */
 function _isConfirmPath(req) {
     return req.url === '/api/v1/delete-testAgent-case-confirm'
@@ -402,6 +409,45 @@ function handleRequest(req, res) {
             console.log('  返回推送结果 ok=%d fail=%d 共 %d 条 bytes=%d',
                 data.length - failCount, failCount, data.length, Buffer.byteLength(_respStr, 'utf8'));
         });
+    } else if (req.method === 'POST' && req.url === '/test-task/query-tco-path') {
+        // 查询线上案例路径及类型/要点数：确定性分发，按路径关键字命中规则
+        // 入参：{ taskInfo, tcoPath: string[] }
+        // 出参：{ errorMsg, body: [{ tcoPath, tcoType, caseTotal, pointTotal, type, data }], returnCode }
+        var qBody = '';
+        req.on('data', function (chunk) { qBody += chunk; });
+        req.on('end', function () {
+            var qPayload = {};
+            try { qPayload = JSON.parse(qBody); } catch (e) { qPayload = {}; }
+            var qTcoPaths = Array.isArray(qPayload.tcoPath) ? qPayload.tcoPath : [];
+            console.log('收到查询案例路径请求 共 %d 条路径', qTcoPaths.length);
+
+            var qResultBody = qTcoPaths.map(function (p) {
+                var tcoPath = String(p);
+                var lower = tcoPath.toLowerCase();
+                // func→tcoType=1 / nonleaf→pointTotal=3 / missing→pointTotal=0,type=3 / 其余合法末级
+                var tcoType = 2, pointTotal = 1, type = 1;
+                if (lower.indexOf('func') >= 0) { tcoType = 1; type = 2; }
+                else if (lower.indexOf('nonleaf') >= 0) { pointTotal = 3; type = 2; }
+                else if (lower.indexOf('missing') >= 0) { pointTotal = 0; type = 3; }
+                return {
+                    tcoPath: tcoPath, tcoType: tcoType, caseTotal: 0,
+                    pointTotal: pointTotal, type: type, data: []
+                };
+            });
+            var qRespStr = JSON.stringify({ errorMsg: '', body: qResultBody, returnCode: 'SUC0000' });
+            var qRespBuf = Buffer.from(qRespStr, 'utf8');
+            if (res.writableEnded || res.destroyed || req.destroyed) return;
+            // 显式带 Content-Length，避免 VSCode 扩展宿主对 chunked 响应丢 body 的问题
+            res.writeHead(200, {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Length': qRespBuf.length,
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type'
+            });
+            console.log('  ↩ 回显 %d 条路径: %s', qResultBody.length, qRespStr);
+            res.end(qRespBuf);
+        });
     } else if ((req.method === 'DELETE' && req.url === '/api/v1/delete-testAgent-case') ||
                (req.method === 'POST' && req.url === '/test-task/delete-testcase')) {
         // 新契约：DELETE /api/v1/delete-testAgent-case（body 含 operationUser）
@@ -706,6 +752,7 @@ server.listen(8081, function () {
     console.log('  POST /test-task/task-tree       - 任务树');
     console.log('  POST   /test-task/test-case            - 测试案例');
     console.log('  POST   /test-task/push-testcase        - 推送测试案例');
+    console.log('  POST   /test-task/query-tco-path        - 查询案例路径(线上是否存在及其案例列表)');
     console.log('  DELETE /api/v1/delete-testAgent-case   - 删除测试案例（新契约）');
     console.log('  POST   /test-task/delete-testcase      - 删除测试案例（旧契约，兼容保留）');
     console.log('  POST   /api/v1/delete-testAgent-case-confirm - 删除确认（新契约，type:1允许/2需确认/3不存在）');
@@ -728,5 +775,6 @@ server.listen(8081, function () {
         + ', 删除接口=' + DELETE_SLOW_MS
         + ' | 可用 MOCK_SLOW_MS / MOCK_CONFIRM_SLOW_MS / MOCK_DELETE_SLOW_MS 覆盖');
     console.log('  长响应单次定向: 请求 URL 带 ?__slow=<ms>（优先级高于环境变量，无需重启）');
+    console.log('  query-tco-path 规则: 路径含 func/nonleaf/missing 命中对应非法规则，其余合法');
     console.log('Total records: ' + TOTAL + ', default pageSize: 200');
 });

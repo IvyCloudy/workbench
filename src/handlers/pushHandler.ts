@@ -17,7 +17,8 @@ import { openCaseFileInEditor } from '../utils/openCaseFileInEditor';
 import {
     classifyFailure,
     failureFieldOf,
-} from '../utils/pushFailureCategory';
+    normalizeSeverity,
+} from '../utils/pushFailure';
 
 /** 支持的推送文件扩展名 */
 const PUSH_EXTENSIONS = new Set(['.csv', '.yaml', '.yml', '.json']);
@@ -711,16 +712,20 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
             console.warn('[推送][批量][前置校验] validate 异常:', files[vi].relativePath, err?.message || err);
             vRes = { filePath: files[vi].uri.fsPath, fileName: files[vi].relativePath, failures: [], hasError: false, hasOnlyWarn: false, skipped: true };
         }
-        if (vRes.failures.length > 0) {
+        const shownFailures = vRes.failures;
+        const shownHasError = shownFailures.some(f => normalizeSeverity(f.severity) !== 'warn');
+        const shownHasOnlyWarn = !shownHasError && shownFailures.length > 0;
+        if (shownFailures.length > 0) {
             validateEntries.push({
                 filePath: vRes.filePath,
                 fileName: vRes.fileName,
-                failures: vRes.failures.map(f => ({
+                failures: shownFailures.map(f => ({
                     tsId: f.tsId,
                     reason: f.reason,
                     rowIndex: f.rowIndex,
-                    severity: f.severity || 'error',
+                    severity: normalizeSeverity(f.severity),
                     field: f.field,
+                    columnName: f.columnName,
                     stepIdx: f.stepIdx,
                     subField: f.subField,
                     hits: f.hits,
@@ -729,10 +734,10 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
         }
         progressPanel.update({
             fileName: files[vi].relativePath,
-            status: vRes.hasError ? 'error' : (vRes.hasOnlyWarn ? 'warning' : 'done'),
-            text: vRes.failures.length === 0
+            status: shownHasError ? 'error' : (shownHasOnlyWarn ? 'warning' : 'done'),
+            text: shownFailures.length === 0
                 ? '校验通过'
-                : `校验命中 ${vRes.failures.length} 项${vRes.hasError ? '（含阻断）' : '（仅提醒）'}`,
+                : `校验命中 ${shownFailures.length} 项${shownHasError ? '（含阻断）' : '（仅提醒）'}`,
         });
         if (progressPanel.cancelled) { validateCancelled = true; break; }
     }
@@ -750,14 +755,14 @@ export async function handleFilePush(targets: vscode.Uri[], context: vscode.Exte
 
     // 有 failures → 弹 05g 汇总视图（复用进度面板）
     if (validateEntries.length > 0) {
-        const totalErrRows = validateEntries.reduce((s, e) => s + e.failures.filter(f => (f.severity || 'error') !== 'warn').length, 0);
+        const totalErrRows = validateEntries.reduce((s, e) => s + e.failures.filter(f => normalizeSeverity(f.severity) !== 'warn').length, 0);
         const totalWarnRows = validateEntries.reduce((s, e) => s + e.failures.filter(f => f.severity === 'warn').length, 0);
         const hasError = totalErrRows > 0;
         TelemetryService.sendTelemetryEvent('explorerPush.batch.preValidate.hit', {
             fileCount: String(totalFiles),
             hitFileCount: String(validateEntries.length),
             skippedNonCase: String(skippedNonCase.length),
-            errorFiles: String(validateEntries.filter(e => e.failures.some(f => (f.severity || 'error') !== 'warn')).length),
+            errorFiles: String(validateEntries.filter(e => e.failures.some(f => normalizeSeverity(f.severity) !== 'warn')).length),
             errorRows: String(totalErrRows),
             warnRows: String(totalWarnRows),
             durationMs: String(preValidateCostMs),

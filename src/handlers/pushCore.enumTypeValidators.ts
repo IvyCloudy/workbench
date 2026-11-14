@@ -36,7 +36,7 @@
 // 避免与迁移后的 pushCore.stages(barrel) 形成循环依赖（本文件被 preValidate/validators.ts 引用）。
 import type { RowLike } from './pushCore.types';
 import type { RowValidator } from '../preValidate/validators';
-import type { PushInterfaceField } from '../utils/pushFailureCategory';
+import type { PushInterfaceField } from '../utils/pushFailure';
 import { getEnumValues, normalizeTestTypeInput } from '../utils/caseEnumValues';
 
 /**

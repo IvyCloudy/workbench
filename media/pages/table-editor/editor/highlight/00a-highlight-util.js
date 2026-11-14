@@ -45,7 +45,7 @@
         designer: [],
         // caseList[] 行级字段
         sourceId:      ['testcase_id', '案例来源Id', '案例来源ID', 'sourceId'],
-        testCasePath:  ['path', '案例路径', '路径', 'testCasePath'],
+        testCasePath:  ['path', '案例路径', '路径', '用例路径'],
         testCaseName:  ['name', '案例名称', '名称', 'testCaseName'],
         testCaseDes:   ['description', '案例描述', 'testCaseDes'], // 注：description 也可能落到 steps 列，见 note
         description:   ['steps', '步骤描述', '操作步骤', 'description'],

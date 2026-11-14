@@ -16,7 +16,7 @@ import { getFileIds, toWorkspaceRelativePath } from '../utils/fileUtils';
 import {
     classifyFailure,
     failureFieldOf,
-} from '../utils/pushFailureCategory';
+} from '../utils/pushFailure';
 import { isSampleTsId, filterTemplateExampleRows, TEMPLATE_EXAMPLE_TS_ID } from '../utils/fileIdentifier';
 import { isTestAgentUuid, isTestFlowUuid } from '../utils/testcaseId';
 import { TS_ID_COLUMN, stackHead } from '../services/utils';

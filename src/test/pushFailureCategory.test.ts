@@ -22,7 +22,7 @@ import {
     summarizeAuxFieldSamples,
     type PushFailCategory,
     type PushInterfaceField,
-} from '../utils/pushFailureCategory';
+} from '../utils/pushFailure';
 
 describe('pushFailureCategory · 后端中文长文本归类', () => {
     it('网络/超时 → network', () => {

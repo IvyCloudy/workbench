@@ -25,7 +25,12 @@ vi.mock('../utils/fileIdentifier', async (importActual) => {
     return { ...actual, filterTemplateExampleRows: (_fp: string, rows: any[]) => rows };
 });
 vi.mock('../services/http', () => ({ pushTestCase: (...args: any[]) => pushTestCase(...args) }));
-vi.mock('../utils/pushFailureStore', () => ({ persistPushFailures: vi.fn(async () => {}) }));
+vi.mock('../utils/pushFailureStore', () => ({
+    persistPushFailures: vi.fn(async () => {}),
+    collectFailureColumns: vi.fn(() => ''),
+    clearFailures: vi.fn(async () => {}),
+    getFailures: vi.fn(() => ({})),
+}));
 
 const HEX32 = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
 const TC_ID = `TC${HEX32}`;
@@ -91,7 +96,9 @@ describe('编辑器全链路：行号映射 / 接口成功计入', () => {
             { [TS_ID_COLUMN]: TC_ID, ...legal },      // 9 合法
             { [TS_ID_COLUMN]: MA_ID, ...legal },      // 10 合法
             { [TS_ID_COLUMN]: UUID_ID, ...legal },    // 11 合法
-        ];
+            // 枚举校验对所有行（含 tsId 非法行）都会跑；补上 type 隔离掉
+            // 「案例类型=缺失」噪声，使本用例只验证 tsId 预校验与行号一一映射。
+        ].map(r => ({ type: '功能点类', ...r }));
         const pushIndexToRow = rows.map((_, i) => i + 1);
         const hooks = baseHooks();
         await runPush({

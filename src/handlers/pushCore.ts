@@ -29,7 +29,7 @@ import {
     summarizeFieldBreakdown,
     summarizeAuxFieldSamples,
     topFieldOfLevel,
-} from '../utils/pushFailureCategory';
+} from '../utils/pushFailure';
 import type { PushFailureItem, PushCoreHooks, RunPushOptions, PushContext } from './pushCore.types';
 
 // 子模块：类型 + 阶段逻辑 + 主编排（保留原导出名，便于调用方零改动）。

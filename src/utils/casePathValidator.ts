@@ -10,7 +10,7 @@
  * 立即重新判定，改其它列不重复打接口，也不会因编辑期覆盖式写盘清掉已有路径红格。
  * 接口异常 / 未回显的路径无法判定，跳过且不缓存（下次仍会重试）。
  */
-import { findBindingByPath } from './taskInfoStore';
+import { getCurrentTaskInfo } from './commands';
 import { queryTcoPath } from '../services/http';
 import type { TcoPathQueryItem } from '../services/http';
 import type { PushFailureItem, RowLike } from '../handlers/pushCore.types';
@@ -77,14 +77,19 @@ export async function collectPathFailuresForFile(
     opts?: { incremental?: boolean },
 ): Promise<PushFailureItem[]> {
     // 未绑定任务 → 无法查询，跳过（与「字段完全缺省则跳过」同口径）
-    const binding = findBindingByPath(filePath);
-    const taskInfo = binding?.taskInfo;
-    if (!taskInfo?.testTaskNo) {
+    const currentTask = await getCurrentTaskInfo(filePath);
+    if (!currentTask.bind) {
+        _verdictCache.delete(filePath);
+        return [];
+    }
+    const testTaskNo = currentTask.taskInfo?.testTaskNo || '';
+    const subTestTaskId = currentTask.taskInfo?.subTestTaskId || '';
+    if (!testTaskNo) {
         _verdictCache.delete(filePath);
         return [];
     }
     // 换绑测试任务后旧结论整体失效
-    const taskKey = `${taskInfo.testTaskNo}|${taskInfo.subTestTaskId || ''}`;
+    const taskKey = `${testTaskNo}|${subTestTaskId}`;
 
     // 与 runValidators 同口径：跳过样例行；空路径交给 PATH_EMPTY_VALIDATOR
     const refs: Array<{ index: number; path: string; tsId: string }> = [];
@@ -115,7 +120,7 @@ export async function collectPathFailuresForFile(
     if (toQuery.length > 0) {
         try {
             const items: TcoPathQueryItem[] = await queryTcoPath(
-                { testTaskNo: taskInfo.testTaskNo, subTestTaskId: taskInfo.subTestTaskId || '' },
+                { testTaskNo, subTestTaskId },
                 toQuery,
             );
             for (const it of items || []) {

@@ -241,11 +241,28 @@ describe('编辑期按需查询（incremental）', () => {
         expect(out.map(f => f.tsId)).toEqual(['TS-1', 'TS-2', 'TS-3']);
     });
 
-    it('标准化后无效（仅分隔符）→ 不查接口、不产出失败项', async () => {
+    it('标准化后无效（仅分隔符）→ 本地判定失败、命中行被剔除，有效路径仍查接口', async () => {
         const fp = '/x/inc-normalize-3.csv';
+        vi.mocked(queryTcoPath).mockResolvedValue([item('A/B/')]);
+        const dropped = new Set<number>();
+        const out = await collectPathFailuresForFile(
+            fp, rowsOf(['A/B/', '/', '\\']) as any, undefined, dropped,
+        );
+        expect(vi.mocked(queryTcoPath).mock.calls[0][1]).toEqual(['A/B/']);
+        expect(out).toHaveLength(2);
+        expect(out.map(f => [f.tsId, f.rowIndex])).toEqual([['TS-2', 2], ['TS-3', 3]]);
+        expect(out[0]).toMatchObject({
+            field: 'testCasePath', category: 'casePath', severity: 'error',
+            reason: '路径问题：路径格式无效，请核对路径',
+        });
+        expect([...dropped]).toEqual([1, 2]);
+    });
+
+    it('全部为标准化无效路径 → 仍产出失败项', async () => {
+        const fp = '/x/inc-normalize-3b.csv';
         const out = await collectPathFailuresForFile(fp, rowsOf(['/', '\\']) as any);
-        expect(out).toEqual([]);
         expect(queryTcoPath).not.toHaveBeenCalled();
+        expect(out.map(f => f.tsId)).toEqual(['TS-1', 'TS-2']);
     });
 
     it('标准化后路径相同但写法变化 → 增量查询不重复打接口', async () => {

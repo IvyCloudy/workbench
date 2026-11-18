@@ -27,6 +27,9 @@ import {
     isSampleCaseRow,
 } from './caseRowFields';
 
+/** 标准化失败（如 `/`、`\`）的本地判定文案，与接口判定三类文案同构 */
+const CASE_PATH_INVALID_FORMAT = '路径格式无效，请核对路径';
+
 /**
  * 依据接口返回项判定路径是否合法；返回 null 表示合法。
  * 合法结构：功能条目/{测试点路径}/末级测试要点 —— 案例必须挂在末级测试要点上。
@@ -96,8 +99,10 @@ export async function collectPathFailuresForFile(
     // 与 runValidators 同口径：跳过样例行；空路径交给 PATH_EMPTY_VALIDATOR。
     // 非空 path 先经推送映射层 normalizePath 标准化（去开头 /、补结尾 /、\ → /），
     // 与真正推送时 testCasePath 的取值口径一致，避免同一路径不同写法漏判或重复查询。
-    // 标准化失败（非法类型 / 纯分隔符）视为无法判定，跳过该行，不阻断推送。
+    // 标准化失败（如仅含分隔符）本地即可判定无效，直接产出失败项并剔除该行，
+    // 不等到推送映射阶段才报错。
     const refs: Array<{ index: number; path: string; tsId: string }> = [];
+    const invalidRefs: Array<{ index: number; tsId: string }> = [];
     (rows || []).forEach((row, i) => {
         if (!row || typeof row !== 'object' || isSampleCaseRow(row)) return;
         const rawPath = readCaseFieldValue(row, CASE_PATH_COLUMN_ALIASES);
@@ -105,8 +110,8 @@ export async function collectPathFailuresForFile(
         let path: string;
         try {
             path = normalizePath(rawPath);
-        } catch (e: any) {
-            console.warn('[案例路径校验] 路径标准化失败，跳过:', filePath, rawPath, e?.message || e);
+        } catch (_) {
+            invalidRefs.push({ index: i, tsId: readCaseTsId(row) });
             return;
         }
         if (!path) return;
@@ -114,8 +119,9 @@ export async function collectPathFailuresForFile(
     });
     const paths = [...new Set(refs.map(r => r.path))];
     if (paths.length === 0) {
+        // 没有可查接口的非空路径，缓存已无意义；但仍要返回本地标准化失败的失败项
         _verdictCache.delete(filePath);
-        return [];
+        return invalidRefs.map(ref => buildPathFailure(ref, CASE_PATH_INVALID_FORMAT, resolveRowIndex, droppedIndex));
     }
 
     // 按需：编辑期只查「还没有结论」的路径（即单元格改出来的新值），其余复用结论；
@@ -154,21 +160,35 @@ export async function collectPathFailuresForFile(
     }
     cacheVerdicts(filePath, taskKey, verdicts);
 
-    const out: PushFailureItem[] = [];
+    // 本地标准化失败的失败项 + 接口判定非法的失败项，统一走同一构造口径，按行号排序
+    const failures: Array<{ ref: { index: number; tsId: string }; message: string }> =
+        invalidRefs.map(ref => ({ ref, message: CASE_PATH_INVALID_FORMAT }));
     for (const ref of refs) {
         const message = verdicts.get(ref.path);
         if (!message) continue; // 合法 / 无法判定，不产出提示
-        droppedIndex?.add(ref.index);
-        const reason = `${CASE_PATH_REASON_PREFIX}：${message}`;
-        out.push({
-            tsId: ref.tsId,
-            reason,
-            rowIndex: resolveRowIndex(ref.index),
-            category: classifyFailure({ reason, validatorKind: 'pathInvalid' }),
-            field: CASE_PATH_FIELD,
-            columnName: CASE_PATH_COLUMN_LABEL,
-            severity: 'error',
-        } as PushFailureItem);
+        failures.push({ ref, message });
     }
-    return out;
+    failures.sort((a, b) => a.ref.index - b.ref.index);
+    return failures.map(({ ref, message }) =>
+        buildPathFailure(ref, message, resolveRowIndex, droppedIndex));
+}
+
+/** 构造一条路径非法失败项，并把命中行并入 droppedIndex（推送期剔除 payload） */
+function buildPathFailure(
+    ref: { index: number; tsId: string },
+    message: string,
+    resolveRowIndex: (i: number) => number,
+    droppedIndex?: Set<number>,
+): PushFailureItem {
+    droppedIndex?.add(ref.index);
+    const reason = `${CASE_PATH_REASON_PREFIX}：${message}`;
+    return {
+        tsId: ref.tsId,
+        reason,
+        rowIndex: resolveRowIndex(ref.index),
+        category: classifyFailure({ reason, validatorKind: 'pathInvalid' }),
+        field: CASE_PATH_FIELD,
+        columnName: CASE_PATH_COLUMN_LABEL,
+        severity: 'error',
+    } as PushFailureItem;
 }

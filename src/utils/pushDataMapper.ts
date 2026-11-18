@@ -214,7 +214,7 @@ function resolveTestType(raw: any, caseTag: string, rowIndex?: number): string {
  * 校验并标准化路径：空值返回空字符串；非空非字符串/仅空白/标准化后无效 → 抛错；
  * 合法路径 → 去掉开头 /，确保结尾有 /。
  */
-function normalizePath(path: string): string {
+export function normalizePath(path: string): string {
     if (path == null || path === '') return '';
     if (typeof path !== 'string') {
         throw new Error('路径类型错误：期望字符串，实际为 ' + typeof path);

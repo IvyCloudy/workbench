@@ -1,17 +1,18 @@
 /**
  * 案例路径合法性校验（非空 path 调接口判定，结果按行还原成失败项）
  * ----------------------------------------------------------------------------
- * 空值由 validators.PATH_EMPTY_VALIDATOR 逐行拦截；接口异常 / 未回显时无法判定，跳过不拦截。
+ * 空值由 validators.PATH_EMPTY_VALIDATOR 逐行拦截；非空 path 先经 pushDataMapper.normalizePath
+ * 标准化后再查接口；接口异常 / 未回显时无法判定，跳过不拦截。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { queryTcoPath } from '../services/http';
-import { findBindingByPath } from '../utils/taskInfoStore';
+import { getCurrentTaskInfo } from '../utils/commands';
 import { collectPathFailuresForFile, evaluateTcoPath } from '../utils/casePathValidator';
 
 vi.mock('../services/http', () => ({ queryTcoPath: vi.fn() }));
-vi.mock('../utils/taskInfoStore', () => ({ findBindingByPath: vi.fn() }));
+vi.mock('../utils/commands', () => ({ getCurrentTaskInfo: vi.fn() }));
 
-const BOUND = { taskInfo: { testTaskNo: 'T1', subTestTaskId: 'S1' } } as any;
+const BOUND = { bind: true, taskInfo: { testTaskNo: 'T1', subTestTaskId: 'S1' } } as any;
 const item = (tcoPath: string, over: Record<string, any> = {}) => ({
     tcoPath, tcoType: 2, caseTotal: 0, pointTotal: 1, type: 1, data: [], ...over,
 });
@@ -20,7 +21,7 @@ const SAMPLE_TSID = '案例唯一标识，不可修改';
 
 beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(findBindingByPath).mockReturnValue(BOUND);
+    vi.mocked(getCurrentTaskInfo).mockResolvedValue(BOUND);
 });
 
 describe('接口判定规则', () => {
@@ -81,7 +82,7 @@ describe('按行还原失败项', () => {
     });
 
     it('未绑定任务 → 跳过整项校验', async () => {
-        vi.mocked(findBindingByPath).mockReturnValue(null as any);
+        vi.mocked(getCurrentTaskInfo).mockResolvedValue({ bind: false, taskInfo: {} } as any);
         const out = await collectPathFailuresForFile('/x/a.csv', rowsOf(['A/B/']) as any);
         expect(out).toEqual([]);
         expect(queryTcoPath).not.toHaveBeenCalled();
@@ -212,13 +213,50 @@ describe('编辑期按需查询（incremental）', () => {
         const fp = '/x/inc-6.csv';
         vi.mocked(queryTcoPath).mockResolvedValue([item('A/B/')]);
         await collectPathFailuresForFile(fp, rowsOf(['A/B/']) as any);
-        vi.mocked(findBindingByPath).mockReturnValue(
-            { taskInfo: { testTaskNo: 'T2', subTestTaskId: 'S1' } } as any,
+        vi.mocked(getCurrentTaskInfo).mockResolvedValue(
+            { bind: true, taskInfo: { testTaskNo: 'T2', subTestTaskId: 'S1' } } as any,
         );
         vi.mocked(queryTcoPath).mockClear();
         await collectPathFailuresForFile(fp, rowsOf(['A/B/']) as any, undefined, undefined, inc);
         expect(queryTcoPath).toHaveBeenCalledTimes(1);
         expect(vi.mocked(queryTcoPath).mock.calls[0][1]).toEqual(['A/B/']);
+    });
+
+    it('接口回显带前导 / 的路径 → 按标准化值匹配，仍能命中失败项', async () => {
+        const fp = '/x/inc-normalize-1.csv';
+        vi.mocked(queryTcoPath).mockResolvedValue([item('/A/B/', { tcoType: 1 })]);
+        const out = await collectPathFailuresForFile(fp, rowsOf(['A/B']) as any);
+        expect(vi.mocked(queryTcoPath).mock.calls[0][1]).toEqual(['A/B/']);
+        expect(out).toHaveLength(1);
+        expect(out[0].tsId).toBe('TS-1');
+    });
+
+    it('不同写法的同一路径 → 标准化后合并为一次查询，命中行各出一条', async () => {
+        const fp = '/x/inc-normalize-2.csv';
+        vi.mocked(queryTcoPath).mockResolvedValue([item('A/B/', { tcoType: 1 })]);
+        const out = await collectPathFailuresForFile(
+            fp, rowsOf(['/A/B', 'A/B/', 'A\\B']) as any,
+        );
+        expect(vi.mocked(queryTcoPath).mock.calls[0][1]).toEqual(['A/B/']);
+        expect(out.map(f => f.tsId)).toEqual(['TS-1', 'TS-2', 'TS-3']);
+    });
+
+    it('标准化后无效（仅分隔符）→ 不查接口、不产出失败项', async () => {
+        const fp = '/x/inc-normalize-3.csv';
+        const out = await collectPathFailuresForFile(fp, rowsOf(['/', '\\']) as any);
+        expect(out).toEqual([]);
+        expect(queryTcoPath).not.toHaveBeenCalled();
+    });
+
+    it('标准化后路径相同但写法变化 → 增量查询不重复打接口', async () => {
+        const fp = '/x/inc-normalize-4.csv';
+        vi.mocked(queryTcoPath).mockResolvedValue([item('A/B/', { tcoType: 1 })]);
+        await collectPathFailuresForFile(fp, rowsOf(['A/B/']) as any);
+        vi.mocked(queryTcoPath).mockClear();
+        const out = await collectPathFailuresForFile(fp, rowsOf(['/A/B']) as any, undefined, undefined, inc);
+        expect(queryTcoPath).not.toHaveBeenCalled();
+        expect(out).toHaveLength(1);
+        expect(out[0].tsId).toBe('TS-1');
     });
 
     it('路径被清空不残留旧结论；重新填写时重新判定', async () => {

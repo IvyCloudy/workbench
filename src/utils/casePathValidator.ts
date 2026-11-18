@@ -6,11 +6,13 @@
  * 行数据与行号映射由调用方提供（与 runValidators 同一份），不再自行解析文件。
  *
  * 按需查询：编辑期（incremental）复用上一次的路径结论，只查本次新增 / 改动过的
- * 非空 path；打开 / 格式校验 / 推送前默认全量查线上最新状态。因此路径单元格编辑会
+ * 非空 path（先经 pushDataMapper.normalizePath 标准化，与推送取值口径一致）；
+ * 打开 / 格式校验 / 推送前默认全量查线上最新状态。因此路径单元格编辑会
  * 立即重新判定，改其它列不重复打接口，也不会因编辑期覆盖式写盘清掉已有路径红格。
  * 接口异常 / 未回显的路径无法判定，跳过且不缓存（下次仍会重试）。
  */
 import { getCurrentTaskInfo } from './commands';
+import { normalizePath } from './pushDataMapper';
 import { queryTcoPath } from '../services/http';
 import type { TcoPathQueryItem } from '../services/http';
 import type { PushFailureItem, RowLike } from '../handlers/pushCore.types';
@@ -91,11 +93,22 @@ export async function collectPathFailuresForFile(
     // 换绑测试任务后旧结论整体失效
     const taskKey = `${testTaskNo}|${subTestTaskId}`;
 
-    // 与 runValidators 同口径：跳过样例行；空路径交给 PATH_EMPTY_VALIDATOR
+    // 与 runValidators 同口径：跳过样例行；空路径交给 PATH_EMPTY_VALIDATOR。
+    // 非空 path 先经推送映射层 normalizePath 标准化（去开头 /、补结尾 /、\ → /），
+    // 与真正推送时 testCasePath 的取值口径一致，避免同一路径不同写法漏判或重复查询。
+    // 标准化失败（非法类型 / 纯分隔符）视为无法判定，跳过该行，不阻断推送。
     const refs: Array<{ index: number; path: string; tsId: string }> = [];
     (rows || []).forEach((row, i) => {
         if (!row || typeof row !== 'object' || isSampleCaseRow(row)) return;
-        const path = readCaseFieldValue(row, CASE_PATH_COLUMN_ALIASES);
+        const rawPath = readCaseFieldValue(row, CASE_PATH_COLUMN_ALIASES);
+        if (!rawPath) return;
+        let path: string;
+        try {
+            path = normalizePath(rawPath);
+        } catch (e: any) {
+            console.warn('[案例路径校验] 路径标准化失败，跳过:', filePath, rawPath, e?.message || e);
+            return;
+        }
         if (!path) return;
         refs.push({ index: i, path, tsId: readCaseTsId(row) });
     });
@@ -124,8 +137,15 @@ export async function collectPathFailuresForFile(
                 toQuery,
             );
             for (const it of items || []) {
-                if (!toQuery.includes(it.tcoPath)) continue;
-                verdicts.set(it.tcoPath, evaluateTcoPath(it));
+                // 回显路径同样标准化后再匹配：后端可能带前导 / 或缺结尾 /
+                let echoed: string;
+                try {
+                    echoed = normalizePath(it.tcoPath);
+                } catch (_) {
+                    continue;
+                }
+                if (!toQuery.includes(echoed)) continue;
+                verdicts.set(echoed, evaluateTcoPath(it));
             }
         } catch (e: any) {
             console.warn('[案例路径校验] 接口异常，跳过路径判定:', filePath, e?.message || e);

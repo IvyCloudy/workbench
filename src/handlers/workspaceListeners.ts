@@ -57,6 +57,7 @@ import { TS_ID_COLUMN, isInTempFolder, isInQualifiedDir, FILE_PATTERNS } from '.
 import { resolveTaskInfoOrNull } from './pushCore.stages';
 import { TelemetryService } from '../utils/telemetry';
 import { caseDeletionTelemetryProps } from '../utils/extensionHelpers';
+import { normalizeSourceId } from '../utils/testcaseId';
 import { showModal } from '../utils/message';
 import {
     confirmCaseFileDeleteWithDetails,
@@ -1350,7 +1351,8 @@ async function prepareCaseFileDecisionContext(
         artifactId: path.basename(filePath),
         testTaskNo: taskTestTaskNo,
         subTestTaskId: taskSubTestTaskId,
-        testcaseIds: nonEmptyIds.join('|'),
+        // MBT 案例线上 sourceId 已去前缀，埋点按线上 ID 归因同样去前缀
+        testcaseIds: nonEmptyIds.map(normalizeSourceId).join('|'),
     });
 
     // 全部本地未推送：无需调线上接口

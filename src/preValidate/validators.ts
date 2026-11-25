@@ -33,7 +33,7 @@ import {
     readCaseFieldValue,
     isSampleCaseTsId,
 } from '../utils/caseRowFields';
-import { isTestAgentUuid, isTestFlowUuid } from '../utils/testcaseId';
+import { isTestAgentUuid, isTestFlowUuid, isMbtTestcaseId } from '../utils/testcaseId';
 import type { PushFailureItem, RowLike, PushSubField } from '../handlers/pushCore.types';
 import { B2_ERROR_VALIDATORS, makeEnumValidator, isTypeColumnPresent, isKeyFlagColumnPresent } from '../handlers/pushCore.enumTypeValidators';
 
@@ -106,21 +106,23 @@ const EMPTY_VALIDATOR: RowValidator = {
 const TESTCASE_ID_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(TC|MA)[0-9a-f]{32})$/i;
 
 /**
- * 综合校验 testcase_id 合法性，兼容两类 TC 前缀"掩码 uuid"场景：
+ * 综合校验 testcase_id 合法性，兼容三类特殊场景：
  *   - 标准 UUID / TC|MA + 32 位 hex（TESTCASE_ID_PATTERN）
  *   - testagent 掩码 uuid（isTestAgentUuid）
  *   - testflow 掩码 uuid（isTestFlowUuid）
- * 掩码 uuid 的判定逻辑独立沉淀于 utils/testcaseId，便于其它模块复用。
+ *   - MBT + 32 位小写字母数字（CMBT_AITEST 平台，isMbtTestcaseId）
+ * 特殊格式的判定逻辑独立沉淀于 utils/testcaseId，便于其它模块复用。
  */
 export function isTestcaseIdValid(tsId: string): boolean {
     return (
         TESTCASE_ID_PATTERN.test(tsId) ||
         isTestAgentUuid(tsId) ||
-        isTestFlowUuid(tsId)
+        isTestFlowUuid(tsId) ||
+        isMbtTestcaseId(tsId)
     );
 }
 
-/** 内置校验：testcase_id 值必须符合案例唯一标识规范（UUID / TC+uuid.hex / MA+uuid.hex / testagent / testflow） */
+/** 内置校验：testcase_id 值必须符合案例唯一标识规范（UUID / TC+uuid.hex / MA+uuid.hex / testagent / testflow / MBT+32位小写字母数字） */
 const FORMAT_VALIDATOR: RowValidator = {
     kind: 'invalidFormat',
     severity: 'error',

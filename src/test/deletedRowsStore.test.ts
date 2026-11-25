@@ -78,6 +78,25 @@ describe('syncDeletedRows · type 分档', () => {
         try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
     });
 
+    it('MBT 案例：删除请求 sourceIds 去 MBT 前缀，响应按去前缀回显仍能对齐本地 tsId', async () => {
+        const mbtId = 'MBT58a41215a4be69bb3ca921687afa02f6';
+        const bareId = mbtId.slice(3);
+        mockDeleteTestCase.mockResolvedValue({
+            returnCode: 'SUC0000',
+            errorMsg: '',
+            body: [{ sourceId: bareId, type: '1' }],
+        });
+
+        const res = await syncDeletedRows(fp, [mbtId]);
+
+        // 线上请求用去前缀 sourceId
+        expect(mockDeleteTestCase.mock.calls[0][2]).toEqual([bareId]);
+        // 本地追踪/快照仍按原始 MBT tsId 清理
+        expect(res.synced).toEqual([mbtId]);
+        expect(res.deletedSuccess).toEqual([mbtId]);
+        expect(res.failed).toEqual([]);
+    });
+
     it('type=1/2/3 混合：1 与 3 都进 synced，且分别计入 deletedSuccess / deletedSourceMissing', async () => {
         mockDeleteTestCase.mockResolvedValue({
             returnCode: 'SUC0000',

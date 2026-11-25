@@ -33,6 +33,7 @@ export function setExtensionContext(ctx: vscode.ExtensionContext): void {
 }
 import { stackHead } from './utils';
 import { telemetryTsIdListProps } from '../utils/telemetryProps';
+import { normalizeSourceId } from '../utils/testcaseId';
 import { mapRowToCaseItem } from '../utils/pushDataMapper';
 import type { AppConfig, ApiResponse, QueryOptions } from '../types';
 
@@ -775,10 +776,13 @@ export async function confirmDeleteTestCase(
     const operationUser = (appConfig.userName || appConfig.userId)
         ? `${appConfig.userName || ''}/${appConfig.userId || ''}`
         : '';
+    // MBT 案例线上 sourceId 已去 MBT 前缀，删除确认请求同样去前缀；
+    // 调用方仍用本地原始 tsId，响应回显由各自链路反查回本地值（与删除同步口径一致）。
+    const requestSourceIds = (Array.isArray(sourceIds) ? sourceIds : []).map(normalizeSourceId);
     const body = {
         testTaskNo: taskInfo.testTaskNo,
         subTestTaskId: taskInfo.subTestTaskId,
-        sourceIds: Array.isArray(sourceIds) ? sourceIds : [],
+        sourceIds: requestSourceIds,
         operationUser,
     };
 

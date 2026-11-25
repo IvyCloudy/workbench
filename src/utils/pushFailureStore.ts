@@ -20,6 +20,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { TS_ID_COLUMN } from '../services/utils';
 import { normalizeSeverity } from './pushFailure/severity';
+import { isMbtTestcaseId } from './testcaseId';
 import type { PushFailCategory, PushInterfaceField } from './pushFailure';
 import type { PushSubField, PushFailureItem } from '../handlers/pushCore.types';
 
@@ -123,6 +124,14 @@ function normalizeEntry(raw: any): PushFailureEntry {
     for (const k of Object.keys(raw)) {
         const v = raw[k];
         if (v == null) continue;
+        // 历史遗留清理：MBT 案例此前被格式校验硬拦截而留下的失败标记，
+        // 现已放行，读盘时直接丢弃（下次覆盖式写盘后磁盘上也清除）。
+        if (isMbtTestcaseId(k)) {
+            const reason = typeof v === 'string' ? v : (v as any)?.reason;
+            if (typeof reason === 'string' && reason.includes('testcase_id的值不符合案例唯一标识规范')) {
+                continue;
+            }
+        }
         if (typeof v === 'string') {
             out[k] = { reason: v, timestamp: 0 };
         } else if (typeof v === 'object') {

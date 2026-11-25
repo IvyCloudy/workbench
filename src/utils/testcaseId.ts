@@ -24,6 +24,24 @@
 const STANDARD_TESTCASE_ID = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(TC|MA)[0-9a-f]{32})$/i;
 
 /**
+ * CMBT_AITEST 平台案例：严格大写 MBT 前缀 + 32 位小写字母数字（不带连字符的 uuid 形态）。
+ *   e.g. MBT58a41215a4be69bb3ca921687afa02f6
+ * 注意与前两类不同：前缀大小写严格、后段不限制为 hex（[0-9a-z]），不加 i 标志。
+ * 校验通过时推送.sourceId 去掉 MBT 前缀（见 normalizeSourceId），本地文件保留原值。
+ */
+const MBT_TESTCASE_ID = /^MBT[0-9a-z]{32}$/;
+
+/** 是否为 CMBT_AITEST 案例 ID（严格大写 MBT + 32 位小写字母数字） */
+export function isMbtTestcaseId(tsId: string | undefined | null): boolean {
+    return typeof tsId === 'string' && MBT_TESTCASE_ID.test(tsId);
+}
+
+/** 推送用 sourceId：MBT 案例去掉 MBT 前缀，其余原样返回（幂等） */
+export function normalizeSourceId(tsId: string): string {
+    return isMbtTestcaseId(tsId) ? tsId.slice(3) : tsId;
+}
+
+/**
  * 掩码 uuid 核心判定：TC 前缀 + 一段"uuid hex，其中特定 1-based 位被固定字母覆盖"。
  *
  * 注意：掩码字母 testagent / testflow 中，e/a/f 本身落在十六进制 a-f 区间内，
@@ -90,7 +108,8 @@ export function isStandardTestcaseId(tsId: string | undefined | null): boolean {
 
 /**
  * 综合判定：testcase_id 是否合法。
- * 合法 = 标准 UUID / TC|MA+hex / testagent 掩码(uuid+掩码) / testflow 掩码(uuid+掩码)。
+ * 合法 = 标准 UUID / TC|MA+hex / testagent 掩码(uuid+掩码) / testflow 掩码(uuid+掩码)
+ *        / MBT+32 位小写字母数字（CMBT_AITEST 平台，推送时去 MBT 前缀）。
  */
 export function isValidTestcaseId(tsId: string | undefined | null): boolean {
     if (typeof tsId !== 'string') return false;
@@ -98,6 +117,7 @@ export function isValidTestcaseId(tsId: string | undefined | null): boolean {
     return (
         STANDARD_TESTCASE_ID.test(v) ||
         isTestAgentUuid(v) ||
-        isTestFlowUuid(v)
+        isTestFlowUuid(v) ||
+        isMbtTestcaseId(v)
     );
 }

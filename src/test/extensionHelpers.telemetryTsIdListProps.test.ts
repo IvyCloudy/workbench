@@ -32,6 +32,14 @@ describe('telemetryTsIdListProps · 遥测 tsId 列表压扁', () => {
         expect(props.syncedTsIdsTruncated).toBeUndefined();
     });
 
+    it('MBT 案例：埋点 testcase_id 去掉 MBT 前缀，计数按原始条数', () => {
+        const mbt = 'MBT58a41215a4be69bb3ca921687afa02f6';
+        const raw = mbt.slice(3);
+        const props = telemetryTsIdListProps({ deletedTestcaseIds: [mbt, 'TC001'] });
+        expect(props.deletedTestcaseIds).toBe(`${raw}|TC001`);
+        expect(props.deletedTestcaseIdsCount).toBe('2');
+    });
+
     it('超长列表：首段完整 + `|...(+N more)` 后缀 + Truncated=true', () => {
         // 构造 1000 条 32 位 hex 风格 tsId，单条长度约 32，加上分隔符总长 ≈ 33000
         // 远超 8000 上限，必然触发截断

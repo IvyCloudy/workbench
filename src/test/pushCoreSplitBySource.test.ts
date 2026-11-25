@@ -41,6 +41,7 @@ vi.mock('../services/http', () => ({
 const HEX32 = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
 const TC_ID = `TC${HEX32}`;              // → testAgent
 const MA_ID = `MA${HEX32}`;              // → testAgentMA
+const MBT_ID = `MBT${HEX32}`;            // → CMBT_AITEST
 const UUID_ID = '123e4567-e89b-12d3-a456-426614174000'; // → testAgentMA
 
 const baseHooks = () => ({
@@ -74,7 +75,7 @@ const run = (rows: Array<Record<string, string>>) => {
     }).then(() => hooks);
 };
 
-describe('pushCore 按来源拆批推送：TC+uuid.hex → testAgent，其余 → testAgentMA', () => {
+describe('pushCore 按来源拆批推送：TC+uuid.hex → testAgent，MBT → CMBT_AITEST，其余 → testAgentMA', () => {
     beforeEach(() => {
         pushTestCase.mockReset();
         // 后端把每行都判为失败（type=2），使 runPush 走全失败路径，避免成功回写触碰文件系统。
@@ -98,6 +99,23 @@ describe('pushCore 按来源拆批推送：TC+uuid.hex → testAgent，其余 �
         }
         expect(bySource['testAgent']).toEqual([TC_ID]);
         expect(bySource['testAgentMA']).toEqual([UUID_ID, MA_ID]); // 保留原有相对顺序
+    });
+
+    it('混合三来源 → 恰好三批：MBT 行独立成 CMBT_AITEST 批次且 sourceId 去前缀', async () => {
+        await run([
+            { [TS_ID_COLUMN]: UUID_ID }, // 行1 → testAgentMA
+            { [TS_ID_COLUMN]: MBT_ID },  // 行2 → CMBT_AITEST
+            { [TS_ID_COLUMN]: TC_ID },   // 行3 → testAgent
+        ]);
+        expect(pushTestCase).toHaveBeenCalledTimes(3);
+        const bySource: Record<string, any[]> = {};
+        for (const call of pushTestCase.mock.calls) {
+            bySource[call[4]] = call[1];
+        }
+        // 分流读的是原始 tsId（带 MBT）；sourceId 去前缀发生在 mapper 内部，由专项用例覆盖
+        expect(bySource['CMBT_AITEST'].map((r: any) => r[TS_ID_COLUMN])).toEqual([MBT_ID]);
+        expect(bySource['testAgent'].map((r: any) => r[TS_ID_COLUMN])).toEqual([TC_ID]);
+        expect(bySource['testAgentMA'].map((r: any) => r[TS_ID_COLUMN])).toEqual([UUID_ID]);
     });
 
     it('单一来源 → 只发一批，不做多余接口调用', async () => {

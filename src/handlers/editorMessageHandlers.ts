@@ -34,6 +34,7 @@ import { BaseEditorProvider } from '../providers/BaseEditorProvider';
 import { TelemetryService } from '../utils/telemetry';
 import { buildErrorProps } from '../services/utils';
 import { syncDeletedResultTelemetryProps } from '../utils/extensionHelpers';
+import { normalizeSourceId } from '../utils/testcaseId';
 import { resolveTaskInfoOrNull } from '../handlers/pushCore.stages';
 import { resolvePreValidateGate } from '../preValidate';
 import { requestEditValidation, type EditValidationResult } from '../preValidate/editValidationHandler';
@@ -580,7 +581,8 @@ async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
         artifactId: path.basename(filePath || ''),
         testTaskNo: taskTestTaskNo,
         subTestTaskId: taskSubTestTaskId,
-        testcaseIds: tsIds.join('|'),
+        // MBT 案例线上 sourceId 已去前缀，埋点按线上 ID 归因同样去前缀
+        testcaseIds: tsIds.map(normalizeSourceId).join('|'),
     });
     try {
         // 优先使用前端提供的 tsIdOrder；缺失时才降级为读磁盘（历史前端版本兼容）

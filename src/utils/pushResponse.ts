@@ -12,6 +12,7 @@
 
 import { TS_ID_COLUMN } from '../services/utils';
 import { classifyFailure, extractInterfaceField, type PushFailCategory, type PushInterfaceField } from './pushFailure';
+import { isMbtTestcaseId } from './testcaseId';
 import type { PushSubField } from '../handlers/pushCore.types';
 
 // ============================================
@@ -63,10 +64,25 @@ export function parsePushResponse(
     const safeBody: any[] = Array.isArray(body) ? body : [];
     const successMappings: PushSuccessMapping[] = [];
     const failures: PushResponseFailure[] = [];
+
+    // MBT 案例推送时 sourceId 去掉了 MBT 前缀，但本地失败盘 / 高亮 / testCaseNo 回写
+    // 全按本地原始 tsId（带 MBT）索引。这里按 bodyIndex 建「去前缀 sourceId → 本地 tsId」
+    // 反查表，把接口回显的 sourceId 归一化回本地值，保证下游链路 tsId 始终一致。
+    const localTsIdBySourceId = new Map<string, string>();
+    if (Array.isArray(pushData)) {
+        pushData.forEach((row: any) => {
+            const tsId = String(row?.[TS_ID_COLUMN] ?? '').trim();
+            if (isMbtTestcaseId(tsId)) localTsIdBySourceId.set(tsId.slice(3), tsId);
+        });
+    }
+
     safeBody.forEach((item, bi) => {
         if (!item) return;
         const t = String(item.type == null ? '' : item.type);
         let sid = String(item.sourceId == null ? '' : item.sourceId);
+        // MBT 案例：接口回显的是去前缀 sourceId，归一化回本地原始 tsId
+        const localTsId = localTsIdBySourceId.get(sid);
+        if (localTsId) sid = localTsId;
         // 后端可能对失败行不返回 sourceId，按 bodyIndex 从 pushData 反查 testcase_id 兜底
         if (!sid && Array.isArray(pushData) && pushData[bi]) {
             const fallback = (pushData[bi] as any)?.[TS_ID_COLUMN];

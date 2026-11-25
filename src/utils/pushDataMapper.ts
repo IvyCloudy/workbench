@@ -76,6 +76,8 @@
 //   stepIdx  —— 步骤下标（0-based），仅在 reason='missingOperation' 时有值
 //   rowIndex —— 主表行号（1-based），从 row.__rowIndex 读取；上层未预贴时为 undefined
 // ============================================================================
+import { normalizeSourceId } from './testcaseId';
+
 export interface MapErrorFields {
     caseTag: string;
     reason: 'missingTestcaseId' | 'missingOperation' | 'missingStepDesc' | 'missingExpected' | 'invalidPath' | 'invalidTestType';
@@ -319,7 +321,8 @@ function parseStepBlocks(text: string): Array<{ num: number; content: string }> 
 
 /** 中文 CSV 行 → 接口 caseList[] 项 */
 function mapChineseRowToCaseItem(row: Record<string, any>): Record<string, any> {
-    const sourceId = toStr(row['testcase_id']).trim();
+    // MBT 案例（CMBT_AITEST）推送时 sourceId 去掉 MBT 前缀，本地 testcase_id 保持原值
+    const sourceId = normalizeSourceId(toStr(row['testcase_id']).trim());
     const caseTag = sourceId || toStr(row['名称']) || '(未命名案例)';
     const rowIndex = pickRowIndex(row);
 
@@ -417,7 +420,8 @@ export function mapRowToCaseItem(row: Record<string, any>): Record<string, any> 
 
     const steps: any[] = Array.isArray(row['steps']) ? row['steps'] : [];
 
-    const sourceId = toStr(row['testcase_id']).trim();
+    // MBT 案例（CMBT_AITEST）推送时 sourceId 去掉 MBT 前缀，本地 testcase_id 保持原值
+    const sourceId = normalizeSourceId(toStr(row['testcase_id']).trim());
     // 案例标识，用于报错定位
     const caseTag = sourceId || toStr(row['name']) || '(未命名案例)';
     const rowIndex = pickRowIndex(row);

@@ -16,6 +16,7 @@
  * ============================================================================
  */
 import { stackHead } from '../services/utils';
+import { normalizeSourceId } from './testcaseId';
 import type { SyncDeletedResult } from './deletedRowsStore';
 
 /**
@@ -57,7 +58,9 @@ const TELEMETRY_TSID_LIST_MAX_LEN = 8000;
 export function telemetryTsIdListProps(lists: Record<string, ReadonlyArray<string>>): Record<string, string> {
     const props: Record<string, string> = {};
     for (const [key, ids] of Object.entries(lists)) {
-        const arr = Array.isArray(ids) ? ids : [];
+        // MBT 案例线上 sourceId 已去前缀，埋点里的 testcase_id 明细同样去前缀，
+        // 便于与线上按 sourceId 审计关联；此处统一收敛，所有删除类埋点自动生效。
+        const arr = (Array.isArray(ids) ? ids : []).map(normalizeSourceId);
         props[`${key}Count`] = String(arr.length);
         if (arr.length === 0) {
             props[key] = '';

@@ -30,6 +30,7 @@ import { deleteTestCase } from '../services/http';
 import { resolveTaskInfoOrNull } from '../handlers/pushCore.stages';
 import type { ResolveTaskInfoResult } from '../handlers/pushCore.types';
 import { TelemetryService } from './telemetry';
+import { normalizeSourceId } from './testcaseId';
 
 // ============================================
 // 类型定义
@@ -288,10 +289,12 @@ export async function syncDeletedRows(
             deletedSuccess.push(...targetIds);
             isLocalOnly = true;
         } else if (taskInfo.status === 'ok') {
+            // MBT 案例线上 sourceId 已去 MBT 前缀，删除请求同样去前缀；
+            // 本地追踪 / 快照仍按原始 tsId（带 MBT）维护，响应解析时反查回原值。
             resp = await deleteTestCase(
                 cachedContext,
                 { testTaskNo: taskInfo.taskInfo.testTaskNo, subTestTaskId: taskInfo.taskInfo.subTestTaskId },
-                targetIds,
+                targetIds.map(normalizeSourceId),
             );
             if (resp.returnCode !== 'SUC0000') {
                 throw new Error(resp.errorMsg || `删除接口返回 ${resp.returnCode}`);
@@ -317,7 +320,9 @@ export async function syncDeletedRows(
             }
 
             for (const id of targetIds) {
-                const t = typeBySourceId.get(id);
+                // 接口按去前缀 sourceId 回显，这里按原始 tsId 查询时先归一化
+                const pid = normalizeSourceId(id);
+                const t = typeBySourceId.get(pid);
                 if (t === '1') {
                     // 线上删除成功：清理本地追踪与快照
                     synced.push(id);
@@ -329,7 +334,7 @@ export async function syncDeletedRows(
                     deletedSourceMissing.push(id);
                 } else if (t === '2') {
                     // 失败原因取接口返回的 data（兜底文案仅在接口未给 data 时使用）
-                    const failData = dataBySourceId.get(id);
+                    const failData = dataBySourceId.get(pid);
                     const reason = failData != null ? String(failData) : '线上删除失败';
                     failed.push({ tsId: id, reason });
                 } else if (t === '4') {

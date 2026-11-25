@@ -18,7 +18,7 @@ import {
     failureFieldOf,
 } from '../utils/pushFailure';
 import { isSampleTsId, filterTemplateExampleRows, TEMPLATE_EXAMPLE_TS_ID } from '../utils/fileIdentifier';
-import { isTestAgentUuid, isTestFlowUuid } from '../utils/testcaseId';
+import { isTestAgentUuid, isTestFlowUuid, isMbtTestcaseId } from '../utils/testcaseId';
 import { TS_ID_COLUMN, stackHead } from '../services/utils';
 import { TelemetryService } from '../utils/telemetry';
 import { telemetryErrProps } from '../utils/extensionHelpers';
@@ -270,15 +270,18 @@ async function writeBackTestCaseNosLocked(opts: WriteBackOptions): Promise<void>
 // =============================================================
 
 /** 推送来源平台类型（与接口 sourcePlatform 取值对应）。 */
-type PushSource = 'testAgent' | 'testAgentMA';
+type PushSource = 'testAgent' | 'testAgentMA' | 'CMBT_AITEST';
 
 /**
- * 来源判定：testcase_id 满足 TC + 32 位 uuid.hex → 'testAgent'，其余（含 MA / 标准 UUID）→ 'testAgentMA'。
- * TC 前缀的"掩码 uuid"（testagent / testflow）同样归属 testAgent 批次。
+ * 来源判定（按优先级，MBT 最优先，必须在去前缀前用原始 tsId 判定）：
+ *   - MBT + 32 位小写字母数字 → 'CMBT_AITEST'，推送 sourceId 去 MBT 前缀
+ *   - TC + 32 位 uuid.hex / TC 掩码 uuid → 'testAgent'
+ *   - 其余（含 MA / 标准 UUID）→ 'testAgentMA'
  */
 const TC_SOURCE_PATTERN = /^TC[0-9a-f]{32}$/i;
 
 function resolveRowSource(tsId: string): PushSource {
+    if (isMbtTestcaseId(tsId)) return 'CMBT_AITEST';
     if (TC_SOURCE_PATTERN.test(tsId) || isTestAgentUuid(tsId) || isTestFlowUuid(tsId)) {
         return 'testAgent';
     }
@@ -286,18 +289,22 @@ function resolveRowSource(tsId: string): PushSource {
 }
 
 /**
- * 按来源拆批：TC+uuid.hex 行归 testAgent，其余归 testAgentMA。
+ * 按来源拆批：MBT 行归 CMBT_AITEST，TC 行归 testAgent，其余归 testAgentMA。
  * 保留各自内部相对顺序，便于后续按全局行号合并结果。
  */
 function splitRowsByPushSource(rows: RowLike[]): Array<{ source: PushSource; rows: RowLike[] }> {
     const tc: RowLike[] = [];
     const ma: RowLike[] = [];
+    const mbt: RowLike[] = [];
     for (const r of rows) {
-        if (resolveRowSource(readTsId(r)) === 'testAgent') tc.push(r);
+        const source = resolveRowSource(readTsId(r));
+        if (source === 'CMBT_AITEST') mbt.push(r);
+        else if (source === 'testAgent') tc.push(r);
         else ma.push(r);
     }
     const batches: Array<{ source: PushSource; rows: RowLike[] }> = [];
     if (tc.length > 0) batches.push({ source: 'testAgent', rows: tc });
+    if (mbt.length > 0) batches.push({ source: 'CMBT_AITEST', rows: mbt });
     if (ma.length > 0) batches.push({ source: 'testAgentMA', rows: ma });
     return batches;
 }
@@ -362,15 +369,19 @@ export async function stepInvokeBackend(
 
     const tcGlobalIdx: number[] = [];
     const maGlobalIdx: number[] = [];
+    const mbtGlobalIdx: number[] = [];
     rows.forEach((r, gi) => {
-        if (resolveRowSource(readTsId(r)) === 'testAgent') tcGlobalIdx.push(gi);
+        const source = resolveRowSource(readTsId(r));
+        if (source === 'CMBT_AITEST') mbtGlobalIdx.push(gi);
+        else if (source === 'testAgent') tcGlobalIdx.push(gi);
         else maGlobalIdx.push(gi);
     });
 
     const allSuccess: PushSuccessMapping[] = [];
     const allFailures: PushResponseFailure[] = [];
     for (const batch of batches) {
-        const gidx = batch.source === 'testAgent' ? tcGlobalIdx : maGlobalIdx;
+        const gidx = batch.source === 'CMBT_AITEST' ? mbtGlobalIdx
+            : batch.source === 'testAgent' ? tcGlobalIdx : maGlobalIdx;
         pushDiag(`[接口] 开始调用批次 source=${batch.source} 行数=${batch.rows.length}`);
 
         const normRows = normalizePushData(batch.rows);

@@ -214,7 +214,6 @@
         S._lastPushBatchRowIndices = null;
         S._addedRowSet = new Set();
         S._addedInfos = [];
-        S._deletedInfos = [];
         if (S._userMarks) {
             S._userMarks.rects = [];
             // 缓存索引失效收敛到 _invalidateUserMarksCache（P7）

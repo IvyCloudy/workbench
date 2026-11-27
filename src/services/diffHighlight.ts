@@ -1,14 +1,14 @@
 /**
  * ============================================================================
  *  services/diffHighlight.ts
- *  编辑器"快照差异 → 高亮/删除/新增标记"公共逻辑
+ *  编辑器"快照差异 → 高亮/新增标记"公共逻辑
  * ----------------------------------------------------------------------------
  *  职责：
  *    1. 定义单个 webview panel 独享的会话状态类型 EditorSession；
  *    2. 提供 expandAddedRowsToCells：把新增行展开为逐单元格清单，纳入黄色高亮；
  *    3. 提供 applyDiffHighlight：基于 diffPushSnapshot 的比对结果，
- *       统一更新 session.highlightedCells / deletedInfos / addedInfos
- *       并同步 highlightStore 与 deletedRowsStore。
+ *       统一更新 session.highlightedCells / addedInfos 并同步 highlightStore。
+ *  说明：已删除行自动追踪 / 幽灵行展示已移除；线上删除仅保留右键删行等显式入口。
  *  抽出动机：
  *    - 与 provider 生命周期无关的纯逻辑，便于日后单元测试；
  *    - init / externalChange / pushSuccess / reload / webview save 五个入口共用同一套逻辑，
@@ -16,8 +16,7 @@
  * ============================================================================
  */
 import { setHighlight, clearHighlight } from '../utils/highlightStore';
-import { diffPushSnapshot, type DeletedRowInfo, type AddedRowInfo } from '../utils/pushSnapshotStore';
-import { markDeletedRows } from '../utils/deletedRowsStore';
+import { diffPushSnapshot, type AddedRowInfo } from '../utils/pushSnapshotStore';
 import { getFailures } from '../utils/pushFailureStore';
 import { TS_ID_COLUMN } from './utils';
 import type { FileParser, FileType } from '../parsers';
@@ -35,8 +34,6 @@ export interface EditorSession {
     cachedTableData: any;
     /** 推送成功后回写了 testCaseNo 的单元格信息（下次 pushDataToWebview 消费后清空）；null 表示明确通知前端清空 */
     highlightedCells?: { colIdx: number; rowIndices: number[]; cells?: Array<[number, number]> } | null;
-    /** 快照差异检测到的被删除行信息（下次 pushDataToWebview 消费后清空） */
-    deletedInfos?: DeletedRowInfo[];
     /** 快照差异检测到的新增行信息（下次 pushDataToWebview 消费后清空） */
     addedInfos?: AddedRowInfo[];
     /** 是否为案例文件（含关键字段 testcase_id）：用于 webview 端按"非案例文件"限制功能（隐藏推送/校验/删除等） */
@@ -85,7 +82,7 @@ export function expandAddedRowsToCells(
 // ============================================
 /**
  * 基于 diffPushSnapshot 的比对结果，统一更新 session.highlightedCells /
- * session.deletedInfos / session.addedInfos，并同步 highlightStore。
+ * session.addedInfos，并同步 highlightStore。
  *
  * 供 pushDataToWebview（init/externalChange/pushSuccess/reload）与 webview save
  * 消息处理复用，避免两处逻辑走偏（历史上曾发生「新增行黄底一处显示、另一处不显示」
@@ -113,7 +110,7 @@ export async function applyDiffHighlight(
     const diffResult = diffPushSnapshot(filePath, tableData);
     if (!diffResult) return null;
 
-    const { changed: changedRowsRaw, deletedInfos, addedInfos: addedInfosRaw } = diffResult;
+    const { changed: changedRowsRaw, addedInfos: addedInfosRaw } = diffResult;
     const prefix = options.logPrefix ? options.logPrefix + ' ' : '';
 
     // ============================================================
@@ -194,12 +191,6 @@ export async function applyDiffHighlight(
         await clearHighlight(filePath);
     }
 
-    session.deletedInfos = deletedInfos;
-    if (deletedInfos.length > 0) {
-        log(`🗑  ${prefix}快照差异比对检测到 ${deletedInfos.length} 行被删除`);
-        const tsIds = deletedInfos.map(d => d.tsId);
-        markDeletedRows(filePath, tsIds).catch(err => log('⚠ 标记删除行失败:', err?.message));
-    }
     session.addedInfos = addedInfos;
     if (addedInfos.length > 0) {
         log(`➕ ${prefix}快照差异比对检测到 ${addedInfos.length} 行新增`);
@@ -207,7 +198,8 @@ export async function applyDiffHighlight(
 
     return {
         addedRows: addedInfos.length,
-        deletedRows: deletedInfos.length,
+        // 已删除行自动追踪已移除，埋点字段保留但恒为 0
+        deletedRows: 0,
         modifiedRows: changedRows.length,
         modifiedCells,
     };

@@ -334,9 +334,9 @@ function rebuildFindMatches(kw) {
     var needle = caseSensitive ? S._findKw : S._findKw.toLowerCase();
     var rows = (S.data && S.data.rows) || [];
     var headers = (S.data && S.data.headers) || [];
-    // 当 toggle 过滤（仅看失败/修改/新增/删除/标记）激活时，find 只搜索可见行
+    // 当 toggle 过滤（仅看失败/修改/新增/标记）激活时，find 只搜索可见行
     // 与 02d-sel-utils.js:208/229 的 hasToggleFilter 保持同源，避免 _markedOnly 场景下匹配到隐藏行
-    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly || S._markedOnly;
+    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._markedOnly;
     var visibleRows = null;
     if (hasToggle && S._viewRows && S._viewRows.length >= 0) {
         visibleRows = new Set(S._viewRows);
@@ -574,7 +574,7 @@ function _ensureFindMatchesConsistent() {
     if (!S._findKw) return;
     // 若过去从未构建过匹配集，无需处理；stepFind 内部有 empty 兜底重建。
     if (!S._matches || S._matches.length === 0) return;
-    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly || S._markedOnly;
+    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._markedOnly;
     // 判定当前可见集与匹配集是否一致：若差集非空则需要重建
     if (hasToggle && S._viewRows && S._viewRows.length >= 0) {
         var vis = new Set(S._viewRows);
@@ -722,7 +722,7 @@ function replaceAll() {
     var needle = caseSensitive ? S._findKw : S._findKw.toLowerCase();
     var count = 0;
     pushHistory();
-    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly || S._markedOnly;
+    var hasToggle = S._failedOnly || S._modifiedOnly || S._addedOnly || S._markedOnly;
     var visibleRows = null;
     if (hasToggle && S._viewRows && S._viewRows.length >= 0) {
         visibleRows = new Set(S._viewRows);

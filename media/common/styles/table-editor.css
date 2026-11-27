@@ -89,17 +89,6 @@ body{font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:va
 .xs-icon-btn-added.active:hover{background:#c8e6c9}
 .xs-icon-btn-added.is-disabled{opacity:.4;cursor:not-allowed;pointer-events:none;border-color:var(--bd)}
 
-/* "仅看已删除行"筛选按钮（垃圾桶图标，红色系） */
-.xs-icon-btn-deleted{width:24px;min-width:24px;height:24px;padding:0;box-sizing:border-box;border-color:#efcdcd}
-.xs-icon-btn-deleted svg{width:16px;height:16px}
-.xs-icon-btn-deleted .xs-ib-fg path{fill:var(--tl)}
-.xs-icon-btn-deleted:hover{border-color:#e57373;background:#fce4e4}
-.xs-icon-btn-deleted:hover .xs-ib-fg path{fill:#c62828}
-.xs-icon-btn-deleted.active{background:#fce4e4;border-color:#c62828;box-shadow:0 0 0 2px rgba(198,40,40,.25)}
-.xs-icon-btn-deleted.active .xs-ib-fg path{fill:#b71c1c}
-.xs-icon-btn-deleted.active:hover{background:#fbd9d9}
-.xs-icon-btn-deleted.is-disabled{opacity:.4;cursor:not-allowed;pointer-events:none;border-color:var(--bd)}
-
 /* "仅看已标记行"筛选按钮（书签图标，蓝紫色系） */
 .xs-icon-btn-marked{width:24px;min-width:24px;height:24px;padding:0;box-sizing:border-box;border-color:#ddd6fe}
 .xs-icon-btn-marked svg{width:16px;height:16px}
@@ -292,12 +281,6 @@ tbody tr.selected td.xs-td.xs-td-push-updated-row.modified{background:#fff9c4 !i
 tbody tr:hover td.xs-td.xs-td-push-added{background:#c8e6c9 !important}
 tbody tr.selected td.xs-td.xs-td-push-added{background:#a5d6a7 !important}
 /* ☆ 需求变更（2026-09-19）：失败行中已新增单元格 保持绿底原色（不再强刷红底）*/
-
-/* Ghost 行（被删除的行占位）：淡红底 + 删除线 + 灰色文字 */
-.xs-ghost-sep td{background:#fce4e4;color:#c62828;font-weight:500;font-size:11px;padding:4px 8px;text-align:center;border-top:2px solid #ef9a9a}
-.xs-ghost-row td.xs-td-ghost{background:#fff0f0;color:#aaa;font-size:11px;padding:2px 8px}
-.xs-ghost-row td.xs-td-ghost del{color:#999}
-.xs-ghost-row td.xs-ghost-cb{background:#fce4e4;color:#d32f2f;text-align:center;font-size:11px;padding:2px 4px}
 
 /* 待删除行：不再做置灰+删除线高亮（与正常行视觉一致） */
 

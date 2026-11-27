@@ -151,12 +151,8 @@ var S = {
     _pushing: false,
     // "仅看已修改行"筛选开关（基于快照差异高亮信息）
     _modifiedOnly: false,
-    // 被删除行的快照信息（用于渲染 ghost 行）
-    _deletedInfos: [],
     // "仅看新增行"筛选开关
     _addedOnly: false,
-    // "仅看已删除行"筛选开关
-    _deletedOnly: false,
     // "仅看已标记行"筛选开关
     _markedOnly: false,
     // 明细弹窗中修改过的单元格标记（持久化，不受 S.mods.clear() 影响）
@@ -458,12 +454,9 @@ function _restoreClearSel() {
 }
 
 // 还原推送失败标记 —— P7 起主体逻辑由 HighlightModel.restoreFromSnapshot 承担；
-// 本函数保留是为了：1) 保持撤销栈调用点的语义顺序稳定；2) 处理仅本模块关心的
-// 副作用（_deletedInfos 复位），这类跨模块副作用不应污染高亮门面。
+// 本函数保留是为了保持撤销栈调用点的语义顺序稳定。
 function _restorePushFailures(snap) {
     HighlightModel.restoreFromSnapshot(S, snap);
-    // 副作用：删除幽灵行数据独立于高亮体系，本处一并清空避免旧索引残留
-    S._deletedInfos = [];
 }
 
 // 还原新增行集合 / 时间戳
@@ -866,16 +859,6 @@ window.addEventListener('message', function (e) {
                     S._addedOnly = false;
                 }
             }
-            // 同步后端下发的已删除行信息（skip-data 路径之前遗漏了 deletedInfos，导致
-            // 新增行被删后 ghost row 残留，刷新后才消失）
-            if ('deletedInfos' in m) {
-                if (m.deletedInfos && Array.isArray(m.deletedInfos) && m.deletedInfos.length > 0) {
-                    S._deletedInfos = m.deletedInfos;
-                } else {
-                    S._deletedInfos = [];
-                    if (S._deletedOnly) S._deletedOnly = false;
-                }
-            }
             // 用户标记更新
             // 跳过条件：
             //   1) reason='saveHighlight'/'pushSuccess'：扩展端同一文件的 save 与 setMarkRects handler 并发执行，
@@ -971,16 +954,6 @@ window.addEventListener('message', function (e) {
         // P7：格式兼容 + 三件套重建收敛到 HighlightModel.applyPushFailuresPayload
         if ('pushFailures' in m) {
             HighlightModel.applyPushFailuresPayload(S, m.pushFailures);
-        }
-        // 删除行信息（快照中有但当前数据中已不存在的行）
-        if ('deletedInfos' in m) {
-            if (m.deletedInfos && Array.isArray(m.deletedInfos) && m.deletedInfos.length > 0) {
-                S._deletedInfos = m.deletedInfos;
-            } else {
-                S._deletedInfos = [];
-                // 如果没有已删除行，自动关闭"仅看已删除行"筛选
-                if (S._deletedOnly) S._deletedOnly = false;
-            }
         }
         // 新增行信息（快照中不存在但当前数据中出现的行）
         // 先清空再重建，确保 _addedRowSet 与扩展端 diff 结果完全一致，避免旧索引残留。
@@ -1277,13 +1250,12 @@ window.addEventListener('message', function (e) {
         // 「clearAllHighlights 消息」全清策略：详见 HighlightModel.resetAllHighlights 说明
         HighlightModel.resetAllHighlights(S);
         // 高亮源全清后，与之绑定的过滤开关也需要复位，否则页面变空但按钮仍激活，
-        // 用户看不到任何行且无提示。与 _restorePushFailures / addedInfos / deletedInfos
+        // 用户看不到任何行且无提示。与 _restorePushFailures / addedInfos
         // 分支「数据没了就关 toggle」保持一致的语义。UI toggle 属于视图状态，
         // 不并入 HighlightModel。
         if (S._failedOnly) S._failedOnly = false;
         if (S._modifiedOnly) S._modifiedOnly = false;
         if (S._addedOnly) S._addedOnly = false;
-        if (S._deletedOnly) S._deletedOnly = false;
         if (S._markedOnly) S._markedOnly = false;
         try { renderTable(); } catch (_) {}
     }

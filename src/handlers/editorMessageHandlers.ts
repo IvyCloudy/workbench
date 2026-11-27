@@ -534,9 +534,6 @@ async function handleRunFormatValidation(_msg: any, ctx: EditorMsgCtx): Promise<
 /**
  * 编辑器右键"删除该行 / 删除选中行"后，由前端把本次删除的 testcase_id 列表
  * 通过 postMessage 上报，本 handler 直接调用线上删除接口并弹窗反馈。
- *
- * 与命令面板「同步已删除行」的区别：本 handler 只同步"本次删除"的行
- * （显式传入 tsIds），而不是文件内全部待同步行。
  */
 async function handleDeleteRows(msg: any, ctx: EditorMsgCtx): Promise<void> {
     // 非案例文件（不含 testcase_id）删除不走线上逻辑：兜底拒绝。

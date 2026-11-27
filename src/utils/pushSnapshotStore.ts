@@ -291,8 +291,7 @@ export function buildSnapshotsForFile(
         if (isPlaceholderTsId(key)) delete snapshots[key];
     }
 
-    // 增量模式下，已删除行的快照保留不清理，等待显式同步后再清除
-    // （参见 clearDeletedSnapshots / deletedRowsStore）
+    // 增量模式下未涉及的行保留旧快照；显式删除成功后由 clearDeletedSnapshots 清除
 
     return snapshots;
 }
@@ -331,7 +330,7 @@ export interface RowDiff {
     changedCols: number[];   // 该行中发生变化的列索引
 }
 
-/** 被删除行的快照信息（用于前端渲染 ghost 行） */
+/** 被删除行的快照信息（结构保留用于兼容，当前 diff 不再生成） */
 export interface DeletedRowInfo {
     tsId: string;
     cells: string[];         // 快照中的原始列值（排除 testCaseNo）
@@ -352,8 +351,8 @@ export interface DiffResult {
 
 /**
  * 用当前数据与推送快照做差异比对（均排除 testCaseNo 列）。
- * 同时检测快照中有但当前数据中已不存在的行（删除）。
- * 返回变更详情 + 删除列表；无快照或快照为空时返回 null。
+ * 返回变更详情 + 新增行信息；删除差异检测已移除，`deletedInfos` 恒为空。
+ * 无快照或快照为空时返回 null。
  *
  * 关于明细表（detailTables）的差异检测：
  * - 新格式快照包含 \x01 分隔的明细签名，可直接比对主表 + 明细两部分。
@@ -421,15 +420,12 @@ export function diffPushSnapshot(
 
     const changed: RowDiff[] = [];
     const addedInfos: AddedRowInfo[] = [];
-    const currIdSet = new Set<string>();
     rows.forEach((row, ri) => {
         const id = row[tsIdIdx] != null ? String(row[tsIdIdx]) : '';
         const tcNo = tcIdx >= 0 && row[tcIdx] != null ? String(row[tcIdx]) : '';
-        if (id) currIdSet.add(id);
         // 样例/占位行不参与任何差异高亮：
         //   - 不作为 addedInfos（即使快照中不存在，也不算「新增行」）；
-        //   - 不作为 changedRows（即使用户改了样例文本，也不显示黄色单元格高亮）；
-        //   - 也不参与后续的删除判定（因为样例行永远不会被写入快照，见 savePushSnapshot）。
+        //   - 不作为 changedRows（即使用户改了样例文本，也不显示黄色单元格高亮）。
         // 与 fileIdentifier.isSampleTsId 的产品语义一致：样例行只显示样例灰底，其他高亮全部让位。
         //
         // 【例外】占位行 TESTCASE_ID 若已作为推送失败记录（hasFailedRecord），说明用户已
@@ -586,29 +582,9 @@ export function diffPushSnapshot(
         }
     });
 
-    // 检测快照中有但当前数据中已不存在的行（删除）
-    // 只有 testCaseNo 非空（即推送过的行）删除才记录到已删除行
+    // 已删除行自动检测已移除：原逻辑按 testcase_id 差集判定，会把 ID 变化误判为删除，
+    // 且在下方渲染幽灵行 / 触发自动追踪。线上删除仅保留右键删行等显式入口。
     const deletedInfos: DeletedRowInfo[] = [];
-    const snapshotIds = Object.keys(snapshots).filter(k => k !== HEADERS_KEY);
-    // 删除判定中 testCaseNo 列的位置：新格式依旧 headers，旧格式依当前 headers
-    const oldTcIdxForDelete = isNewFormat && oldHeaders ? oldHeaders.indexOf(TC_NO_COLUMN) : tcIdx;
-    for (const id of snapshotIds) {
-        // 防御历史脏快照：若快照里遗留样例行 tsId，也不判为「删除」，避免误绘幽灵行
-        if (isPlaceholderTsId(id)) continue;
-        if (!currIdSet.has(id)) {
-            // 新旧格式兼容：先剥离明细签名再取主表单元格，避免末项混入 \x01 后缀
-            const raw = snapshots[id];
-            const mainPart = raw.indexOf(DETAIL_SEP) >= 0 ? raw.split(DETAIL_SEP)[0] : raw;
-            const oldCells = mainPart.split('\x00');
-            // 检查快照中 testCaseNo 列的值，为空说明未推送过，不记录
-            const tcNo = oldTcIdxForDelete >= 0 && oldTcIdxForDelete < oldCells.length ? oldCells[oldTcIdxForDelete] : '';
-            if (!tcNo) continue;
-            deletedInfos.push({
-                tsId: id,
-                cells: oldCells,
-            });
-        }
-    }
 
     return { changed, deletedInfos, addedInfos };
 }
@@ -646,42 +622,6 @@ export async function cleanupOrphanedSnapshots(): Promise<void> {
         }
     }
     if (changed) await saveStore(store);
-}
-
-/**
- * 获取指定文件中快照有但当前数据已无的 testcase_id 列表（已删除行）。
- * 用于查询待同步的删除行记录。
- * @param filePath   文件绝对路径
- * @param tableData  当前文件解析后的 { headers, rows }
- * @returns 已删除行的 DeletedRowInfo 列表，无删除返回空数组
- */
-export function getDeletedSnapshotIds(
-    filePath: string,
-    tableData: { headers: string[]; rows: any[][] },
-): DeletedRowInfo[] {
-    if (!filePath || !tableData) return [];
-    // 统一走 loadStore()（内部已做 mtime 缓存校验）
-    const store = loadStore();
-    const snapshots = store[filePath];
-    if (!snapshots || Object.keys(snapshots).filter(k => k !== HEADERS_KEY).length === 0) return [];
-
-    const headers = tableData.headers || [];
-    const rows = tableData.rows || [];
-    const tsIdIdx = headers.indexOf(TS_ID_COLUMN);
-    if (tsIdIdx < 0) return [];
-
-    const currIdSet = new Set(rows.map(r => r[tsIdIdx] != null ? String(r[tsIdIdx]) : '').filter(Boolean));
-    const deleted: DeletedRowInfo[] = [];
-    for (const id of Object.keys(snapshots)) {
-        if (id === HEADERS_KEY) continue;
-        if (!currIdSet.has(id)) {
-            // 新旧格式兼容：先剥离明细签名再取主表单元格
-            const raw = snapshots[id];
-            const mainPart = raw.indexOf(DETAIL_SEP) >= 0 ? raw.split(DETAIL_SEP)[0] : raw;
-            deleted.push({ tsId: id, cells: mainPart.split('\x00') });
-        }
-    }
-    return deleted;
 }
 
 /**

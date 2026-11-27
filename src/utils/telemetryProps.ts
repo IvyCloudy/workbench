@@ -93,7 +93,7 @@ export function telemetryTsIdListProps(lists: Record<string, ReadonlyArray<strin
 /**
  * 案例删除类埋点的**统一字段构造器**（全场景一致命名）。
  *
- * 目的：让「通过要点删除关联案例 / 编辑器内删除案例行 / 同步已删除行 / 批量删除案例」
+ * 目的：让「通过要点删除关联案例 / 编辑器内删除案例行 / 批量删除案例」
  * 等所有案例删除场景的埋点，携带**完全一致**的字段命名，便于跨场景聚合与下钻分析。
  *
  * 输出字段：
@@ -125,10 +125,10 @@ export function caseDeletionTelemetryProps(opts: {
 }
 
 /**
- * 同步删除结果事件（editor.deleteRows.synced / syncDeletedRows.complete 等）的
+ * 同步删除结果事件（editor.deleteRows.synced / caseFileDelete.intercept.done 等）的
  * **统一埋点字段构造器**。
  *
- * 以往这两个调用点各自内联拼装「4 个计数字段 + caseDeletionTelemetryProps」，
+ * 以往这些调用点各自内联拼装「4 个计数字段 + caseDeletionTelemetryProps」，
  * 此处收敛为单一入口，保证字段命名在全场景完全一致，且后续新增同步删除类事件
  * 直接复用即可，避免再次出现字段命名漂移。
  */

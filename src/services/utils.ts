@@ -296,7 +296,6 @@ const PARSE_SOURCE_MARKERS: ReadonlyArray<readonly [string, string]> = [
     ['BaseEditorProvider', 'editor'],
     ['webviewDataPusher', 'editor'],
     ['editorMessageHandlers', 'editor'],
-    ['deletedRowsHandler', 'editor'],
     ['pointCaseDeleter', 'editor'],
     ['workspaceListeners', 'watch'],
     ['yamlValidator', 'validate'],

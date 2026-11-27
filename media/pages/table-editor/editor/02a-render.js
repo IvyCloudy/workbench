@@ -92,7 +92,6 @@ function renderTable() {
     if (typeof updateFailedFilterBtn === 'function') updateFailedFilterBtn();
     if (typeof updateModifiedFilterBtn === 'function') updateModifiedFilterBtn();
     if (typeof updateAddedFilterBtn === 'function') updateAddedFilterBtn();
-    if (typeof updateDeletedFilterBtn === 'function') updateDeletedFilterBtn();
     if (typeof updateMarkedFilterBtn === 'function') updateMarkedFilterBtn();
     updateSearchClear();
     if (typeof updateColSelClasses === 'function') updateColSelClasses();
@@ -130,14 +129,8 @@ function _computeViewRows() {
     var modifiedOnly = !!(S._modifiedOnly && _modRowSet && _modRowSet.size > 0);
     // 仅看新增行：基于新增行索引集合
     var addedOnly = !!(S._addedOnly && S._addedRowSet && S._addedRowSet.size > 0);
-    // 仅看已删除行：展示 ghost 行，隐藏所有常规行
-    var deletedOnly = !!(S._deletedOnly && S._deletedInfos && S._deletedInfos.length > 0);
     // 仅看已标记行：基于用户手动标记（含行标记和单元格标记）
     var markedOnly = !!(S._markedOnly);
-    if (deletedOnly) {
-        // 仅看已删除行时，常规行全部隐藏，只展示 ghost 区域
-        return [];
-    }
     if (!skw && !hasColFilters && !failedOnly && !modifiedOnly && !addedOnly && !markedOnly) {
         // 直接整段：避免大数组 push 开销
         var arr = new Array(rows.length);
@@ -193,36 +186,6 @@ function _computeViewRows() {
         out.push(ri);
     }
     return out;
-}
-
-// 构建 ghost 行 HTML（快照中有但当前数据中已删除的行，显示在表格底部）
-function _buildGhostRowsHtml(headers) {
-    var infos = S._deletedInfos;
-    if (!infos || infos.length === 0) return '';
-    var tsIdIdx = headers.indexOf('testcase_id');
-    var tcIdx = headers.indexOf('testCaseNo');
-    if (tsIdIdx < 0) return '';
-    var totalCols = headers.length + 1; // +1 是复选框列
-    var html = '<tr class="xs-ghost-sep"><td colspan="' + totalCols + '">已删除 ' + infos.length + ' 行</td></tr>';
-    for (var i = 0; i < infos.length; i++) {
-        var info = infos[i];
-        var cells = info.cells || [];
-        html += '<tr class="xs-ghost-row">';
-        html += '<td class="xs-td xs-td-cb xs-ghost-cb">🗑</td>';
-        for (var ci = 0; ci < headers.length; ci++) {
-            var val = '';
-            if (String(headers[ci]) === 'testcase_id') {
-                // testcase_id 直接取 info.tsId，避免依赖 cells 中可能过期的值
-                val = info.tsId || '';
-            } else {
-                // cells 长度与 headers 一致（testCaseNo 位置为空字符串），直接用 ci 索引
-                val = (ci < cells.length && cells[ci] !== undefined && cells[ci] !== '') ? cells[ci] : '';
-            }
-            html += '<td class="xs-td xs-td-ghost"><del>' + escapeHtml(val) + '</del></td>';
-        }
-        html += '</tr>';
-    }
-    return html;
 }
 
 // 构建表格骨架（colgroup + thead + 空 tbody），不含具体 tr
@@ -1057,7 +1020,7 @@ function _renderAllBody() {
     var view = S._viewRows || [];
     var parts = new Array(view.length);
     for (var i = 0; i < view.length; i++) parts[i] = _buildRowHtml(view[i], tsIdColIdx);
-    tbody.innerHTML = parts.join('') + _buildGhostRowsHtml(headers);
+    tbody.innerHTML = parts.join('');
       // 同步真实行高（展开步骤会把单行高度撑大，需要把每行 offsetHeight 写回 S._autoRowH，
     //   否则后续切回虚拟模式 / 二次渲染时 _rowOffsets 仍按默认 36px 算，定位错位）
     _syncRenderedRowHeights();
@@ -1194,7 +1157,7 @@ function _renderVirtualBody() {
     parts.push('<tr class="xs-vspacer" aria-hidden="true" style="height:' + topH + 'px"><td colspan="' + totalCols + '" style="padding:0;border:0"></td></tr>');
     for (var i = from; i < to; i++) parts.push(_buildRowHtml(view[i], tsIdColIdx));
     parts.push('<tr class="xs-vspacer" aria-hidden="true" style="height:' + bottomH + 'px"><td colspan="' + totalCols + '" style="padding:0;border:0"></td></tr>');
-    tbody.innerHTML = parts.join('') + _buildGhostRowsHtml(headers);
+    tbody.innerHTML = parts.join('');
     // 同步已渲染行的真实高度：展开步骤后行高被撑大，但 _rowOffsets 仍按默认 36px 算，
     //   会让 _calcVisibleRange 算出错的 range，匹配行漏出渲染范围、查找高亮消失。
     //   这里在 render 完成的第一时间把真实 offsetHeight 写回 S._autoRowH 并重算偏移。

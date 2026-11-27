@@ -234,8 +234,6 @@ export class WebviewDataPusher {
             msgPayload.pushFailures = getFailures(this.filePath);
         } catch { /* ignore */ }
 
-        const deleted = this.session.deletedInfos;
-        if (deleted !== undefined) msgPayload.deletedInfos = deleted;
         const added = this.session.addedInfos;
         if (added !== undefined) msgPayload.addedInfos = added;
 
@@ -245,8 +243,7 @@ export class WebviewDataPusher {
         }
         try { msgPayload.headerLabels = getHeaderLabels(); } catch { /* ignore */ }
 
-        // deletedInfos / addedInfos 为一次性字段，发送后清空
-        this.session.deletedInfos = undefined;
+        // addedInfos 为一次性字段，发送后清空
         this.session.addedInfos = undefined;
 
         this.log(`📤 push (${reason}) rows=${rowsLen} visible=${this.webviewPanel.visible} force=${!!force} external=${isExternal}`);

@@ -11,7 +11,6 @@
  *    - handlers/pushHandler.ts       文件推送
  *    - handlers/fileCreator.ts       文件创建（测试案例 / 测试要点）
  *    - handlers/workspaceListeners.ts 工作区文件变化监听（重命名、删除）
- *    - handlers/deletedRowsHandler.ts 已删除行同步
  *    - handlers/yamlPreOpenInterceptor.ts YAML CustomEditor 打开前置拦截
  *    - utils/storageInitializer.ts   存储初始化与孤儿记录清理
  *    - utils/extensionHelpers.ts     公共工具函数
@@ -33,7 +32,6 @@ import { TelemetryService } from './utils/telemetry';
 import { getActiveFileUri, isTestCaseFile, updateShowIcon, telemetryErrProps } from './utils/extensionHelpers';
 import { handleFilePush } from './handlers/pushHandler';
 import { handleCreateNewTestCase, handleCreateNewTestPoint } from './handlers/fileCreator';
-import { handleSyncDeletedRows } from './handlers/deletedRowsHandler';
 import { registerWorkspaceListeners } from './handlers/workspaceListeners';
 import { handleClearHighlight } from './handlers/clearHighlightHandler';
 import { initializeStorages, cleanupOrphanedRecords } from './utils/storageInitializer';
@@ -317,14 +315,6 @@ export async function activate(context: vscode.ExtensionContext) {
                 } catch (err: any) {
                     showToast(undefined, 'error', `创建测试要点失败: ${err.message || err}`);
                 }
-            }
-        ),
-
-        // ---- 已删除行同步 ----
-        vscode.commands.registerCommand(
-            'workbench.syncDeletedRows',
-            async () => {
-                await handleSyncDeletedRows();
             }
         ),
 

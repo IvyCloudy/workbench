@@ -25,7 +25,7 @@ export type { DeleteConfirmItem, PushFailure };
 /**
  * 从同步删除结果构造「删除失败明细」列表（供 reportDeleteResult 弹窗渲染）。
  *
- * 统一各调用点（编辑器内删除 / 同步已删除行 / 案例文件删除）对
+ * 统一各调用点（编辑器内删除 / 案例文件删除）对
  * `result.failed → PushFailure[]` 的转换口径，避免重复手写 map + 兜底文案。
  *
  * @param result          syncDeletedRows 的返回结果
@@ -41,7 +41,7 @@ export function buildDeleteFailures(
 /**
  * 统一把「删除同步结果」回传案例编辑器面板（渲染成功行删除 + 失败行高亮/置灰 + # 列 tooltip）。
  *
- * 收敛编辑器内删除、同步已删除行、案例文件删除三处重复的
+ * 收敛编辑器内删除、案例文件删除两处重复的
  * `postMessage({type:'deleteRowsResult'})` 拼接逻辑（P1 去重），
  * 避免 synced / failed / reasons / deletedSuccess / deletedSourceMissing 字段口径漂移。
  *

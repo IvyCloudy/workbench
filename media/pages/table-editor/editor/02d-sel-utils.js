@@ -205,7 +205,7 @@ function updateSelectionInfo() {
         return;
     }
     var hasColFilters = S._colFilters && Object.keys(S._colFilters).length > 0;
-    var hasToggleFilter = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly || S._markedOnly;
+    var hasToggleFilter = S._failedOnly || S._modifiedOnly || S._addedOnly || S._markedOnly;
     if (S._searchKw || hasColFilters || hasToggleFilter) {
         var matched = countMatchedRows();
         var visibleSelected = 0;
@@ -226,10 +226,8 @@ function countMatchedRows() {
     var skw = (S._searchKw || '').toLowerCase();
     var h = S.data.headers || [];
     var hasColFilters = S._colFilters && Object.keys(S._colFilters).length > 0;
-    var hasToggleFilter = S._failedOnly || S._modifiedOnly || S._addedOnly || S._deletedOnly || S._markedOnly;
+    var hasToggleFilter = S._failedOnly || S._modifiedOnly || S._addedOnly || S._markedOnly;
     if (!skw && !hasColFilters && !hasToggleFilter) return (S.data.rows || []).length;
-    // 仅看已删除行：普通行全部隐藏，计数来自 ghost 行
-    if (S._deletedOnly) return (S._deletedInfos && S._deletedInfos.length) || 0;
     var count = 0;
     (S.data.rows || []).forEach(function (row, ri) {
         if (hasToggleFilter) {
@@ -419,26 +417,6 @@ function updateAddedFilterBtn() {
     btn.setAttribute('data-tip', tip);
     btn.setAttribute('title', tip);
     if (S._addedOnly) btn.classList.add('active'); else btn.classList.remove('active');
-}
-
-// 同步"仅看已删除行"按钮的禁用 / 激活状态与计数 tooltip
-function updateDeletedFilterBtn() {
-    var btn = document.getElementById('deletedFilterBtn');
-    if (!btn) return;
-    var n = (S._deletedInfos && S._deletedInfos.length) || 0;
-    if (n === 0) {
-        btn.classList.add('is-disabled');
-        btn.classList.remove('active');
-        btn.setAttribute('data-tip', '暂无已删除行');
-        btn.setAttribute('title', '暂无已删除行');
-        if (S._deletedOnly) S._deletedOnly = false;
-        return;
-    }
-    btn.classList.remove('is-disabled');
-    var tip = S._deletedOnly ? ('已仅看已删除行 (' + n + ')，点击退出') : ('仅看已删除行 (' + n + ')');
-    btn.setAttribute('data-tip', tip);
-    btn.setAttribute('title', tip);
-    if (S._deletedOnly) btn.classList.add('active'); else btn.classList.remove('active');
 }
 
 // 同步"仅看已标记行"按钮的禁用 / 激活状态与计数 tooltip

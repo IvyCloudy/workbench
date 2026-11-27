@@ -1,17 +1,16 @@
 /**
  * ============================================================================
  *  utils/deletedRowsStore.ts
- *  已删除行同步追踪存储
+ *  显式删除同步存储
  * ----------------------------------------------------------------------------
  *  职责：
- *    1. 持久化记录"待同步"的已删除行（testcase_id 列表），按文件分组。
- *    2. 同步成功后将指定行从 push-snapshots 中清除，并清理追踪记录。
- *    3. 提供查询、同步、清理等接口，供后续扩展接入线上删除 API。
+ *    1. 为编辑器右键删行、文件删除等显式入口提供统一执行原语。
+ *    2. 调用线上删除接口后，清理 push-snapshots 与本地追踪记录。
+ *    3. 提供待同步记录查询与孤儿记录清理，兼容历史遗留数据。
  *
  *  与 pushSnapshotStore 的关系：
- *    - pushSnapshotStore 的 diffPushSnapshot 根据"快照有/当前数据无"检测删除行。
- *    - deletedRowsStore 是上层追踪层，管理"哪些已删除行需要同步到线上"。
- *    - savePushSnapshot 增量模式下不再自动清除已删除行快照，由本 store 的 sync 方法显式触发清除。
+ *    - diffPushSnapshot 不再自动检测删除行；删除只由显式入口触发。
+ *    - syncDeletedRows 成功后调用 clearDeletedSnapshots 清理对应快照。
  *
  *  存储格式（JSON 文件）：
  *    {
@@ -25,7 +24,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getDeletedSnapshotIds, clearDeletedSnapshots, type DeletedRowInfo } from './pushSnapshotStore';
+import { clearDeletedSnapshots } from './pushSnapshotStore';
 import { deleteTestCase } from '../services/http';
 import { resolveTaskInfoOrNull } from '../handlers/pushCore.stages';
 import type { ResolveTaskInfoResult } from '../handlers/pushCore.types';
@@ -38,16 +37,6 @@ import { normalizeSourceId } from './testcaseId';
 
 /** 文件 → { testcase_id → 删除时间戳 } */
 type DeletedRowsStore = Record<string, Record<string, number>>;
-
-/** 单条已删除行记录 */
-export interface DeletedRowRecord {
-    /** testcase_id */
-    tsId: string;
-    /** 文件绝对路径 */
-    filePath: string;
-    /** 删除时的时间戳 (ms) */
-    deletedAt: number;
-}
 
 /** 同步结果 */
 export interface SyncDeletedResult {
@@ -160,96 +149,26 @@ export async function ensureDeletedRowsFile(context: vscode.ExtensionContext): P
 }
 
 /**
- * 标记一批 testcase_id 为"待同步"的已删除行。
- * 通常由 diffPushSnapshot 检测到删除后调用，或用户在编辑器中显式删除后调用。
- * @param filePath 文件绝对路径
- * @param tsIds    要标记为待同步的 testcase_id 列表
- */
-export async function markDeletedRows(filePath: string, tsIds: string[]): Promise<void> {
-    if (!filePath || !tsIds || tsIds.length === 0) return;
-    const store = loadStore();
-    if (!store[filePath]) store[filePath] = {};
-    const now = Date.now();
-    for (const id of tsIds) {
-        // 仅首次标记时记录时间戳，后续保持原始时间
-        if (!store[filePath][id]) {
-            store[filePath][id] = now;
-        }
-    }
-    await saveStore(store);
-    console.log(`[DeletedRowsStore] 标记待同步删除行: ${filePath} (${tsIds.length} 行)`);
-}
-
-/**
- * 获取指定文件中所有待同步的已删除行记录。
- * @param filePath 文件绝对路径
- * @returns 已删除行记录列表
- */
-export function getPendingDeletedRows(filePath: string): DeletedRowRecord[] {
-    if (!filePath) return [];
-    // 统一走 loadStore()（内部已做 mtime 缓存校验），避免缓存过期读到旧数据
-    const store = loadStore();
-    const fileRecords = store[filePath];
-    if (!fileRecords) return [];
-    return Object.entries(fileRecords).map(([tsId, deletedAt]) => ({
-        tsId,
-        filePath,
-        deletedAt,
-    }));
-}
-
-/**
- * 从 push-snapshot 中获取当前实际的已删除行列表，并确保它们被追踪。
- * 返回待同步的删除行信息，用于前端展示。
- * @param filePath   文件绝对路径
- * @param tableData  当前文件解析后的 { headers, rows }
- * @returns 待同步的已删除行列表（来自快照对比）
- */
-export function refreshAndGetDeletedRows(
-    filePath: string,
-    tableData: { headers: string[]; rows: any[][] },
-): DeletedRowInfo[] {
-    const deletedFromSnapshot = getDeletedSnapshotIds(filePath, tableData);
-    if (deletedFromSnapshot.length > 0) {
-        // 自动将快照中的删除行同步到追踪记录
-        const tsIds = deletedFromSnapshot.map(d => d.tsId);
-        markDeletedRows(filePath, tsIds).catch(err =>
-            console.error('[DeletedRowsStore] 自动标记失败:', err)
-        );
-    }
-    return deletedFromSnapshot;
-}
-
-/**
- * 同步指定的已删除行到线上（占位实现，后续扩展）。
+ * 同步显式删除的 testcase_id 到线上。
  *
  * 流程：
- *   1. 调用线上删除 API（待实现）
- *   2. 移除追踪记录
+ *   1. 调用线上删除 API
+ *   2. 成功后清除追踪记录（兼容历史数据）
  *   3. 从 push-snapshot 中清除对应的快照条目
  *
  * @param filePath 文件绝对路径
- * @param tsIds    要同步的 testcase_id 列表，为空则同步全部待处理行
+ * @param tsIds    本次显式删除的 testcase_id 列表
  * @returns 同步结果
  */
 export async function syncDeletedRows(
     filePath: string,
-    tsIds?: string[],
+    tsIds: string[],
     options?: { isUnbound?: boolean },
 ): Promise<SyncDeletedResult> {
-    if (!filePath) return { synced: [], failed: [], deletedSuccess: [], deletedSourceMissing: [] };
-
-    // 确定要同步的行
-    let targetIds: string[];
-    if (tsIds && tsIds.length > 0) {
-        targetIds = tsIds;
-    } else {
-        const pending = getPendingDeletedRows(filePath);
-        targetIds = pending.map(r => r.tsId);
-    }
-    if (targetIds.length === 0) {
+    if (!filePath || !tsIds || tsIds.length === 0) {
         return { synced: [], failed: [], deletedSuccess: [], deletedSourceMissing: [] };
     }
+    const targetIds = tsIds;
 
     const synced: string[] = [];
     /** type=1：线上删除成功（sourceId 真实存在并已删除） */
@@ -382,10 +301,7 @@ export async function syncDeletedRows(
 }
 
 /**
- * 清除指定文件的所有删除行追踪记录（不清除 push-snapshot）。
- */
-/**
- * 删除指定文件的全部删除行追踪记录（文件被删除时调用）。
+ * 删除指定文件的全部删除行追踪记录（文件被删除时调用，不清除 push-snapshot）。
  */
 export async function removeDeletedRowsFile(filePath: string): Promise<void> {
     if (!filePath) return;

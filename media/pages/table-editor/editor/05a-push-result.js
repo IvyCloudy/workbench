@@ -373,7 +373,6 @@ function jumpToRowByDisplayIndex(rowIndex) {
         if (S._failedOnly) { S._failedOnly = false; _cleared.push('仅看推送失败'); }
         if (S._modifiedOnly) { S._modifiedOnly = false; _cleared.push('仅看修改'); }
         if (S._addedOnly) { S._addedOnly = false; _cleared.push('仅看新增'); }
-        if (S._deletedOnly) { S._deletedOnly = false; _cleared.push('仅看删除'); }
         if (S._markedOnly) { S._markedOnly = false; _cleared.push('仅看标记'); }
         if (_cleared.length > 0 && typeof showToast === 'function') {
             showToast('已退出「' + _cleared.join('、') + '」以定位目标行', 'info');

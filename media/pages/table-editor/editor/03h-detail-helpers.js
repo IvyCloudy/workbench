@@ -123,8 +123,8 @@ function _writeDetailCellFromRaw(ri, ci, raw) {
 
 // 判断当前文件是否已经被推送过：只要任意一行 testCaseNo 列非空，即视为已推送过。
 // 关闭文件再打开时，扩展端 diffPushSnapshot 也是基于推送快照来判定新增/删除高亮的，
-// 这里保持同一标准：从未推送的文件，新增行不上绿色高亮、被删除行不显示 ghost，
-// 与重开后无高亮/无 ghost 的行为保持一致。
+// 这里保持同一标准：从未推送的文件，新增行不上绿色高亮，
+// 与重开后无新增高亮的行为保持一致。
 function _filePushedBefore() {
     var headers = (S.data && S.data.headers) || [];
     var tcIdx = headers.indexOf('testCaseNo');

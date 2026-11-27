@@ -194,7 +194,7 @@ describe('pushSnapshotStore end-to-end（γ/δ/ε mtime 缓存修复）', () => 
         expect(result!.addedInfos).toEqual([]); // 3 个占位行都不算 added
     });
 
-    it('删除行（快照有、当前无、且快照带 testCaseNo）—— deletedInfos 记录', async () => {
+    it('删除行 —— 不再生成 deletedInfos（自动追踪已移除）', async () => {
         const headers = ['testcase_id', 'testCaseNo', 'name'];
         const rows = [
             ['TC001', 'CN-1', 'n1'],
@@ -204,11 +204,10 @@ describe('pushSnapshotStore end-to-end（γ/δ/ε mtime 缓存修复）', () => 
 
         const afterDelete = [['TC001', 'CN-1', 'n1']];
         const result = diffPushSnapshot(filePath, makeTable(headers, afterDelete));
-        expect(result!.deletedInfos).toHaveLength(1);
-        expect(result!.deletedInfos[0].tsId).toBe('TC002');
+        expect(result!.deletedInfos).toEqual([]);
     });
 
-    it('删除行但快照中未推送过（testCaseNo 空）—— 不记录到 deletedInfos', async () => {
+    it('未推送过的行被删除 —— 不生成 deletedInfos', async () => {
         const headers = ['testcase_id', 'testCaseNo', 'name'];
         const rows = [
             ['TC001', 'CN-1', 'n1'],
@@ -218,7 +217,23 @@ describe('pushSnapshotStore end-to-end（γ/δ/ε mtime 缓存修复）', () => 
 
         const afterDelete = [['TC001', 'CN-1', 'n1']];
         const result = diffPushSnapshot(filePath, makeTable(headers, afterDelete));
-        expect(result!.deletedInfos).toEqual([]); // 未推送过，删了就是删了，无需 ghost 行
+        expect(result!.deletedInfos).toEqual([]);
+    });
+
+    it('testcase_id 变化 —— 不把旧 ID 误判为删除', async () => {
+        const headers = ['testcase_id', 'testCaseNo', 'name'];
+        const oldId = 'MBT' + 'a'.repeat(32);
+        await savePushSnapshot(filePath, makeTable(headers, [
+            ['TC001', 'CN-1', 'n1'],
+            [oldId, 'CN-2', 'n2'],
+        ]));
+
+        const result = diffPushSnapshot(filePath, makeTable(headers, [
+            ['TC001', 'CN-1', 'n1'],
+            ['TC_NEW', 'CN-2', 'n2'],
+        ]));
+        expect(result!.deletedInfos).toEqual([]);
+        expect(result!.addedInfos).toEqual([]); // 已有 testCaseNo，不算新增
     });
 
     // -------- γ/δ 关键：mtime 缓存一致性 --------
@@ -265,7 +280,7 @@ describe('pushSnapshotStore end-to-end（γ/δ/ε mtime 缓存修复）', () => 
         const future = new Date(Date.now() + 1000);
         fs.utimesSync(snapshotFile, future, future);
 
-        // 再 diff：此时快照里只有 TC_OTHER，我方当前显示 TC001 → 应识别 added=TC001 + deleted=TC_OTHER
+        // 再 diff：此时快照里只有 TC_OTHER，我方当前显示 TC001 → 不产生新增/删除差异
         const result = diffPushSnapshot(
             filePath,
             makeTable(headers, [['TC001', 'CN-1', 'from-us']]),
@@ -273,9 +288,8 @@ describe('pushSnapshotStore end-to-end（γ/δ/ε mtime 缓存修复）', () => 
         expect(result).not.toBeNull();
         // TC001 快照里没有但已有 testCaseNo → 不判 added（防御 1 生效）
         expect(result!.addedInfos).toEqual([]);
-        // TC_OTHER 快照有、当前无、且 testCaseNo=CN-999 非空 → 判 deleted
-        expect(result!.deletedInfos).toHaveLength(1);
-        expect(result!.deletedInfos[0].tsId).toBe('TC_OTHER');
+        // 删除差异检测已移除 → 不再生成 deletedInfos
+        expect(result!.deletedInfos).toEqual([]);
     });
 
     it('γ 修复：多次 save + diff 交叉调用 —— 一致性不受 cached 状态影响', async () => {

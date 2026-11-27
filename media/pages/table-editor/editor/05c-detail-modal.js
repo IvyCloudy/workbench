@@ -114,6 +114,8 @@ function openDetailModal(ri, field) {
     if (!dt || !dt.rowGroups) return;
     S._detailField = field;
     S._detailRowIdx = ri;
+    // MBT 案例：明细弹窗只读（仅路径列可改，明细内容冻结）
+    S._detailFrozen = (typeof isMbtRow === 'function') && isMbtRow(ri);
     S._detailMods = new Set();
     S._detailSel = new Set();
 
@@ -147,6 +149,11 @@ function openDetailModal(ri, field) {
             _baseTitle = dt.fieldDisplay || _fieldKey || '明细';
         }
         title.textContent = _baseTitle + typeTag + ' - 第 ' + (ri + 1) + ' 行';
+    }
+    // MBT 案例：标题追加只读提示（只在此处执行一次，避免 renderDetailV2 重渲染时重复追加）
+    if (S._detailFrozen) {
+        var titleEl0 = document.getElementById('detailModalTitle');
+        if (titleEl0) titleEl0.textContent += '（只读·' + MBT_FREEZE_NOTICE + '）';
     }
     bindDetailModal();
     renderDetailV2();
@@ -440,6 +447,22 @@ function renderDetailV2() {
     html += '</div>'; // /.xs-dv2-right
 
     body.innerHTML = html;
+    // MBT 案例：明细弹窗冻结——所有输入只读、操作按钮隐藏，仅保留关闭/取消。
+    if (S._detailFrozen) {
+        body.querySelectorAll('textarea, input').forEach(function (el) {
+            el.setAttribute('readonly', 'readonly');
+            el.setAttribute('disabled', 'disabled');
+            el.style.opacity = '0.75';
+        });
+        // 隐藏所有可修改按钮（上移/下移/删除步骤、添加步骤、复制、添加项、删除项、格式化、语法高亮等），
+        // 保留展开查看按钮（纯查看，不修改数据）。
+        body.querySelectorAll('button, .xs-dv2-step-up, .xs-dv2-step-dn, .xs-dv2-step-del, .xs-dv2-arr-del').forEach(function (el) {
+            if (el.classList && (el.classList.contains('xs-dv2-expand-btn') || el.classList.contains('xs-dv2-arr-expand-btn'))) return;
+            el.style.display = 'none';
+        });
+        var saveBtn = document.getElementById('detailSaveBtn');
+        if (saveBtn) saveBtn.style.display = 'none';
+    }
     bindDv2Events();
 }
 
@@ -492,6 +515,16 @@ function renderDv2FieldCard(field, kind, innerHtml, withAddBtn, failCls) {
 function bindDv2Events() {
     var body = document.getElementById('detailModalBody');
     if (!body) return;
+    // MBT 案例：明细弹窗只读——不绑定任何写事件（切换步骤/展开查看仍可用，但由 DOM 后处理隐藏了写按钮）
+    if (S._detailFrozen) {
+        body.querySelectorAll('.xs-dv2-step').forEach(function (el) {
+            el.addEventListener('click', function (ev) {
+                var di = parseInt(el.getAttribute('data-di'), 10);
+                if (!isNaN(di)) { S._dv2ActiveStep = di; renderDetailV2(); }
+            });
+        });
+        return;
+    }
     // 步骤列表禁用右键菜单（阻止冒泡到主表的 contextmenu）
     var leftCol = body.querySelector('.xs-dv2-left');
     if (leftCol) {

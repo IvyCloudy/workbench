@@ -573,7 +573,9 @@ function _buildRowHtml(ri, tsIdColIdx) {
             if (st) mkStyle = ' style="' + st + '"';
         }
         var colSelCls2 = S.colSel.has(ci) ? ' xs-col-selected' : '';
-        var frozenCls2 = (String(headers[ci]) === 'testcase_id' || rowFrozen) ? ' xs-td-frozen' : '';
+        // MBT 案例：仅路径列可改，其它列显示冻结态（路径列保持正常视觉）。
+        var _mbtFrozen = (typeof isMbtFrozenCell === 'function') && isMbtFrozenCell(ri, ci);
+        var frozenCls2 = (String(headers[ci]) === 'testcase_id' || rowFrozen || _mbtFrozen) ? ' xs-td-frozen' : '';
         // B3 · 单元格级失败高亮：若当前 ci 命中 failedColSet → 根据该字段自己的 severity 取色：
             //   error → xs-td-failed-cell（红），warn → xs-td-failed-cell-warn（黄）。
             //   行内 error/warn 字段可共存，列与列之间颜色独立。与行级 tr class 共存：tr class 用于
@@ -705,8 +707,9 @@ function _buildCellInner(ri, ci, v) {
     if (isDetail) {
         // 展开模式且内容为 steps 合并文本 → 四列内联子表格；否则显示为链接
         if (S._stepsExpanded && rawText && (rawText.indexOf('【步骤描述】') === 0 || rawText.indexOf('【预期结果】') >= 0)) {
-            // 样例数据行：展开态下 steps 子表也应只读（与 isFrozenRow/isFrozenCell 保护一致）
-            var _rowFrozenForExpand = (typeof isFrozenRow === 'function') && isFrozenRow(ri);
+            // 冻结判定（样例行整行 / MBT 行）：展开态下 steps 子表只读（steps 列非路径列）
+            var _rowFrozenForExpand = (typeof isFrozenRow === 'function') && isFrozenRow(ri, ci)
+                || (typeof isMbtRow === 'function' && isMbtRow(ri));
             var _frozenCls = _rowFrozenForExpand ? ' xs-step-expanded-frozen' : '';
             // B4 · 展开态子表格 sub-td 精确高亮：查询当前行的失败 stepCells（{stepIdx,subField,section,severity}[]）
             //   传给 _buildStepExpandedHtml 用于给对应 <td> 打 xs-td-failed-cell(-warn) class
@@ -742,12 +745,15 @@ function _buildCellInner(ri, ci, v) {
         //   - .xs-tr-resized .xs-cell-wrap 为 white-space:pre-wrap → \n 产生真实换行
         // 这样无需占位 span，行为最简单稳健。
         inner = escapeHtml(rawText).replace(/\\n/g, '\n');
-        // testcase_id 列：若值为 testagent / testflow 掩码 uuid，在内容前追加打标小图标。
+        // testcase_id 列：若值为 testagent / testflow 掩码 uuid 或 MBT 案例，在内容前追加打标小图标。
         var _hdrForCell = (S.data && S.data.headers && S.data.headers[ci] !== undefined) ? String(S.data.headers[ci]) : '';
         if (_hdrForCell === 'testcase_id') {
             var _maskKind = _detectTcMaskKind(v);
+            var _mbt = isMbtTestcaseIdValue(v);
             if (_maskKind) {
                 inner = _buildTcMaskBadge(_maskKind, String(v)) + '<span class="xs-tc-text">' + inner + '</span>';
+            } else if (_mbt) {
+                inner = _buildMbtBadge(String(v)) + '<span class="xs-tc-text">' + inner + '</span>';
             }
         }
     }
@@ -776,6 +782,14 @@ function _buildTcMaskBadge(kind, value) {
     if (kind !== 'mask') return '';
     return '<span class="xs-tc-badge xs-tc-badge-mask" title="' + escapeHtml('TC 掩码标识（testagent/testflow）：' + value) + '">'
         + '<span class="xs-tc-badge-letter">TA</span>'
+        + '</span>';
+}
+
+// MBT 案例打标：红色徽标（与 TA 掩码绿色徽标并列，语义为平台标识而非校验失败）。
+// 判定复用 01-core.js 的 isMbtTestcaseIdValue，与后端 testcaseId.ts 口径统一。
+function _buildMbtBadge(value) {
+    return '<span class="xs-tc-badge xs-tc-badge-mbt" title="' + escapeHtml('MBT 标识（CMBT_AITEST 平台）：' + value) + '">'
+        + '<span class="xs-tc-badge-letter">MBT</span>'
         + '</span>';
 }
 
@@ -1324,7 +1338,8 @@ function patchCell(ri, ci) {
     }
     if (isDetail) td.classList.add('xs-detail-cell'); else td.classList.remove('xs-detail-cell');
     if (isArrCol) td.classList.add('xs-arr-cell'); else td.classList.remove('xs-arr-cell');
-    var frozen = (String(headers[ci]) === 'testcase_id');
+    var frozen = (String(headers[ci]) === 'testcase_id')
+        || ((typeof isMbtFrozenCell === 'function') && isMbtFrozenCell(ri, ci));
     if (frozen) td.classList.add('xs-td-frozen'); else td.classList.remove('xs-td-frozen');
     // 时间戳竞争决策：统一入口，见 00-highlight-util.js / docs/specs/高亮逻辑说明.md 第 2 节
     var _res2 = HighlightUtil.resolveHighlight({

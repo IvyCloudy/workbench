@@ -1318,6 +1318,48 @@ function escapeHtml(str) {
         return ch;
     });
 }
+// ==================== MBT 案例冻结判定 ====================
+// MBT 案例（CMBT_AITEST 平台）：严格大写 MBT + 32 位小写字母数字。
+// 与 src/utils/testcaseId.ts 的 MBT_TESTCASE_ID 及 02a-render.js 的打标判定保持一致（不加 i 标志）。
+var _MBT_TESTCASE_ID_RE = /^MBT[0-9a-z]{32}$/;
+function isMbtTestcaseIdValue(value) {
+    if (typeof value !== 'string') return false;
+    return _MBT_TESTCASE_ID_RE.test(value.trim());
+}
+// MBT 案例冻结提示文案（业务约定：MBT 案例为业务关键案例，不允许在端到端流程中修改）
+var MBT_FREEZE_NOTICE = 'MBT业务关键案例，不允许在端到端流程中修改。';
+
+// 当前行是否为 MBT 案例：按 testcase_id 列取值判定（中文模板表头也统一为 testcase_id）。
+function isMbtRow(ri) {
+    if (!S || !S.data || !S.data.rows || ri == null || ri < 0 || ri >= S.data.rows.length) return false;
+    var headers = S.data.headers || [];
+    var ci = headers.indexOf('testcase_id');
+    if (ci < 0) return false;
+    return isMbtTestcaseIdValue(S.data.rows[ri] && S.data.rows[ri][ci]);
+}
+
+// 路径列索引：与后端 CASE_PATH_COLUMN_ALIASES = ['path','路径'] 对齐，精确优先、大小写兜底。
+var _pathColCache = { headers: null, ci: -1 };
+function getCasePathColIndex() {
+    var headers = (S && S.data && S.data.headers) || [];
+    if (_pathColCache.headers === headers) return _pathColCache.ci;
+    var ci = headers.indexOf('path');
+    if (ci < 0) ci = headers.indexOf('路径');
+    if (ci < 0) {
+        for (var i = 0; i < headers.length; i++) {
+            if (String(headers[i]).toLowerCase() === 'path') { ci = i; break; }
+        }
+    }
+    _pathColCache.headers = headers;
+    _pathColCache.ci = ci;
+    return ci;
+}
+
+// MBT 案例仅允许修改路径列；其它列（含 testcase_id 列）全部冻结。
+function isMbtFrozenCell(ri, ci) {
+    return isMbtRow(ri) && ci !== getCasePathColIndex();
+}
+
 function formatCellValue(v) {
     if (v === null || v === undefined) return '';
     if (Array.isArray(v)) {

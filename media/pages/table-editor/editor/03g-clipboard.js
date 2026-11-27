@@ -229,12 +229,12 @@ function pasteCell() {
             var rIdx = _targetRowsPC[i];
             var row = rows[rIdx];
             if (!row) continue;
-            // 样例数据行冻结：粘贴跳过该行
-            if (isFrozenRow(rIdx)) continue;
+            // 冻结判定（样例行整行 / MBT 行非路径列）：按单元格跳过
             for (var j = 0; j < grid[i].length; j++) {
                 var cIdx = S._ctxCol + j;
                 if (cIdx >= headers.length) break;
                 if (isFrozenCol(cIdx)) { skippedTsId = true; continue; }
+                if (isFrozenRow(rIdx, cIdx)) continue;
                 var src = grid[i][j];
                 var isArrTarget = typeof isArrayCol === 'function' && isArrayCol(cIdx);
                 // detail 列：若源是对象 / 对象数组，走写入 detail 表的路径，同步 rawRowGroups / rowGroups / rawRowTypes
@@ -298,8 +298,8 @@ function pasteCell() {
         showToast(msg, 'success');
         return;
     }
-    // 单值粘贴：原逻辑
-    if (isFrozenRow(S._ctxRow)) { showToast('样例数据行已冻结，不允许粘贴', 'error'); return; }
+    // 单值粘贴：冻结判定（样例行整行 / MBT 行非路径列）
+    if (isFrozenRow(S._ctxRow, S._ctxCol)) { showToast(frozenToastText(S._ctxRow), 'error'); return; }
     if (isFrozenCol(S._ctxCol)) { showToast('testcase_id 列不允许粘贴', 'error'); return; }
     pushHistory();
     var target = S.clip;
@@ -367,10 +367,10 @@ function clearCell() {
         pushHistory();
         for (var i = 0; i < rowList.length; i++) {
             var r = rowList[i];
-            // 样例数据行冻结：批量清空跳过该行
-            if (isFrozenRow(r)) continue;
+            // 冻结判定（样例行整行 / MBT 行非路径列）：按单元格跳过
             for (var c = rc.c1; c <= rc.c2; c++) {
                 if (isFrozenCol(c)) { skippedTsId = true; continue; }
+                if (isFrozenRow(r, c)) continue;
                 var row = rows[r]; if (!row) continue;
                 // detail 列（steps 等）：同步清空 rawRowGroups，避免 yaml-parser 回写旧数据
                 var _isDetailB = (typeof isDetailColumn === 'function') && isDetailColumn(c);
@@ -404,7 +404,7 @@ function clearCell() {
         return;
     }
     if (S._ctxRow < 0 || S._ctxCol < 0) return;
-    if (isFrozenRow(S._ctxRow)) { showToast('样例数据行已冻结，不允许清空', 'error'); return; }
+    if (isFrozenRow(S._ctxRow, S._ctxCol)) { showToast(frozenToastText(S._ctxRow), 'error'); return; }
     if (isFrozenCol(S._ctxCol)) { showToast('testcase_id 列不允许清空', 'error'); return; }
     pushHistory();
     // detail 列（steps 等）清空：必须同步清空 rawRowGroups，
@@ -447,10 +447,9 @@ function fillSelectedCells() {
         pushHistory();
         for (var i = 0; i < rowList.length; i++) {
             var r = rowList[i];
-            // 样例数据行冻结：批量填充跳过该行
-            if (isFrozenRow(r)) continue;
             for (var c = rc.c1; c <= rc.c2; c++) {
                 if (isFrozenCol(c)) { skippedTsId = true; continue; }
+                if (isFrozenRow(r, c)) continue; // 样例行整行 / MBT 行非路径列
                 var row = rows[r]; if (!row) continue;
                 // detail 列（steps 等）：填充字符串到嵌套结构无合理语义，直接跳过
                 // 用户如果确实想批量清空，请用 Delete/Backspace（clearCell 已支持 detail 列同步清空）

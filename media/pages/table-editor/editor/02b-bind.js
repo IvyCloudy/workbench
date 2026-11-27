@@ -480,10 +480,10 @@ function bindDocument() {
                     for (var _vi2 = 0; _vi2 < _rowListV.length; _vi2++) {
                         var rr = _rowListV[_vi2];
                         var rowR = rows[rr]; if (!rowR) continue;
-                        // 样例数据行冻结：粘贴跳过该行
-                        if (isFrozenRow(rr)) continue;
+                        // 冻结判定（样例行整行 / MBT 行非路径列）：按单元格跳过
                         for (var cc = _rcPaste.c1; cc <= _rcPaste.c2; cc++) {
                             if (isFrozenCol(cc)) { skippedTsId = true; continue; }
+                            if (isFrozenRow(rr, cc)) continue;
                             var isArrT = typeof isArrayCol === 'function' && isArrayCol(cc);
                             // 尝试将 src0 解析为对象 / 对象数组（支持表内 Ctrl+C / 外部粘贴 JSON）
                             var _parsed0;
@@ -557,12 +557,12 @@ function bindDocument() {
                         var rIdx = _targetRows[i];
                         var rowi = rows[rIdx];
                         if (!rowi) continue;
-                        // 样例数据行冻结：粘贴跳过该行
-                        if (isFrozenRow(rIdx)) continue;
+                        // 冻结判定（样例行整行 / MBT 行非路径列）：按单元格跳过
                         for (var j = 0; j < grid[i].length; j++) {
                             var cIdx = startC + j;
                             if (cIdx >= headers.length) break;
                             if (isFrozenCol(cIdx)) { skippedTsId = true; continue; }
+                            if (isFrozenRow(rIdx, cIdx)) continue;
                             var isArrT2 = typeof isArrayCol === 'function' && isArrayCol(cIdx);
                             var src = grid[i][j];
                             // 尝试将 src 解析为对象 / 对象数组
@@ -773,9 +773,9 @@ function bindTable() {
             if (xseContainer && !isNaN(copyStep)) {
                 var dri0 = parseInt(xseContainer.getAttribute('data-detail-row'), 10);
                 var dci0 = parseInt(xseContainer.getAttribute('data-detail-col'), 10);
-                // 样例数据行冻结：禁止展开态下按钮操作
-                if (typeof isFrozenRow === 'function' && isFrozenRow(dri0)) {
-                    if (typeof showToast === 'function') showToast('样例数据行已冻结，不可操作', 'error');
+                // 冻结判定（样例行整行 / MBT 行）：禁止展开态下按钮操作
+                if (typeof isFrozenRow === 'function' && isFrozenRow(dri0, dci0)) {
+                    if (typeof showToast === 'function') showToast(frozenToastText(dri0), 'error');
                     return;
                 }
                 _copySubStep(dri0, dci0, copyStep);
@@ -791,9 +791,9 @@ function bindTable() {
             if (xseContainer && !isNaN(delStep)) {
                 var dri2 = parseInt(xseContainer.getAttribute('data-detail-row'), 10);
                 var dci2 = parseInt(xseContainer.getAttribute('data-detail-col'), 10);
-                // 样例数据行冻结：禁止删除步骤
-                if (typeof isFrozenRow === 'function' && isFrozenRow(dri2)) {
-                    if (typeof showToast === 'function') showToast('样例数据行已冻结，不可操作', 'error');
+                // 冻结判定（样例行整行 / MBT 行）：禁止删除步骤
+                if (typeof isFrozenRow === 'function' && isFrozenRow(dri2, dci2)) {
+                    if (typeof showToast === 'function') showToast(frozenToastText(dri2), 'error');
                     return;
                 }
                 _delSubStep(dri2, dci2, delStep);
@@ -809,9 +809,9 @@ function bindTable() {
             if (xseContainer2 && !isNaN(addStep)) {
                 var dri3 = parseInt(xseContainer2.getAttribute('data-detail-row'), 10);
                 var dci3 = parseInt(xseContainer2.getAttribute('data-detail-col'), 10);
-                // 样例数据行冻结：禁止插入步骤
-                if (typeof isFrozenRow === 'function' && isFrozenRow(dri3)) {
-                    if (typeof showToast === 'function') showToast('样例数据行已冻结，不可操作', 'error');
+                // 冻结判定（样例行整行 / MBT 行）：禁止插入步骤
+                if (typeof isFrozenRow === 'function' && isFrozenRow(dri3, dci3)) {
+                    if (typeof showToast === 'function') showToast(frozenToastText(dri3), 'error');
                     return;
                 }
                 _addSubStep(dri3, dci3, addStep);
@@ -828,12 +828,13 @@ function bindTable() {
         if (xseBtnAddGroup) {
             e.stopPropagation();
             e.preventDefault();
-            // 样例数据行冻结：禁止添加分组（双保险，正常情况下视图层已不渲染此按钮）
+            // 冻结判定（样例行整行 / MBT 行）：禁止添加分组（双保险，视图层已不渲染此按钮）
             var _agContainer = xseBtnAddGroup.closest('.xs-step-expanded');
             if (_agContainer) {
                 var _agRi = parseInt(_agContainer.getAttribute('data-detail-row'), 10);
-                if (!isNaN(_agRi) && typeof isFrozenRow === 'function' && isFrozenRow(_agRi)) {
-                    if (typeof showToast === 'function') showToast('样例数据行已冻结，不可操作', 'error');
+                if (!isNaN(_agRi) && typeof isFrozenRow === 'function'
+                    && (isFrozenRow(_agRi) || (typeof isMbtRow === 'function' && isMbtRow(_agRi)))) {
+                    if (typeof showToast === 'function') showToast(frozenToastText(_agRi), 'error');
                     return;
                 }
             }
@@ -884,8 +885,8 @@ function bindTable() {
             var dci = parseInt(dlink.getAttribute('data-detail-col'), 10);
             // 展开态下的空明细加号入口：内联直接新增一条步骤（复用向下插入），不弹窗
             if (dlink.classList && dlink.classList.contains('xs-detail-empty')) {
-                if (typeof isFrozenRow === 'function' && isFrozenRow(dri)) {
-                    if (typeof showToast === 'function') showToast('样例数据行已冻结，不可操作', 'error');
+                if (typeof isFrozenRow === 'function' && isFrozenRow(dri, dci)) {
+                    if (typeof showToast === 'function') showToast(frozenToastText(dri), 'error');
                     return;
                 }
                 _addFirstStep(dri, dci);
@@ -1276,9 +1277,9 @@ function _handleSubTableCellEdit(td) {
     var ri = parseInt(container.getAttribute('data-detail-row'), 10);
     var ci = parseInt(container.getAttribute('data-detail-col'), 10);
     if (isNaN(ri) || isNaN(ci)) return;
-    // 样例数据行冻结：展开态下 steps 子表也只读，防止任何仅依赖回写的编辑轨道
-    if (typeof isFrozenRow === 'function' && isFrozenRow(ri)) {
-        if (typeof showToast === 'function') showToast('样例数据行已冻结，不可编辑（testcase_id 为占位值）', 'error');
+    // 冻结判定（样例行整行 / MBT 行）：展开态下 steps 子表只读，防止仅依赖回写的编辑轨道
+    if (typeof isFrozenRow === 'function' && isFrozenRow(ri, ci)) {
+        if (typeof showToast === 'function') showToast(frozenToastText(ri), 'error');
         // 冻结路径同样清理快照，避免下次聚焦其他 td 时误用残留值
         try { if (td.__xseInitial != null) delete td.__xseInitial; } catch (_e) { td.__xseInitial = null; }
         return;

@@ -14,7 +14,16 @@
  * ========================================================================== */
 
 // 当前活动 step 的 raw 对象引用（不存在时按需新建）
+// MBT 案例：明细弹窗只读，步骤级写操作统一守卫
+function _dv2FrozenGuard() {
+    if (!S._detailFrozen) return false;
+    if (typeof showToast === 'function') showToast(MBT_FREEZE_NOTICE, 'error');
+    return true;
+}
+
 function dv2GetActiveRaw() {
+    // MBT 案例：明细弹窗只读，任何写入入口都拿不到可写对象
+    if (S._detailFrozen) return null;
     var dt = getCurrentDetailTable();
     var ri = S._detailRowIdx;
     if (!dt || ri < 0) return null;
@@ -189,6 +198,7 @@ function _inferDetailFieldKind(dt, field) {
 }
 
 function dv2AddStep() {
+    if (_dv2FrozenGuard()) return;
     var dt = getCurrentDetailTable();
     var ri = S._detailRowIdx;
     if (!dt || ri < 0) return;
@@ -223,6 +233,7 @@ function dv2AddStep() {
 }
 
 function dv2DuplicateStep() {
+    if (_dv2FrozenGuard()) return;
     var dt = getCurrentDetailTable();
     var ri = S._detailRowIdx;
     if (!dt || ri < 0) return;
@@ -251,6 +262,7 @@ function dv2DuplicateStep() {
 }
 
 function dv2DeleteStep(di) {
+    if (_dv2FrozenGuard()) return;
     var dt = getCurrentDetailTable();
     var ri = S._detailRowIdx;
     if (!dt || ri < 0) return;
@@ -278,6 +290,7 @@ function dv2DeleteStep(di) {
 }
 
 function dv2MoveStep(di, direction) {
+    if (_dv2FrozenGuard()) return;
     var dt = getCurrentDetailTable();
     var ri = S._detailRowIdx;
     if (!dt || ri < 0) return;
@@ -308,6 +321,12 @@ function dv2MoveStep(di, direction) {
 }
 
 function saveDetailModal() {
+    // MBT 案例：明细弹窗只读，禁止保存任何修改
+    if (S._detailFrozen) {
+        if (typeof showToast === 'function') showToast(MBT_FREEZE_NOTICE, 'error');
+        closeDetailModal(true);
+        return;
+    }
     var dt = getCurrentDetailTable();
     var ri = S._detailRowIdx;
     if (!dt || ri < 0) { closeDetailModal(false); return; }

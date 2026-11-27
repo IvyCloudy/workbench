@@ -533,7 +533,7 @@ function isSampleTsIdValue(v) {
     if (!s) return false;
     return s === SAMPLE_TS_ID_VALUES[0] || s === SAMPLE_TS_ID_VALUES[1];
 }
-function isFrozenRow(ri) {
+function isFrozenRow(ri, ci) {
     if (typeof ri !== 'number' || ri < 0) return false;
     var rows = (S.data && S.data.rows) || [];
     var row = rows[ri];
@@ -541,11 +541,21 @@ function isFrozenRow(ri) {
     var headers = (S.data && S.data.headers) || [];
     var tsIdx = headers.indexOf('testcase_id');
     if (tsIdx < 0) return false;
-    return isSampleTsIdValue(row[tsIdx]);
+    // 样例数据行：整行冻结（与列无关）
+    if (isSampleTsIdValue(row[tsIdx])) return true;
+    // MBT 案例：仅当明确指定列时按单元格冻结（路径列可改），不传列时返回 false，
+    // 保证整行删除 / 行级操作不被误拦截（MBT 行整行删除仍可用）。
+    if (typeof ci === 'number' && typeof isMbtFrozenCell === 'function' && isMbtFrozenCell(ri, ci)) return true;
+    return false;
 }
-// 单元格级冻结：列冻结（testcase_id）或 行冻结（样例数据行）任一命中即只读
+// 单元格级冻结：列冻结（testcase_id）或 行冻结（样例行 / MBT 非路径列）任一命中即只读
 function isFrozenCell(ri, ci) {
-    return isFrozenCol(ci) || isFrozenRow(ri);
+    return isFrozenCol(ci) || isFrozenRow(ri, ci);
+}
+// 冻结提示文案：MBT 行用业务文案，样例行用占位文案
+function frozenToastText(ri) {
+    if (typeof isMbtRow === 'function' && isMbtRow(ri)) return MBT_FREEZE_NOTICE;
+    return '样例数据行已冻结，不可操作';
 }
 
 // 受保护列：禁止结构性变更（删除列 / 重命名列），但不限制编辑、粘贴、批量等
@@ -713,9 +723,9 @@ function applyColumnsBulk(fillVal) {
     }
     rows.forEach(function (row, ri) {
         if (_viewSetCols && !_viewSetCols.has(ri)) return;
-        // 样例数据行冻结：批量列操作跳过该行，避免改写模板示例数据
-        if (isFrozenRow(ri)) return;
         targets.forEach(function (ci) {
+            // 冻结判定（样例行整行 / MBT 行非路径列）：按单元格跳过批量列操作
+            if (isFrozenRow(ri, ci)) return;
             // 标量数组列的填充：清空→[]；填充为 x → 以 '; ' 拆分成数组。
             var isArrTarget = typeof isArrayCol === 'function' && isArrayCol(ci);
             var oldV = row[ci];

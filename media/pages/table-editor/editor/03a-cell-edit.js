@@ -25,10 +25,10 @@ function onCellDblClick(e) {
     var td = e.currentTarget;
     var ri = parseInt(td.getAttribute('data-row'), 10);
     var ci = parseInt(td.getAttribute('data-col'), 10);
-    // 样例数据行冻结：整行只读，禁止双击进入任何编辑（含明细弹窗 / 数组编辑器）
-    if (isFrozenRow(ri)) {
+    // 冻结判定（样例行整行 / MBT 行仅路径列可改）：禁止双击进入任何编辑（含明细弹窗 / 数组编辑器）
+    if (isFrozenRow(ri, ci)) {
         e.preventDefault();
-        showToast('样例数据行已冻结，不可编辑（testcase_id 为占位值）', 'error');
+        showToast(frozenToastText(ri), 'error');
         return;
     }
     // 待删除行（删除中等待确认）：不可编辑；删除失败行允许编辑
@@ -126,9 +126,9 @@ function startEdit(e) {
     var td = e.currentTarget;
     var ri = parseInt(td.getAttribute('data-row'), 10);
     var ci = parseInt(td.getAttribute('data-col'), 10);
-    // 样例数据行冻结：整行只读，禁止进入编辑
-    if (isFrozenRow(ri)) {
-        showToast('样例数据行已冻结，不可编辑（testcase_id 为占位值）', 'error');
+    // 冻结判定（样例行整行 / MBT 行仅路径列可改）：禁止进入编辑
+    if (isFrozenRow(ri, ci)) {
+        showToast(frozenToastText(ri), 'error');
         return;
     }
     // 待删除行（删除中等待确认）：不可编辑；删除失败行允许编辑
@@ -297,10 +297,10 @@ function startEdit(e) {
                     for (var _bi = 0; _bi < bulkRows.length; _bi++) {
                         var rr = bulkRows[_bi];
                         var rowR = rows[rr]; if (!rowR) continue;
-                        // 样例数据行冻结：批量填充跳过该行
-                        if (isFrozenRow(rr)) continue;
+                        // 冻结判定（样例行整行 / MBT 行非路径列）：批量填充按单元格跳过
                         for (var cc = bulkRect.c1; cc <= bulkRect.c2; cc++) {
                             if (isFrozenCol(cc)) { skippedTsId = true; continue; }
+                            if (isFrozenRow(rr, cc)) continue;
                             var isArrTarget = typeof isArrayCol === 'function' && isArrayCol(cc);
                             var nv;
                             if (isArrTarget) {

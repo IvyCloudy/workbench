@@ -307,6 +307,14 @@ function _getModifiedRowSet() {
             });
         }
     }
+    // 新增优先：新增行尚未推送，不存在“相对基线的修改”，不进入“仅看修改行”筛选。
+    if (S._addedRowSet && S._addedRowSet.size > 0) {
+        var nonAdded = new Set();
+        rows.forEach(function (ri) {
+            if (!S._addedRowSet.has(ri)) nonAdded.add(ri);
+        });
+        return nonAdded;
+    }
     return rows;
 }
 

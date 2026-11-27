@@ -93,14 +93,14 @@ function insertRow(at, count) {
             dt.rawRowTypes.splice(at, 0, kind);
         }
     });
-    if (!S._addedRowSet) S._addedRowSet = new Set();
     // 同步转移高亮集合（S.mods / _modsTime / _detailModCellKeys / _highlightedCells.cells / _highlightedCells.rowSet / _addedRowSet）
     // 说明：_addedRowSet 后移已合并到 HighlightModel.shiftRowIndex，无需再单独处理
     _shiftRowIdxHighlights('insert', at);
     // 仅当文件已被推送过时才标绿（与关闭重开后扩展端 diff 行为一致）：
     // 未推送的文件没有快照基线，重开后所有行都会被视为初始数据 → 不应有“新增”概念。
+    // 走门面以同步刷新 _addedRowTime，保证新增绿底在时间戳竞争中胜出。
     if (_filePushedBefore()) {
-        S._addedRowSet.add(at);
+        HighlightModel.addAddedRow(S, at);
     }
     // 更新选中集合（被插入位置之后的索引整体+1）
     var ns = new Set();
@@ -700,9 +700,7 @@ function copyRowInline() {
     _shiftRowIdxHighlights('insert', at);
     // 复制行也属于"新增行"（與 insertRow 同步待推送语义）
     if (typeof _filePushedBefore === 'function' && _filePushedBefore()) {
-        if (!S._addedRowSet) S._addedRowSet = new Set();
-        S._addedRowSet.add(at);
-        S._addedRowTime = Date.now();
+        HighlightModel.addAddedRow(S, at);
     }
     // 同步 rowHeights / _rowExpanded 下移
     if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
@@ -768,8 +766,7 @@ function copySelectedRows() {
         // 同步转移高亮/修改集合（逐行累加，与 insertRow 一致，_addedRowSet 已合并到 shiftRowIndex 内）
         _shiftRowIdxHighlights('insert', at);
         if (typeof _filePushedBefore === 'function' && _filePushedBefore()) {
-            if (!S._addedRowSet) S._addedRowSet = new Set();
-            S._addedRowSet.add(at);
+            HighlightModel.addAddedRow(S, at);
         }
         // 同步 rowHeights / _rowExpanded 下移
         if (S.rowHeights && Object.keys(S.rowHeights).length > 0) {
@@ -801,10 +798,6 @@ function copySelectedRows() {
             }
         });
     });
-    // 复制多行结束后统一刷新新增行时间戳
-    if (S._addedRowSet && S._addedRowSet.size > 0 && typeof _filePushedBefore === 'function' && _filePushedBefore()) {
-        S._addedRowTime = Date.now();
-    }
     // 重建选中集：原索引 r → r + (选中行中 < r 的个数)
     if (S.sel && S.sel.size > 0) {
         var newSel = new Set();

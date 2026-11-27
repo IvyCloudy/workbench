@@ -5,14 +5,15 @@
  * ----------------------------------------------------------------------------
  *  职责：
  *    1. 定义单个 webview panel 独享的会话状态类型 EditorSession；
- *    2. 提供 expandAddedRowsToCells：把新增行展开为逐单元格清单，纳入黄色高亮；
- *    3. 提供 applyDiffHighlight：基于 diffPushSnapshot 的比对结果，
+ *    2. 提供 applyDiffHighlight：基于 diffPushSnapshot 的比对结果，
  *       统一更新 session.highlightedCells / addedInfos 并同步 highlightStore。
- *  说明：已删除行自动追踪 / 幽灵行展示已移除；线上删除仅保留右键删行等显式入口。
+ *  说明：
+ *    - 新增优先：新增行只走 addedInfos 绿底，不再展开进 highlightedCells 黄底；
+ *    - 已删除行自动追踪 / 幽灵行展示已移除；线上删除仅保留右键删行等显式入口。
  *  抽出动机：
  *    - 与 provider 生命周期无关的纯逻辑，便于日后单元测试；
  *    - init / externalChange / pushSuccess / reload / webview save 五个入口共用同一套逻辑，
- *      避免"新增行黄底一处显示、另一处不显示"这类割裂问题的历史 bug。
+ *      避免"新增绿底 / 修改黄底一处显示、另一处不显示"这类割裂问题。
  * ============================================================================
  */
 import { setHighlight, clearHighlight } from '../utils/highlightStore';
@@ -38,43 +39,6 @@ export interface EditorSession {
     addedInfos?: AddedRowInfo[];
     /** 是否为案例文件（含关键字段 testcase_id）：用于 webview 端按"非案例文件"限制功能（隐藏推送/校验/删除等） */
     isCaseFile?: boolean;
-}
-
-// ============================================
-// 内部工具：把 addedInfos 展开为 (rowIdx, colIdx) 单元格清单
-// ============================================
-/**
- * 把 diffPushSnapshot 返回的 addedInfos（新增行）展开为逐单元格清单，
- * 用于把新增行也纳入 highlightedCells.cells，让新增行显示与"修改行"一致的黄色单元格高亮。
- *
- * 规则：
- *   - 跳过 testCaseNo 列（推送后台自动回写，不算用户输入）；
- *   - 跳过空值单元格（避免整行满行黄底、视觉噪声）；
- *   - 结果与 changedRows 展开的 flatCells 结构完全一致：Array<[rowIdx, colIdx]>。
- */
-export function expandAddedRowsToCells(
-    addedInfos: AddedRowInfo[],
-    tableData: { headers: string[]; rows: any[][] } | null | undefined,
-): Array<[number, number]> {
-    if (!addedInfos || addedInfos.length === 0 || !tableData) return [];
-    const headers = tableData.headers || [];
-    const rows = tableData.rows || [];
-    const tcIdx = headers.indexOf('testCaseNo');
-    const out: Array<[number, number]> = [];
-    for (const info of addedInfos) {
-        const ri = info.rowIndex;
-        const row = rows[ri];
-        if (!Array.isArray(row)) continue;
-        for (let ci = 0; ci < headers.length; ci++) {
-            if (ci === tcIdx) continue;
-            const v = ci < row.length ? row[ci] : undefined;
-            if (v == null) continue;
-            const s = String(v);
-            if (s === '') continue;
-            out.push([ri, ci]);
-        }
-    }
-    return out;
 }
 
 // ============================================
@@ -165,25 +129,20 @@ export async function applyDiffHighlight(
             + `失败 tsId 数=${failedTsIds.size}`);
     }
 
-    // 新增行也纳入黄色单元格高亮，与"修改行"保持一致的心智模型：
-    // "任何相对最新推送快照的差异 = 黄色高亮"，避免出现「新增行编辑不显示黄」的割裂感。
-    const addedFlatCells = expandAddedRowsToCells(addedInfos, tableData);
+    // 新增优先：新增行只走 addedInfos（前端绿底），不进入 highlightedCells 修改高亮；
+    // highlightedCells 仅承载真正相对推送基线发生变化的单元格。
     let modifiedCells = 0;
 
-    if (changedRows.length > 0 || addedFlatCells.length > 0) {
-        const rowIndicesSet = new Set<number>();
-        changedRows.forEach(d => rowIndicesSet.add(d.rowIndex));
-        addedInfos.forEach(a => rowIndicesSet.add(a.rowIndex));
-        const rowIndices = Array.from(rowIndicesSet);
+    if (changedRows.length > 0) {
+        const rowIndices = Array.from(new Set(changedRows.map(d => d.rowIndex)));
         const flatCells: Array<[number, number]> = [];
         for (const d of changedRows) {
             for (const ci of d.changedCols) flatCells.push([d.rowIndex, ci]);
         }
-        for (const cell of addedFlatCells) flatCells.push(cell);
         modifiedCells = flatCells.length;
         session.highlightedCells = { colIdx: -1, rowIndices, cells: flatCells };
         await setHighlight(filePath, session.highlightedCells);
-        log(`🟢 ${prefix}快照差异比对检测到 ${changedRows.length} 行修改 + ${addedInfos.length} 行新增，共 ${flatCells.length} 格`);
+        log(`🟢 ${prefix}快照差异比对检测到 ${changedRows.length} 行修改，共 ${flatCells.length} 格`);
     } else {
         // 'null'      : 显式发送 null 让前端清空高亮（save / pushSuccess / reload）
         // 'undefined' : 不覆盖前端已有状态（如 visible 场景保留旧高亮）

@@ -343,7 +343,7 @@
 
     /**
      * 统一的时间戳竞争决策（唯一真源）
-     * 详细语义与 docs/specs/高亮逻辑说明.md 第 2 节保持一致。
+     * 详细语义与 docs/案例编辑器-校验/设计/高亮逻辑说明.md 第 2 节保持一致。
      */
     function resolveHighlight(ctx) {
         var bestTime = 0;
@@ -366,27 +366,33 @@
                 pushUpdCls = 'xs-td-push-updated-row';
             }
         }
+        var isAddedRow = !!(ctx.addedRowSet && ctx.addedRowSet.has(ctx.ri));
         if (pushUpdCls) {
-            var t1 = ctx.highlightedTime || 0;
-            // 修改时间胜出：跳过 pushUpdCls，保留 modified 独立生效
-            if (ctx.modTime > t1) {
+            // 新增优先：新增行尚未推送，不存在“相对推送基线的更新”，黄/橙高亮不适用。
+            if (isAddedRow) {
                 pushUpdCls = '';
-            } else if (t1 >= bestTime) {
-                bestTime = t1;
-                bestClass = pushUpdCls;
-                bestMkInfo = null;
+            } else {
+                var t1 = ctx.highlightedTime || 0;
+                // 修改时间胜出：跳过 pushUpdCls，保留 modified 独立生效
+                if (ctx.modTime > t1) {
+                    pushUpdCls = '';
+                } else if (t1 >= bestTime) {
+                    bestTime = t1;
+                    bestClass = pushUpdCls;
+                    bestMkInfo = null;
+                }
             }
         }
 
         // 2) 新增行高亮
-        if (ctx.addedRowSet && ctx.addedRowSet.has(ctx.ri)) {
+        if (isAddedRow) {
             var t2 = ctx.addedRowTime || 0;
+            // 新增行始终清除 modified：即使后续被编辑，仍保持“未推送的新增”语义。
+            clearModified = true;
             if (t2 >= bestTime) {
                 bestTime = t2;
                 bestClass = 'xs-td-push-added';
                 bestMkInfo = null;
-                // 新增行胜出：清除 modified（避免绿底上叠加黄底）
-                clearModified = true;
             }
         }
 

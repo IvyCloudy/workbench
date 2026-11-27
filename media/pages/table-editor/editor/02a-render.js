@@ -509,7 +509,7 @@ function _buildRowHtml(ri, tsIdColIdx) {
         //   注：仅视觉层清 class，不清 S.mods / _modsTime 内部状态，
         //   一旦该行的失败记录消失（改成合法值 → 编辑期校验清盘），modified 会自然显现。
         if (rowFailTime > 0) modCls = '';
-        // 时间戳竞争决策：统一入口，见 00-highlight-util.js / docs/specs/高亮逻辑说明.md 第 2 节。
+        // 时间戳竞争决策：统一入口，见 highlight/00a-highlight-util.js / docs/案例编辑器-校验/设计/高亮逻辑说明.md 第 2 节。
         // 输出的 bestClass 不带前导空格，本处拼接时补上；modCls 交给下方 clearModified 决定是否置空。
         var _res = HighlightUtil.resolveHighlight({
             ri: ri, ci: ci,
@@ -1304,7 +1304,7 @@ function patchCell(ri, ci) {
     var frozen = (String(headers[ci]) === 'testcase_id')
         || ((typeof isMbtFrozenCell === 'function') && isMbtFrozenCell(ri, ci));
     if (frozen) td.classList.add('xs-td-frozen'); else td.classList.remove('xs-td-frozen');
-    // 时间戳竞争决策：统一入口，见 00-highlight-util.js / docs/specs/高亮逻辑说明.md 第 2 节
+    // 时间戳竞争决策：统一入口，见 highlight/00a-highlight-util.js / docs/案例编辑器-校验/设计/高亮逻辑说明.md 第 2 节
     var _res2 = HighlightUtil.resolveHighlight({
         ri: ri, ci: ci,
         modTime: _modTime2,

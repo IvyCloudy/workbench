@@ -21,7 +21,6 @@ import * as path from 'path';
 import type { DetailTableData } from '../types';
 import { TelemetryService } from './telemetry';
 import { stackHead } from '../services/utils';
-import { getFailures } from './pushFailureStore';
 
 // ============================================
 // 常量
@@ -401,11 +400,6 @@ export function diffPushSnapshot(
         }
     }
 
-    // 加载当前文件的失败 tsId 集合。用于阻断"推送失败的新增行"再次被判定为新增行——
-    // 否则前端会同时叠加红色（xs-tr-push-failed）与绿色（xs-td-push-added）高亮。
-    const failuresMap = getFailures(filePath) || {};
-    const hasFailedRecord = (id: string) => !!(id && Object.prototype.hasOwnProperty.call(failuresMap, id));
-
     // 构建 detail field → colIdx 快速索引
     const detailColIdxByField = new Map<string, number>();
     const detailTables = tableData.detailTables;
@@ -427,37 +421,21 @@ export function diffPushSnapshot(
         //   - 不作为 addedInfos（即使快照中不存在，也不算「新增行」）；
         //   - 不作为 changedRows（即使用户改了样例文本，也不显示黄色单元格高亮）。
         // 与 fileIdentifier.isSampleTsId 的产品语义一致：样例行只显示样例灰底，其他高亮全部让位。
-        //
-        // 【例外】占位行 TESTCASE_ID 若已作为推送失败记录（hasFailedRecord），说明用户已
-        // 尝试推送该行但被扩展端以「占位值」为由拒绝。此时该行在前端呈现为失败红底，
-        // 用户修改内容后期待与真实 tsId 失败行一致的「改单元格黄 + 整行橙 + 失败红叠加」
-        // 视觉反馈。若这里一刀切 return，会导致 session.highlightedCells 完全丢失，
-        // 前端只剩淡红底，与真实失败行行为不一致（详见 019f9a03 诊断结论）。
-        // 故仅对「不是失败行」的占位行 skip；已进入 failures 的占位行走完整 diff 流程。
-        if (id && isPlaceholderTsId(id) && !hasFailedRecord(id)) return;
+        if (id && isPlaceholderTsId(id)) return;
         // 检测新增行：当前数据中有但快照中不存在的行。
         // 防御 1：已有 testCaseNo 说明已被后端确认并推送过，即使快照中找不到（如快照损坏
         // 或 tsId 被意外重新生成），也不应被标为新增行，避免已推送案例被误标绿。
-        // 防御 2：占位/样例行（testcase_id 为 '案例唯一标识[，不可修改]' 或 'TESTCASE_ID'）
-        // 从语义上就不是"用户新增"的行，而是模板/占位数据，同样不应被标为新增行——
-        // 否则会与 pushFailureStore 的红色失败标记叠加，造成红+绿双色高亮。
-        // 防御 3：该 tsId 已存在推送失败记录（说明它是"已尝试推送但失败"，不是"未推送过的新增"），
-        // 让红色失败标记独占，避免绿色新增高亮清不掉。用户手动修改数据后（触发去失败标记的
-        // 用户流程），该行会重新参与新增判定。
-        if (id && !(id in snapshots) && !tcNo && !isPlaceholderTsId(id) && !hasFailedRecord(id)) {
+        // 防御 2：占位/样例行从语义上不是"用户新增"的行，而是模板/占位数据。
+        // 注意：推送失败的新增行仍保持新增语义，绿色新增与字段级失败红底可以共存；
+        // 失败是否消除由 pushFailures 流程负责，不在快照 diff 阶段抢夺这个状态。
+        if (id && !(id in snapshots) && !tcNo && !isPlaceholderTsId(id)) {
             addedInfos.push({ rowIndex: ri, tsId: id });
             return;
         }
         if (!id) return;
 
-        // ---- 说明：失败行也参与 changedRows 判定 ----
-        // 早期曾在此处加过一刀切「if (hasFailedRecord(id)) return;」以避免弹窗关闭后
-        // 视觉错乱，但这与前端 02a-render.js 的时间戳竞争机制矛盾：
-        //   - _highlightedTime（save 后打点）一般 >= rowFailTime（推送时打点），
-        //     前端会以黄色（xs-td-push-updated）覆盖红底，符合"用户新的编辑意图应有反馈"；
-        //   - 若时间反过来（推送晚于修改），前端会保留 xs-td-overrides-fail 让红底继续生效。
-        // 因此不在扩展端 diff 阶段剔除失败行，让前端按时间戳自主竞争，避免"失败行改后
-        // 无黄色高亮"的死角。
+        // 失败行不参与修改黄底：上层 applyDiffHighlight 会按失败 tsId 剔除 changedRows；
+        // 本函数只负责产出原始差异，不再为失败行构造特殊基线。
 
         // 1) 构建当前数据的主表单元格序列化
         //    - testCaseNo 列：排除（后端生成的编号不参与 diff）
@@ -473,20 +451,10 @@ export function diffPushSnapshot(
         // 2) 解析旧快照
         // 防御：行有 testCaseNo（已推送过，不会被前面判定为新增）但快照中查不到 id 的极端情况
         // （快照损坏 / tsId 被重新生成等），跳过 diff 避免 oldRaw=undefined 触发 indexOf 崩溃。
-        //
-        // 【占位失败行例外】：TESTCASE_ID 从不写入 push 快照（savePushSnapshot 里 skip），
-        // 但若它已进入 push failures（已尝试推送被拒），我们希望用户后续修改仍能得到
-        // 「改单元格黄 + 整行橙 + 失败红叠加」的一致视觉反馈。此时使用「空快照基线」参与 diff：
-        // 主表旧值一律空、明细旧签名为空，让当前非空 cell 全部被标为 changedCols。
-        // 逻辑上等价于「首次推送前的空基线」，diff 结果自然纳入 changedRows 与 flatCells。
-        const isPlaceholderFailedRow = id && isPlaceholderTsId(id) && hasFailedRecord(id);
         const oldRaw = snapshots[id];
-        if (oldRaw == null && !isPlaceholderFailedRow) return;
-        const _oldRawEffective = oldRaw != null ? oldRaw : '';
-        const hasOldDetail = _oldRawEffective.indexOf(DETAIL_SEP) >= 0
-            // 占位失败行使用空基线，但若当前行有 detailTables 则强制启用 detail 签名比对，
-            // 让明细变化也能被检测为 changed（否则明细列改动被"仅比对主表"漏掉）。
-            || (isPlaceholderFailedRow && !!detailTables && detailTables.length > 0);
+        if (oldRaw == null) return;
+        const _oldRawEffective = oldRaw;
+        const hasOldDetail = _oldRawEffective.indexOf(DETAIL_SEP) >= 0;
         const oldMainPart = _oldRawEffective.indexOf(DETAIL_SEP) >= 0
             ? _oldRawEffective.split(DETAIL_SEP)[0]
             : _oldRawEffective;

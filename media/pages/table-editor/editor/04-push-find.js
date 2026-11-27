@@ -317,7 +317,7 @@ function _syncStepsCellAfterReplace(ri, ci) {
     if (!S.data.rows[ri]) return;
     var combined = _buildStepCombined(dt.rawRowGroups[ri]);
     S.data.rows[ri][ci] = combined;
-    if (S.mods) S.mods.add(ri + ',' + ci);
+    HighlightModel.touchModified(S, ri, ci);
     if (S._detailModCellKeys) S._detailModCellKeys.add(ri + ',' + ci);
     if (typeof saveFile === 'function') saveFile();
     if (typeof patchCell === 'function') patchCell(ri, ci);
@@ -696,7 +696,7 @@ function replaceCurrent() {
     var newCell = oldCell.slice(0, hit) + newVal + oldCell.slice(hit + S._findKw.length);
     pushHistory();
     S.data.rows[m.r][m.c] = newCell;
-    S.mods.add(m.r + ',' + m.c);
+    HighlightModel.touchModified(S, m.r, m.c);
     saveFile();
     patchCell(m.r, m.c);
     // 重新搜索（单元格内可能还有其他命中）
@@ -744,7 +744,7 @@ function replaceAll() {
                     var _c2 = _replaceStepsAll(_araws, caseSensitive, needle, newVal);
                     if (_c2 > 0) {
                         row[ci] = _buildStepCombined(_araws);
-                        S.mods.add(ri + ',' + ci);
+                        HighlightModel.touchModified(S, ri, ci);
                         if (S._detailModCellKeys) S._detailModCellKeys.add(ri + ',' + ci);
                         count += _c2;
                     }
@@ -767,7 +767,7 @@ function replaceAll() {
                 count++;
             }
             row[ci] = out;
-            S.mods.add(ri + ',' + ci);
+            HighlightModel.touchModified(S, ri, ci);
         });
     });
     if (count === 0) { showToast('没有找到匹配项', 'error'); return; }

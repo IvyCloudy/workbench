@@ -243,8 +243,10 @@ export class WebviewDataPusher {
         }
         try { msgPayload.headerLabels = getHeaderLabels(); } catch { /* ignore */ }
 
-        // addedInfos 为一次性字段，发送后清空
+        // addedInfos / highlightedCells 均为一次性字段，发送后清空：
+        // 避免 visible / reload 等非 diff 帧重放陈旧高亮并刷新前端时间戳。
         this.session.addedInfos = undefined;
+        this.session.highlightedCells = undefined;
 
         this.log(`📤 push (${reason}) rows=${rowsLen} visible=${this.webviewPanel.visible} force=${!!force} external=${isExternal}`);
         this.webviewPanel.webview.postMessage(msgPayload);

@@ -15,7 +15,7 @@
 // ==================== 行操作 ====================
 
 /**
- * 行索引偏移的统一入口：委托到 00-highlight-util.js 的 HighlightModel.shiftRowIndex。
+ * 行索引偏移的统一入口：委托到 highlight/00b-highlight-model-write.js 的 HighlightModel.shiftRowIndex。
  * 保留本地包装函数是为了让 03d 内部调用点保持简洁（不必每处都写 HighlightModel.xxx(S, ...)）。
  *
  * @param {'insert'|'delete'|'deleteBatch'} op

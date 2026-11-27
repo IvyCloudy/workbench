@@ -284,7 +284,7 @@ function pasteCell() {
                     nv = src;
                 }
                 row[cIdx] = nv;
-                S.mods.add(rIdx + ',' + cIdx);
+                HighlightModel.touchModified(S, rIdx, cIdx);
                 changed++;
             }
         }
@@ -347,7 +347,7 @@ function pasteCell() {
         target = (function () { try { return JSON.stringify(target); } catch (_e) { return ''; } })();
     }
     S.data.rows[S._ctxRow][S._ctxCol] = target;
-    S.mods.add(S._ctxRow + ',' + S._ctxCol);
+    HighlightModel.touchModified(S, S._ctxRow, S._ctxCol);
     saveFile();
     patchCell(S._ctxRow, S._ctxCol);
 }
@@ -391,7 +391,7 @@ function clearCell() {
                 var newStr = isArr ? '' : '';
                 if (oldStr !== newStr) {
                     row[c] = nv;
-                    S.mods.add(r + ',' + c);
+                    HighlightModel.touchModified(S, r, c);
                     changed++;
                 }
             }
@@ -423,7 +423,7 @@ function clearCell() {
     } else {
         S.data.rows[S._ctxRow][S._ctxCol] = '';
     }
-    S.mods.add(S._ctxRow + ',' + S._ctxCol);
+    HighlightModel.touchModified(S, S._ctxRow, S._ctxCol);
     saveFile();
     patchCell(S._ctxRow, S._ctxCol);
 }
@@ -469,7 +469,7 @@ function fillSelectedCells() {
                 var newStr = Array.isArray(nv) ? formatCellValue(nv) : String(nv);
                 if (oldStr !== newStr) {
                     row[c] = nv;
-                    S.mods.add(r + ',' + c);
+                    HighlightModel.touchModified(S, r, c);
                     changed++;
                 }
             }

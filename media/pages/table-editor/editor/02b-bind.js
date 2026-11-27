@@ -509,7 +509,7 @@ function bindDocument() {
                                 nv = (src0 == null) ? '' : _strSrc0;
                             }
                             rowR[cc] = nv;
-                            S.mods.add(rr + ',' + cc);
+                            HighlightModel.touchModified(S, rr, cc);
                             changed++;
                         }
                     }
@@ -588,7 +588,7 @@ function bindDocument() {
                                 nv2 = (src == null) ? '' : _strSrc;
                             }
                             rowi[cIdx] = nv2;
-                            S.mods.add(rIdx + ',' + cIdx);
+                            HighlightModel.touchModified(S, rIdx, cIdx);
                             changed++;
                         }
                     }
@@ -1251,7 +1251,7 @@ function _syncSubSteps(ri, ci, raws) {
             });
         }
     }
-    if (S.mods) S.mods.add(ri + ',' + ci);
+    HighlightModel.touchModified(S, ri, ci);
     if (typeof saveFile === 'function') saveFile();
     if (typeof patchCell === 'function') patchCell(ri, ci);
 }
@@ -1417,21 +1417,11 @@ function _handleSubTableCellEdit(td) {
     if (typeof pushHistory === 'function') pushHistory();
     if (!S.data.rows[ri]) return;
     S.data.rows[ri][ci] = combined;
-    if (S.mods) S.mods.add(ri + ',' + ci);
+    HighlightModel.touchModified(S, ri, ci);
     // 子表格深层修改同时标记为 detail cell 修改（与 03h-detail-helpers/05d-detail-write 一致），
     // 让"仅看修改行"及 detail 相关判定链路都能命中该单元格。
     if (S._detailModCellKeys) S._detailModCellKeys.add(ri + ',' + ci);
-    // 【关键修复：失败行修改后单元格不变黄】
-    //   _modsTime 由 renderTable/patchCell 「懒补」（== null 时才补 Date.now()）而非「主动更新」。
-    //   若该单元格在本次推送失败之前已有旧时间戳 T_old（< rowFailTime），懒补会跳过、
-    //   保留旧值 → 渲染时 _modTime <= rowFailTime → 失败红底完全胜出 → td.classList.remove('modified')。
-    //   这里在真正落盘处主动写入最新时间戳（覆盖旧值），确保：
-    //     _modTime = Date.now() > rowFailTime → _failOverridden = true → 保留 modCls
-    //     → CSS: tr.xs-tr-push-failed td.xs-td-overrides-fail.modified 命中 → 黄底叠加于失败红底
-    if (!S._modsTime) S._modsTime = {};
-    S._modsTime[ri + ',' + ci] = Date.now();
     if (typeof saveFile === 'function') saveFile();
-    // 立即 patchCell 让 modified 视觉反馈在 'saved' 回程前就渲染出来。
-    // patchCell 读取上面刚更新的 _modsTime → 走失败竞争 _failOverridden 分支 → 保留 modified 类。
+    // 立即 patchCell 让非失败行的修改高亮在 'saved' 回程前渲染出来。
     if (typeof patchCell === 'function') patchCell(ri, ci);
 }

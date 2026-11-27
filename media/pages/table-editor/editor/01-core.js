@@ -956,22 +956,21 @@ window.addEventListener('message', function (e) {
             HighlightModel.applyPushFailuresPayload(S, m.pushFailures);
         }
         // 新增行信息（快照中不存在但当前数据中出现的行）
-        // 先清空再重建，确保 _addedRowSet 与扩展端 diff 结果完全一致，避免旧索引残留。
+        // 与 skip-data 分支共用门面，避免两套实现漂移。
         if ('addedInfos' in m) {
-            if (!S._addedRowSet) S._addedRowSet = new Set();
-            S._addedRowSet.clear();
-            S._addedRowTime = Date.now();
+            var _fullDataAddedRows = [];
             if (m.addedInfos && Array.isArray(m.addedInfos) && m.addedInfos.length > 0) {
                 S._addedInfos = m.addedInfos;
                 for (var ai = 0; ai < m.addedInfos.length; ai++) {
-                    S._addedRowSet.add(m.addedInfos[ai].rowIndex);
+                    _fullDataAddedRows.push(m.addedInfos[ai].rowIndex);
                 }
             } else {
                 S._addedInfos = [];
             }
+            HighlightModel.setAddedRows(S, _fullDataAddedRows);
             // 没有新增行时自动关闭"仅看新增行"筛选
-            if (S._addedRowSet.size === 0) {
-                if (S._addedOnly) S._addedOnly = false;
+            if ((!S._addedRowSet || S._addedRowSet.size === 0) && S._addedOnly) {
+                S._addedOnly = false;
             }
         }
         // 用户标记高亮（持久化数据）

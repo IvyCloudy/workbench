@@ -5,7 +5,7 @@
  *  由 00-highlight-util.js 拆分而来（2026-09-19，方案 C · C6）。
  *
  *  承担范围：
- *    · 写路径基础：setHighlightedCells / setAddedRows / addAddedRow / shiftRowIndex
+ *    · 写路径基础：setHighlightedCells / setAddedRows / addAddedRow / touchModified / shiftRowIndex
  *    · 5 种重置策略：resetForReload / resetForFullPush / resetAllHighlights /
  *                    resetOnColumnChange / clearByPushBatch
  *
@@ -50,6 +50,18 @@
         if (!S._addedRowSet) S._addedRowSet = new Set();
         S._addedRowSet.add(rowIdx);
         S._addedRowTime = Date.now();
+    }
+
+    /**
+     * 标记单元格修改并刷新时间戳（所有写入路径统一入口）。
+     */
+    function touchModified(S, ri, ci) {
+        if (!S) return;
+        if (!S.mods) S.mods = new Set();
+        var key = ri + ',' + ci;
+        S.mods.add(key);
+        if (!S._modsTime) S._modsTime = {};
+        S._modsTime[key] = Date.now();
     }
 
     /**
@@ -258,7 +270,13 @@
      */
     function clearByPushBatch(S, opts) {
         var o = opts || {};
-        var rowIndices = o.rowIndices;
+        var failedSet = {};
+        var failedRowIndices = o.failedRowIndices || [];
+        for (var fi = 0; fi < failedRowIndices.length; fi++) failedSet[failedRowIndices[fi]] = true;
+        // 失败行保留修改/新增状态：绿底与字段级失败红底共存，待失败消除后再参与清理。
+        var rowIndices = o.rowIndices
+            ? o.rowIndices.filter(function (ri) { return !failedSet[ri]; })
+            : null;
         var clearBatchTsIds = (o.clearBatchTsIds !== false);
 
         if (rowIndices && rowIndices.length > 0) {
@@ -329,6 +347,7 @@
         setHighlightedCells: setHighlightedCells,
         setAddedRows: setAddedRows,
         addAddedRow: addAddedRow,
+        touchModified: touchModified,
         shiftRowIndex: shiftRowIndex,
         resetForReload: resetForReload,
         resetForFullPush: resetForFullPush,

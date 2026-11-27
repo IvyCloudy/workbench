@@ -269,7 +269,7 @@ function closeArrayCellEditor(commit) {
         if (prevStr !== newStr) {
             pushHistory();
             S.data.rows[ri][ci] = out;
-            S.mods.add(ri + ',' + ci);
+            HighlightModel.touchModified(S, ri, ci);
             saveFile();
             patchCell(ri, ci);
             showToast('已保存', 'success');

@@ -417,7 +417,7 @@ function saveDetailModal() {
             && S.data.rows[ri] && colIdx < S.data.rows[ri].length) {
             S.data.rows[ri][colIdx] = _writeText;
         }
-        S.mods.add(ri + ',' + colIdx);
+        HighlightModel.touchModified(S, ri, colIdx);
         S._detailModCellKeys.add(ri + ',' + colIdx);
     }
 

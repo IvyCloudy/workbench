@@ -9,7 +9,7 @@
  *    · resolveFieldColumnIndex / getFailedColumnsOfRow / getFieldSeverityOfColumn
  *    · getFailedStepCellsOfRow / isRowColFullyGranular（B4 细粒度）
  *    · parseHighlightedCells（extension payload → 内存态）
- *    · resolveHighlight（时间戳竞争唯一真源，与 docs/specs/高亮逻辑说明.md 第 2 节对齐）
+ *    · resolveHighlight（时间戳竞争唯一真源，与 docs/案例编辑器-校验/设计/高亮逻辑说明.md 第 2 节对齐）
  *
  *  命名空间：window.HighlightUtil / window.HighlightModel（本文件预先建立占位对象，
  *          后续 00b / 00c 依次 Object.assign 追加成员）。
@@ -367,9 +367,11 @@
             }
         }
         var isAddedRow = !!(ctx.addedRowSet && ctx.addedRowSet.has(ctx.ri));
+        var isFailedRow = (ctx.rowFailTime || 0) > 0;
+        if (isFailedRow) clearModified = true;
         if (pushUpdCls) {
-            // 新增优先：新增行尚未推送，不存在“相对推送基线的更新”，黄/橙高亮不适用。
-            if (isAddedRow) {
+            // 新增优先 + 失败行纯红：新增行与失败行都不参与黄/橙“推送后更新”竞争。
+            if (isAddedRow || isFailedRow) {
                 pushUpdCls = '';
             } else {
                 var t1 = ctx.highlightedTime || 0;
@@ -410,11 +412,10 @@
             }
         }
 
-        // 4) 推送失败高亮（行级失败时间）—— 已改为"仅字段级红底"
-        //    新策略：整行铺红取消，红色只由 xs-td-failed-cell(-warn) 精准命中的字段承担。
-        //    本分支不再把 bestClass 置为 'xs-td-push-failed'，也不再 clearModified，
-        //    以免"失败行的非命中字段被整体染红 / 修改黄底被清掉"。
-        //    仍保留 failOverridden 标记，兼容外层可能残留的行级 CSS（tr.xs-tr-push-failed）。
+        // 4) 推送失败高亮（行级失败时间）—— 仅字段级红底
+        //    红色只由 xs-td-failed-cell(-warn) 精准命中的字段承担；失败行不显示
+        //    push-updated / modified 黄底，由外层渲染直接清掉 modCls。
+        //    failOverridden 仅用于让用户手动标记在失败字段之外正常显示。
         var rowFailTime = ctx.rowFailTime || 0;
         if (rowFailTime > 0) {
             failOverridden = true;

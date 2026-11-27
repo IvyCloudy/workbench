@@ -102,7 +102,6 @@ export async function applyDiffHighlight(
     const tsIdCol = headers.indexOf(TS_ID_COLUMN);
 
     let excludedChanged = 0;
-    let excludedAdded = 0;
     const changedRows = (failedTsIds.size === 0 || tsIdCol < 0)
         ? changedRowsRaw
         : changedRowsRaw.filter(d => {
@@ -115,18 +114,12 @@ export async function applyDiffHighlight(
             if (excluded) excludedChanged++;
             return !excluded;
         });
-    const addedInfos = failedTsIds.size === 0
-        ? addedInfosRaw
-        : addedInfosRaw.filter(a => {
-            const aTsId = a.tsId ? String(a.tsId).trim() : '';
-            const excluded = aTsId !== '' && failedTsIds.has(aTsId);
-            if (excluded) excludedAdded++;
-            return !excluded;
-        });
-    if (excludedChanged > 0 || excludedAdded > 0) {
-        log(`🚫 ${prefix}剔除推送失败行不参与更新态高亮：`
-            + `changedRows -${excludedChanged}, addedInfos -${excludedAdded}, `
-            + `失败 tsId 数=${failedTsIds.size}`);
+    // 新增行即使推送失败也保持新增语义：绿色新增与字段级失败红底可以共存，
+    // 失败是否消除由 05a / pushFailures 流程负责，不在 diff 阶段剔除 addedInfos。
+    const addedInfos = addedInfosRaw;
+    if (excludedChanged > 0) {
+        log(`🚫 ${prefix}剔除推送失败行不参与修改高亮：`
+            + `changedRows -${excludedChanged}, 失败 tsId 数=${failedTsIds.size}`);
     }
 
     // 新增优先：新增行只走 addedInfos（前端绿底），不进入 highlightedCells 修改高亮；

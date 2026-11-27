@@ -739,14 +739,14 @@ function applyColumnsBulk(fillVal) {
                 var newStr = formatCellValue(newArr);
                 if (oldStr !== newStr) {
                     row[ci] = newArr;
-                    S.mods.add(ri + ',' + ci);
+                    HighlightModel.touchModified(S, ri, ci);
                     changed++;
                 }
             } else {
                 var oldStr2 = (oldV === null || oldV === undefined) ? '' : (Array.isArray(oldV) ? formatCellValue(oldV) : String(oldV));
                 if (oldStr2 !== newScalar) {
                     row[ci] = newScalar;
-                    S.mods.add(ri + ',' + ci);
+                    HighlightModel.touchModified(S, ri, ci);
                     changed++;
                 }
             }

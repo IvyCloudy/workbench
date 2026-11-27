@@ -313,7 +313,7 @@ function startEdit(e) {
                             var newStr = Array.isArray(nv) ? formatCellValue(nv) : String(nv);
                             if (oldStr !== newStr) {
                                 rowR[cc] = nv;
-                                S.mods.add(rr + ',' + cc);
+                                HighlightModel.touchModified(S, rr, cc);
                                 changed++;
                             }
                         }
@@ -328,7 +328,7 @@ function startEdit(e) {
                     return;
                 }
                 row[ci] = newVal;
-                S.mods.add(ri + ',' + ci);
+                HighlightModel.touchModified(S, ri, ci);
                 saveFile();
             }
         }

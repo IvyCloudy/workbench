@@ -306,6 +306,11 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         return BaseEditorProvider.panelMap.get(filePath)?.panel;
     }
 
+    /** 外部清理高亮命令：同步清掉 panel session，避免后续帧重放旧高亮 */
+    static clearPanelHighlightState(filePath: string): void {
+        BaseEditorProvider.panelMap.get(filePath)?.clearHighlightState?.();
+    }
+
     /** 更新 panelMap 中的键值（文件重命名时调用） */
     static updatePanelMapKey(oldPath: string, newPath: string): void {
         const entry = BaseEditorProvider.panelMap.get(oldPath);
@@ -658,6 +663,7 @@ export abstract class BaseEditorProvider implements vscode.CustomEditorProvider 
         panelEntry.markSelfSave = () => { lastSelfSaveAt = Date.now(); };
         panelEntry.clearHighlightState = () => {
             session.highlightedCells = null;
+            session.addedInfos = undefined;
             session.cachedTableData = null;
         };
 

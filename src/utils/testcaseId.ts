@@ -33,12 +33,13 @@ const MBT_TESTCASE_ID = /^MBT[0-9a-z]{32}$/;
 
 /** 是否为 CMBT_AITEST 案例 ID（严格大写 MBT + 32 位小写字母数字） */
 export function isMbtTestcaseId(tsId: string | undefined | null): boolean {
-    return typeof tsId === 'string' && MBT_TESTCASE_ID.test(tsId);
+    return typeof tsId === 'string' && MBT_TESTCASE_ID.test(tsId.trim());
 }
 
-/** 推送用 sourceId：MBT 案例去掉 MBT 前缀，其余原样返回（幂等） */
+/** 推送用 sourceId：先 trim，再对 MBT 案例去掉 MBT 前缀，其余返回清洗后的值（幂等） */
 export function normalizeSourceId(tsId: string): string {
-    return isMbtTestcaseId(tsId) ? tsId.slice(3) : tsId;
+    const cleaned = typeof tsId === 'string' ? tsId.trim() : tsId;
+    return isMbtTestcaseId(cleaned) ? cleaned.slice(3) : cleaned;
 }
 
 /**

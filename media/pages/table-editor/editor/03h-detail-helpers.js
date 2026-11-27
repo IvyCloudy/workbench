@@ -116,7 +116,7 @@ function _writeDetailCellFromRaw(ri, ci, raw) {
     if (S.data && Array.isArray(S.data.rows) && S.data.rows[ri]) {
         S.data.rows[ri][ci] = displayText;
     }
-    if (S.mods) S.mods.add(ri + ',' + ci);
+    HighlightModel.touchModified(S, ri, ci);
     if (S._detailModCellKeys) S._detailModCellKeys.add(ri + ',' + ci);
     return true;
 }

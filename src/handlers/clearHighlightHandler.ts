@@ -34,6 +34,8 @@ export async function handleClearHighlight(uri?: vscode.Uri): Promise<void> {
         await cleanupCaseFileTraces(fp);
 
         // 通知前端刷新，清除内存中的高亮状态
+        // 同时清 session，避免后续 visible / save 帧重放已清掉的高亮基线。
+        BaseEditorProvider.clearPanelHighlightState(fp);
         const panel = BaseEditorProvider.getPanel(fp);
         if (panel) {
             panel.webview.postMessage({ type: 'clearAllHighlights' });

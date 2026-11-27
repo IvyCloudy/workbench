@@ -80,11 +80,13 @@ function showPushResultModal(payload) {
         if (listEl) listEl.innerHTML = '<div class="xs-pr-empty">' + escapeHtml(errorMsg) + '</div>';
         if (hintEl) hintEl.textContent = '';
         if (copyBtn) copyBtn.style.display = 'none';
-        // 前置校验失败也属于"推送完成"，清理本批修改高亮避免残留
+        // 前置校验失败：本批行全部按失败处理，保留修改/新增状态以便修正后继续显示
+        var preFailRows = (S._lastPushBatchRowIndices && S._lastPushBatchRowIndices.length > 0)
+            ? S._lastPushBatchRowIndices.slice()
+            : [];
         HighlightModel.clearByPushBatch(S, {
-            rowIndices: (S._lastPushBatchRowIndices && S._lastPushBatchRowIndices.length > 0)
-                ? S._lastPushBatchRowIndices.slice()
-                : null,
+            rowIndices: preFailRows,
+            failedRowIndices: preFailRows.slice(),
         });
         try { renderTable(); } catch (_) {}
         bindPushResultModal();
@@ -245,15 +247,42 @@ function showPushResultModal(payload) {
             + ' failedOnly=' + !!S._failedOnly);
     }
 
-    // 清除本批推送行的 S.mods 修改高亮（推送完成 = 修改已提交）
-    // 失败行由 S._pushFailedTsIds 提供红色高亮，不再需要黄色 modified 标记
-    // 05a 自身负责"从哪几个渠道兜底反查行号"，门面只接收最终 rowIndices。
+    // 仅清理推送成功行的修改/新增状态；失败行保留状态，待失败消除后继续显示。
+    // 05a 自身负责"从哪几个渠道兜底反查行号"，门面只接收最终 rowIndices / failedRowIndices。
     // 4 层兜底反查逻辑已抽至 05h-push-failures-store.js（window.PushFailuresStore）。
     var pushRowIndices = window.PushFailuresStore.resolvePushRowIndices(S, p, batchSet, failures);
+    var failedTsIdMap = {};
+    for (var _fi = 0; _fi < errorFailures.length; _fi++) {
+        var _fts = errorFailures[_fi] && errorFailures[_fi].tsId;
+        if (_fts) failedTsIdMap[String(_fts).trim()] = true;
+    }
+    var failedRowIndices = [];
+    var failedRowSeen = {};
+    var tsColForFail = S.data && S.data.headers ? S.data.headers.indexOf('testcase_id') : -1;
+    for (var _pi = 0; _pi < pushRowIndices.length; _pi++) {
+        var _ri = pushRowIndices[_pi];
+        var _row = (S.data && S.data.rows && S.data.rows[_ri]) || [];
+        var _tid = tsColForFail >= 0 ? String(_row[tsColForFail] || '').trim() : '';
+        if (_tid && failedTsIdMap[_tid]) {
+            failedRowIndices.push(_ri);
+            failedRowSeen[_ri] = true;
+        }
+    }
+    if (failedRowIndices.length === 0) {
+        for (var _ej = 0; _ej < errorFailures.length; _ej++) {
+            var _er = errorFailures[_ej] && errorFailures[_ej].rowIndex;
+            var _eri = (_er != null && _er > 0) ? (_er - 1) : -1;
+            if (_eri >= 0 && pushRowIndices.indexOf(_eri) >= 0 && !failedRowSeen[_eri]) {
+                failedRowIndices.push(_eri);
+                failedRowSeen[_eri] = true;
+            }
+        }
+    }
     // 交由门面统一收敛清理动作：S.mods / _detailModCellKeys / _addedRowSet /
     // _lastPushBatchRowIndices / _lastPushBatchTsIds（一次推送结果消费完毕）
     HighlightModel.clearByPushBatch(S, {
         rowIndices: (pushRowIndices && pushRowIndices.length > 0) ? pushRowIndices : null,
+        failedRowIndices: failedRowIndices,
     });
 
     // 推送后回写的 testCaseNo 单元格高亮信息（同时清除旧高亮，确保弹窗显示最新结果）
